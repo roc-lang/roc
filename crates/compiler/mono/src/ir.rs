@@ -306,11 +306,20 @@ pub struct Proc<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostExposedLambdaSet<'a> {
+    pub id: LambdaSetId,
+    /// Symbol of the exposed function
+    pub symbol: Symbol,
+    pub proc_layout: ProcLayout<'a>,
+    pub raw_function_layout: RawFunctionLayout<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
         rigids: BumpMap<Lowercase, InLayout<'a>>,
-        aliases: BumpMap<Symbol, (Symbol, ProcLayout<'a>, RawFunctionLayout<'a>)>,
+        aliases: BumpMap<Symbol, HostExposedLambdaSet<'a>>,
     },
 }
 
@@ -1177,7 +1186,6 @@ impl<'a> Procs<'a> {
                                 name,
                                 layout_cache,
                                 annotation,
-                                &[],
                                 partial_proc_id,
                             ) {
                                 Ok((proc, layout)) => {
@@ -1270,7 +1278,6 @@ impl<'a> Procs<'a> {
                     proc_name,
                     layout_cache,
                     fn_var,
-                    Default::default(),
                     partial_proc_id,
                 ) {
                     Ok((proc, raw_layout)) => {
@@ -2911,7 +2918,7 @@ fn specialize_suspended<'a>(
             }
         };
 
-        match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
+        match specialize_variable(env, procs, name, layout_cache, var, partial_proc) {
             Ok((proc, raw_layout)) => {
                 let proc_layout = ProcLayout::from_raw_named(env.arena, name, raw_layout);
                 procs
@@ -3057,36 +3064,129 @@ fn specialize_external_help<'a>(
         }
     };
 
-    let specialization_result = specialize_variable(
-        env,
-        procs,
-        name,
-        layout_cache,
-        variable,
-        host_exposed_aliases,
-        partial_proc_id,
-    );
+    let specialization_result =
+        specialize_variable(env, procs, name, layout_cache, variable, partial_proc_id);
 
     match specialization_result {
-        Ok((proc, layout)) => {
+        Ok((mut proc, layout)) => {
             let top_level = ProcLayout::from_raw_named(env.arena, name, layout);
 
             if procs.is_module_thunk(name.name()) {
                 debug_assert!(top_level.arguments.is_empty());
             }
 
-            // layouts that are (transitively) used in the type of `mainForHost`.
-            let host_exposed_layouts = top_level
-                .arguments
-                .iter()
-                .copied()
-                .chain([top_level.result]);
+            if !host_exposed_aliases.is_empty() {
+                // layouts that are (transitively) used in the type of `mainForHost`.
+                let mut host_exposed_layouts: Vec<_> = top_level
+                    .arguments
+                    .iter()
+                    .copied()
+                    .chain([top_level.result])
+                    .collect_in(env.arena);
 
-            // TODO: In the future, we will generate glue procs here
-            for in_layout in host_exposed_layouts {
-                let layout = layout_cache.interner.get(in_layout);
+                // it is very likely we see the same types across functions, or in multiple arguments
+                host_exposed_layouts.sort();
+                host_exposed_layouts.dedup();
 
-                let _ = layout;
+                // TODO: In the future, we will generate glue procs here
+                for in_layout in host_exposed_layouts {
+                    let layout = layout_cache.interner.get(in_layout);
+
+                    let all_glue_procs = generate_glue_procs(
+                        env.home,
+                        env.ident_ids,
+                        env.arena,
+                        &mut layout_cache.interner,
+                        env.arena.alloc(layout),
+                    );
+
+                    // for now, getters are not processed here
+                    let GlueProcs {
+                        getters: _,
+                        extern_names,
+                    } = all_glue_procs;
+
+                    let mut aliases = BumpMap::default();
+
+                    for (id, mut raw_function_layout) in extern_names {
+                        let symbol = env.unique_symbol();
+                        let lambda_name = LambdaName::no_niche(symbol);
+
+                        if false {
+                            raw_function_layout = match raw_function_layout {
+                                RawFunctionLayout::Function(a, mut lambda_set, _) => {
+                                    lambda_set.ret = in_layout;
+                                    RawFunctionLayout::Function(a, lambda_set, in_layout)
+                                }
+                                RawFunctionLayout::ZeroArgumentThunk(x) => {
+                                    RawFunctionLayout::ZeroArgumentThunk(x)
+                                }
+                            };
+                        }
+
+                        let (key, (top_level, proc)) = generate_host_exposed_function(
+                            env,
+                            procs,
+                            layout_cache,
+                            lambda_name,
+                            raw_function_layout,
+                        );
+
+                        procs
+                            .specialized
+                            .insert_specialized(symbol, top_level, proc);
+
+                        let hels = HostExposedLambdaSet {
+                            id,
+                            symbol,
+                            proc_layout: top_level,
+                            raw_function_layout,
+                        };
+
+                        aliases.insert(key, hels);
+                    }
+
+                    // pre-glue: generate named callers for as-exposed aliases
+                    for (alias_name, variable) in host_exposed_aliases {
+                        let raw_function_layout = layout_cache
+                            .raw_from_var(env.arena, *variable, env.subs)
+                            .unwrap();
+
+                        let symbol = env.unique_symbol();
+                        let lambda_name = LambdaName::no_niche(symbol);
+
+                        let (proc_name, (proc_layout, proc)) = generate_host_exposed_function(
+                            env,
+                            procs,
+                            layout_cache,
+                            lambda_name,
+                            raw_function_layout,
+                        );
+
+                        procs
+                            .specialized
+                            .insert_specialized(proc_name, proc_layout, proc);
+
+                        let hels = HostExposedLambdaSet {
+                            id: LambdaSetId::default(),
+                            symbol: proc_name,
+                            proc_layout,
+                            raw_function_layout,
+                        };
+
+                        aliases.insert(*alias_name, hels);
+                    }
+
+                    match &mut proc.host_exposed_layouts {
+                        HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
+                        hep @ HostExposedLayouts::NotHostExposed => {
+                            *hep = HostExposedLayouts::HostExposed {
+                                aliases,
+                                rigids: Default::default(),
+                            };
+                        }
+                    }
+                }
             }
 
             procs
@@ -3219,9 +3319,8 @@ fn generate_host_exposed_function<'a>(
     layout_cache: &mut LayoutCache<'a>,
     lambda_name: LambdaName<'a>,
     layout: RawFunctionLayout<'a>,
-) -> (Symbol, (Symbol, ProcLayout<'a>, Proc<'a>)) {
-    let symbol = lambda_name.name();
-    let function_name = env.unique_symbol();
+) -> (Symbol, (ProcLayout<'a>, Proc<'a>)) {
+    let function_name = lambda_name.name();
 
     match layout {
         RawFunctionLayout::Function(_, lambda_set, _) => {
@@ -3233,12 +3332,12 @@ fn generate_host_exposed_function<'a>(
                 lambda_set,
             );
 
-            (symbol, (function_name, top_level, proc))
+            (function_name, (top_level, proc))
         }
         RawFunctionLayout::ZeroArgumentThunk(result) => {
             let assigned = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(assigned));
-            let forced = force_thunk(env, symbol, result, assigned, hole);
+            let forced = force_thunk(env, function_name, result, assigned, hole);
 
             let lambda_name = LambdaName::no_niche(function_name);
             let proc = Proc {
@@ -3254,7 +3353,7 @@ fn generate_host_exposed_function<'a>(
 
             let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
 
-            (symbol, (function_name, top_level, proc))
+            (function_name, (top_level, proc))
         }
     }
 }
@@ -3337,7 +3436,6 @@ fn specialize_proc_help<'a>(
     lambda_name: LambdaName<'a>,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<Proc<'a>, LayoutProblem> {
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
@@ -3378,36 +3476,8 @@ fn specialize_proc_help<'a>(
     let body = partial_proc.body.clone();
     let body_var = partial_proc.body_var;
 
-    // determine the layout of aliases/rigids exposed to the host
-    let host_exposed_layouts = if host_exposed_variables.is_empty() {
-        HostExposedLayouts::NotHostExposed
-    } else {
-        let mut aliases = BumpMap::new_in(env.arena);
-
-        for (alias_name, variable) in host_exposed_variables {
-            let raw_function_layout = layout_cache
-                .raw_from_var(env.arena, *variable, env.subs)
-                .unwrap();
-
-            let (_lambda_name, (proc_name, proc_layout, proc)) = generate_host_exposed_function(
-                env,
-                procs,
-                layout_cache,
-                lambda_name,
-                raw_function_layout,
-            );
-
-            procs
-                .specialized
-                .insert_specialized(proc_name, proc_layout, proc);
-            aliases.insert(*alias_name, (proc_name, proc_layout, raw_function_layout));
-        }
-
-        HostExposedLayouts::HostExposed {
-            rigids: BumpMap::new_in(env.arena),
-            aliases,
-        }
-    };
+    // host-exposed functions are tagged on later
+    let host_exposed_layouts = HostExposedLayouts::NotHostExposed;
 
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
@@ -3854,7 +3924,6 @@ fn specialize_variable<'a>(
     proc_name: LambdaName<'a>,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     let snapshot = snapshot_typestate(env.subs, procs, layout_cache);
@@ -3884,15 +3953,8 @@ fn specialize_variable<'a>(
     procs.push_active_specialization(proc_name.name());
     roc_tracing::debug!(?proc_name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "specialization start");
 
-    let specialized = specialize_proc_help(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        fn_var,
-        host_exposed_variables,
-        partial_proc_id,
-    );
+    let specialized =
+        specialize_proc_help(env, procs, proc_name, layout_cache, fn_var, partial_proc_id);
 
     roc_tracing::debug!(
         ?proc_name,
@@ -9003,7 +9065,6 @@ fn call_by_name_help<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, layout)) => {
@@ -9151,7 +9212,6 @@ fn call_by_name_module_thunk<'a>(
                             LambdaName::no_niche(proc_name),
                             layout_cache,
                             fn_var,
-                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, raw_layout)) => {
@@ -11068,4 +11128,344 @@ where
         body: hole,
         remainder: env.arena.alloc(switch),
     }
+}
+
+pub struct GlueLayouts<'a> {
+    pub getters: std::vec::Vec<(Symbol, ProcLayout<'a>)>,
+}
+
+type GlueProcId = u16;
+
+pub struct GlueProc<'a> {
+    pub name: Symbol,
+    pub proc_layout: ProcLayout<'a>,
+    pub proc: Proc<'a>,
+}
+
+pub struct GlueProcs<'a> {
+    pub getters: Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)>,
+    pub extern_names: Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LambdaSetId(pub u32);
+
+impl LambdaSetId {
+    #[must_use]
+    pub fn next(self) -> Self {
+        debug_assert!(self.0 < u32::MAX);
+        Self(self.0 + 1)
+    }
+
+    pub const fn invalid() -> Self {
+        Self(u32::MAX)
+    }
+}
+
+pub fn generate_glue_procs<'a, 'i, I>(
+    home: ModuleId,
+    ident_ids: &mut IdentIds,
+    arena: &'a Bump,
+    layout_interner: &'i mut I,
+    layout: &'a Layout<'a>,
+) -> GlueProcs<'a>
+where
+    I: LayoutInterner<'a>,
+{
+    let mut answer = GlueProcs {
+        getters: Vec::new_in(arena),
+        extern_names: Vec::new_in(arena),
+    };
+
+    let mut lambda_set_id = LambdaSetId(0);
+
+    let mut stack: Vec<'a, Layout<'a>> = Vec::from_iter_in([*layout], arena);
+    let mut next_unique_id = 0;
+
+    macro_rules! handle_struct_field_layouts {
+        ($field_layouts: expr) => {{
+            if $field_layouts.iter().any(|l| {
+                layout_interner
+                    .get(*l)
+                    .has_varying_stack_size(layout_interner, arena)
+            }) {
+                let procs = generate_glue_procs_for_struct_fields(
+                    layout_interner,
+                    home,
+                    &mut next_unique_id,
+                    ident_ids,
+                    arena,
+                    layout,
+                    $field_layouts,
+                );
+
+                answer.getters.push((*layout, procs));
+            }
+
+            for in_layout in $field_layouts.iter().rev() {
+                stack.push(layout_interner.get(*in_layout));
+            }
+        }};
+    }
+
+    macro_rules! handle_tag_field_layouts {
+        ($tag_id:expr, $union_layout:expr, $field_layouts: expr) => {{
+            if $field_layouts.iter().any(|l| {
+                layout_interner
+                    .get(*l)
+                    .has_varying_stack_size(layout_interner, arena)
+            }) {
+                let procs = generate_glue_procs_for_tag_fields(
+                    layout_interner,
+                    home,
+                    &mut next_unique_id,
+                    ident_ids,
+                    arena,
+                    $tag_id,
+                    layout,
+                    $union_layout,
+                    $field_layouts,
+                );
+
+                answer.getters.push((*layout, procs));
+            }
+
+            for in_layout in $field_layouts.iter().rev() {
+                stack.push(layout_interner.get(*in_layout));
+            }
+        }};
+    }
+
+    while let Some(layout) = stack.pop() {
+        match layout {
+            Layout::Builtin(builtin) => match builtin {
+                Builtin::Int(_)
+                | Builtin::Float(_)
+                | Builtin::Bool
+                | Builtin::Decimal
+                | Builtin::Str => { /* do nothing */ }
+                Builtin::List(element) => stack.push(layout_interner.get(element)),
+            },
+            Layout::Struct { field_layouts, .. } => {
+                handle_struct_field_layouts!(field_layouts);
+            }
+            Layout::Boxed(boxed) => {
+                stack.push(layout_interner.get(boxed));
+            }
+            Layout::Union(union_layout) => match union_layout {
+                UnionLayout::NonRecursive(tags) => {
+                    for in_layout in tags.iter().flat_map(|e| e.iter()) {
+                        stack.push(layout_interner.get(*in_layout));
+                    }
+                }
+                UnionLayout::Recursive(tags) => {
+                    for in_layout in tags.iter().flat_map(|e| e.iter()) {
+                        stack.push(layout_interner.get(*in_layout));
+                    }
+                }
+                UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                    handle_tag_field_layouts!(0, union_layout, field_layouts);
+                }
+                UnionLayout::NullableWrapped {
+                    other_tags,
+                    nullable_id,
+                } => {
+                    let tag_ids =
+                        (0..nullable_id).chain(nullable_id + 1..other_tags.len() as u16 + 1);
+                    for (i, field_layouts) in tag_ids.zip(other_tags) {
+                        handle_tag_field_layouts!(i, union_layout, *field_layouts);
+                    }
+                }
+                UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                    for in_layout in other_fields.iter().rev() {
+                        stack.push(layout_interner.get(*in_layout));
+                    }
+                }
+            },
+            Layout::LambdaSet(lambda_set) => {
+                let raw_function_layout =
+                    RawFunctionLayout::Function(lambda_set.args, lambda_set, lambda_set.ret);
+
+                let key = (lambda_set_id, raw_function_layout);
+                answer.extern_names.push(key);
+
+                // this id is used, increment for the next one
+                lambda_set_id = lambda_set_id.next();
+
+                stack.push(layout_interner.get(lambda_set.runtime_representation()));
+            }
+            Layout::RecursivePointer(_) => {
+                /* do nothing, we've already generated for this type through the Union(_) */
+            }
+        }
+    }
+
+    answer
+}
+
+fn generate_glue_procs_for_struct_fields<'a, 'i, I>(
+    layout_interner: &'i mut I,
+    home: ModuleId,
+    next_unique_id: &mut GlueProcId,
+    ident_ids: &mut IdentIds,
+    arena: &'a Bump,
+    unboxed_struct_layout: &'a Layout<'a>,
+    field_layouts: &'a [InLayout<'a>],
+) -> Vec<'a, GlueProc<'a>>
+where
+    I: LayoutInterner<'a>,
+{
+    let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
+    let boxed_struct_layout = Layout::Boxed(interned_unboxed_struct_layout);
+    let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
+    let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
+
+    for (index, field) in field_layouts.iter().enumerate() {
+        let proc_layout = ProcLayout {
+            arguments: arena.alloc([boxed_struct_layout]),
+            result: *field,
+            niche: Niche::NONE,
+        };
+
+        let symbol = unique_glue_symbol(arena, next_unique_id, home, ident_ids);
+
+        let argument = Symbol::new(home, ident_ids.gen_unique());
+        let unboxed = Symbol::new(home, ident_ids.gen_unique());
+        let result = Symbol::new(home, ident_ids.gen_unique());
+
+        home.register_debug_idents(ident_ids);
+
+        let ret_stmt = arena.alloc(Stmt::Ret(result));
+
+        let field_get_expr = Expr::StructAtIndex {
+            index: index as u64,
+            field_layouts,
+            structure: unboxed,
+        };
+
+        let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
+
+        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+
+        let unbox_stmt = Stmt::Let(
+            unboxed,
+            unbox_expr,
+            interned_unboxed_struct_layout,
+            arena.alloc(field_get_stmt),
+        );
+
+        let proc = Proc {
+            name: LambdaName::no_niche(symbol),
+            args: arena.alloc([(boxed_struct_layout, argument)]),
+            body: unbox_stmt,
+            closure_data_layout: None,
+            ret_layout: *field,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            must_own_arguments: false,
+            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        };
+
+        answer.push(GlueProc {
+            name: symbol,
+            proc_layout,
+            proc,
+        });
+    }
+
+    answer
+}
+
+fn unique_glue_symbol(
+    arena: &Bump,
+    next_unique_id: &mut GlueProcId,
+    home: ModuleId,
+    ident_ids: &mut IdentIds,
+) -> Symbol {
+    let unique_id = *next_unique_id;
+
+    *next_unique_id = unique_id + 1;
+
+    // then name of the platform `main.roc` is the empty string
+    let module_name = "";
+
+    // Turn unique_id into a Symbol without doing a heap allocation.
+    use std::fmt::Write;
+    let mut string = bumpalo::collections::String::with_capacity_in(32, arena);
+
+    let _result = write!(&mut string, "roc__getter_{}_{}", module_name, unique_id);
+    debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
+
+    let ident_id = ident_ids.get_or_insert(string.into_bump_str());
+
+    Symbol::new(home, ident_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_glue_procs_for_tag_fields<'a, 'i, I>(
+    layout_interner: &'i mut I,
+    home: ModuleId,
+    next_unique_id: &mut GlueProcId,
+    ident_ids: &mut IdentIds,
+    arena: &'a Bump,
+    tag_id: TagIdIntType,
+    unboxed_struct_layout: &'a Layout<'a>,
+    union_layout: UnionLayout<'a>,
+    field_layouts: &'a [InLayout<'a>],
+) -> Vec<'a, GlueProc<'a>>
+where
+    I: LayoutInterner<'a>,
+{
+    let interned = layout_interner.insert(*unboxed_struct_layout);
+    let boxed_struct_layout = Layout::Boxed(interned);
+    let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
+    let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
+
+    for (index, field) in field_layouts.iter().enumerate() {
+        let proc_layout = ProcLayout {
+            arguments: arena.alloc([boxed_struct_layout]),
+            result: *field,
+            niche: Niche::NONE,
+        };
+        let symbol = unique_glue_symbol(arena, next_unique_id, home, ident_ids);
+
+        let argument = Symbol::new(home, ident_ids.gen_unique());
+        let unboxed = Symbol::new(home, ident_ids.gen_unique());
+        let result = Symbol::new(home, ident_ids.gen_unique());
+
+        home.register_debug_idents(ident_ids);
+
+        let ret_stmt = arena.alloc(Stmt::Ret(result));
+
+        let field_get_expr = Expr::UnionAtIndex {
+            structure: unboxed,
+            tag_id,
+            union_layout,
+            index: index as u64,
+        };
+
+        let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
+
+        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+
+        let unbox_stmt = Stmt::Let(unboxed, unbox_expr, interned, arena.alloc(field_get_stmt));
+
+        let proc = Proc {
+            name: LambdaName::no_niche(symbol),
+            args: arena.alloc([(boxed_struct_layout, argument)]),
+            body: unbox_stmt,
+            closure_data_layout: None,
+            ret_layout: *field,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            must_own_arguments: false,
+            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        };
+
+        answer.push(GlueProc {
+            name: symbol,
+            proc_layout,
+            proc,
+        });
+    }
+
+    answer
 }
