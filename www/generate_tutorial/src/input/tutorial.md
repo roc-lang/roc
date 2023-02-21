@@ -1419,19 +1419,21 @@ We'll use these four operations to learn about tasks.
 
 Let's start with a basic "Hello World" program.
 
-<pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf<span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
-    <span class="kw">imports</span> [pf.Stdout]
-    <span class="kw">provides</span> [main] <span class="kw">to</span> pf
+```roc
+app "cli-tutorial"
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    imports [pf.Stdout]
+    provides [main] to pf
 
-main <span class="kw">=</span>
-    Stdout.line <span class="str">"Hello, World!"</span>
-</samp></pre>
+main =
+    Stdout.line "Hello, World!"
+```
 
 The `Stdout.line` function takes a `Str` and writes it to [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). It has this type:
 
-<pre><samp>Stdout.line <span class="colon">:</span> Str <span class="kw">-&gt;</span> Task {} *
-</samp></pre>
+```roc
+Stdout.line : Str -> Task {} *
+```
 
 A `Task` represents an _effect_; an interaction with state outside your Roc program, such as the terminal's standard output, or a file.
 
@@ -1441,20 +1443,22 @@ When we set `main` to be a `Task`, the task will get run when we run our program
 
 In contrast, `Stdin.line` produces a `Str` when it finishes reading from [standard input](<https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)>). That `Str` is reflected in its type:
 
-<pre><samp>Stdin.line <span class="colon">:</span> Task Str *
-</samp></pre>
+```roc
+Stdin.line : Task Str *
+```
 
 Let's change `main` to read a line from `stdin`, and then print it back out again:
 
-<pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf<span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
-    <span class="kw">imports</span> [pf.Stdout, pf.Stdin, pf.Task]
-    <span class="kw">provides</span> [main] <span class="kw">to</span> pf
+```roc
+app "cli-tutorial"
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    imports [pf.Stdout, pf.Stdin, pf.Task]
+    provides [main] to pf
 
-main <span class="kw">=</span>
-    Task.await Stdin.line <span class="kw">\</span>text <span class="kw">-&gt;</span>
-        Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+main =
+    Task.await Stdin.line \text ->
+        Stdout.line "You just entered: \(text)"
+```
 
 If you run this program, at first it won't do anything. It's waiting for you to type something in and press Enter! Once you do, it should print back out what you entered.
 
@@ -1462,37 +1466,41 @@ The `Task.await` function combines two tasks into one bigger `Task` which first 
 
 The type of `Task.await` is:
 
-<pre><samp>Task.await <span class="colon">:</span> Task <span class="hljs-selector-tag">a</span> err, (<span class="hljs-selector-tag">a</span> <span class="kw">-&gt;</span> Task <span class="hljs-selector-tag">b</span> err) <span class="kw">-&gt;</span> Task <span class="hljs-selector-tag">b</span> err
-</samp></pre>
+```roc
+Task.await : Task a err, (a -> Task b err) -> Task b err
+```
 
 The second argument to `Task.await` is a "callback function" which runs after the first task completes. This callback function receives the output of that first task, and then returns the second task. This means the second task can make use of output from the first task, like we did in our `\text -> …` callback function here:
 
-<pre><samp><span class="kw">\</span>text <span class="kw">-&gt;</span>
-    Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+```roc
+\text ->
+    Stdout.line "You just entered: \(text)"
+```
 
 Notice that, just like before, we're still building `main` from a single `Task`. This is how we'll always do it! We'll keep building up bigger and bigger `Task`s out of smaller tasks, and then setting `main` to be that one big `Task`.
 
 For example, we can print a prompt before we pause to read from `stdin`, so it no longer looks like the program isn't doing anything when we start it up:
 
-<pre><samp>task <span class="kw">=</span>
-    Task.await (Stdout.line <span class="str">"Type something press Enter:"</span>) <span class="kw">\</span>_ <span class="kw">-&gt;</span>
-        Task.await Stdin.line <span class="kw">\</span>text <span class="kw">-&gt;</span>
-            Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+```roc
+task =
+    Task.await (Stdout.line "Type something press Enter:") \_ ->
+        Task.await Stdin.line \text ->
+            Stdout.line "You just entered: \(text)"
+```
 
 This works, but we can make it a little nicer to read. Let's change it to the following:
 
-<pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
-    <span class="kw">imports</span> [pf.Stdout, pf.Stdin, pf.Task.{ await }]
-    <span class="kw">provides</span> [main] <span class="kw">to</span> pf
+```roc
+app "cli-tutorial"
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
+    provides [main] to pf
 
-main <span class="kw">=</span>
-    await (Stdout.line <span class="str">"Type something press Enter:"</span>) <span class="kw">\</span>_ <span class="kw">-&gt;</span>
-        await Stdin.line <span class="kw">\</span>text <span class="kw">-&gt;</span>
-            Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+main =
+    await (Stdout.line "Type something press Enter:") \_ ->
+        await Stdin.line \text ->
+            Stdout.line "You just entered: \(text)"
+```
 
 Here we've changed how we're importing the `Task` module. Before it was `pf.Task` and now it's `pf.Task.{ await }`. The difference is that we're importing `await` in an _unqualified_ way, meaning that whenever we write `await` in this module, it will refer to `Task.await`. Now we no longer need to write `Task.` every time we want to use `await`.
 
@@ -1500,27 +1508,30 @@ It's most common in Roc to call functions from other modules in a _qualified_ wa
 
 Speaking of calling `await` repeatedly, if we keep calling it more and more on this code, we'll end up doing a lot of indenting. If we'd rather not indent so much, we can rewrite `task` into this style which looks different but does the same thing:
 
-<pre><samp>task <span class="kw">=</span>
-    _ <span class="kw">&lt;-</span> await (Stdout.line <span class="str">"Type something press Enter:"</span>)
-    text <span class="kw">&lt;-</span> await Stdin.line
+```roc
+task =
+    _ <- await (Stdout.line "Type something press Enter:")
+    text <- await Stdin.line
 
-    Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+    Stdout.line "You just entered: \(text)"
+```
 
 This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymous function, just like `\ … ->` is.
 
 Here, we're using backpassing to define two anonymous functions. Here's one of them:
 
-<pre><samp>text <span class="kw">&lt;-</span>
+```roc
+text <-
 
-Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+Stdout.line "You just entered: \(text)"
+```
 
 It may not look like it, but this code is defining an anonymous function! You might remember it as the anonymous function we previously defined like this:
 
-<pre><samp><span class="kw">\</span>text <span class="kw">-&gt;</span>
-    Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+```roc
+\text ->
+    Stdout.line "You just entered: \(text)"
+```
 
 These two anonymous functions are the same, just defined using different syntax.
 
@@ -1530,43 +1541,48 @@ Let's look at these two complete expressions side by side. They are both saying 
 
 Here's the original:
 
-<pre><samp>await Stdin.line <span class="kw">\</span>text <span class="kw">-&gt;</span>
-    Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+```roc
+await Stdin.line \text ->
+    Stdout.line "You just entered: \(text)"
+```
 
 And here's the equivalent expression with backpassing syntax:
 
-<pre><samp>text <span class="kw">&lt;-</span> await Stdin.line
+```roc
+text <- await Stdin.line
 
-Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+Stdout.line "You just entered: \(text)"
+```
 
 Here's the other function we're defining with backpassing:
 
-<pre><samp>_ <span class="kw">&lt;-</span>
-text <span class="kw">&lt;-</span> await Stdin.line
+```roc
+_ <-
+text <- await Stdin.line
 
-Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+Stdout.line "You just entered: \(text)"
+```
 
 We could also have written that function this way if we preferred:
 
-<pre><samp>_ <span class="kw">&lt;-</span>
+```roc
+_ <-
 
-await Stdin.line <span class="kw">\</span>text <span class="kw">-&gt;</span>
-    Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+await Stdin.line \text ->
+    Stdout.line "You just entered: \(text)"
+```
 
 This is using a mix of a backpassing function `_ <-` and a normal function `\text ->`, which is totally allowed! Since backpassing is nothing more than syntax sugar for defining a function and passing back as an argument to another function, there's no reason we can't mix and match if we like.
 
 That said, the typical style in which this `task` would be written in Roc is using backpassing for all the `await` calls, like we had above:
 
-<pre><samp>task <span class="kw">=</span>
-    _ <span class="kw">&lt;-</span> await (Stdout.line <span class="str">"Type something press Enter:"</span>)
-    text <span class="kw">&lt;-</span> await Stdin.line
+```roc
+task =
+    _ <- await (Stdout.line "Type something press Enter:")
+    text <- await Stdin.line
 
-    Stdout.line <span class="str">"You just entered: </span><span class="str-interp">\(text)"</span>
-</samp></pre>
+    Stdout.line "You just entered: \(text)"
+```
 
 This way, it reads like a series of instructions:
 
@@ -1592,9 +1608,10 @@ Here are some concepts you likely won't need as a beginner, but may want to know
 
 Let's say I write a function which takes a record with a `firstName` and `lastName` field, and puts them together with a space in between:
 
-<pre><samp>fullName <span class="kw">=</span> <span class="kw">\</span>user <span class="kw">-&gt;
-</span>    <span class="str">"</span><span class="str-interp">\(user.firstName) \(user.lastName)</span><span class="str">"</span>
-</samp></pre>
+```roc
+fullName = \user ->
+    "\(user.firstName) \(user.lastName)"
+```
 
 I can pass this function a record that has more fields than just `firstName` and `lastName`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
 
@@ -1608,16 +1625,19 @@ In contrast, a _closed record_ is one that requires an exact set of fields (and 
 
 If we add a type annotation to this `fullName` function, we can choose to have it accept either an open record or a closed record:
 
-<pre><samp><span class="comment"># Closed record</span>
-fullName <span class="colon">:</span> { <span class="hljs-type">firstName </span><span class="colon">:</span> <span class="hljs-type">Str</span>, lastName <span class="colon">:</span> <span class="hljs-type">Str</span> } <span class="kw">-&gt;</span> Str
-fullName <span class="kw">=</span> <span class="kw">\</span>user <span class="kw">-&gt;</span>
-    <span class="str-interp">"\(user.firstName) \(user.lastName)"</span>
-</samp>
-<samp><span class="comment"># Open record (because of the `*`)</span>
-fullName <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }* <span class="kw">-&gt;</span> Str
-fullName <span class="kw">=</span> <span class="kw">\</span>user <span class="kw">-&gt;</span>
-    <span class="str-interp">"\(user.firstName) \(user.lastName)"</span>
-</samp></pre>
+```roc
+# Closed record
+fullName : { firstName : Str, lastName : Str } -> Str
+fullName = \user ->
+    "\(user.firstName) \(user.lastName)"
+```
+
+```roc
+# Open record (because of the `*`)
+fullName : { firstName : Str, lastName : Str }* -> Str
+fullName = \user ->
+    "\(user.firstName) \(user.lastName)"
+```
 
 The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
 
@@ -1629,10 +1649,11 @@ If the type variable in a record type is a `*` (such as in `{ first : Str, last 
 
 The type variable can also be a named type variable, like so:
 
-<pre><samp>addHttps <span class="colon">:</span> { <span class="hljs-type">url </span><span class="colon">:</span> <span class="hljs-type">Str</span> }a <span class="kw">-&gt;</span> { url <span class="colon">:</span> <span class="hljs-type">Str</span> }a
-addHttps <span class="kw">=</span> <span class="kw">\</span>record <span class="kw">-&gt;</span>
-    { record <span class="kw">&amp;</span> url<span class="colon">:</span> <span class="str">"https://</span><span class="str-interp">\(record.url)"</span> }
-</samp></pre>
+```roc
+addHttps : { url : Str }a -> { url : Str }a
+addHttps = \record ->
+    { record & url: "https://\(record.url)" }
+```
 
 This function uses _constrained records_ in its type. The annotation is saying:
 
@@ -1660,51 +1681,59 @@ You can add type annotations to make record types less flexible than what the co
 
 If you like, you can always annotate your functions as accepting open records. However, in practice this may not always be the nicest choice. For example, let's say you have a `User` type alias, like so:
 
-<pre><samp>User <span class="colon">:</span> {
-    email <span class="colon">:</span> <span class="hljs-type">Str</span>,
-    firstName <span class="colon">:</span> <span class="hljs-type">Str</span>,
-    lastName <span class="colon">:</span> <span class="hljs-type">Str</span>,
+```roc
+User : {
+    email : Str,
+    firstName : Str,
+    lastName : Str,
 }
-</samp></pre>
+```
 
 This defines `User` to be a closed record, which in practice is the most common way records named `User` tend to be defined.
 
 If you want to have a function take a `User`, you might write its type like so:
 
-<pre><samp>isValid <span class="colon">:</span> User <span class="kw">-&gt;</span> </span>Bool</span></samp></pre>
+```roc
+isValid : User -> Bool
+```
 
 If you want to have a function return a `User`, you might write its type like so:
 
-<pre><samp>userFromEmail <span class="colon">:</span> Str <span class="kw">-&gt;</span> User
-</samp></pre>
+```roc
+userFromEmail : Str -> User
+```
 
 A function which takes a user and returns a user might look like this:
 
-<pre><samp>capitalizeNames <span class="colon">:</span> User <span class="kw">-&gt;</span> </span>User</span>
-</samp></pre>
+```roc
+capitalizeNames : User -> User
+```
 
 This is a perfectly reasonable way to write all of these functions. However, I might decide that I really want the `isValid` function to take an open record; a record with _at least_ the fields of this `User` record, but possibly others as well.
 
 Since open records have a type variable (like `*` in `{ email : Str }*` or `a` in `{ email : Str }a -> { email : Str }a`), in order to do this I'd need to add a type variable to the `User` type alias:
 
-<pre><samp>User a <span class="kw">:</span> {
-    email <span class="kw">:</span> Str
-    firstName <span class="kw">:</span> Str
-    lastName <span class="kw">:</span> Str
+```roc
+User a : {
+    email : Str
+    firstName : Str
+    lastName : Str
 }a
-</samp></pre>
+```
 
 Notice that the `a` type variable appears not only in `User a` but also in `}a` at the end of the record type!
 
 Using `User a` type alias, I can still write the same three functions, but now their types need to look different. This is what the first one would look like:
 
-<pre><samp>isValid <span class="colon">:</span> User * <span class="kw">-&gt;</span> Bool
-</samp></pre>
+```roc
+isValid : User * -> Bool
+```
 
 Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
 
-<pre><samp>userFromEmail <span class="colon">:</span> Str <span class="kw">-&gt;</span> User {}
-</samp></pre>
+```roc
+userFromEmail : Str -> User {}
+```
 
 Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
 
@@ -1714,15 +1743,17 @@ This function still returns the same record as it always did, it just needs to b
 
 The third function might need to use a named type variable:
 
-<pre><samp>capitalizeNames <span class="colon">:</span> User a <span class="kw">-&gt;</span> User a
-</samp></pre>
+```roc
+capitalizeNames : User a -> User a
+```
 
 If this function does a record update on the given user, and returns that - for example, if its definition were `capitalizeNames = \user -> { user & email: "blah" }` - then it needs to use the same named type variable for both the argument and return value.
 
 However, if returns a new `User` that it created from scratch, then its type could instead be:
 
-<pre><samp>capitalizeNames <span class="colon">:</span> User * <span class="kw">-&gt;</span> User {}
-</samp></pre>
+```roc
+capitalizeNames : User * -> User {}
+```
 
 This says that it takes a record with at least the fields specified in the `User` type alias, and possibly others...and then returns a record with exactly the fields specified in the `User` type alias, and no others.
 
@@ -1738,22 +1769,24 @@ The _open tag union_ (or _open union_ for short) `[Foo Str, Bar Bool]*` represen
 
 Because an open union represents possibilities that are impossible to know ahead of time, any `when` I use on a `[Foo Str, Bar Bool]*` value must include a catch-all `_ ->` branch. Otherwise, if one of those unknown tags were to come up, the `when` would not know what to do with it! For example:
 
-<pre><samp>example <span class="kw">:</span> [Foo Str, Bar Bool]* <span class="kw">-&gt;</span> Bool
-example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">-&gt;</span>
-    <span class="kw">when</span> tag <span class="kw">is</span>
-        Foo str <span class="kw">-&gt;</span> Str.isEmpty str
-        Bar bool <span class="kw">-&gt;</span> bool
-        _ <span class="kw">-&gt;</span> Bool.<span class="hljs-literal">false</span>
-</samp></pre>
+```roc
+example : [Foo Str, Bar Bool]* -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+        _ -> Bool.false
+```
 
 In contrast, a _closed tag union_ (or _closed union_) like `[Foo Str, Bar Bool]` (without the `*`) represents the set of all possible tags. If I use a `when` on one of these, I can match on `Foo` only and then on `Bar` only, with no need for a catch-all branch. For example:
 
-<pre><samp>example <span class="kw">:</span> [Foo Str, Bar Bool] <span class="kw">-&gt;</span> Bool
-example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">-&gt;</span>
-    <span class="kw">when</span> tag <span class="kw">is</span>
-        Foo str <span class="kw">-&gt;</span> Str.isEmpty str
-        Bar bool <span class="kw">-&gt;</span> bool
-</samp></pre>
+```roc
+example : [Foo Str, Bar Bool] -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+```
 
 If we were to remove the type annotations from the previous two code examples, Roc would infer the same types for them anyway.
 
@@ -1771,19 +1804,21 @@ When we make a new record, it's inferred to be a closed record. For example, in 
 
 This is because open unions can accumulate additional tags based on how they're used in the program, whereas closed unions cannot. For example, let's look at this conditional:
 
-<pre><samp><span class="kw">if</span> x <span class="op">&gt;</span> <span class="number">5</span> <span class="kw">then</span>
-    <span class="str">"foo"</span>
-<span class="kw">else</span>
-    <span class="number">7</span>
-</samp></pre>
+```roc
+if x > 5 then
+    "foo"
+else
+    7
+```
 
 This will be a type mismatch because the two branches have incompatible types. Strings and numbers are not type-compatible! Now let's look at another example:
 
-<pre><samp><span class="kw">if</span> x <span class="op">&gt;</span> <span class="number">5</span> <span class="kw">then</span>
-    <span class="hljs-literal">Ok</span> <span class="str">"foo"</span>
-<span class="kw">else</span>
-    <span class="hljs-literal">Err</span> <span class="str">"bar"</span>
-</samp></pre>
+```roc
+if x > 5 then
+    Ok "foo"
+else
+    Err "bar"
+```
 
 This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok "foo"` to be the closed union `[Ok Str]`, and likewise for `Err "bar"` and `[Err Str]`, then this would have to be a type mismatch - because those two closed unions are incompatible.
 
@@ -1793,14 +1828,16 @@ Earlier we saw how a function which accepts an open union must account for more 
 
 So if I have an `[Ok Str]*` value, I can pass it to functions with any of these types (among others):
 
-- `[Ok Str]* -> Bool`
-- `[Ok Str] -> Bool`
-- `[Ok Str, Err Bool]* -> Bool`
-- `[Ok Str, Err Bool] -> Bool`
-- `[Ok Str, Err Bool, Whatever]* -> Bool`
-- `[Ok Str, Err Bool, Whatever] -> Bool`
-- `Result Str Bool -> Bool`
-- `[Err Bool, Whatever]* -> Bool`
+|              Function Type              | Can it receive `[Ok Str]*`? |
+| :-------------------------------------- | :-------------------------: |
+|           `[Ok Str]* -> Bool`           |             Yes             |
+|           `[Ok Str] -> Bool`            |             Yes             |
+|      `[Ok Str, Err Bool]* -> Bool`      |             Yes             |
+|      `[Ok Str, Err Bool] -> Bool`       |             Yes             |
+| `[Ok Str, Err Bool, Whatever]* -> Bool` |             Yes             |
+| `[Ok Str, Err Bool, Whatever] -> Bool`  |             Yes             |
+|        `Result Str Bool -> Bool`        |             Yes             |
+|     `[Err Bool, Whatever]* -> Bool`     |             Yes             |
 
 That last one works because a function accepting an open union can accept any unrecognized tag (including `Ok Str`) even though it is not mentioned as one of the tags in `[Err Bool, Whatever]*`! Remember, when a function accepts an open tag union, any `when` branches on that union must include a catch-all `_ ->` branch, which is the branch that will end up handling the `Ok Str` value we pass in.
 
@@ -1821,29 +1858,33 @@ In summary, here's a way to think about the difference between open unions in a 
 
 Earlier we saw these two examples, one with an open tag union and the other with a closed one:
 
-<pre><samp>example <span class="kw">:</span> [Foo Str, Bar Bool]* <span class="kw">-&gt;</span> Bool
-example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">-&gt;</span>
-    <span class="kw">when</span> tag <span class="kw">is</span>
-        Foo str <span class="kw">-&gt;</span> Str.isEmpty str
-        Bar bool <span class="kw">-&gt;</span> bool
-        _ <span class="kw">-&gt;</span> Bool.<span class="hljs-literal">false</span>
-</samp>
-<samp>example <span class="kw">:</span> [Foo Str, Bar Bool] <span class="kw">-&gt;</span> Bool
-example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">-&gt;</span>
-    <span class="kw">when</span> tag <span class="kw">is</span>
-        Foo str <span class="kw">-&gt;</span> Str.isEmpty str
-        Bar bool <span class="kw">-&gt;</span> bool
-</samp></pre>
+```roc
+example : [Foo Str, Bar Bool]* -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+        _ -> Bool.false
+```
+
+```roc
+example : [Foo Str, Bar Bool] -> Bool
+example = \tag ->
+    when tag is
+        Foo str -> Str.isEmpty str
+        Bar bool -> bool
+```
 
 Similarly to how there are open records with a `*`, closed records with nothing, and constrained records with a named type variable, we can also have _constrained tag unions_ with a named type variable. Here's an example:
 
-<pre><samp>example <span class="kw">:</span> [Foo Str, Bar Bool]a <span class="kw">-&gt;</span> [Foo Str, Bar Bool]a
-example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">-&gt;</span>
-    <span class="kw">when</span> tag <span class="kw">is</span>
-        Foo str <span class="kw">-&gt;</span> Bar (Str.isEmpty str)
-        Bar bool <span class="kw">-&gt;</span> Bar Bool.false
-        other <span class="kw">-&gt;</span> other
-</samp></pre>
+```roc
+example : [Foo Str, Bar Bool]a -> [Foo Str, Bar Bool]a
+example = \tag ->
+    when tag is
+        Foo str -> Bar (Str.isEmpty str)
+        Bar bool -> Bar Bool.false
+        other -> other
+```
 
 This type says that the `example` function will take either a `Foo Str` tag, or a `Bar Bool` tag, or possibly another tag we don't know about at compile time and it also says that the function's return type is the same as the type of its argument.
 
