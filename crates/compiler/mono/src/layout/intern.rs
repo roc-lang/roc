@@ -365,6 +365,10 @@ pub trait LayoutInterner<'a>: Sized {
     fn dbg_deep<'r>(&'r self, layout: InLayout<'a>) -> dbg::Dbg<'a, 'r, Self> {
         dbg::Dbg(self, layout)
     }
+
+    fn dbg_deep_iter<'r>(&'r self, layouts: &'a [InLayout<'a>]) -> dbg::DbgFields<'a, 'r, Self> {
+        dbg::DbgFields(self, layouts)
+    }
 }
 
 /// An interned layout.
@@ -1274,7 +1278,7 @@ mod equiv {
     }
 }
 
-mod dbg {
+pub mod dbg {
     use roc_module::symbol::Symbol;
 
     use crate::layout::{Builtin, LambdaSet, Layout, UnionLayout};
@@ -1311,7 +1315,7 @@ mod dbg {
         }
     }
 
-    struct DbgFields<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'a [InLayout<'a>]);
+    pub struct DbgFields<'a, 'r, I: LayoutInterner<'a>>(pub &'r I, pub &'a [InLayout<'a>]);
 
     impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgFields<'a, 'r, I> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

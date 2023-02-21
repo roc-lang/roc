@@ -1568,8 +1568,10 @@ fn unspecialized_lambda_set_sorter(subs: &Subs, uls1: Uls, uls2: Uls) -> std::cm
                 }
                 (FlexAbleVar(..), _) => Greater,
                 (_, FlexAbleVar(..)) => Less,
-                // For everything else, the order is irrelevant
-                (_, _) => Less,
+                // For everything else, sort by the root key
+                (_, _) => subs
+                    .get_root_key_without_compacting(var1)
+                    .cmp(&subs.get_root_key_without_compacting(var2)),
             }
         }
         ord => ord,
@@ -1731,6 +1733,8 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             let kept = uls_left.next().unwrap();
                             merged_uls.push(*kept);
                         } else {
+                            // CASE: disjoint_flex_specializations
+                            //
                             //     ... a1     ...
                             //     ... b1     ...
                             // =>  ... a1, b1 ...
@@ -1800,20 +1804,47 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                         let _dropped = uls_left.next().unwrap();
                     }
                     (_, _) => {
-                        //     ... {foo: _} ...
-                        //     ... {foo: _} ...
-                        // =>  ... {foo: _} ...
-                        //
-                        // Unify them, then advance one.
-                        // (the choice is arbitrary, so we choose the left)
+                        if env.subs.equivalent_without_compacting(var_l, var_r) {
+                            //     ... a1    ...
+                            //     ... b1=a1 ...
+                            // =>  ... a1    ...
+                            //
+                            // Keep the one on the left, drop the one on the right. Then progress
+                            // both, because the next variable on the left must be disjoint from
+                            // the current on the right (resp. next variable on the right vs.
+                            // current left) - if they aren't, then the invariant was broken.
+                            //
+                            // Then progress both, because the invariant tells us they must be
+                            // disjoint, and if there were any concrete variables, they would have
+                            // appeared earlier.
+                            let _dropped = uls_right.next().unwrap();
+                            let kept = uls_left.next().unwrap();
+                            merged_uls.push(*kept);
 
-                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
-                        if !outcome.mismatches.is_empty() {
-                            return Err(outcome);
+                            debug_assert!(uls_right
+                                .peek()
+                                .map(|r| env.subs.equivalent_without_compacting(var_l, r.0))
+                                .unwrap_or(true));
+                            debug_assert!(uls_left
+                                .peek()
+                                .map(|l| env.subs.equivalent_without_compacting(l.0, var_r))
+                                .unwrap_or(true));
+                        } else {
+                            // Even if these two variables unify, since they are not equivalent,
+                            // they correspond to different specializations! As such we must not
+                            // merge them.
+                            //
+                            // Instead, keep both, but do so by adding and advancing the side with
+                            // the lower root. See CASE disjoint_flex_specializations for
+                            // reasoning.
+                            if env.subs.get_root_key(var_l) < env.subs.get_root_key(var_r) {
+                                let kept = uls_left.next().unwrap();
+                                merged_uls.push(*kept);
+                            } else {
+                                let kept = uls_right.next().unwrap();
+                                merged_uls.push(*kept);
+                            }
                         }
-                        whole_outcome.union(outcome);
-
-                        let _dropped = uls_left.next().unwrap();
                     }
                 }
             }

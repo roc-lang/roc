@@ -385,7 +385,15 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         ),
         Crash { .. } => todo!(),
         ZeroArgumentTag { .. } => todo!(),
-        OpaqueRef { .. } => todo!(),
+        OpaqueRef { name, argument, .. } => maybe_paren!(
+            Free,
+            p,
+            || true,
+            pp_sym(c, f, *name)
+                .append(f.space())
+                .append(expr(c, AppArg, f, &argument.1.value))
+                .group()
+        ),
         Dbg { .. } => todo!(),
         Expect { .. } => todo!(),
         ExpectFx { .. } => todo!(),
