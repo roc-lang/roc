@@ -40,7 +40,6 @@ confy = { git = 'https://github.com/rust-cli/confy', features = [
 serde = { version = "1.0.130", features = ["derive"] }
 nonempty = "0.7.0"
 fs_extra = "1.2.0"
-rodio = { version = "0.14.0", optional = true } # to play sounds
 threadpool = "1.8.1"
 
 [package.metadata.cargo-udeps.ignore]
@@ -51,7 +50,6 @@ normal = ["confy"]
 
 [features]
 default = []
-with_sound = ["rodio"]
 
 [dependencies.bytemuck]
 version = "1.7.2"

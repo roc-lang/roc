@@ -65,7 +65,6 @@ rustPlatform.buildRustPackage {
       cargo
       makeWrapper # necessary for postBuild wrapProgram
     ] ++ lib.optionals pkgs.stdenv.isLinux [
-      alsa-lib
       valgrind
       vulkan-headers
       vulkan-loader
