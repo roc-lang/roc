@@ -1870,91 +1870,25 @@ For this reason, any time you see a function that only runs a `when` on its only
 
 Here are various Roc expressions involving operators, and what they desugar to.
 
-<pre>
-<table>
-<thead>
-<tr>
-    <th>Expression</th>
-    <th>Desugars to</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-    <td><code>a + b</code></td>
-    <td><code>Num.add a b</code></td>
-</tr>
-<tr>
-    <td><code>a - b</code></td>
-    <td><code>Num.sub a b</code></td>
-</tr>
-<tr>
-    <td><code>a * b</code></td>
-    <td><code>Num.mul a b</code></td>
-</tr>
-<tr>
-    <td><code>a / b</code></td>
-    <td><code>Num.div a b</code></td>
-</tr>
-<tr>
-    <td><code>a // b</code></td>
-    <td><code>Num.divTrunc a b</code></td>
-</tr>
-<tr>
-    <td><code>a ^ b</code></td>
-    <td><code>Num.pow a b</code></td>
-</tr>
-<tr>
-    <td><code>a % b</code></td>
-    <td><code>Num.rem a b</code></td>
-</tr>
-<tr>
-    <td><code>a &gt;&gt; b</code></td>
-    <td><code>Num.shr a b</code></td>
-</tr>
-<tr>
-    <td><code>a &lt;&lt; b</code></td>
-    <td><code>Num.shl a b</code></td>
-</tr>
-<tr>
-    <td><code>-a</code></td>
-    <td><code>Num.neg a</code></td>
-</tr>
-<tr>
-    <td><code>-f x y</code></td>
-    <td><code>Num.neg (f x y)</code></td>
-</tr>
-<tr>
-    <td><code>a <span class="op">==</span> b</code></td>
-    <td><code>Bool.isEq a b</code></td>
-</tr>
-<tr>
-    <td><code>a != b</code></td>
-    <td><code>Bool.isNotEq a b</code></td>
-</tr>
-<tr>
-    <td><code>a &amp;&amp; b</code></td>
-    <td><code>Bool.and a b</code></td>
-</tr>
-<tr>
-    <td><code>a || b</code></td>
-    <td><code>Bool.or a b</code></td>
-</tr>
-<tr>
-    <td><code>!a</code></td>
-    <td><code>Bool.not a</code></td>
-</tr>
-<tr>
-    <td><code>!f x y</code></td>
-    <td><code>Bool.not (f x y)</code></td>
-</tr>
-<tr>
-    <td><code>a |&gt; b</code>
-    </td><td><code>b a</code></td>
-</tr>
-<tr>
-    <td><code>a b c |&gt; f x y</code></td>
-    <td><code>f (a b c) x y</code></td>
-</tr>
-</tbody>
-</table>
-</pre>
+| Expression                    |    Desugars To     |
+| :---------------------------: | :----------------: | 
+| `a + b`                       |   `Num.add a b`    |
+| `a - b`                       |   `Num.sub a b`    |
+| `a * b`                       |   `Num.mul a b`    |
+| `a / b`                       |   `Num.div a b`    |
+| `a // b`                      | `Num.divTrunc a b` |
+| `a ^ b`                       |   `Num.pow a b`    |
+| `a % b`                       |   `Num.rem a b`    |
+| `a >> b`                      |   `Num.shr a b`    |
+| `a << b`                      |   `Num.shl a b`    |
+| `-a`                          |    `Num.neg a`     |
+| `-f x y`                      | `Num.neg (f x y)`  |
+| `a == b`                      |  `Bool.isEq a b`   |
+| `a != b`                      | `Bool.isNotEq a b` |
+| `a && b`                      |   `Bool.and a b`   |
+| <code>a \|\| b</code>         | `Bool.or a b`      |
+| `!a`                          |    `Bool.not a`    |
+| `!f x y`                      | `Bool.not (f x y)` |
+| <code>a \|> b</code>          |       `b a`        |
+| <code>a b c \|> f x y</code>  | `f (a b c) x y`    |
+
