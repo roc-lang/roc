@@ -3307,8 +3307,44 @@ fn box_str() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn box_and_unbox_num() {
+fn box_and_unbox_u64() {
     assert_evals_to!("Box.unbox (Box.box (123u64))", 123, u64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u32() {
+    assert_evals_to!("Box.unbox (Box.box (123u32))", 123, u32)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u16() {
+    assert_evals_to!("Box.unbox (Box.box (123u16))", 123, u16)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u8() {
+    assert_evals_to!("Box.unbox (Box.box (123u8))", 123, u8)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_bool() {
+    assert_evals_to!("Box.unbox (Box.box (Bool.true))", true, bool)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_f64() {
+    assert_evals_to!("Box.unbox (Box.box (123.0f64))", 123.0, f64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_f32() {
+    assert_evals_to!("Box.unbox (Box.box (123.0f32))", 123.0, f32)
 }
 
 #[test]
