@@ -135,7 +135,8 @@ impl FlatEncodable {
                 Self::from_var(subs, range.default_compilation_variable())
             }
             //
-            Content::RecursionVar { .. } => Err(Underivable),
+            Content::RecursionVar { structure, .. } => Self::from_var(subs, structure),
+            //
             Content::Error => Err(Underivable),
             Content::FlexVar(_)
             | Content::RigidVar(_)
