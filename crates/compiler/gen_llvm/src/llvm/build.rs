@@ -3979,8 +3979,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
             // In C, this is modelled as a function returning void
             (
                 &params[..],
-                // &param_types[..param_types.len().saturating_sub(1)],
-                &param_types[..],
+                &param_types[..param_types.len().saturating_sub(1)],
+                // &param_types[..],
             )
         }
         _ => (&params[..], &param_types[..]),

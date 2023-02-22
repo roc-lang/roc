@@ -3114,7 +3114,7 @@ fn specialize_external_help<'a>(
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
 
-                        if false {
+                        if true {
                             raw_function_layout = match raw_function_layout {
                                 RawFunctionLayout::Function(a, mut lambda_set, _) => {
                                     lambda_set.ret = in_layout;
