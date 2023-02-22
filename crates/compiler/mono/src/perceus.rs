@@ -287,25 +287,13 @@ impl<'a> VariableUsageEnv<'a> {
             Expr::Tag { arguments, .. } | Expr::Struct(arguments) => {
                 usage_env.insert_variable_usages(arguments.iter().copied());
             }
-            Expr::StructAtIndex {
-                index: _,
-                field_layouts: _,
-                structure,
-            } => {
-                usage_env.insert_variable_usage(*structure);
+
+            Expr::GetTagId { structure, .. }
+            | Expr::StructAtIndex { structure, .. }
+            | Expr::UnionAtIndex { structure, .. } => {
+                // All structures are alive at this point and don't have to be copied in order to take an index out.
+                // TODO perhaps inc if the index is a pointer to a heap value, assuming non pointers get copied.
             }
-            Expr::GetTagId {
-                structure,
-                union_layout,
-            } => {
-                // The arguments to get tag id are not reference counted.
-            }
-            Expr::UnionAtIndex {
-                structure,
-                tag_id,
-                union_layout,
-                index,
-            } => todo!(),
             Expr::Array {
                 elem_layout: _,
                 elems,
