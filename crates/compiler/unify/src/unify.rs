@@ -1823,11 +1823,11 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
 
                             debug_assert!(uls_right
                                 .peek()
-                                .map(|r| env.subs.equivalent_without_compacting(var_l, r.0))
+                                .map(|r| !env.subs.equivalent_without_compacting(var_l, r.0))
                                 .unwrap_or(true));
                             debug_assert!(uls_left
                                 .peek()
-                                .map(|l| env.subs.equivalent_without_compacting(l.0, var_r))
+                                .map(|l| !env.subs.equivalent_without_compacting(l.0, var_r))
                                 .unwrap_or(true));
                         } else {
                             // Even if these two variables unify, since they are not equivalent,
