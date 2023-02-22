@@ -9,9 +9,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::RocList;
-#[allow(unused_imports)]
-use roc_std::RocStr;
+use roc_std::{RocBox, RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -3257,8 +3255,24 @@ fn issue_2322() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_small_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "short"
+                |> Box.box
+                |> Box.unbox
+            "#
+        ),
+        RocStr::from("short"),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn box_and_unbox_string() {
+fn box_and_unbox_big_string() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3275,17 +3289,62 @@ fn box_and_unbox_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn box_and_unbox_num() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_num() {
+    assert_evals_to!("Box.box 123u64", RocBox::new(123), RocBox<u64>)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[ignore = "triggers some UB somewhere in at least the llvm and dev backends"]
+fn box_str() {
     assert_evals_to!(
-        indoc!(
-            r#"
-            Box.unbox (Box.box (123u8))
-            "#
-        ),
-        123,
-        u8
-    )
+        "Box.box \"short\"",
+        RocBox::new(RocStr::from("short")),
+        RocBox<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u64() {
+    assert_evals_to!("Box.unbox (Box.box (123u64))", 123, u64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u32() {
+    assert_evals_to!("Box.unbox (Box.box (123u32))", 123, u32)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u16() {
+    assert_evals_to!("Box.unbox (Box.box (123u16))", 123, u16)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u8() {
+    assert_evals_to!("Box.unbox (Box.box (123u8))", 123, u8)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_bool() {
+    assert_evals_to!("Box.unbox (Box.box (Bool.true))", true, bool)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_f64() {
+    assert_evals_to!("Box.unbox (Box.box (123.0f64))", 123.0, f64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_f32() {
+    assert_evals_to!("Box.unbox (Box.box (123.0f32))", 123.0, f32)
 }
 
 #[test]

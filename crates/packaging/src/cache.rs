@@ -36,9 +36,9 @@ fn nixos_error_if_dynamic(url: &str, dest_dir: &Path) {
             .arg(format!("ldd {}/linux-x86_64.rh*", dest_dir.display()))
             .output()
             .expect("ldd command failed to start");
-        let is_static = String::from_utf8_lossy(&ldd_output.stdout).contains("statically linked");
+        let is_dynamic = String::from_utf8_lossy(&ldd_output.stdout).contains("=>");
 
-        if !is_static {
+        if is_dynamic {
             eprintln!("The platform downloaded from the URL {url} is dynamically linked.\n\
                         Dynamically linked platforms can't be used on NixOS.\n\n\
                         You can:\n\n\t\

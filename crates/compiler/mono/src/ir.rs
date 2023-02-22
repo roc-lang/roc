@@ -307,11 +307,20 @@ pub struct Proc<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostExposedLambdaSet<'a> {
+    pub id: LambdaSetId,
+    /// Symbol of the exposed function
+    pub symbol: Symbol,
+    pub proc_layout: ProcLayout<'a>,
+    pub raw_function_layout: RawFunctionLayout<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
         rigids: BumpMap<Lowercase, InLayout<'a>>,
-        aliases: BumpMap<Symbol, (LambdaSetId, Symbol, ProcLayout<'a>, RawFunctionLayout<'a>)>,
+        aliases: BumpMap<Symbol, HostExposedLambdaSet<'a>>,
     },
 }
 
@@ -1178,7 +1187,6 @@ impl<'a> Procs<'a> {
                                 name,
                                 layout_cache,
                                 annotation,
-                                &[],
                                 partial_proc_id,
                             ) {
                                 Ok((proc, layout)) => {
@@ -1271,7 +1279,6 @@ impl<'a> Procs<'a> {
                     proc_name,
                     layout_cache,
                     fn_var,
-                    Default::default(),
                     partial_proc_id,
                 ) {
                     Ok((proc, raw_layout)) => {
@@ -2912,7 +2919,7 @@ fn specialize_suspended<'a>(
             }
         };
 
-        match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
+        match specialize_variable(env, procs, name, layout_cache, var, partial_proc) {
             Ok((proc, raw_layout)) => {
                 let proc_layout = ProcLayout::from_raw_named(env.arena, name, raw_layout);
                 procs
@@ -3059,15 +3066,8 @@ fn specialize_external_help<'a>(
         }
     };
 
-    let specialization_result = specialize_variable(
-        env,
-        procs,
-        name,
-        layout_cache,
-        variable,
-        host_exposed_aliases,
-        partial_proc_id,
-    );
+    let specialization_result =
+        specialize_variable(env, procs, name, layout_cache, variable, partial_proc_id);
 
     match specialization_result {
         Ok((mut proc, layout)) => {
@@ -3077,21 +3077,23 @@ fn specialize_external_help<'a>(
                 debug_assert!(top_level.arguments.is_empty());
             }
 
-            {
-                let proc_layout = top_level;
-
-                for in_layout in proc_layout
+            if !host_exposed_aliases.is_empty() {
+                // layouts that are (transitively) used in the type of `mainForHost`.
+                let mut host_exposed_layouts: Vec<_> = top_level
                     .arguments
                     .iter()
                     .copied()
-                    .chain([proc_layout.result])
-                {
-                    dbg!(
-                        in_layout,
-                        layout_cache.interner.get(in_layout),
-                        layout_cache.interner.dbg(in_layout)
-                    );
+                    .chain([top_level.result])
+                    .collect_in(env.arena);
+
+                // it is very likely we see the same types across functions, or in multiple arguments
+                host_exposed_layouts.sort();
+                host_exposed_layouts.dedup();
+
+                // TODO: In the future, we will generate glue procs here
+                for in_layout in host_exposed_layouts {
                     let layout = layout_cache.interner.get(in_layout);
+
                     let all_glue_procs = generate_glue_procs(
                         env.home,
                         env.ident_ids,
@@ -3100,24 +3102,31 @@ fn specialize_external_help<'a>(
                         env.arena.alloc(layout),
                     );
 
+                    // for now, getters are not processed here
+                    let GlueProcs {
+                        getters: _,
+                        extern_names,
+                    } = all_glue_procs;
+
                     let mut aliases = BumpMap::default();
 
-                    for (id, raw_function_layout) in all_glue_procs.extern_names {
+                    for (id, mut raw_function_layout) in extern_names {
                         let symbol = env.unique_symbol();
-
                         let lambda_name = LambdaName::no_niche(symbol);
 
-                        let raw_function_layout = match raw_function_layout {
-                            RawFunctionLayout::Function(a, mut lambda_set, _) => {
-                                lambda_set.ret = in_layout;
-                                RawFunctionLayout::Function(a, lambda_set, in_layout)
-                            }
-                            RawFunctionLayout::ZeroArgumentThunk(x) => {
-                                RawFunctionLayout::ZeroArgumentThunk(x)
-                            }
-                        };
+                        if false {
+                            raw_function_layout = match raw_function_layout {
+                                RawFunctionLayout::Function(a, mut lambda_set, _) => {
+                                    lambda_set.ret = in_layout;
+                                    RawFunctionLayout::Function(a, lambda_set, in_layout)
+                                }
+                                RawFunctionLayout::ZeroArgumentThunk(x) => {
+                                    RawFunctionLayout::ZeroArgumentThunk(x)
+                                }
+                            };
+                        }
 
-                        let (key, (name, top_level, raw_layout, proc)) = host_expose_x(
+                        let (key, (top_level, proc)) = generate_host_exposed_function(
                             env,
                             procs,
                             layout_cache,
@@ -3125,15 +3134,60 @@ fn specialize_external_help<'a>(
                             raw_function_layout,
                         );
 
-                        procs.specialized.insert_specialized(name, top_level, proc);
+                        procs
+                            .specialized
+                            .insert_specialized(symbol, top_level, proc);
 
-                        aliases.insert(key, (id, name, top_level, raw_layout));
+                        let hels = HostExposedLambdaSet {
+                            id,
+                            symbol,
+                            proc_layout: top_level,
+                            raw_function_layout,
+                        };
+
+                        aliases.insert(key, hels);
                     }
 
-                    proc.host_exposed_layouts = HostExposedLayouts::HostExposed {
-                        rigids: BumpMap::default(),
-                        aliases,
-                    };
+                    // pre-glue: generate named callers for as-exposed aliases
+                    for (alias_name, variable) in host_exposed_aliases {
+                        let raw_function_layout = layout_cache
+                            .raw_from_var(env.arena, *variable, env.subs)
+                            .unwrap();
+
+                        let symbol = env.unique_symbol();
+                        let lambda_name = LambdaName::no_niche(symbol);
+
+                        let (proc_name, (proc_layout, proc)) = generate_host_exposed_function(
+                            env,
+                            procs,
+                            layout_cache,
+                            lambda_name,
+                            raw_function_layout,
+                        );
+
+                        procs
+                            .specialized
+                            .insert_specialized(proc_name, proc_layout, proc);
+
+                        let hels = HostExposedLambdaSet {
+                            id: LambdaSetId::default(),
+                            symbol: proc_name,
+                            proc_layout,
+                            raw_function_layout,
+                        };
+
+                        aliases.insert(*alias_name, hels);
+                    }
+
+                    match &mut proc.host_exposed_layouts {
+                        HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
+                        hep @ HostExposedLayouts::NotHostExposed => {
+                            *hep = HostExposedLayouts::HostExposed {
+                                aliases,
+                                rigids: Default::default(),
+                            };
+                        }
+                    }
                 }
             }
 
@@ -3261,103 +3315,47 @@ fn rollback_typestate(
     }
 }
 
-struct HostExposedProc<'a> {
-    proc: Proc<'a>,
-    top_level: ProcLayout<'a>,
-}
+fn generate_host_exposed_function<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    lambda_name: LambdaName<'a>,
+    layout: RawFunctionLayout<'a>,
+) -> (Symbol, (ProcLayout<'a>, Proc<'a>)) {
+    let function_name = lambda_name.name();
 
-impl<'a> HostExposedProc<'a> {
-    fn new(
-        env: &mut Env<'a, '_>,
-        procs: &mut Procs<'a>,
-        lambda_name: LambdaName<'a>,
-        layout_cache: &mut LayoutCache<'a>,
-        name: Symbol,
-        layout: RawFunctionLayout<'a>,
-    ) -> Self {
-        match layout {
-            RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout) => {
-                let assigned = env.unique_symbol();
+    match layout {
+        RawFunctionLayout::Function(_, lambda_set, _) => {
+            let (proc, top_level) = generate_host_exposed_lambda_set(
+                env,
+                procs,
+                layout_cache,
+                function_name,
+                lambda_set,
+            );
 
-                let mut argument_symbols = Vec::with_capacity_in(argument_layouts.len(), env.arena);
-                let mut proc_arguments =
-                    Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
-                let mut top_level_arguments =
-                    Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+            (function_name, (top_level, proc))
+        }
+        RawFunctionLayout::ZeroArgumentThunk(result) => {
+            let assigned = env.unique_symbol();
+            let hole = env.arena.alloc(Stmt::Ret(assigned));
+            let forced = force_thunk(env, function_name, result, assigned, hole);
 
-                for layout in argument_layouts {
-                    let symbol = env.unique_symbol();
+            let lambda_name = LambdaName::no_niche(function_name);
+            let proc = Proc {
+                name: lambda_name,
+                args: &[],
+                body: forced,
+                closure_data_layout: None,
+                ret_layout: result,
+                is_self_recursive: SelfRecursive::NotSelfRecursive,
+                must_own_arguments: false,
+                host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            };
 
-                    proc_arguments.push((*layout, symbol));
+            let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
 
-                    argument_symbols.push(symbol);
-                    top_level_arguments.push(*layout);
-                }
-
-                // the proc needs to take an extra closure argument
-                let lambda_set_layout = layout_cache.interner.insert(Layout::LambdaSet(lambda_set));
-                proc_arguments.push((lambda_set_layout, Symbol::ARG_CLOSURE));
-
-                // this should also be reflected in the TopLevel signature
-                top_level_arguments.push(lambda_set_layout);
-
-                let hole = env.arena.alloc(Stmt::Ret(assigned));
-
-                let body = match_on_lambda_set(
-                    env,
-                    layout_cache,
-                    procs,
-                    lambda_set,
-                    Symbol::ARG_CLOSURE,
-                    argument_symbols.into_bump_slice(),
-                    argument_layouts,
-                    return_layout,
-                    assigned,
-                    hole,
-                );
-
-                let proc = Proc {
-                    name: LambdaName::no_niche(name),
-                    args: proc_arguments.into_bump_slice(),
-                    body,
-                    closure_data_layout: None,
-                    ret_layout: return_layout,
-                    is_self_recursive: SelfRecursive::NotSelfRecursive,
-                    must_own_arguments: false,
-                    host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-                };
-
-                let top_level = ProcLayout::new(
-                    env.arena,
-                    top_level_arguments.into_bump_slice(),
-                    Niche::NONE,
-                    return_layout,
-                );
-
-                Self { proc, top_level }
-            }
-
-            RawFunctionLayout::ZeroArgumentThunk(result) => {
-                let assigned = env.unique_symbol();
-                let hole = env.arena.alloc(Stmt::Ret(assigned));
-                let forced = force_thunk(env, lambda_name.name(), result, assigned, hole);
-
-                let lambda_name = LambdaName::no_niche(name);
-                let proc = Proc {
-                    name: lambda_name,
-                    args: &[],
-                    body: forced,
-                    closure_data_layout: None,
-                    ret_layout: result,
-                    is_self_recursive: SelfRecursive::NotSelfRecursive,
-                    must_own_arguments: false,
-                    host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-                };
-
-                let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
-
-                Self { proc, top_level }
-            }
+            (function_name, (top_level, proc))
         }
     }
 }
@@ -3430,56 +3428,6 @@ fn generate_host_exposed_lambda_set<'a>(
     (proc, top_level)
 }
 
-fn host_expose_x<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    lambda_name: LambdaName<'a>,
-    layout: RawFunctionLayout<'a>,
-) -> (
-    Symbol,
-    (Symbol, ProcLayout<'a>, RawFunctionLayout<'a>, Proc<'a>),
-) {
-    let symbol = lambda_name.name();
-    let name = env.unique_symbol();
-
-    match dbg!(layout) {
-        RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout) => {
-            let (proc, top_level) =
-                generate_host_exposed_lambda_set(env, procs, layout_cache, name, lambda_set);
-
-            (symbol, (name, top_level, layout, proc))
-        }
-        RawFunctionLayout::ZeroArgumentThunk(result) => {
-            let assigned = env.unique_symbol();
-            let hole = env.arena.alloc(Stmt::Ret(assigned));
-            let forced = force_thunk(env, symbol, result, assigned, hole);
-
-            let lambda_name = LambdaName::no_niche(name);
-            let proc = Proc {
-                name: lambda_name,
-                args: &[],
-                body: forced,
-                closure_data_layout: None,
-                ret_layout: result,
-                is_self_recursive: SelfRecursive::NotSelfRecursive,
-                must_own_arguments: false,
-                host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-            };
-
-            let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
-
-            (
-                symbol,
-                (
-                    name, // ProcLayout::new(env.arena, &[], Niche::NONE, result),
-                    top_level, layout, proc,
-                ),
-            )
-        }
-    }
-}
-
 /// Specialize a single proc.
 ///
 /// The caller should snapshot and rollback the type state before and after calling this function,
@@ -3490,7 +3438,6 @@ fn specialize_proc_help<'a>(
     lambda_name: LambdaName<'a>,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<Proc<'a>, LayoutProblem> {
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
@@ -3531,29 +3478,8 @@ fn specialize_proc_help<'a>(
     let body = partial_proc.body.clone();
     let body_var = partial_proc.body_var;
 
-    let host_exposed_layouts = if host_exposed_variables.is_empty() {
-        HostExposedLayouts::NotHostExposed
-    } else {
-        let mut aliases = BumpMap::new_in(env.arena);
-
-        for (_symbol, variable) in host_exposed_variables {
-            let layout = layout_cache
-                .raw_from_var(env.arena, *variable, env.subs)
-                .unwrap();
-
-            let (key, (name, top_level, raw_layout, proc)) =
-                host_expose_x(env, procs, layout_cache, lambda_name, layout);
-
-            procs.specialized.insert_specialized(name, top_level, proc);
-
-            aliases.insert(key, (LambdaSetId::default(), name, top_level, raw_layout));
-        }
-
-        HostExposedLayouts::HostExposed {
-            rigids: BumpMap::new_in(env.arena),
-            aliases,
-        }
-    };
+    // host-exposed functions are tagged on later
+    let host_exposed_layouts = HostExposedLayouts::NotHostExposed;
 
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
@@ -4000,7 +3926,6 @@ fn specialize_variable<'a>(
     proc_name: LambdaName<'a>,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     let snapshot = snapshot_typestate(env.subs, procs, layout_cache);
@@ -4030,15 +3955,8 @@ fn specialize_variable<'a>(
     procs.push_active_specialization(proc_name.name());
     roc_tracing::debug!(?proc_name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "specialization start");
 
-    let specialized = specialize_proc_help(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        fn_var,
-        host_exposed_variables,
-        partial_proc_id,
-    );
+    let specialized =
+        specialize_proc_help(env, procs, proc_name, layout_cache, fn_var, partial_proc_id);
 
     roc_tracing::debug!(
         ?proc_name,
@@ -4121,6 +4039,33 @@ impl<'a> ProcLayout<'a> {
                 ProcLayout::new(arena, &[], Niche::NONE, result)
             }
         }
+    }
+
+    pub fn dbg_deep<'r, I: LayoutInterner<'a>>(&self, interner: &'r I) -> DbgProcLayout<'a, 'r, I> {
+        DbgProcLayout {
+            layout: *self,
+            interner,
+        }
+    }
+}
+
+pub struct DbgProcLayout<'a, 'r, I: LayoutInterner<'a>> {
+    layout: ProcLayout<'a>,
+    interner: &'r I,
+}
+
+impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgProcLayout<'a, 'r, I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ProcLayout {
+            arguments,
+            result,
+            niche,
+        } = self.layout;
+        f.debug_struct("ProcLayout")
+            .field("arguments", &self.interner.dbg_deep_iter(arguments))
+            .field("result", &self.interner.dbg_deep(result))
+            .field("niche", &niche.dbg_deep(self.interner))
+            .finish()
     }
 }
 
@@ -4455,93 +4400,20 @@ pub fn with_hole<'a>(
                 Err(_) => return runtime_error(env, "Can't create tuple with improper layout"),
             };
 
-            let mut elem_symbols = Vec::with_capacity_in(elems.len(), env.arena);
-            let mut can_elems = Vec::with_capacity_in(elems.len(), env.arena);
-
-            #[allow(clippy::enum_variant_names)]
-            enum Field {
-                // TODO: rename this since it can handle unspecialized expressions now too
-                FunctionOrUnspecialized(Symbol, Variable),
-                ValueSymbol,
-                Field(Variable, Loc<roc_can::expr::Expr>),
-            }
-
             // Hacky way to let us remove the owned elements from the vector, possibly out-of-order.
             let mut elems = Vec::from_iter_in(elems.into_iter().map(Some), env.arena);
+            let take_elem_expr = move |index: usize| elems[index].take();
 
-            for (index, variable, _) in sorted_elems.into_iter() {
-                // TODO how should function pointers be handled here?
-                use ReuseSymbol::*;
-                let (var, loc_expr) = elems[index].take().unwrap();
-                match can_reuse_symbol(env, procs, &loc_expr.value, var) {
-                    Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
-                        elem_symbols.push(symbol);
-                        can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
-                    }
-                    Value(symbol) => {
-                        let reusable = procs.get_or_insert_symbol_specialization(
-                            env,
-                            layout_cache,
-                            symbol,
-                            var,
-                        );
-                        elem_symbols.push(reusable);
-                        can_elems.push(Field::ValueSymbol);
-                    }
-                    NotASymbol => {
-                        elem_symbols.push(env.unique_symbol());
-                        can_elems.push(Field::Field(var, *loc_expr));
-                    }
-                }
-            }
-
-            // creating a record from the var will unpack it if it's just a single field.
-            let layout = match layout_cache.from_var(env.arena, tuple_var, env.subs) {
-                Ok(layout) => layout,
-                Err(_) => return runtime_error(env, "Can't create record with improper layout"),
-            };
-
-            let elem_symbols = elem_symbols.into_bump_slice();
-
-            let mut stmt = if let [only_field] = elem_symbols {
-                let mut hole = hole.clone();
-                substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
-                hole
-            } else {
-                Stmt::Let(assigned, Expr::Struct(elem_symbols), layout, hole)
-            };
-
-            for (opt_field, symbol) in can_elems.into_iter().rev().zip(elem_symbols.iter().rev()) {
-                match opt_field {
-                    Field::ValueSymbol => {
-                        // this symbol is already defined; nothing to do
-                    }
-                    Field::FunctionOrUnspecialized(symbol, variable) => {
-                        stmt = specialize_symbol(
-                            env,
-                            procs,
-                            layout_cache,
-                            Some(variable),
-                            symbol,
-                            env.arena.alloc(stmt),
-                            symbol,
-                        );
-                    }
-                    Field::Field(var, loc_expr) => {
-                        stmt = with_hole(
-                            env,
-                            loc_expr.value,
-                            var,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(stmt),
-                        );
-                    }
-                }
-            }
-
-            stmt
+            compile_struct_like(
+                env,
+                procs,
+                layout_cache,
+                sorted_elems,
+                take_elem_expr,
+                tuple_var,
+                hole,
+                assigned,
+            )
         }
 
         Record {
@@ -4563,100 +4435,19 @@ pub fn with_hole<'a>(
                 Err(_) => return runtime_error(env, "Can't create record with improper layout"),
             };
 
-            let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
-            let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
+            let take_field_expr =
+                move |field: Lowercase| fields.remove(&field).map(|f| (f.var, f.loc_expr));
 
-            #[allow(clippy::enum_variant_names)]
-            enum Field {
-                // TODO: rename this since it can handle unspecialized expressions now too
-                FunctionOrUnspecialized(Symbol, Variable),
-                ValueSymbol,
-                Field(roc_can::expr::Field),
-            }
-
-            for (label, variable, _) in sorted_fields.into_iter() {
-                // TODO how should function pointers be handled here?
-                use ReuseSymbol::*;
-                match fields.remove(&label) {
-                    Some(field) => {
-                        match can_reuse_symbol(env, procs, &field.loc_expr.value, field.var) {
-                            Imported(symbol)
-                            | LocalFunction(symbol)
-                            | UnspecializedExpr(symbol) => {
-                                field_symbols.push(symbol);
-                                can_fields.push(Field::FunctionOrUnspecialized(symbol, variable));
-                            }
-                            Value(symbol) => {
-                                let reusable = procs.get_or_insert_symbol_specialization(
-                                    env,
-                                    layout_cache,
-                                    symbol,
-                                    field.var,
-                                );
-                                field_symbols.push(reusable);
-                                can_fields.push(Field::ValueSymbol);
-                            }
-                            NotASymbol => {
-                                field_symbols.push(env.unique_symbol());
-                                can_fields.push(Field::Field(field));
-                            }
-                        }
-                    }
-                    None => {
-                        // this field was optional, but not given
-                        continue;
-                    }
-                }
-            }
-
-            // creating a record from the var will unpack it if it's just a single field.
-            let layout = match layout_cache.from_var(env.arena, record_var, env.subs) {
-                Ok(layout) => layout,
-                Err(_) => return runtime_error(env, "Can't create record with improper layout"),
-            };
-
-            let field_symbols = field_symbols.into_bump_slice();
-
-            let mut stmt = if let [only_field] = field_symbols {
-                let mut hole = hole.clone();
-                substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
-                hole
-            } else {
-                Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole)
-            };
-
-            for (opt_field, symbol) in can_fields.into_iter().rev().zip(field_symbols.iter().rev())
-            {
-                match opt_field {
-                    Field::ValueSymbol => {
-                        // this symbol is already defined; nothing to do
-                    }
-                    Field::FunctionOrUnspecialized(symbol, variable) => {
-                        stmt = specialize_symbol(
-                            env,
-                            procs,
-                            layout_cache,
-                            Some(variable),
-                            symbol,
-                            env.arena.alloc(stmt),
-                            symbol,
-                        );
-                    }
-                    Field::Field(field) => {
-                        stmt = with_hole(
-                            env,
-                            field.loc_expr.value,
-                            field.var,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(stmt),
-                        );
-                    }
-                }
-            }
-
-            stmt
+            compile_struct_like(
+                env,
+                procs,
+                layout_cache,
+                sorted_fields,
+                take_field_expr,
+                record_var,
+                hole,
+                assigned,
+            )
         }
 
         EmptyRecord => let_empty_struct(assigned, hole),
@@ -4976,49 +4767,18 @@ pub fn with_hole<'a>(
                 }
             }
 
-            let record_symbol = possible_reuse_symbol_or_specialize(
+            compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
-                &loc_expr.value,
-                record_var,
-            );
-
-            let mut stmt = match field_layouts.as_slice() {
-                [_] => {
-                    let mut hole = hole.clone();
-                    substitute_in_exprs(env.arena, &mut hole, assigned, record_symbol);
-
-                    hole
-                }
-                _ => {
-                    let expr = Expr::StructAtIndex {
-                        index: index.expect("field not in its own type") as u64,
-                        field_layouts: field_layouts.into_bump_slice(),
-                        structure: record_symbol,
-                    };
-
-                    let layout = layout_cache
-                        .from_var(env.arena, field_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
-
-                    Stmt::Let(assigned, expr, layout, hole)
-                }
-            };
-
-            stmt = assign_to_symbol(
-                env,
-                procs,
-                layout_cache,
-                record_var,
+                field_layouts,
+                index.expect("field not in its own type") as _,
                 *loc_expr,
-                record_symbol,
-                stmt,
-            );
-
-            stmt
+                record_var,
+                hole,
+                assigned,
+                field_var,
+            )
         }
 
         RecordAccessor(accessor_data) => {
@@ -5096,61 +4856,30 @@ pub fn with_hole<'a>(
                 Ok(fields) => fields,
                 Err(_) => return runtime_error(env, "Can't access tuple with improper layout"),
             };
+            let mut field_layouts = Vec::with_capacity_in(sorted_elems.len(), env.arena);
 
             let mut final_index = None;
-            let mut elem_layouts = Vec::with_capacity_in(sorted_elems.len(), env.arena);
 
             for (current, (index, _, elem_layout)) in sorted_elems.into_iter().enumerate() {
-                elem_layouts.push(elem_layout);
+                field_layouts.push(elem_layout);
 
                 if index == accessed_index {
                     final_index = Some(current);
                 }
             }
 
-            let tuple_symbol = possible_reuse_symbol_or_specialize(
+            compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
-                &loc_expr.value,
-                tuple_var,
-            );
-
-            let mut stmt = match elem_layouts.as_slice() {
-                [_] => {
-                    let mut hole = hole.clone();
-                    substitute_in_exprs(env.arena, &mut hole, assigned, tuple_symbol);
-
-                    hole
-                }
-                _ => {
-                    let expr = Expr::StructAtIndex {
-                        index: final_index.expect("field not in its own type") as u64,
-                        field_layouts: elem_layouts.into_bump_slice(),
-                        structure: tuple_symbol,
-                    };
-
-                    let layout = layout_cache
-                        .from_var(env.arena, elem_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
-
-                    Stmt::Let(assigned, expr, layout, hole)
-                }
-            };
-
-            stmt = assign_to_symbol(
-                env,
-                procs,
-                layout_cache,
-                tuple_var,
+                field_layouts,
+                final_index.expect("elem not in its own type") as u64,
                 *loc_expr,
-                tuple_symbol,
-                stmt,
-            );
-
-            stmt
+                tuple_var,
+                hole,
+                assigned,
+                elem_var,
+            )
         }
 
         OpaqueWrapFunction(wrap_fn_data) => {
@@ -5906,6 +5635,162 @@ pub fn with_hole<'a>(
             assign_to_symbol(env, procs, layout_cache, Variable::STR, *msg, msg_sym, stmt)
         }
     }
+}
+
+/// Compiles an access into a tuple or record.
+fn compile_struct_like_access<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    field_layouts: Vec<'a, InLayout<'a>>,
+    index: u64,
+    loc_expr: Loc<roc_can::expr::Expr>,
+    struct_like_var: Variable,
+    hole: &'a Stmt<'a>,
+    assigned: Symbol,
+    elem_var: Variable,
+) -> Stmt<'a> {
+    let struct_symbol = possible_reuse_symbol_or_specialize(
+        env,
+        procs,
+        layout_cache,
+        &loc_expr.value,
+        struct_like_var,
+    );
+
+    let mut stmt = match field_layouts.as_slice() {
+        [_] => {
+            let mut hole = hole.clone();
+            substitute_in_exprs(env.arena, &mut hole, assigned, struct_symbol);
+
+            hole
+        }
+        _ => {
+            let expr = Expr::StructAtIndex {
+                index,
+                field_layouts: field_layouts.into_bump_slice(),
+                structure: struct_symbol,
+            };
+
+            let layout = layout_cache
+                .from_var(env.arena, elem_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            Stmt::Let(assigned, expr, layout, hole)
+        }
+    };
+
+    stmt = assign_to_symbol(
+        env,
+        procs,
+        layout_cache,
+        struct_like_var,
+        loc_expr,
+        struct_symbol,
+        stmt,
+    );
+
+    stmt
+}
+
+/// Compiles a record or a tuple.
+// TODO: UnusedLayout is because `sort_record_fields` currently returns a three-tuple, but is, in
+// fact, unneeded for the compilation.
+fn compile_struct_like<'a, L, UnusedLayout>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    sorted_elems: Vec<(L, Variable, UnusedLayout)>,
+    mut take_elem_expr: impl FnMut(L) -> Option<(Variable, Box<Loc<roc_can::expr::Expr>>)>,
+    struct_like_var: Variable,
+    hole: &'a Stmt<'a>,
+    assigned: Symbol,
+) -> Stmt<'a> {
+    let mut elem_symbols = Vec::with_capacity_in(sorted_elems.len(), env.arena);
+    let mut can_elems = Vec::with_capacity_in(sorted_elems.len(), env.arena);
+
+    #[allow(clippy::enum_variant_names)]
+    enum Field {
+        // TODO: rename this since it can handle unspecialized expressions now too
+        FunctionOrUnspecialized(Symbol, Variable),
+        ValueSymbol,
+        Field(Variable, Loc<roc_can::expr::Expr>),
+    }
+
+    for (index, variable, _) in sorted_elems.into_iter() {
+        // TODO how should function pointers be handled here?
+        use ReuseSymbol::*;
+        match take_elem_expr(index) {
+            Some((var, loc_expr)) => match can_reuse_symbol(env, procs, &loc_expr.value, var) {
+                Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
+                    elem_symbols.push(symbol);
+                    can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
+                }
+                Value(symbol) => {
+                    let reusable =
+                        procs.get_or_insert_symbol_specialization(env, layout_cache, symbol, var);
+                    elem_symbols.push(reusable);
+                    can_elems.push(Field::ValueSymbol);
+                }
+                NotASymbol => {
+                    elem_symbols.push(env.unique_symbol());
+                    can_elems.push(Field::Field(var, *loc_expr));
+                }
+            },
+            None => {
+                // this field was optional, but not given
+                continue;
+            }
+        }
+    }
+
+    // creating a record from the var will unpack it if it's just a single field.
+    let layout = match layout_cache.from_var(env.arena, struct_like_var, env.subs) {
+        Ok(layout) => layout,
+        Err(_) => return runtime_error(env, "Can't create record with improper layout"),
+    };
+
+    let elem_symbols = elem_symbols.into_bump_slice();
+
+    let mut stmt = if let [only_field] = elem_symbols {
+        let mut hole = hole.clone();
+        substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
+        hole
+    } else {
+        Stmt::Let(assigned, Expr::Struct(elem_symbols), layout, hole)
+    };
+
+    for (opt_field, symbol) in can_elems.into_iter().rev().zip(elem_symbols.iter().rev()) {
+        match opt_field {
+            Field::ValueSymbol => {
+                // this symbol is already defined; nothing to do
+            }
+            Field::FunctionOrUnspecialized(symbol, variable) => {
+                stmt = specialize_symbol(
+                    env,
+                    procs,
+                    layout_cache,
+                    Some(variable),
+                    symbol,
+                    env.arena.alloc(stmt),
+                    symbol,
+                );
+            }
+            Field::Field(var, loc_expr) => {
+                stmt = with_hole(
+                    env,
+                    loc_expr.value,
+                    var,
+                    procs,
+                    layout_cache,
+                    *symbol,
+                    env.arena.alloc(stmt),
+                );
+            }
+        }
+    }
+
+    stmt
 }
 
 #[inline(always)]
@@ -9209,7 +9094,6 @@ fn call_by_name_help<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, layout)) => {
@@ -9357,7 +9241,6 @@ fn call_by_name_module_thunk<'a>(
                             LambdaName::no_niche(proc_name),
                             layout_cache,
                             fn_var,
-                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, raw_layout)) => {
@@ -11430,22 +11313,15 @@ where
                 }
             },
             Layout::LambdaSet(lambda_set) => {
-                dbg!(lambda_set);
-                // let symbol = unique_glue_symbol(arena, &mut next_unique_id, home, interns);
-                // let string = String::from(symbol.as_str(interns));
-
-                // Function(&'a [InLayout<'a>], LambdaSet<'a>, InLayout<'a>),
-                let arguments = *lambda_set.args;
-                let return_type = lambda_set.ret;
                 let raw_function_layout =
-                    RawFunctionLayout::Function(arguments, lambda_set, return_type);
+                    RawFunctionLayout::Function(lambda_set.args, lambda_set, lambda_set.ret);
 
-                answer
-                    .extern_names
-                    .push((lambda_set_id, raw_function_layout));
+                let key = (lambda_set_id, raw_function_layout);
+                answer.extern_names.push(key);
+
+                // this id is used, increment for the next one
                 lambda_set_id = lambda_set_id.next();
 
-                // TODO generate closure caller
                 stack.push(layout_interner.get(lambda_set.runtime_representation()));
             }
             Layout::RecursivePointer(_) => {
@@ -11539,15 +11415,14 @@ fn unique_glue_symbol(
 
     *next_unique_id = unique_id + 1;
 
+    // then name of the platform `main.roc` is the empty string
+    let module_name = "";
+
     // Turn unique_id into a Symbol without doing a heap allocation.
     use std::fmt::Write;
     let mut string = bumpalo::collections::String::with_capacity_in(32, arena);
-    let _result = write!(
-        &mut string,
-        "roc__getter_{}_{}",
-        "", // then name of the platform `main.roc` is the empty string
-        unique_id
-    );
+
+    let _result = write!(&mut string, "roc__getter_{}_{}", module_name, unique_id);
     debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
 
     let ident_id = ident_ids.get_or_insert(string.into_bump_str());

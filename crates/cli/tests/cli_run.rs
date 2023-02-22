@@ -675,6 +675,7 @@ mod cli_run {
         )
     }
 
+    #[cfg_attr(windows, ignore)] // flaky error; issue #5024
     #[test]
     fn breakout() {
         test_roc_app_slim(

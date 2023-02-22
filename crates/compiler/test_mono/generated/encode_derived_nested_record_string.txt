@@ -213,11 +213,11 @@ procedure List.138 (List.139, List.140, List.137):
     ret List.592;
 
 procedure List.18 (List.135, List.136, List.137):
-    let List.500 : {List U8, U64} = CallByName List.90 List.135 List.136 List.137;
+    let List.500 : {List U8, U64} = CallByName List.91 List.135 List.136 List.137;
     ret List.500;
 
 procedure List.18 (List.135, List.136, List.137):
-    let List.573 : {List U8, U64} = CallByName List.90 List.135 List.136 List.137;
+    let List.573 : {List U8, U64} = CallByName List.91 List.135 List.136 List.137;
     ret List.573;
 
 procedure List.4 (List.106, List.107):
@@ -258,19 +258,7 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.594 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.594;
 
-procedure List.90 (List.426, List.427, List.428):
-    let List.504 : U64 = 0i64;
-    let List.505 : U64 = CallByName List.6 List.426;
-    let List.503 : {List U8, U64} = CallByName List.91 List.426 List.427 List.428 List.504 List.505;
-    ret List.503;
-
-procedure List.90 (List.426, List.427, List.428):
-    let List.577 : U64 = 0i64;
-    let List.578 : U64 = CallByName List.6 List.426;
-    let List.576 : {List U8, U64} = CallByName List.91 List.426 List.427 List.428 List.577 List.578;
-    ret List.576;
-
-procedure List.91 (List.531, List.532, List.533, List.534, List.535):
+procedure List.80 (List.531, List.532, List.533, List.534, List.535):
     joinpoint List.506 List.429 List.430 List.431 List.432 List.433:
         let List.508 : Int1 = CallByName Num.22 List.432 List.433;
         if List.508 then
@@ -284,7 +272,7 @@ procedure List.91 (List.531, List.532, List.533, List.534, List.535):
     in
     jump List.506 List.531 List.532 List.533 List.534 List.535;
 
-procedure List.91 (List.605, List.606, List.607, List.608, List.609):
+procedure List.80 (List.605, List.606, List.607, List.608, List.609):
     joinpoint List.579 List.429 List.430 List.431 List.432 List.433:
         let List.581 : Int1 = CallByName Num.22 List.432 List.433;
         if List.581 then
@@ -297,6 +285,18 @@ procedure List.91 (List.605, List.606, List.607, List.608, List.609):
             ret List.430;
     in
     jump List.579 List.605 List.606 List.607 List.608 List.609;
+
+procedure List.91 (List.426, List.427, List.428):
+    let List.504 : U64 = 0i64;
+    let List.505 : U64 = CallByName List.6 List.426;
+    let List.503 : {List U8, U64} = CallByName List.80 List.426 List.427 List.428 List.504 List.505;
+    ret List.503;
+
+procedure List.91 (List.426, List.427, List.428):
+    let List.577 : U64 = 0i64;
+    let List.578 : U64 = CallByName List.6 List.426;
+    let List.576 : {List U8, U64} = CallByName List.80 List.426 List.427 List.428 List.577 List.578;
+    ret List.576;
 
 procedure Num.125 (#Attr.2):
     let Num.282 : U8 = lowlevel NumIntCast #Attr.2;

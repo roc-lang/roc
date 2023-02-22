@@ -509,6 +509,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
 
             buf.spaces(separator_spaces);
             buf.push('?');
+            buf.spaces(1);
             ann.value.format(buf, indent);
         }
         LabelOnly(name) => {

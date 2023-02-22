@@ -188,20 +188,28 @@ where
             let func_name = FuncName(&bytes);
 
             if let HostExposedLayouts::HostExposed { aliases, .. } = &proc.host_exposed_layouts {
-                for (_, (_id, symbol, top_level, layout)) in aliases {
-                    match layout {
+                for (_, hels) in aliases {
+                    match hels.raw_function_layout {
                         RawFunctionLayout::Function(_, _, _) => {
-                            let it = top_level.arguments.iter().copied();
-                            let bytes =
-                                func_name_bytes_help(*symbol, it, Niche::NONE, top_level.result);
+                            let it = hels.proc_layout.arguments.iter().copied();
+                            let bytes = func_name_bytes_help(
+                                hels.symbol,
+                                it,
+                                Niche::NONE,
+                                hels.proc_layout.result,
+                            );
 
-                            host_exposed_functions.push((bytes, top_level.arguments));
+                            host_exposed_functions.push((bytes, hels.proc_layout.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            let bytes =
-                                func_name_bytes_help(*symbol, [], Niche::NONE, top_level.result);
+                            let bytes = func_name_bytes_help(
+                                hels.symbol,
+                                [],
+                                Niche::NONE,
+                                hels.proc_layout.result,
+                            );
 
-                            host_exposed_functions.push((bytes, top_level.arguments));
+                            host_exposed_functions.push((bytes, hels.proc_layout.arguments));
                         }
                     }
                 }
