@@ -95,14 +95,14 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - [Unreal Engine 4](https://www.unrealengine.com/en-US/)
   - [Blueprints](https://docs.unrealengine.com/en-US/Engine/Blueprints/index.html) visual scripting (not suggesting visual scripting for Roc)
 
-- [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
+- [Live Programming](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
 - [Math Inspector](https://mathinspector.com/), [github](https://github.com/MathInspector/MathInspector)
 - [Lamdu](http://www.lamdu.org/) live functional programming.
 - [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
 - [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
 - [Utopia](https://utopia.app/) integrated design and development environment for React. Design and code update each other, in real time.
 - [Paredit](https://calva.io/paredit/) structural clojure editing, navigation and selection. [Another overview](http://danmidwood.com/content/2014/11/21/animated-paredit.html)
-- [tylr](https://tylr.fun/) projectional editor ux that helps you make it easier to do edits that are typically difficult with projectional editors but are easy with classic editors. 
+- [tylr](https://tylr.fun/) projectional editor UX that helps you make it easier to do edits that are typically difficult with projectional editors but are easy with classic editors. 
 
 ### Project exploration
 
@@ -110,7 +110,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 #### Inspiration
 
-- [Github Next](https://next.github.com/projects/repo-visualization) each file and folder is visualised as a circle: the circle’s color is the type of file, and the circle’s size represents the size of the file. Sidenote, a cool addition to this might be to use heatmap colors for the circles; circles for files that have had lots of commits could be more red, files with few commits would be blue.
+- [Github Next](https://next.github.com/projects/repo-visualization) each file and folder is visualised as a circle: the circle’s color is the type of file, and the circle’s size represents the size of the file. Side note: a cool addition to this might be to use heatmap colors for the circles; circles for files that have had lots of commits could be more red, files with few commits would be blue.
 - [AppMap](https://appland.com/docs/appmap-overview.html) records code execution traces, collecting information about how your code works and what it does. Then it presents this information as interactive diagrams that you can search and navigate. In the diagrams, you can see exactly how functions, web services, data stores, security, I/O, and dependent services all work together when application code runs.
 - [Discussion on flow based ( nodes and wires) programming](https://marianoguerra.github.io/future-of-coding-weekly/history/weekly/2022/08/W1/thinking-together.html#2022-07-25T00:47:49.408Z) if the wires are a mess, is your program a mess?
 
@@ -195,16 +195,16 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
   - look for similar errors in github issues of the relevant libraries
   - search stackoverflow questions
   - search a local history of previously encountered errors and fixes
-  - search through a database of our zullip questions
+  - search through a database of our Zulip questions
   - ...
 - smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
 - After the user has refactored code to be simpler, try finding other places in the code base where the same simplification can be made.
 - Show most commonly changed settings on first run so new users can quickly customize their experience. Keeping record of changed settings should be opt-in.
 - Detection of multiple people within same company/team working on same code at the same time (opt-in).
 - Autocorrect likely typos for stuff like `-<` when not in string.
-- If multiple functions are available for import, use function were types would match in insetion position.
+- If multiple functions are available for import, use function were types would match in insertion position.
 - Recommend imports based on imports in other files in same project.
-- Machine Learning model to determine confidence in a possiblte auto import. Automatically add the importt if confidence is very high.
+- Machine Learning model to determine confidence in a possible auto import. Automatically add the import if confidence is very high.
 - Ability to print logs in different color depending on which file they come from.
 - Clicking on a log print should take you to the exact line of code that called the log function
 - When detecting that the user is repeating a transformation such as replacing a string in a text manually, offer to do the replacement for all occurrences in this string/function/file/workspace.
@@ -342,7 +342,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 ## Tutorials
 
-- Inclusion of step-by-step tutrials in Roc libraries, platforms or business specific code.
+- Inclusion of step-by-step tutorials in Roc libraries, platforms or business specific code.
 - Having to set up your own website for a tutorial can be a lot of work, making it easy to make quality tutorials would make for a more delightful experience.
 
 ## High performance
@@ -369,25 +369,25 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 ## Accessibility
 
-  - Visual Imapirments
-      No Animation is most benign form of cognitive disabity but really important base line of people with tense nerve system.
+  - Visual Impairments
+      No Animation is most benign form of cognitive disability but really important base line of people with tense nerve system.
       Insensitivity to certain or all colors.
-      Need of highcontrast
+      Need of high contrast
       Or Everything Magnified for me with no glasses.
       Or Total blindness where we need to trough sound to communicate to the user
-      Screen readers read trees of labeled elements. Each OS has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
-      But blind people walk with a tool and they can react much better to sound/space relations than full on visal majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
-      Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
+      Screen readers read trees of labeled elements. Each OS has different APIs, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using these majestic machines called computers.
+      But blind people walk with a tool and they can react much better to sound/space relations than full on visual majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
+      Imagine if every time the user doesn't want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
 
-      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice triggered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
+      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice triggered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! Each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
     - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your program should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
 
-  - Motor impariments
+  - Motor impairments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]
       Too much mouse waving and sitting for too long is bad for humans.
-      Keyboard is basic accessability tool but
+      Keyboard is basic accessibility tool but
       Keyboard is also optional, some people have too shaky hands even for keyboard.
-      They rely on eye tracking to move mouse cursor arond.
+      They rely on eye tracking to move mouse cursor around.
       If we employ *some* voice recognition functions we could make same interface as we could do for consoles where 4+2 buttons and directional pad would suffice.
       That is 10 phrases that need to be pulled trough as many possible translations so people don't have to pretend that they are from Maine or Texas so they get voice recognition to work. Believe me I was there with Apple's Siri :D That is why we have 10 phrases for movement and management and most basic syntax.
   - Builtin fonts that can be read more easily by those with dyslexia.

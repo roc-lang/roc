@@ -57,7 +57,7 @@ In some cases, the compiler can detect that no reference counting is necessary. 
 
 ## Pointing to the first element
 
-The fact that the reference count may or may not be present could creat a tricky situation for some `List` operations.
+The fact that the reference count may or may not be present could create a tricky situation for some `List` operations.
 
 For example, should `List.get 0` return the first 16B of the heap-allocated bytes, or the second 16B? If there's a reference count in the first 16B, it should return the second 16B. If there's no refcount, it should return the first 16B.
 
