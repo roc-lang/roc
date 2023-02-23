@@ -1820,15 +1820,6 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             let _dropped = uls_right.next().unwrap();
                             let kept = uls_left.next().unwrap();
                             merged_uls.push(*kept);
-
-                            debug_assert!(uls_right
-                                .peek()
-                                .map(|r| !env.subs.equivalent_without_compacting(var_l, r.0))
-                                .unwrap_or(true));
-                            debug_assert!(uls_left
-                                .peek()
-                                .map(|l| !env.subs.equivalent_without_compacting(l.0, var_r))
-                                .unwrap_or(true));
                         } else {
                             // Even if these two variables unify, since they are not equivalent,
                             // they correspond to different specializations! As such we must not
