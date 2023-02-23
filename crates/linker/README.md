@@ -6,7 +6,7 @@ This restriction enables ignoring most of linking.
 
 ## General Overview
 
-This linker is run in 2 phases: preprocessing and surigical linking.
+This linker is run in 2 phases: preprocessing and surgical linking.
 
 ### Platform Preprocessor
 

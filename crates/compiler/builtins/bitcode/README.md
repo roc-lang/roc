@@ -21,7 +21,7 @@ implement them in a higher-level language like Zig, then compile
 the result to LLVM bitcode, and import that bitcode into the compiler.
 
 Compiling the bitcode happens automatically in a Rust build script at `compiler/builtins/build.rs`.
-Then `builtins/src/bitcode/rs` staticlly imports the compiled bitcode for use in the compiler.
+Then `builtins/src/bitcode/rs` statically imports the compiled bitcode for use in the compiler.
 
 You can find the compiled bitcode in `target/debug/build/roc_builtins-[some random characters]/out/builtins.bc`.
 There will be two directories like `roc_builtins-[some random characters]`, look for the one that has an
@@ -33,4 +33,4 @@ There will be two directories like `roc_builtins-[some random characters]`, look
 
 ## Calling bitcode functions
 
-use the `call_bitcode_fn` function defined in `llvm/src/build.rs` to call bitcode functions.
+Use the `call_bitcode_fn` function defined in `llvm/src/build.rs` to call bitcode functions.
