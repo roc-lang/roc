@@ -269,9 +269,10 @@ impl VariableUsage {
 
             Expr::Call(Call { arguments, .. })
             | Expr::Tag { arguments, .. }
-            | Expr::Struct(arguments) => {
-                Self::owned_usages(variable_rc_types, arguments.iter().copied())
-            }
+            | Expr::Struct(arguments) => VariableUsage::Owned(Self::owned_usages(
+                variable_rc_types,
+                arguments.iter().copied(),
+            )),
 
             Expr::GetTagId { structure, .. }
             | Expr::StructAtIndex { structure, .. }
@@ -285,7 +286,7 @@ impl VariableUsage {
                 elems,
             } => {
                 // For an array creation, we insert all the used elements.
-                Self::owned_usages(
+                VariableUsage::Owned(Self::owned_usages(
                     variable_rc_types,
                     elems.iter().filter_map(|element| match element {
                         // Literal elements are not reference counted.
@@ -293,14 +294,14 @@ impl VariableUsage {
                         // Symbol elements are reference counted.
                         ListLiteralElement::Symbol(symbol) => Some(*symbol),
                     }),
-                )
+                ))
             }
             Expr::EmptyArray => {
                 // Empty arrays have no reference counted elements.
                 VariableUsage::None
             }
             Expr::ExprBox { symbol } | Expr::ExprUnbox { symbol } => {
-                Self::owned_usages(variable_rc_types, iter::once(*symbol))
+                VariableUsage::Owned(Self::owned_usages(variable_rc_types, iter::once(*symbol)))
             }
             Expr::Reuse { .. } | Expr::Reset { .. } => {
                 unreachable!("Reset and reuse should not exist at this point")
@@ -316,7 +317,7 @@ impl VariableUsage {
     fn owned_usages(
         variable_rc_types: &VariableRcTypes,
         symbols: impl Iterator<Item = Symbol>,
-    ) -> VariableUsage {
+    ) -> OwnedUsage {
         // A groupby or something similar would be nice here.
         let mut variable_usage = OwnedUsage::default();
         symbols.for_each(|symbol| {
@@ -336,7 +337,7 @@ impl VariableUsage {
                 VarRcType::NotReferenceCounted => return,
             }
         });
-        VariableUsage::Owned(variable_usage)
+        variable_usage
     }
 }
 
@@ -353,24 +354,27 @@ Struct containing data about the variable consumption of a join point.
 Contains data about consumed closure values and the consumption of the parameters.
 */
 #[derive(Clone)]
-struct JoinPointConsumption<'a> {
-    closure: MutSet<Symbol>,
-    parameters: &'a [Consumption],
+enum JoinPointConsumption {
+    // Normal join point call with consumed variables of closure.
+    Normal { consumed_variables: MutSet<Symbol> },
+    // Recursive join point call, closure is unknown.
+    // TODO find a way to get the closure values.
+    Recursive,
 }
 
 /**
 The environment for the reference counting pass.
 Contains the variable rc types and the ownership.
 */
-struct Environment<'v, 'a> {
+struct Environment<'v> {
     // Keep track which variables are reference counted and which are not.
     variables_rc_types: &'v VariableRcTypes,
     // The Koka implementation assumes everything that is not owned to be borrowed.
     variables_ownership: VariablesOwnership,
-    jointpoint_closures: MutMap<JoinPointId, JoinPointConsumption<'a>>,
+    jointpoint_closures: MutMap<JoinPointId, JoinPointConsumption>,
 }
 
-impl<'v, 'a> Clone for Environment<'v, 'a> {
+impl<'v, 'a> Clone for Environment<'v> {
     fn clone(&self) -> Self {
         Environment {
             variables_rc_types: self.variables_rc_types,
@@ -380,11 +384,11 @@ impl<'v, 'a> Clone for Environment<'v, 'a> {
     }
 }
 
-impl<'v, 'a> Environment<'v, 'a> {
+impl<'v> Environment<'v> {
     /**
     Retrieve the rc type of a variable.
     */
-    fn get_variable_rc_type(self: &mut Environment<'v, 'a>, variable: &Symbol) -> &VarRcType {
+    fn get_variable_rc_type(self: &mut Environment<'v>, variable: &Symbol) -> &VarRcType {
         self.variables_rc_types
             .get(variable)
             .expect("variable should have rc type")
@@ -395,7 +399,7 @@ impl<'v, 'a> Environment<'v, 'a> {
     If it was owned, set it to borrowed (as it is consumed/the variable can be used as owned only once without incrementing).
     If the variable is not reference counted, do nothing and return None.
     */
-    fn consume_variable(self: &mut Environment<'v, 'a>, variable: &Symbol) -> Option<Ownership> {
+    fn consume_variable(self: &mut Environment<'v>, variable: &Symbol) -> Option<Ownership> {
         if !self.variables_ownership.contains_key(variable) {
             return None;
         }
@@ -408,7 +412,7 @@ impl<'v, 'a> Environment<'v, 'a> {
     Retrieve whether the variable is owned or borrowed.
     If it was owned, set it to borrowed (as it is consumed/the variable can be used as owned only once without incrementing).
     */
-    fn consume_rc_variable(self: &mut Environment<'v, 'a>, variable: &Symbol) -> Ownership {
+    fn consume_rc_variable(self: &mut Environment<'v>, variable: &Symbol) -> Ownership {
         // Consume the variable by setting it to borrowed (if it was owned before), and return the previous ownership.
         self.variables_ownership
             .insert(*variable, Ownership::Borrowed)
@@ -419,21 +423,21 @@ impl<'v, 'a> Environment<'v, 'a> {
        Retrieve the ownership of a variable.
        If the variable is not reference counted, it will None.
     */
-    fn get_variable_ownership(self: &Environment<'v, 'a>, variable: &Symbol) -> Option<&Ownership> {
+    fn get_variable_ownership(self: &Environment<'v>, variable: &Symbol) -> Option<&Ownership> {
         self.variables_ownership.get(variable)
     }
 
     /**
     Add a variables to the environment if they are reference counted.
     */
-    fn add_variables(self: &mut Environment<'v, 'a>, variables: impl Iterator<Item = Symbol>) {
+    fn add_variables(self: &mut Environment<'v>, variables: impl Iterator<Item = Symbol>) {
         variables.for_each(|variable| self.add_variable(variable))
     }
 
     /**
     Add a variable to the environment if it is reference counted.
     */
-    fn add_variable(self: &mut Environment<'v, 'a>, variable: Symbol) {
+    fn add_variable(self: &mut Environment<'v>, variable: Symbol) {
         match self.get_variable_rc_type(&variable) {
             VarRcType::ReferenceCounted => {
                 self.variables_ownership.insert(variable, Ownership::Owned);
@@ -448,14 +452,14 @@ impl<'v, 'a> Environment<'v, 'a> {
     Remove variables from the environment.
     Is used when a variable is no longer in scope (after checking a join point).
      */
-    fn remove_variables(self: &mut Environment<'v, 'a>, variables: impl Iterator<Item = Symbol>) {
+    fn remove_variables(self: &mut Environment<'v>, variables: impl Iterator<Item = Symbol>) {
         variables.for_each(|variable| self.remove_variable(variable))
     }
     /**
     Remove a variable from the environment.
     Is used when a variable is no longer in scope (before a let binding).
      */
-    fn remove_variable(self: &mut Environment<'v, 'a>, variable: Symbol) {
+    fn remove_variable(self: &mut Environment<'v>, variable: Symbol) {
         self.variables_ownership.remove(&variable);
     }
 
@@ -464,9 +468,9 @@ impl<'v, 'a> Environment<'v, 'a> {
     Used when analyzing a join point. So that a jump can update the environment on call.
     */
     fn add_joinpoint_consumption(
-        self: &mut Environment<'v, 'a>,
+        self: &mut Environment<'v>,
         joinpoint_id: JoinPointId,
-        consumption: JoinPointConsumption<'a>,
+        consumption: JoinPointConsumption,
     ) {
         self.jointpoint_closures.insert(joinpoint_id, consumption);
     }
@@ -475,9 +479,9 @@ impl<'v, 'a> Environment<'v, 'a> {
     Get the consumed closure from a join point id.
     */
     fn get_joinpoint_consume(
-        self: &Environment<'v, 'a>,
+        self: &Environment<'v>,
         joinpoint_id: JoinPointId,
-    ) -> JoinPointConsumption<'a> {
+    ) -> JoinPointConsumption {
         self.jointpoint_closures
             .get(&joinpoint_id)
             .expect("Expected closure to be in environment")
@@ -488,7 +492,7 @@ impl<'v, 'a> Environment<'v, 'a> {
     Remove a joinpoint id and the consumed closure from the environment.
     Used after analyzing the continuation of a join point.
     */
-    fn remove_joinpoint_consumption(self: &mut Environment<'v, 'a>, joinpoint_id: JoinPointId) {
+    fn remove_joinpoint_consumption(self: &mut Environment<'v>, joinpoint_id: JoinPointId) {
         let closure = self.jointpoint_closures.remove(&joinpoint_id);
         debug_assert!(
             matches!(closure, Some(_)),
@@ -550,7 +554,7 @@ Assuming that a symbol can only be defined once (no binding to the same variable
 */
 fn insert_refcount_operations_stmt<'v, 'a>(
     arena: &'a Bump,
-    environment: &mut Environment<'v, 'a>,
+    environment: &mut Environment<'v>,
     stmt: &Stmt<'a>,
 ) -> &'a Stmt<'a> {
     // TODO: Deal with potentially stack overflowing let chains with an explicit loop.
@@ -758,11 +762,13 @@ fn insert_refcount_operations_stmt<'v, 'a>(
 
             join_point_env.add_variables(parameter_variables.by_ref());
 
+            environment.add_joinpoint_consumption(*id, JoinPointConsumption::Recursive);
             let new_body = insert_refcount_operations_stmt(arena, &mut join_point_env, body);
+            environment.remove_joinpoint_consumption(*id);
 
             // We save the parameters consumed by this join point. So we can do the same when we jump to this joinpoint.
             // This includes parameter variables, this might help with unused closure variables.
-            let consumed_variables = {
+            let joinpoint_consumption = {
                 let consumed_variables = join_point_env
                     .variables_ownership
                     .iter()
@@ -777,25 +783,12 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                     .copied()
                     .collect::<MutSet<Symbol>>();
 
-                let consumed_parameters = Vec::from_iter_in(
-                    parameter_variables.map(|parameter| {
-                        if consumed_closure.contains(&parameter) {
-                            Consumption::Consumed
-                        } else {
-                            Consumption::Unconsumed
-                        }
-                    }),
-                    arena,
-                )
-                .into_bump_slice();
-
-                JoinPointConsumption {
-                    closure: consumed_closure,
-                    parameters: consumed_parameters,
+                JoinPointConsumption::Normal {
+                    consumed_variables: consumed_closure,
                 }
             };
 
-            environment.add_joinpoint_consumption(*id, consumed_variables);
+            environment.add_joinpoint_consumption(*id, joinpoint_consumption);
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
             environment.remove_joinpoint_consumption(*id);
 
@@ -807,28 +800,42 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             })
         }
         Stmt::Jump(join_point_id, arguments) => {
-            let JoinPointConsumption {
-                closure: consumed_variables,
-                parameters: consumed_parameters,
-            } = environment.get_joinpoint_consume(*join_point_id);
+            match environment.get_joinpoint_consume(*join_point_id) {
+                JoinPointConsumption::Normal { consumed_variables } => {
+                    for consumed_variable in consumed_variables.iter() {
+                        environment.consume_variable(consumed_variable);
+                    }
+                }
+                JoinPointConsumption::Recursive => {
+                    /*
+                    TODO We do not determine what the consumed variables are of recursive join points.
+                    If there are no consumed variables in the closure, everything is fine.
+                    But if we do consume variables in the closure, like y in the example below:
 
-            // the consumed variables contain the arguments, so we don't need ot
-            for consumed_variable in consumed_variables.iter() {
-                environment.consume_variable(consumed_variable);
+                    add = \x, y ->
+                        jp 1 \acc, count ->
+                            if count == 0
+                            then acc + y
+                            else jump 1 (acc+1) (count-1)
+                        jump 1 0 x
+
+                    the analysis will not know that y is still used in the jump and thus will drop if after the then.
+                    */
+                }
             }
 
-            // consume all arguments that are consumed by the join point.
-            for (argument, _) in arguments
-                .iter()
-                .zip(consumed_parameters.iter())
-                .filter(|(_, consumption)| matches!(consumption, Consumption::Consumed))
-            {
-                let ownership = environment.consume_variable(argument);
-                // the argument should be owned or not reference counted at the return.
-                debug_assert!(matches!(ownership, None | Some(Ownership::Owned)));
-            }
+            let new_jump = arena.alloc(Stmt::Jump(*join_point_id, arguments.clone()));
 
-            arena.alloc(Stmt::Jump(*join_point_id, arguments.clone()))
+            // Note that this should only insert increments if a later join point has a current parameter as consumed closure.
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                &VariableUsage::owned_usages(
+                    environment.variables_rc_types,
+                    arguments.iter().copied(),
+                ),
+                new_jump,
+            )
         }
         Stmt::Crash(_, _) => todo!(),
     }
