@@ -1207,7 +1207,7 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::neq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            Layout::Builtin(Builtin::Str) => {
+            Layout::STR => {
                 self.build_fn_call(
                     dst,
                     bitcode::STR_EQUAL.to_string(),
@@ -1225,38 +1225,6 @@ impl<
                 ASM::neq_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, tmp_reg);
             }
             x => todo!("NumNeq: layout, {:?}", x),
-        }
-    }
-
-    fn build_and(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        match *arg_layout {
-            Layout::BOOL => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::and_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            x => todo!("And: layout, {:?}", x),
-        }
-    }
-
-    fn build_or(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        match *arg_layout {
-            Layout::BOOL => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::or_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            x => todo!("Or: layout, {:?}", x),
         }
     }
 

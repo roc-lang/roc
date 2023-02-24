@@ -661,32 +661,6 @@ trait Backend<'a> {
                 );
                 self.build_neq(sym, &args[0], &args[1], &arg_layouts[0])
             }
-            LowLevel::And => {
-                debug_assert_eq!(2, args.len(), "And: expected to have exactly two argument");
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
-                    "And: expected all arguments of to have the same layout"
-                );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
-                    "And: expected to have return layout of type Bool"
-                );
-                self.build_and(sym, &args[0], &args[1], &arg_layouts[0])
-            }
-            LowLevel::Or => {
-                debug_assert_eq!(2, args.len(), "Or: expected to have exactly two argument");
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
-                    "Or: expected all arguments of to have the same layout"
-                );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
-                    "Or: expected to have return layout of type Bool"
-                );
-                self.build_or(sym, &args[0], &args[1], &arg_layouts[0])
-            }
             LowLevel::Not => {
                 debug_assert_eq!(1, args.len(), "Not: expected to have exactly one argument");
                 debug_assert_eq!(
@@ -1238,12 +1212,6 @@ trait Backend<'a> {
 
     /// build_neq stores the result of `src1 != src2` into dst.
     fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
-
-    /// build_and stores the result of `src1 && src2` into dst.
-    fn build_and(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
-
-    /// build_or stores the result of `src1 || src2` into dst.
-    fn build_or(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
 
     /// build_not stores the result of `!src` into dst.
     fn build_not(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
