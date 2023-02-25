@@ -95,7 +95,7 @@ union union_Op {
 ))]
 #[repr(C)]
 pub struct RocFunction_66 {
-    pub closure_data: Vec<u8>,
+    pub closure_data: roc_std::RocList<u8>,
 }
 
 impl RocFunction_66 {
@@ -120,7 +120,7 @@ impl RocFunction_66 {
 ))]
 #[repr(C)]
 pub struct RocFunction_67 {
-    pub closure_data: Vec<u8>,
+    pub closure_data: roc_std::RocList<u8>,
 }
 
 impl RocFunction_67 {
@@ -243,8 +243,10 @@ impl Op {
             fn getter(_: *mut u8, _: *const Op);
         }
 
-        // dumb heap allocation for now
-        let mut bytes = vec![0xAAu8; size()];
+        // allocate memory to store this variably-sized value
+        // allocates with roc_alloc, but that likely still uses the heap
+        let it = std::iter::repeat(0xAAu8).take(size());
+        let mut bytes = roc_std::RocList::from_iter(it);
 
         getter(bytes.as_mut_ptr(), self);
 
@@ -361,8 +363,10 @@ impl Op {
             fn getter(_: *mut u8, _: *const Op);
         }
 
-        // dumb heap allocation for now
-        let mut bytes = vec![0xAAu8; size()];
+        // allocate memory to store this variably-sized value
+        // allocates with roc_alloc, but that likely still uses the heap
+        let it = std::iter::repeat(0xAAu8).take(size());
+        let mut bytes = roc_std::RocList::from_iter(it);
 
         getter(bytes.as_mut_ptr(), self);
 
