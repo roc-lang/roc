@@ -8,7 +8,7 @@ static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 #[cfg(all(target_os = "linux"))]
 fn build_host() {
     use roc_build::link::preprocessed_host_filename;
-    use roc_linker::build_and_preprocess_host;
+    use roc_linker::{build_and_preprocess_host, ExposedSymbols};
 
     let platform_main_roc = std::env::current_dir()
         .unwrap()
@@ -26,8 +26,10 @@ fn build_host() {
         &target,
         &platform_main_roc,
         &preprocessed_host_path,
-        vec![String::from("mainForHost")],
-        vec![],
+        ExposedSymbols {
+            top_level_values: vec![String::from("mainForHost")],
+            exported_closure_types: vec![],
+        },
     );
 }
 

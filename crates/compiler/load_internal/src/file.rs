@@ -31,8 +31,8 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
-    ProcsBase, UpdateModeIds,
+    CapturedSymbols, ExternalSpecializations, GlueLayouts, LambdaSetId, PartialProc, Proc,
+    ProcLayout, Procs, ProcsBase, UpdateModeIds,
 };
 use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
@@ -797,9 +797,12 @@ pub struct Expectations {
 #[derive(Clone, Debug, Default)]
 pub struct ExposedToHost {
     /// usually `mainForHost`
-    pub values: MutMap<Symbol, Variable>,
+    pub top_level_values: MutMap<Symbol, Variable>,
     /// exposed closure types, typically `Fx`
     pub closure_types: Vec<Symbol>,
+    /// lambda_sets
+    pub lambda_sets: Vec<(Symbol, LambdaSetId)>,
+    pub getters: Vec<Symbol>,
 }
 
 impl<'a> MonomorphizedModule<'a> {
@@ -2777,7 +2780,7 @@ fn update<'a>(
                 !matches!(state.exec_mode, ExecutionMode::Test);
 
             if add_to_host_exposed {
-                state.exposed_to_host.values.extend(
+                state.exposed_to_host.top_level_values.extend(
                     solved_module
                         .exposed_vars_by_symbol
                         .iter()
@@ -3104,7 +3107,7 @@ fn update<'a>(
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                     let host_exposed_procs = bumpalo::collections::Vec::from_iter_in(
-                        state.exposed_to_host.values.keys().copied(),
+                        state.exposed_to_host.top_level_values.keys().copied(),
                         arena,
                     );
 
@@ -3275,7 +3278,7 @@ fn finish_specialization<'a>(
     state: State<'a>,
     subs: Subs,
     mut layout_interner: STLayoutInterner<'a>,
-    exposed_to_host: ExposedToHost,
+    mut exposed_to_host: ExposedToHost,
     module_expectations: VecMap<ModuleId, Expectations>,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
@@ -3328,7 +3331,7 @@ fn finish_specialization<'a>(
 
                 let exposed_symbols_and_layouts = match state.platform_data {
                     None => {
-                        let src = &state.exposed_to_host.values;
+                        let src = &state.exposed_to_host.top_level_values;
                         let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
 
                         for &symbol in src.keys() {
@@ -3396,13 +3399,14 @@ fn finish_specialization<'a>(
     let mut glue_getters = Vec::new();
 
     if let EntryPoint::Executable {
-        exposed_to_host, ..
+        exposed_to_host: exposed_top_levels,
+        ..
     } = &entry_point
     {
         // Expose glue for the platform, not for the app module!
         let module_id = platform_data.as_ref().unwrap().module_id;
 
-        for (_name, proc_layout) in exposed_to_host.iter() {
+        for (_name, proc_layout) in exposed_top_levels.iter() {
             let ret = &proc_layout.result;
             for in_layout in proc_layout.arguments.iter().chain([ret]) {
                 let layout = layout_interner.get(*in_layout);
@@ -3414,6 +3418,18 @@ fn finish_specialization<'a>(
                     &mut layout_interner,
                     arena.alloc(layout),
                 );
+
+                let getter_names = all_glue_procs
+                    .getters
+                    .iter()
+                    .flat_map(|(_, glue_procs)| glue_procs.iter().map(|glue_proc| glue_proc.name));
+                exposed_to_host.getters.extend(getter_names);
+
+                let lambda_set_names = all_glue_procs
+                    .extern_names
+                    .iter()
+                    .map(|(lambda_set_id, _)| (*_name, *lambda_set_id));
+                exposed_to_host.lambda_sets.extend(lambda_set_names);
 
                 glue_getters.extend(all_glue_procs.getters.iter().flat_map(|(_, glue_procs)| {
                     glue_procs
@@ -5787,7 +5803,7 @@ fn build_pending_specializations<'a>(
         let symbol = declarations.symbols[index].value;
         let expr_var = declarations.variables[index];
 
-        let is_host_exposed = exposed_to_host.values.contains_key(&symbol);
+        let is_host_exposed = exposed_to_host.top_level_values.contains_key(&symbol);
 
         // TODO remove clones (with drain)
         let annotation = declarations.annotations[index].clone();

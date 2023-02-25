@@ -180,7 +180,12 @@ fn gen_from_mono_module_llvm<'a>(
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
         },
 
-        exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: loaded
+            .exposed_to_host
+            .top_level_values
+            .keys()
+            .copied()
+            .collect(),
     };
 
     // does not add any externs for this mode (we have a host) but cleans up some functions around
@@ -485,7 +490,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let exposed_to_host = loaded
         .exposed_to_host
-        .values
+        .top_level_values
         .keys()
         .copied()
         .collect::<MutSet<_>>();
@@ -556,7 +561,7 @@ fn gen_from_mono_module_dev_assembly<'a>(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };

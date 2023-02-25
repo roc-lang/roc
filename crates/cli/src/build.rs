@@ -7,6 +7,7 @@ use roc_build::{
     program::{self, CodeGenBackend, CodeGenOptions},
 };
 use roc_builtins::bitcode;
+use roc_linker::ExposedSymbols;
 use roc_load::{
     EntryPoint, ExecutionMode, ExpectMetadata, LoadConfig, LoadMonomorphizedError, LoadedModule,
     LoadingProblem, Threading,
@@ -200,25 +201,8 @@ fn build_loaded_file<'a>(
         // Also, we should no longer need to do this once we have platforms on
         // a package repository, as we can then get prebuilt platforms from there.
 
-        let exposed_values = loaded
-            .exposed_to_host
-            .values
-            .keys()
-            .map(|x| x.as_str(&loaded.interns).to_string())
-            .collect();
-
-        let exposed_closure_types = loaded
-            .exposed_to_host
-            .closure_types
-            .iter()
-            .map(|x| {
-                format!(
-                    "{}_{}",
-                    x.module_string(&loaded.interns),
-                    x.as_str(&loaded.interns)
-                )
-            })
-            .collect();
+        let dll_stub_symbols =
+            ExposedSymbols::from_exposed_to_host(&loaded.interns, &loaded.exposed_to_host);
 
         let join_handle = spawn_rebuild_thread(
             code_gen_options.opt_level,
@@ -227,8 +211,7 @@ fn build_loaded_file<'a>(
             preprocessed_host_path.clone(),
             output_exe_path.clone(),
             target,
-            exposed_values,
-            exposed_closure_types,
+            dll_stub_symbols,
         );
 
         Some(join_handle)
@@ -447,8 +430,7 @@ fn spawn_rebuild_thread(
     preprocessed_host_path: PathBuf,
     output_exe_path: PathBuf,
     target: &Triple,
-    exported_symbols: Vec<String>,
-    exported_closure_types: Vec<String>,
+    dll_stub_symbols: Vec<String>,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
@@ -471,13 +453,12 @@ fn spawn_rebuild_thread(
                 preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
             }
             LinkingStrategy::Surgical => {
-                roc_linker::build_and_preprocess_host(
+                roc_linker::build_and_preprocess_host_lowlevel(
                     opt_level,
                     &thread_local_target,
                     platform_main_roc.as_path(),
                     preprocessed_host_path.as_path(),
-                    exported_symbols,
-                    exported_closure_types,
+                    &dll_stub_symbols,
                 );
 
                 // Copy preprocessed host to executable location.

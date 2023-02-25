@@ -217,8 +217,8 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         ..
     } = mono;
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
-    let (main_fn_symbol, main_fn_var) = exposed_to_host.values.iter().next().unwrap();
+    debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
+    let (main_fn_symbol, main_fn_var) = exposed_to_host.top_level_values.iter().next().unwrap();
     let main_fn_symbol = *main_fn_symbol;
     let main_fn_var = *main_fn_var;
 
@@ -242,7 +242,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             module_id,
             stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
             exposed_to_host: exposed_to_host
-                .values
+                .top_level_values
                 .keys()
                 .copied()
                 .collect::<MutSet<_>>(),

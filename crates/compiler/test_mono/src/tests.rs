@@ -148,7 +148,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
 
     assert!(type_problems.is_empty());
 
-    let main_fn_symbol = exposed_to_host.values.keys().copied().next();
+    let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
 
     if !no_check {
         check_procedures(arena, &interns, &mut layout_interner, &procedures);
