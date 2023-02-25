@@ -478,7 +478,7 @@ impl<'v> Environment<'v> {
     /**
     Get the consumed closure from a join point id.
     */
-    fn get_joinpoint_consume(
+    fn get_joinpoint_consumption(
         self: &Environment<'v>,
         joinpoint_id: JoinPointId,
     ) -> JoinPointConsumption {
@@ -743,7 +743,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             remainder,
         } => todo!(),
         Stmt::Join {
-            id,
+            id: joinpoint_id,
             parameters,
             body,
             remainder,
@@ -756,20 +756,20 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 .iter()
                 .all(|(_, ownership)| matches!(ownership, Ownership::Owned)));
 
-            let mut join_point_env = environment.clone();
+            let mut body_env = environment.clone();
 
             let mut parameter_variables = parameters.iter().map(|Param { symbol, .. }| *symbol);
 
-            join_point_env.add_variables(parameter_variables.by_ref());
+            body_env.add_variables(parameter_variables.by_ref());
 
-            environment.add_joinpoint_consumption(*id, JoinPointConsumption::Recursive);
-            let new_body = insert_refcount_operations_stmt(arena, &mut join_point_env, body);
-            environment.remove_joinpoint_consumption(*id);
+            body_env.add_joinpoint_consumption(*joinpoint_id, JoinPointConsumption::Recursive);
+            let new_body = insert_refcount_operations_stmt(arena, &mut body_env, body);
+            body_env.remove_joinpoint_consumption(*joinpoint_id);
 
             // We save the parameters consumed by this join point. So we can do the same when we jump to this joinpoint.
             // This includes parameter variables, this might help with unused closure variables.
             let joinpoint_consumption = {
-                let consumed_variables = join_point_env
+                let consumed_variables = body_env
                     .variables_ownership
                     .iter()
                     .filter_map(|(symbol, ownership)| match ownership {
@@ -788,19 +788,19 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 }
             };
 
-            environment.add_joinpoint_consumption(*id, joinpoint_consumption);
+            environment.add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption);
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
-            environment.remove_joinpoint_consumption(*id);
+            environment.remove_joinpoint_consumption(*joinpoint_id);
 
             arena.alloc(Stmt::Join {
-                id: *id,
+                id: *joinpoint_id,
                 parameters: parameters.clone(),
                 body: new_body,
                 remainder: new_remainder,
             })
         }
-        Stmt::Jump(join_point_id, arguments) => {
-            match environment.get_joinpoint_consume(*join_point_id) {
+        Stmt::Jump(joinpoint_id, arguments) => {
+            match environment.get_joinpoint_consumption(*joinpoint_id) {
                 JoinPointConsumption::Normal { consumed_variables } => {
                     for consumed_variable in consumed_variables.iter() {
                         environment.consume_variable(consumed_variable);
@@ -824,7 +824,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 }
             }
 
-            let new_jump = arena.alloc(Stmt::Jump(*join_point_id, arguments.clone()));
+            let new_jump = arena.alloc(Stmt::Jump(*joinpoint_id, arguments.clone()));
 
             // Note that this should only insert increments if a later join point has a current parameter as consumed closure.
             consume_and_insert_inc_stmts(
