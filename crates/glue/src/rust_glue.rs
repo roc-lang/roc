@@ -1906,17 +1906,19 @@ fn add_function(
     )
     .unwrap();
 
+    writeln!(
+        buf,
+        "{INDENT}{INDENT}let ptr = self.closure_data.as_mut_ptr();"
+    )
+    .unwrap();
+
     write!(buf, "{INDENT}{INDENT}unsafe {{ {extern_name}(").unwrap();
 
     for (i, _) in roc_fn.args.iter().enumerate() {
         write!(buf, "&arg_{i}, ").unwrap();
     }
 
-    writeln!(
-        buf,
-        "self.closure_data.as_mut_ptr(), output.as_mut_ptr()) }};"
-    )
-    .unwrap();
+    writeln!(buf, "ptr, output.as_mut_ptr()) }};").unwrap();
 
     writeln!(buf, "{INDENT}{INDENT}unsafe {{ output.assume_init() }}").unwrap();
 

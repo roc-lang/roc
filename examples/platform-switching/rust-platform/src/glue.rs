@@ -105,9 +105,8 @@ impl RocFunction_66 {
         }
 
         let mut output = std::mem::MaybeUninit::uninit();
-        unsafe {
-            roc__mainForHost_0_caller(&arg_0, self.closure_data.as_mut_ptr(), output.as_mut_ptr())
-        };
+        let ptr = self.closure_data.as_mut_ptr();
+        unsafe { roc__mainForHost_0_caller(&arg_0, ptr, output.as_mut_ptr()) };
         unsafe { output.assume_init() }
     }
 }
@@ -131,9 +130,8 @@ impl RocFunction_67 {
         }
 
         let mut output = std::mem::MaybeUninit::uninit();
-        unsafe {
-            roc__mainForHost_1_caller(&arg_0, self.closure_data.as_mut_ptr(), output.as_mut_ptr())
-        };
+        let ptr = self.closure_data.as_mut_ptr();
+        unsafe { roc__mainForHost_1_caller(&arg_0, ptr, output.as_mut_ptr()) };
         unsafe { output.assume_init() }
     }
 }
