@@ -788,6 +788,59 @@ fn encode_derived_record_with_many_types() {
 }
 
 #[test]
+#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
+fn encode_derived_generic_record_with_different_field_types() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, Json]
+                provides [main] to "./platform"
+
+            Q a b := {a: a, b: b} has [Encoding]
+
+            q = @Q {a: 10u32, b: "fieldb"}
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes q Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":10,"b":"fieldb"}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
+fn encode_derived_generic_tag_with_different_field_types() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, Json]
+                provides [main] to "./platform"
+
+            Q a b := [A a, B b] has [Encoding]
+
+            q : Q Str U32
+            q = @Q (B 67)
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes q Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"B":[67]}"#),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_use_stdlib() {
     assert_evals_to!(

@@ -4038,6 +4038,33 @@ impl<'a> ProcLayout<'a> {
             }
         }
     }
+
+    pub fn dbg_deep<'r, I: LayoutInterner<'a>>(&self, interner: &'r I) -> DbgProcLayout<'a, 'r, I> {
+        DbgProcLayout {
+            layout: *self,
+            interner,
+        }
+    }
+}
+
+pub struct DbgProcLayout<'a, 'r, I: LayoutInterner<'a>> {
+    layout: ProcLayout<'a>,
+    interner: &'r I,
+}
+
+impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgProcLayout<'a, 'r, I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ProcLayout {
+            arguments,
+            result,
+            niche,
+        } = self.layout;
+        f.debug_struct("ProcLayout")
+            .field("arguments", &self.interner.dbg_deep_iter(arguments))
+            .field("result", &self.interner.dbg_deep(result))
+            .field("niche", &niche.dbg_deep(self.interner))
+            .finish()
+    }
 }
 
 fn specialize_naked_symbol<'a>(
