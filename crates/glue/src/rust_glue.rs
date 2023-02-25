@@ -1052,7 +1052,7 @@ pub struct {name} {{
                                 format!(
                                     r#"
                                     extern "C" {{
-                                        #[link_name = "roc__{getter_name}_size"]
+                                        #[link_name = "{getter_name}_size"]
                                         fn size() -> usize;
 
                                         #[link_name = "{getter_name}_generic"]

@@ -236,7 +236,7 @@ impl Op {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
 
         extern "C" {
-            #[link_name = "roc__roc__getter__3_size"]
+            #[link_name = "roc__getter__3_size"]
             fn size() -> usize;
 
             #[link_name = "roc__getter__3_generic"]
@@ -356,7 +356,7 @@ impl Op {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
 
         extern "C" {
-            #[link_name = "roc__roc__getter__3_size"]
+            #[link_name = "roc__getter__3_size"]
             fn size() -> usize;
 
             #[link_name = "roc__getter__3_generic"]

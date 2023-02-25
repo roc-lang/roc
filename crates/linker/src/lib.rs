@@ -232,7 +232,7 @@ impl ExposedSymbols {
             custom_names.extend([
                 format!("{sym}"),
                 format!("{sym}_generic"),
-                format!("roc__{sym}_size"),
+                format!("{sym}_size"),
             ]);
         }
 

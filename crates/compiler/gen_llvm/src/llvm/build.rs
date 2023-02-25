@@ -4153,7 +4153,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         Some(env.context.i64_type().as_basic_type_enum()),
         &[],
     );
-    let size_function_name: String = format!("roc__{}_size", c_function_name);
+    let size_function_name: String = format!("{}_size", c_function_name);
 
     let size_function = add_func(
         env.context,
