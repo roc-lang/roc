@@ -27,7 +27,7 @@ use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapsh
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
@@ -36,7 +36,6 @@ use roc_types::subs::{
     instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
     StorageSubs, Subs, Variable, VariableSubsSlice,
 };
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 

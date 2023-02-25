@@ -75,7 +75,6 @@ impl Types {
         variables: I,
         interns: &'a Interns,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
-        extern_names: MutMap<Variable, String>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
     ) -> Self {
@@ -86,7 +85,6 @@ impl Types {
             interns,
             layout_cache.interner,
             glue_procs_by_layout,
-            extern_names,
             target,
         );
 
@@ -827,7 +825,6 @@ struct Env<'a> {
     subs: &'a Subs,
     layout_cache: LayoutCache<'a>,
     glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
-    extern_names: MutMap<Variable, String>,
     lambda_set_ids: MutMap<Variable, LambdaSetId>,
     interns: &'a Interns,
     struct_names: Structs,
@@ -844,7 +841,6 @@ impl<'a> Env<'a> {
         interns: &'a Interns,
         layout_interner: TLLayoutInterner<'a>,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
-        extern_names: MutMap<Variable, String>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -856,7 +852,6 @@ impl<'a> Env<'a> {
             pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
             glue_procs_by_layout,
-            extern_names,
             lambda_set_ids: Default::default(),
             layout_cache: LayoutCache::new(layout_interner, target),
             target,
@@ -933,7 +928,6 @@ impl<'a> Env<'a> {
                     FlatType::TagUnion(_, _) => todo!(),
                     FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
                     FlatType::RecursiveTagUnion(_, union_tags, ext) => {
-                        //
                         for tag in union_tags.variables() {
                             stack.extend(
                                 self.subs
@@ -941,6 +935,11 @@ impl<'a> Env<'a> {
                                     .iter()
                                     .rev(),
                             );
+                        }
+
+                        match ext {
+                            roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                            roc_types::subs::TagExt::Any(_) => { /* ignore */ }
                         }
                     }
                     FlatType::EmptyRecord => {}
@@ -1283,8 +1282,6 @@ fn add_builtin_type<'a>(
 
     let builtin_type = env.subs.get_content_without_compacting(var);
 
-    let lambda_set_id = LambdaSetId::invalid();
-
     match (builtin, builtin_type) {
         (Builtin::Int(width), _) => match width {
             U8 => types.add_anonymous(&env.layout_cache.interner, RocType::Num(RocNum::U8), layout),
@@ -1593,7 +1590,6 @@ fn tag_union_type_from_layout<'a>(
     var: Variable,
     types: &mut Types,
     layout: InLayout<'a>,
-    rec_root: Option<Variable>,
 ) -> RocTagUnion {
     let subs = env.subs;
 
@@ -1792,7 +1788,6 @@ fn tag_union_type_from_layout<'a>(
             var,
             types,
             lambda_set.runtime_representation(),
-            rec_root,
         ),
         Layout::RecursivePointer(_) => {
             // A single-tag union which only wraps itself is erroneous and should have
@@ -1824,7 +1819,6 @@ fn add_tag_union<'a>(
         var,
         types,
         layout,
-        rec_root,
     );
 
     let typ = RocType::TagUnion(tag_union_type);

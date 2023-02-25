@@ -1967,7 +1967,7 @@ fn add_struct(
             buf.push('}');
         }
         RocStructFields::HasClosure { fields: _ } => {
-            buf = format!("//TODO HAS CLOSURE 2");
+            buf = "//TODO HAS CLOSURE 2".to_string();
         }
     }
 
@@ -2592,7 +2592,7 @@ fn tag_union_struct_help(
             // because they're numbers
             format!("f{}", label)
         } else {
-            escape_kw(format!("{}", label))
+            escape_kw(label.to_string())
         };
 
         ret_values.push(format!("payload.{label}"));

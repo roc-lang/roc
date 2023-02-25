@@ -101,9 +101,8 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
         match subs.get_content_without_compacting(var) {
             RigidVar(_) | RigidAbleVar(_, _) | FlexVar(_) | FlexAbleVar(_, _) | Error => (),
 
-            RecursionVar { structure, .. } => {
-                // can we skip this?
-                // stack.push(*structure);
+            RecursionVar { .. } => {
+                // we got here, so we've treated this type already
             }
 
             Structure(flat_type) => match flat_type {
@@ -329,7 +328,6 @@ pub fn load_types(
             variables.clone(),
             arena.alloc(interns),
             glue_procs_by_layout,
-            extern_names,
             layout_cache,
             target_info,
         );

@@ -31,8 +31,8 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, GlueLayouts, HostExposedLayouts, PartialProc, Proc,
-    ProcLayout, Procs, ProcsBase, UpdateModeIds,
+    CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
+    ProcsBase, UpdateModeIds,
 };
 use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
@@ -3270,76 +3270,6 @@ fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
     );
 }
 
-fn find_entry_point<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-    interns: &mut Interns,
-) -> Result<(State<'a>, EntryPoint<'a>), LoadingProblem<'a>> {
-    match state.exec_mode {
-        ExecutionMode::Test => Ok((state, EntryPoint::Test)),
-        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
-            use PlatformPath::*;
-
-            let platform_path = match &state.platform_path {
-                Valid(To::ExistingPackage(shorthand)) => {
-                    match state.arc_shorthands.lock().get(shorthand) {
-                        Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
-                        None => unreachable!(),
-                    }
-                }
-                Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
-                other => {
-                    let buf = to_missing_platform_report(state.root_id, other);
-                    return Err(LoadingProblem::FormattedReport(buf));
-                }
-            };
-
-            let exposed_symbols_and_layouts = match state.platform_data {
-                None => {
-                    let src = &state.exposed_to_host.values;
-                    let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
-
-                    for &symbol in src.keys() {
-                        let proc_layout = proc_layout_for(state.procedures.keys().copied(), symbol);
-
-                        buf.push((symbol, proc_layout));
-                    }
-
-                    buf.into_bump_slice()
-                }
-                Some(PlatformData {
-                    module_id,
-                    provides,
-                    ..
-                }) => {
-                    let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
-                    let mut buf =
-                        bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
-
-                    for (loc_name, _loc_typed_ident) in provides {
-                        let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
-                        let symbol = Symbol::new(module_id, ident_id);
-                        let proc_layout = proc_layout_for(state.procedures.keys().copied(), symbol);
-
-                        buf.push((symbol, proc_layout));
-                    }
-
-                    buf.into_bump_slice()
-                }
-            };
-
-            Ok((
-                state,
-                EntryPoint::Executable {
-                    exposed_to_host: exposed_symbols_and_layouts,
-                    platform_path,
-                },
-            ))
-        }
-        ExecutionMode::Check => unreachable!(),
-    }
-}
-
 fn finish_specialization<'a>(
     arena: &'a Bump,
     state: State<'a>,
@@ -3472,7 +3402,7 @@ fn finish_specialization<'a>(
         // Expose glue for the platform, not for the app module!
         let module_id = platform_data.as_ref().unwrap().module_id;
 
-        for key @ (_name, proc_layout) in exposed_to_host.iter() {
+        for (_name, proc_layout) in exposed_to_host.iter() {
             let ret = &proc_layout.result;
             for in_layout in proc_layout.arguments.iter().chain([ret]) {
                 let layout = layout_interner.get(*in_layout);

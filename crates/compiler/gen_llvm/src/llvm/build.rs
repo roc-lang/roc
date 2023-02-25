@@ -5025,7 +5025,7 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
             build_closure_caller(
                 env,
                 layout_interner,
-                &fn_name,
+                fn_name,
                 evaluator,
                 alias_symbol,
                 arguments,
@@ -5044,7 +5044,7 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
 
             build_host_exposed_alias_size_help(
                 env,
-                &fn_name,
+                fn_name,
                 alias_symbol,
                 Some("result"),
                 result_type,
