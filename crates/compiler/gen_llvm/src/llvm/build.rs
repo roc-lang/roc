@@ -3972,13 +3972,17 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                 &param_types[..param_types.len().saturating_sub(1)],
             )
         }
-        (RocReturn::Return | RocReturn::ByPointer, CCReturn::Void) => {
+        (RocReturn::Return, CCReturn::Void) => {
+            // the roc function returns a unit value. like `{}` or `{ { {}, {} }, {} }`.
+            // In C, this is modelled as a function returning void
+            (&params[..], &param_types[..])
+        }
+        (RocReturn::ByPointer, CCReturn::Void) => {
             // the roc function returns a unit value. like `{}` or `{ { {}, {} }, {} }`.
             // In C, this is modelled as a function returning void
             (
                 &params[..],
                 &param_types[..param_types.len().saturating_sub(1)],
-                // &param_types[..],
             )
         }
         _ => (&params[..], &param_types[..]),
