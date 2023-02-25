@@ -3008,7 +3008,6 @@ fn specialize_host_specializations<'a>(
     layout_cache: &mut LayoutCache<'a>,
     host_specializations: HostSpecializations<'a>,
 ) {
-    dbg!(&host_specializations.symbol_or_lambdas);
     let (store, it) = host_specializations.decompose();
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
@@ -11425,7 +11424,8 @@ fn unique_glue_symbol(
     let _result = write!(&mut string, "roc__getter_{}_{}", module_name, unique_id);
     debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
 
-    let ident_id = ident_ids.get_or_insert(string.into_bump_str());
+    let bump_string = string.into_bump_str();
+    let ident_id = ident_ids.get_or_insert(bump_string);
 
     Symbol::new(home, ident_id)
 }

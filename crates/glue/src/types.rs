@@ -15,7 +15,7 @@ use roc_mono::{
     ir::LambdaSetId,
     layout::{
         cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
-        InLayout, LambdaSet, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
+        InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
     },
 };
 use roc_target::TargetInfo;

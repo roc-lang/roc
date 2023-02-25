@@ -1047,27 +1047,51 @@ pub struct {name} {{
                             let getter_name = &accessor.getter;
                             let ret = type_name(*field, types);
                             let returns_via_pointer = true;
-                            let body = if returns_via_pointer {
+
+                            let body = if let RocType::Function(_) = types.get_type(*field) {
                                 format!(
-                                    r#"extern "C" {{
-            #[link_name = "{getter_name}"]
-            fn getter(_: *mut {ret}, _: *const {name});
-        }}
+                                    r#"
+                                    extern "C" {{
+                                        #[link_name = "roc__{getter_name}_size"]
+                                        fn size() -> usize;
 
-        let mut ret = core::mem::MaybeUninit::uninit();
+                                        #[link_name = "{getter_name}_generic"]
+                                        fn getter(_: *mut u8, _: *const {name});
+                                    }}
 
-        getter(ret.as_mut_ptr(), self);
+                                    // dumb heap allocation for now
+                                    let mut bytes = vec![0xAAu8; size()];
 
-        ret.assume_init()"#
+                                    getter(bytes.as_mut_ptr(), self);
+
+                                    {ret} {{
+                                        closure_data: bytes,
+                                    }}
+                                    "#
+                                )
+                            } else if returns_via_pointer {
+                                format!(
+                                    r#"
+                                    extern "C" {{
+                                        #[link_name = "{getter_name}_generic"]
+                                        fn getter(_: *mut {ret}, _: *const {name});
+                                    }}
+
+                                    let mut ret = core::mem::MaybeUninit::uninit();
+                                    getter(ret.as_mut_ptr(), self);
+                                    ret.assume_init()
+                                    "#
                                 )
                             } else {
                                 format!(
-                                    r#"extern "C" {{
-            #[link_name = "{getter_name}"]
-            fn getter(_: *const {name}) -> {ret};
-        }}
+                                    r#"
+                                    extern "C" {{
+                                        #[link_name = "{getter_name}"]
+                                        fn getter(_: *const {name}) -> {ret};
+                                    }}
 
-        getter(self)"#
+                                    getter(self)
+                                    "#
                                 )
                             };
 
@@ -1849,7 +1873,7 @@ fn add_function(
 
     writeln!(buf, "impl {name} {{").unwrap();
 
-    write!(buf, "{INDENT}pub fn force_thunk(self").unwrap();
+    write!(buf, "{INDENT}pub fn force_thunk(mut self").unwrap();
     for (i, argument_type) in roc_fn.args.iter().enumerate() {
         write!(buf, ", arg_{i}: {}", type_name(*argument_type, types)).unwrap();
     }
@@ -1858,17 +1882,17 @@ fn add_function(
     writeln!(buf, "{INDENT}{INDENT}extern \"C\" {{").unwrap();
 
     // fn extern_name(output: *mut return_type, arg1: arg1_type, ..., closure_data: *mut u8);
-    write!(
-        buf,
-        "{INDENT}{INDENT}{INDENT} fn {extern_name}(output: *mut {return_type_str}, "
-    )
-    .unwrap();
+    write!(buf, "{INDENT}{INDENT}{INDENT} fn {extern_name}(").unwrap();
 
     for (i, argument_type) in roc_fn.args.iter().enumerate() {
-        write!(buf, "arg_{i}: {}, ", type_name(*argument_type, types)).unwrap();
+        write!(buf, "arg_{i}: &{}, ", type_name(*argument_type, types)).unwrap();
     }
 
-    writeln!(buf, "closure_data: *mut u8);").unwrap();
+    writeln!(
+        buf,
+        "closure_data: *mut u8, output: *mut {return_type_str});"
+    )
+    .unwrap();
 
     // {argument_types} "
 
@@ -1882,17 +1906,17 @@ fn add_function(
     )
     .unwrap();
 
-    write!(
-        buf,
-        "{INDENT}{INDENT}unsafe {{ {extern_name}(output.as_mut_ptr(), "
-    )
-    .unwrap();
+    write!(buf, "{INDENT}{INDENT}unsafe {{ {extern_name}(").unwrap();
 
     for (i, _) in roc_fn.args.iter().enumerate() {
-        write!(buf, "arg_{i}, ").unwrap();
+        write!(buf, "&arg_{i}, ").unwrap();
     }
 
-    writeln!(buf, "self.closure_data) }};").unwrap();
+    writeln!(
+        buf,
+        "self.closure_data.as_mut_ptr(), output.as_mut_ptr()) }};"
+    )
+    .unwrap();
 
     writeln!(buf, "{INDENT}{INDENT}unsafe {{ output.assume_init() }}").unwrap();
 
@@ -1977,7 +2001,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocSet(elem_id) => format!("roc_std::RocSet<{}>", type_name(*elem_id, types)),
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
-        RocType::Unsized => "*mut u8".to_string(),
+        RocType::Unsized => "Vec<u8>".to_string(),
         RocType::RocResult(ok_id, err_id) => {
             format!(
                 "roc_std::RocResult<{}, {}>",

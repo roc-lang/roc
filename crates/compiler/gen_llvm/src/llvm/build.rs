@@ -3949,8 +3949,6 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
 
     let params = c_function.get_params();
 
-    dbg!(&params);
-
     let param_types = Vec::from_iter_in(roc_function.get_type().get_param_types(), env.arena);
 
     let (params, param_types) = match (&roc_return, &cc_return) {
@@ -4151,7 +4149,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         Some(env.context.i64_type().as_basic_type_enum()),
         &[],
     );
-    let size_function_name: String = format!("roc__{}_size", ident_string);
+    let size_function_name: String = format!("roc__{}_size", c_function_name);
 
     let size_function = add_func(
         env.context,
@@ -4643,8 +4641,6 @@ pub fn build_procedures<'a, 'ctx, 'env>(
 
         let name = getter_fn.get_name().to_str().unwrap();
         let getter_name = symbol.as_str(&env.interns);
-
-        dbg!(&getter_name);
 
         // Add the getter function to the module.
         let _ = expose_function_to_host_help_c_abi(
