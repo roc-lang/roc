@@ -107,21 +107,16 @@ pub extern "C" fn rust_main() -> i32 {
                 let output: RocStr = unsafe { op.get_StdoutWrite_0() };
                 op = unsafe { op.get_StdoutWrite_1().force_thunk(()) };
 
-                dbg!(&output);
-
                 if let Err(e) = std::io::stdout().write_all(output.as_bytes()) {
                     panic!("Writing to stdout failed! {:?}", e);
                 }
             }
             StderrWrite => {
                 let output: RocStr = unsafe { op.get_StderrWrite_0() };
-                // let _next = unsafe { op.get_StderrWrite_1() };
-                dbg!(&output);
-
-                break;
+                op = unsafe { op.get_StderrWrite_1().force_thunk(()) };
 
                 if let Err(e) = std::io::stderr().write_all(output.as_bytes()) {
-                    panic!("Writing to stderr failed! {:?}", e);
+                    panic!("Writing to stdout failed! {:?}", e);
                 }
             }
             Done => {
