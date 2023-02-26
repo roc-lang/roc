@@ -1053,6 +1053,14 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     {
         todo!("sar for AArch64")
     }
+
+    fn sqrt_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
+        todo!("sqrt")
+    }
+
+    fn sqrt_freg32_freg32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
+        todo!("sqrt")
+    }
 }
 
 impl AArch64Assembler {}

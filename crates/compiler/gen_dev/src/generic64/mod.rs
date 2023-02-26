@@ -317,6 +317,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
 
+    fn sqrt_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+    fn sqrt_freg32_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
+
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
     fn mul_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
@@ -2569,6 +2572,18 @@ impl<
                     src2_reg,
                 );
             }
+        }
+    }
+
+    fn build_num_sqrt(&mut self, dst: Symbol, src: Symbol, float_width: FloatWidth) {
+        let buf = &mut self.buf;
+
+        let dst_reg = self.storage_manager.claim_float_reg(buf, &dst);
+        let src_reg = self.storage_manager.load_to_float_reg(buf, &src);
+
+        match float_width {
+            FloatWidth::F32 => ASM::sqrt_freg32_freg32(buf, dst_reg, src_reg),
+            FloatWidth::F64 => ASM::sqrt_freg64_freg64(buf, dst_reg, src_reg),
         }
     }
 }

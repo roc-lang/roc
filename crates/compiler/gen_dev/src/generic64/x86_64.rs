@@ -1745,6 +1745,14 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     {
         shift_reg64_reg64_reg64(buf, storage_manager, sar_reg64_reg64, dst, src1, src2)
     }
+
+    fn sqrt_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+        sqrtsd_freg64_freg64(buf, dst, src)
+    }
+
+    fn sqrt_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+        sqrtss_freg32_freg32(buf, dst, src)
+    }
 }
 
 fn shift_reg64_reg64_reg64<'a, 'r, ASM, CC>(
@@ -2154,6 +2162,48 @@ fn cmp_freg32_freg32(buf: &mut Vec<'_, u8>, src1: X86_64FloatReg, src2: X86_64Fl
         ])
     } else {
         buf.extend([0x65, 0x0F, 0x2E, 0xC0 | (src1_mod << 3) | (src2_mod)])
+    }
+}
+
+#[inline(always)]
+fn sqrtsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        buf.extend([
+            0xF2,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x51,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend([0xF2, 0x0F, 0x51, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+#[inline(always)]
+fn sqrtss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        buf.extend([
+            0xF3,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x51,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend([0xF3, 0x0F, 0x51, 0xC0 | (dst_mod << 3) | (src_mod)])
     }
 }
 
@@ -3600,5 +3650,25 @@ mod tests {
     #[test]
     fn test_push_reg64() {
         disassembler_test!(push_reg64, |reg| format!("push {}", reg), ALL_GENERAL_REGS);
+    }
+
+    #[test]
+    fn test_sqrt_freg64_freg64() {
+        disassembler_test!(
+            sqrtsd_freg64_freg64,
+            |dst, src| format!("sqrtsd {dst}, {src}"),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_sqrt_freg32_freg32() {
+        disassembler_test!(
+            sqrtss_freg32_freg32,
+            |dst, src| format!("sqrtss {dst}, {src}"),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 }
