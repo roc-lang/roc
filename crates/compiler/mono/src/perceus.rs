@@ -342,25 +342,9 @@ impl VariableUsage {
 }
 
 /**
-Enum to indicate whether or not a join point consumed a parameter.
+Type containing data about the variable consumption of a join point.
 */
-enum Consumption {
-    Consumed,
-    Unconsumed,
-}
-
-/**
-Struct containing data about the variable consumption of a join point.
-Contains data about consumed closure values and the consumption of the parameters.
-*/
-#[derive(Clone)]
-enum JoinPointConsumption {
-    // Normal join point call with consumed variables of closure.
-    Normal { consumed_variables: MutSet<Symbol> },
-    // Recursive join point call, closure is unknown.
-    // TODO find a way to get the closure values.
-    Recursive,
-}
+type JoinPointConsumption = MutSet<Symbol>;
 
 /**
 The environment for the reference counting pass.
@@ -428,6 +412,19 @@ impl<'v> Environment<'v> {
     }
 
     /**
+    Remove non reference counted variables from an iterator.
+    Usefull when we want to insert reference count operations for symbols that might not be rc.
+    */
+    fn filter_rc_variables<'a>(
+        self: &Environment<'v>,
+        variables: impl Iterator<Item = &'a Symbol>,
+    ) -> std::vec::Vec<&'a Symbol> {
+        variables
+            .filter(|variable| self.variables_ownership.contains_key(variable))
+            .collect::<std::vec::Vec<_>>()
+    }
+
+    /**
     Add a variables to the environment if they are reference counted.
     */
     fn add_variables(self: &mut Environment<'v>, variables: impl Iterator<Item = Symbol>) {
@@ -455,6 +452,7 @@ impl<'v> Environment<'v> {
     fn remove_variables(self: &mut Environment<'v>, variables: impl Iterator<Item = Symbol>) {
         variables.for_each(|variable| self.remove_variable(variable))
     }
+
     /**
     Remove a variable from the environment.
     Is used when a variable is no longer in scope (before a let binding).
@@ -520,8 +518,8 @@ fn insert_refcount_operations_proc<'a, 'i>(
     };
 
     // Add all arguments to the environment (if they are reference counted)
-    let mut proc_symbols = proc.args.iter().map(|(_layout, symbol)| symbol);
-    for symbol in proc_symbols.by_ref() {
+    let proc_symbols = proc.args.iter().map(|(_layout, symbol)| symbol);
+    for symbol in proc_symbols.clone() {
         environment.add_variable(*symbol);
     }
 
@@ -529,7 +527,13 @@ fn insert_refcount_operations_proc<'a, 'i>(
     let new_body = insert_refcount_operations_stmt(arena, &mut environment, &proc.body);
 
     // Insert decrement statements for unused parameters (which are still marked as owned).
-    let newer_body = consume_and_insert_dec_stmts(arena, &mut environment, proc_symbols, new_body);
+    let rc_proc_symbols = environment.filter_rc_variables(proc_symbols);
+    let newer_body = consume_and_insert_dec_stmts(
+        arena,
+        &mut environment,
+        rc_proc_symbols.into_iter(),
+        new_body,
+    );
 
     // Assert that just the arguments are in the environment. And (after decrementing the unused ones) that they are all borrowed.
     debug_assert!(environment
@@ -759,32 +763,64 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             let mut body_env = environment.clone();
 
             let mut parameter_variables = parameters.iter().map(|Param { symbol, .. }| *symbol);
+            let parameter_variables_set = parameter_variables.clone().collect::<MutSet<_>>();
+            body_env.add_variables(parameter_variables);
 
-            body_env.add_variables(parameter_variables.by_ref());
+            /*
+            We use a fixed point iteration to determine what variables are consumed in the join point.
+            We need to do this because the join point might be called recursively.
+            If we consume variables in the closure, like y in the example below:
 
-            body_env.add_joinpoint_consumption(*joinpoint_id, JoinPointConsumption::Recursive);
-            let new_body = insert_refcount_operations_stmt(arena, &mut body_env, body);
-            body_env.remove_joinpoint_consumption(*joinpoint_id);
+            add = \x, y ->
+                jp 1 \acc, count ->
+                    if count == 0
+                    then acc + y
+                    else jump 1 (acc+1) (count-1)
+                jump 1 0 x
 
-            // We save the parameters consumed by this join point. So we can do the same when we jump to this joinpoint.
-            // This includes parameter variables, this might help with unused closure variables.
-            let joinpoint_consumption = {
-                let consumed_variables = body_env
-                    .variables_ownership
-                    .iter()
-                    .filter_map(|(symbol, ownership)| match ownership {
-                        Ownership::Borrowed => Some(*symbol),
-                        _ => None,
-                    })
-                    .collect::<MutSet<_>>();
+            If we were to just use an empty consumption without iteration,
+            the analysis will not know that y is still used in the jump and thus will drop if after the then.
+            */
 
-                let consumed_closure = consumed_variables
-                    .difference(&parameter_variables.by_ref().collect::<MutSet<_>>())
-                    .copied()
-                    .collect::<MutSet<Symbol>>();
+            let mut joinpoint_consumption = MutSet::default();
 
-                JoinPointConsumption::Normal {
-                    consumed_variables: consumed_closure,
+            let new_body = loop {
+                // Copy the env to make sure each iteration has a fresh environment.
+                let mut current_body_env = body_env.clone();
+
+                current_body_env
+                    .add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption.clone());
+                let new_body = insert_refcount_operations_stmt(arena, &mut current_body_env, body);
+                current_body_env.remove_joinpoint_consumption(*joinpoint_id);
+
+                // We save the parameters consumed by this join point. So we can do the same when we jump to this joinpoint.
+                // This includes parameter variables, this might help with unused closure variables.
+                let current_joinpoint_consumption = {
+                    let consumed_variables = current_body_env
+                        .variables_ownership
+                        .iter()
+                        .filter_map(|(symbol, ownership)| match ownership {
+                            Ownership::Borrowed => Some(*symbol),
+                            _ => None,
+                        })
+                        .collect::<MutSet<_>>();
+
+                    consumed_variables
+                        .difference(&parameter_variables_set)
+                        .copied()
+                        .collect::<MutSet<Symbol>>()
+                };
+
+                if joinpoint_consumption == current_joinpoint_consumption {
+                    break new_body;
+                } else {
+                    debug_assert!(
+                        current_joinpoint_consumption.is_superset(&joinpoint_consumption),
+                        "The current consumption should be a superset of the previous consumption.
+                        As the consumption should only ever increase.
+                        Otherwise we will looping forever."
+                    );
+                    joinpoint_consumption = current_joinpoint_consumption;
                 }
             };
 
@@ -800,28 +836,9 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             })
         }
         Stmt::Jump(joinpoint_id, arguments) => {
-            match environment.get_joinpoint_consumption(*joinpoint_id) {
-                JoinPointConsumption::Normal { consumed_variables } => {
-                    for consumed_variable in consumed_variables.iter() {
-                        environment.consume_variable(consumed_variable);
-                    }
-                }
-                JoinPointConsumption::Recursive => {
-                    /*
-                    TODO We do not determine what the consumed variables are of recursive join points.
-                    If there are no consumed variables in the closure, everything is fine.
-                    But if we do consume variables in the closure, like y in the example below:
-
-                    add = \x, y ->
-                        jp 1 \acc, count ->
-                            if count == 0
-                            then acc + y
-                            else jump 1 (acc+1) (count-1)
-                        jump 1 0 x
-
-                    the analysis will not know that y is still used in the jump and thus will drop if after the then.
-                    */
-                }
+            let consumed_variables = environment.get_joinpoint_consumption(*joinpoint_id);
+            for consumed_variable in consumed_variables.iter() {
+                environment.consume_variable(consumed_variable);
             }
 
             let new_jump = arena.alloc(Stmt::Jump(*joinpoint_id, arguments.clone()));
