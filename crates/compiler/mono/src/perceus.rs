@@ -8,8 +8,8 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use crate::{
     borrow::Ownership,
     ir::{
-        BranchInfo, Call, Expr, JoinPointId, ListLiteralElement, ModifyRc, Param, Proc, ProcLayout,
-        Stmt, UpdateModeIds,
+        BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, ModifyRc, Param, Proc,
+        ProcLayout, Stmt, UpdateModeIds,
     },
     layout::{InLayout, LayoutInterner, STLayoutInterner},
 };
@@ -267,12 +267,26 @@ impl VariableUsage {
                 VariableUsage::None
             }
 
-            Expr::Call(Call { arguments, .. })
-            | Expr::Tag { arguments, .. }
-            | Expr::Struct(arguments) => VariableUsage::Owned(Self::owned_usages(
-                variable_rc_types,
-                arguments.iter().copied(),
-            )),
+            Expr::Call(Call {
+                arguments,
+                call_type,
+            }) => match call_type {
+                // A by name call refers to a normal function call.
+                // Normal functions take all their parameters as owned, so we can mark them all as such.
+                CallType::ByName { name, .. } => VariableUsage::Owned(Self::owned_usages(
+                    variable_rc_types,
+                    arguments.iter().copied(),
+                )),
+                CallType::Foreign {
+                    foreign_symbol,
+                    ret_layout,
+                } => todo!(),
+                CallType::LowLevel { op, update_mode } => todo!(),
+                CallType::HigherOrder(_) => todo!(),
+            },
+            Expr::Tag { arguments, .. } | Expr::Struct(arguments) => VariableUsage::Owned(
+                Self::owned_usages(variable_rc_types, arguments.iter().copied()),
+            ),
 
             Expr::GetTagId { structure, .. }
             | Expr::StructAtIndex { structure, .. }
@@ -953,3 +967,27 @@ fn insert_dec_stmt<'a, 's>(
 ) -> &'a Stmt<'a> {
     arena.alloc(Stmt::Refcounting(ModifyRc::Dec(symbol), continuation))
 }
+
+// Check higher orders as well, they might check the ownership signature of their function parameter.
+// match op {
+//     ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrGraphemes
+//     | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => {
+//         arena.alloc_slice_copy(&[borrowed])
+//     }
+//     StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+//     StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
+//     StrSubstringUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
+//     StrGetScalarUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+//     StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
+//     StrToNum => arena.alloc_slice_copy(&[borrowed]),
+//     StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
+//     Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
+
+//     NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+//     NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+//     StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
+//     StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+//     StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+//     Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+
+//     ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
