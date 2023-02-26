@@ -6,6 +6,8 @@
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
+// Not a useful lint for us
+#![allow(clippy::too_many_arguments)]
 
 pub mod borrow;
 pub mod code_gen_help;
