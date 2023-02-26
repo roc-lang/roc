@@ -113,6 +113,13 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
     );
 }
 
+pub enum CompareOperation {
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+}
+
 /// Assembler contains calls to the backend assembly generator.
 /// These calls do not necessarily map directly to a single assembly instruction.
 /// They are higher level in cases where an instruction would not be common and shared between multiple architectures.
@@ -404,6 +411,15 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
+    );
+
+    fn cmp_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: FloatReg,
+        src2: FloatReg,
+        width: FloatWidth,
+        operation: CompareOperation,
     );
 
     fn igt_reg64_reg64_reg64(
@@ -1273,6 +1289,20 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::ult_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            Layout::Builtin(Builtin::Float(width)) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+
+                ASM::cmp_freg_freg_reg64(
+                    &mut self.buf,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                    width,
+                    CompareOperation::LessThan,
+                );
+            }
             x => todo!("NumLt: layout, {:?}", x),
         }
     }
@@ -1304,6 +1334,20 @@ impl<
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::ugt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Float(width)) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+
+                ASM::cmp_freg_freg_reg64(
+                    &mut self.buf,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                    width,
+                    CompareOperation::GreaterThan,
+                );
             }
             x => todo!("NumGt: layout, {:?}", x),
         }
@@ -1385,6 +1429,26 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::lte_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            Layout::F64 | Layout::F32 => {
+                let width = if *arg_layout == Layout::F64 {
+                    FloatWidth::F64
+                } else {
+                    FloatWidth::F32
+                };
+
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+
+                ASM::cmp_freg_freg_reg64(
+                    &mut self.buf,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                    width,
+                    CompareOperation::LessThanOrEqual,
+                );
+            }
             x => todo!("NumLte: layout, {:?}", x),
         }
     }
@@ -1406,6 +1470,26 @@ impl<
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::gte_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::F64 | Layout::F32 => {
+                let width = if *arg_layout == Layout::F64 {
+                    FloatWidth::F64
+                } else {
+                    FloatWidth::F32
+                };
+
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+
+                ASM::cmp_freg_freg_reg64(
+                    &mut self.buf,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                    width,
+                    CompareOperation::GreaterThanOrEqual,
+                );
             }
             x => todo!("NumGte: layout, {:?}", x),
         }
@@ -2147,12 +2231,14 @@ impl<
                 let val = *x;
                 ASM::mov_reg64_imm64(&mut self.buf, reg, i128::from_ne_bytes(val) as i64);
             }
-            (Literal::Int(x), Layout::Builtin(Builtin::Int(IntWidth::I128 | IntWidth::U128))) => {
+            (
+                Literal::Int(bytes),
+                Layout::Builtin(Builtin::Int(IntWidth::I128 | IntWidth::U128)),
+            ) => {
                 self.storage_manager.with_tmp_general_reg(
                     &mut self.buf,
                     |storage_manager, buf, reg| {
                         let base_offset = storage_manager.claim_stack_area(sym, 16);
-                        let bytes = *x;
 
                         let mut num_bytes = [0; 8];
                         num_bytes.copy_from_slice(&bytes[..8]);
@@ -2186,6 +2272,25 @@ impl<
                 let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
                 let val = *x as f32;
                 ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
+            }
+            (Literal::Decimal(bytes), Layout::Builtin(Builtin::Decimal)) => {
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |storage_manager, buf, reg| {
+                        let base_offset = storage_manager.claim_stack_area(sym, 16);
+
+                        let mut num_bytes = [0; 8];
+                        num_bytes.copy_from_slice(&bytes[..8]);
+                        let num = i64::from_ne_bytes(num_bytes);
+                        ASM::mov_reg64_imm64(buf, reg, num);
+                        ASM::mov_base32_reg64(buf, base_offset, reg);
+
+                        num_bytes.copy_from_slice(&bytes[8..16]);
+                        let num = i64::from_ne_bytes(num_bytes);
+                        ASM::mov_reg64_imm64(buf, reg, num);
+                        ASM::mov_base32_reg64(buf, base_offset + 8, reg);
+                    },
+                );
             }
             (Literal::Str(x), Layout::Builtin(Builtin::Str)) => {
                 if x.len() < 24 {

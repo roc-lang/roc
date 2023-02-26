@@ -2,9 +2,12 @@ use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::Relocation;
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
+use roc_builtins::bitcode::FloatWidth;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, STLayoutInterner};
+
+use super::CompareOperation;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -886,6 +889,18 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src2: AArch64GeneralReg,
     ) {
         todo!("registers unsigned less than for AArch64");
+    }
+
+    #[inline(always)]
+    fn cmp_freg_freg_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
+        _width: FloatWidth,
+        _operation: CompareOperation,
+    ) {
+        todo!("registers float comparison for AArch64");
     }
 
     #[inline(always)]

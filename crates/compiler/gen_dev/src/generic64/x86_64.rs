@@ -4,9 +4,12 @@ use crate::{
     single_register_layouts, Relocation,
 };
 use bumpalo::collections::Vec;
+use roc_builtins::bitcode::FloatWidth;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
+
+use super::CompareOperation;
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.
@@ -1593,6 +1596,33 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn cmp_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+        width: FloatWidth,
+        operation: CompareOperation,
+    ) {
+        use CompareOperation::*;
+
+        let (arg1, arg2) = match operation {
+            LessThan | LessThanOrEqual => (src1, src2),
+            GreaterThan | GreaterThanOrEqual => (src2, src1),
+        };
+
+        match width {
+            FloatWidth::F32 => cmp_freg32_freg32(buf, arg2, arg1),
+            FloatWidth::F64 => cmp_freg64_freg64(buf, arg2, arg1),
+        }
+
+        match operation {
+            LessThan | GreaterThan => seta_reg64(buf, dst),
+            LessThanOrEqual | GreaterThanOrEqual => setae_reg64(buf, dst),
+        };
+    }
+
+    #[inline(always)]
     fn igt_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -2083,6 +2113,48 @@ fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
 #[inline(always)]
 fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     binop_reg64_reg64(0x39, buf, dst, src);
+}
+
+#[inline(always)]
+fn cmp_freg64_freg64(buf: &mut Vec<'_, u8>, src1: X86_64FloatReg, src2: X86_64FloatReg) {
+    let src1_high = src1 as u8 > 7;
+    let src1_mod = src1 as u8 % 8;
+
+    let src2_high = src2 as u8 > 7;
+    let src2_mod = src2 as u8 % 8;
+
+    if src1_high || src2_high {
+        buf.extend([
+            0x66,
+            0x40 | ((src1_high as u8) << 2) | (src2_high as u8),
+            0x0F,
+            0x2E,
+            0xC0 | (src1_mod << 3) | (src2_mod),
+        ])
+    } else {
+        buf.extend([0x66, 0x0F, 0x2E, 0xC0 | (src1_mod << 3) | (src2_mod)])
+    }
+}
+
+#[inline(always)]
+fn cmp_freg32_freg32(buf: &mut Vec<'_, u8>, src1: X86_64FloatReg, src2: X86_64FloatReg) {
+    let src1_high = src1 as u8 > 7;
+    let src1_mod = src1 as u8 % 8;
+
+    let src2_high = src2 as u8 > 7;
+    let src2_mod = src2 as u8 % 8;
+
+    if src1_high || src2_high {
+        buf.extend([
+            0x65,
+            0x40 | ((src1_high as u8) << 2) | (src2_high as u8),
+            0x0F,
+            0x2E,
+            0xC0 | (src1_mod << 3) | (src2_mod),
+        ])
+    } else {
+        buf.extend([0x65, 0x0F, 0x2E, 0xC0 | (src1_mod << 3) | (src2_mod)])
+    }
 }
 
 /// `TEST r/m64,r64` -> AND r64 with r/m64; set SF, ZF, PF according to result.
@@ -2755,6 +2827,12 @@ fn setg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 #[inline(always)]
 fn seta_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x97, buf, reg);
+}
+
+/// `SETAE r/m64` -> Set byte if above or equal (CF=0).
+#[inline(always)]
+fn setae_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x93, buf, reg);
 }
 
 /// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF≠ OF).

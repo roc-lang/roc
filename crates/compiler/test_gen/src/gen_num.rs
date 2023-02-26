@@ -115,7 +115,7 @@ fn i8_signed_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn i128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -196,7 +196,7 @@ fn i8_hex_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn u128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -277,7 +277,7 @@ fn u8_signed_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn u128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -418,7 +418,7 @@ fn character_literal_new_line() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn dec_float_alias() {
     assert_evals_to!(
         indoc!(
@@ -451,7 +451,7 @@ fn f64_float_alias() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn f32_float_alias() {
     assert_evals_to!(
         indoc!(
@@ -890,16 +890,20 @@ fn gen_int_neq() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn gen_int_less_than() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    4 < 5
-                "#
-        ),
-        true,
-        bool
-    );
+fn int_less_than() {
+    assert_evals_to!("4 < 5", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn float_less_than() {
+    assert_evals_to!("4.0 < 5.0", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn float_greater_than() {
+    assert_evals_to!("5.0 > 4.0", true, bool);
 }
 
 #[test]
