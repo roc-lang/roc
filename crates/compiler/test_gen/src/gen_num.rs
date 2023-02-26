@@ -500,7 +500,7 @@ fn f64_log() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_checked_one() {
-    assert_evals_to!("Num.logChecked 1", RocResult::ok(1.0), RocResult<f64, ()>);
+    assert_evals_to!("Num.logChecked 1", RocResult::ok(0.0), RocResult<f64, ()>);
 }
 
 #[test]
