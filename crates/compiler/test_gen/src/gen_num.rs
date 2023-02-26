@@ -19,11 +19,11 @@ fn nat_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : Num.Nat
-                    i = 1
+            i : Num.Nat
+            i = 1
 
-                    i
-                "#
+            i
+            "#
         ),
         1,
         usize
@@ -31,16 +31,16 @@ fn nat_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn i128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : I128
-                    i = 128
+            i : I128
+            i = 128
 
-                    i
-                "#
+            i
+            "#
         ),
         128,
         i128
@@ -71,11 +71,11 @@ fn i32_signed_int_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : I32
-                    i = 32
+            i : I32
+            i = 32
 
-                    i
-                "#
+            i
+            "#
         ),
         32,
         i32

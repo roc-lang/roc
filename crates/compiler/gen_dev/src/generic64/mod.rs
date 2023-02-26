@@ -2147,6 +2147,26 @@ impl<
                 let val = *x;
                 ASM::mov_reg64_imm64(&mut self.buf, reg, i128::from_ne_bytes(val) as i64);
             }
+            (Literal::Int(x), Layout::Builtin(Builtin::Int(IntWidth::I128 | IntWidth::U128))) => {
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |storage_manager, buf, reg| {
+                        let base_offset = storage_manager.claim_stack_area(sym, 16);
+                        let bytes = *x;
+
+                        let mut num_bytes = [0; 8];
+                        num_bytes.copy_from_slice(&bytes[..8]);
+                        let num = i64::from_ne_bytes(num_bytes);
+                        ASM::mov_reg64_imm64(buf, reg, num);
+                        ASM::mov_base32_reg64(buf, base_offset, reg);
+
+                        num_bytes.copy_from_slice(&bytes[8..16]);
+                        let num = i64::from_ne_bytes(num_bytes);
+                        ASM::mov_reg64_imm64(buf, reg, num);
+                        ASM::mov_base32_reg64(buf, base_offset + 8, reg);
+                    },
+                );
+            }
             (Literal::Byte(x), Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8))) => {
                 let reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
                 let val = *x;
