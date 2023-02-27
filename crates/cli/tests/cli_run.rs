@@ -533,6 +533,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
@@ -861,6 +862,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
