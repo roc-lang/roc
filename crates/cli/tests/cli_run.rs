@@ -487,7 +487,6 @@ mod cli_run {
 
     #[test]
     #[serial(cli_platform)]
-    #[cfg_attr(windows, ignore)]
     fn hello_world_no_url() {
         test_roc_app_slim(
             "examples",
