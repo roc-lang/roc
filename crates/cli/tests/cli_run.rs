@@ -503,7 +503,6 @@ mod cli_run {
     const LINE_ENDING: &str = "\n";
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     // uses C platform
     fn platform_switching_main() {
         test_roc_app_slim(
@@ -520,7 +519,6 @@ mod cli_run {
     // If we don't, a race condition leads to test flakiness.
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn platform_switching_rust() {
         test_roc_app_slim(
             "examples/platform-switching",
@@ -532,7 +530,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
             "examples/platform-switching",
@@ -566,7 +563,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn expects_dev_and_test() {
         // these are in the same test function so we don't have to worry about race conditions
         // on the building of the platform
@@ -652,7 +648,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn fibonacci() {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
@@ -698,7 +693,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
@@ -761,7 +755,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn interactive_effects() {
         test_roc_app(
             "examples/cli",
@@ -777,7 +770,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
     fn terminal_ui_tea() {
         test_roc_app(
@@ -794,7 +786,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -821,7 +812,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn static_site_gen() {
         test_roc_app(
             "examples/static-site-gen",
@@ -838,7 +828,6 @@ mod cli_run {
 
     #[test]
     #[serial(cli_platform)]
-    #[cfg_attr(windows, ignore)]
     fn with_env_vars() {
         test_roc_app(
             "examples/cli",
@@ -860,7 +849,10 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(
+        windows,
+        ignore = "LLVM error: Did not get return value from bitcode function roc_builtins.str.to_int.u64"
+    )]
     fn parse_movies_csv() {
         test_roc_app_slim(
             "examples/parser/examples",
@@ -884,7 +876,10 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(
+        windows,
+        ignore = "Non-zero exit code, no output, debugging this further should not be too hard."
+    )]
     fn parse_http() {
         test_roc_expect("examples/parser/package", "ParserHttp.roc")
     }
@@ -1113,19 +1108,16 @@ mod cli_run {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn nqueens() {
             test_benchmark("NQueens.roc", "nqueens", &["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn cfold() {
             test_benchmark("CFold.roc", "cfold", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn deriv() {
             test_benchmark(
                 "Deriv.roc",
@@ -1137,7 +1129,6 @@ mod cli_run {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
             test_benchmark(
                 "RBTreeCk.roc",
@@ -1149,7 +1140,6 @@ mod cli_run {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
             test_benchmark(
                 "RBTreeInsert.roc",
@@ -1175,7 +1165,7 @@ mod cli_run {
         }*/
 
         #[test]
-        #[cfg_attr(windows, ignore)]
+        #[cfg_attr(windows, ignore = "segmentation fault")]
         fn astar() {
             test_benchmark(
                 "TestAStar.roc",
@@ -1187,7 +1177,6 @@ mod cli_run {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn base64() {
             test_benchmark(
                 "TestBase64.roc",
@@ -1199,13 +1188,11 @@ mod cli_run {
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn closure() {
             test_benchmark("Closure.roc", "closure", &[], "", UseValgrind::No)
         }
 
         #[test]
-        #[cfg_attr(windows, ignore)]
         fn issue2279() {
             test_benchmark(
                 "Issue2279.roc",
@@ -1230,7 +1217,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_str)]
-    #[cfg_attr(windows, ignore)]
     fn run_multi_dep_str_unoptimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-str", "Main.roc"),
@@ -1247,7 +1233,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_str)]
-    #[cfg_attr(windows, ignore)]
     fn run_multi_dep_str_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-str", "Main.roc"),
@@ -1264,7 +1249,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
     fn run_multi_dep_thunk_unoptimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
@@ -1281,7 +1265,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
     fn run_multi_dep_thunk_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
@@ -1298,7 +1281,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
     fn run_packages_unoptimized() {
         check_output_with_stdin(
             &fixture_file("packages", "app.roc"),
@@ -1315,7 +1297,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
     fn run_packages_optimized() {
         check_output_with_stdin(
             &fixture_file("packages", "app.roc"),
