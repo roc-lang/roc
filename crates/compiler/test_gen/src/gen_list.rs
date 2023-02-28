@@ -3709,7 +3709,7 @@ fn list_range_length_overflow() {
             List.range {start: At 255u8, end: Length 2}
                "#
         ),
-        RocList::default(),
+        RocList::<u8>::default(),
         RocList::<u8>
     );
 }
