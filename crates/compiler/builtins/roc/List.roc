@@ -655,77 +655,93 @@ mapWithIndexHelp = \src, dest, func, index, length ->
 ##
 ##     List.range { start: After 0, end: Before 9, step: 3 } # returns [3, 6]
 ##
+## List.range will also generate a reversed list if step is negative or end comes before start:
+##
+##     List.range { start: At 5, end: At 2 } # returns [5, 4, 3, 2]
+##
 ## All of these options are compatible with the others. For example, you can use `At` or `After`
 ## with `start` regardless of what `end` and `step` are set to.
 range : _
 range = \{ start, end, step ? 0 } ->
-    { incByStep, stepIsPositive } =
+    { calcNext, stepIsPositive } =
         if step == 0 then
             when T start end is
                 T (At x) (At y) | T (At x) (Before y) | T (After x) (At y) | T (After x) (Before y) ->
                     if x < y then
                         {
-                            incByStep: \i -> i + 1,
+                            calcNext: \i -> Num.addChecked i 1,
                             stepIsPositive: Bool.true,
                         }
                     else
                         {
-                            incByStep: \i -> i - 1,
+                            calcNext: \i -> Num.subChecked i 1,
                             stepIsPositive: Bool.false,
                         }
 
                 T (At _) (Length _) | T (After _) (Length _) ->
                     {
-                        incByStep: \i -> i + 1,
+                        calcNext: \i -> Num.addChecked i 1,
                         stepIsPositive: Bool.true,
                     }
         else
             {
-                incByStep: \i -> i + step,
+                calcNext: \i -> Num.addChecked i step,
                 stepIsPositive: step > 0,
             }
 
     inclusiveStart =
         when start is
-            At x -> x
-            After x -> incByStep x
+            At x -> Ok x
+            After x -> calcNext x
 
     when end is
         At at ->
-            isComplete =
+            isValid =
                 if stepIsPositive then
-                    \i -> i > at
+                    \i -> i <= at
                 else
-                    \i -> i < at
+                    \i -> i >= at
 
             # TODO: switch to List.withCapacity
-            rangeHelp [] inclusiveStart incByStep isComplete
+            rangeHelp [] inclusiveStart calcNext isValid
 
         Before before ->
-            isComplete =
+            isValid =
                 if stepIsPositive then
-                    \i -> i >= before
+                    \i -> i < before
                 else
-                    \i -> i <= before
+                    \i -> i > before
 
             # TODO: switch to List.withCapacity
-            rangeHelp [] inclusiveStart incByStep isComplete
+            rangeHelp [] inclusiveStart calcNext isValid
 
         Length l ->
-            rangeLengthHelp (List.withCapacity l) inclusiveStart l incByStep
+            rangeLengthHelp (List.withCapacity l) inclusiveStart l calcNext
 
-rangeHelp = \accum, i, incByStep, isComplete ->
-    if isComplete i then
-        accum
-    else
-        # TODO: change this to List.appendUnsafe once capacity is set correctly
-        rangeHelp (List.append accum i) (incByStep i) incByStep isComplete
+rangeHelp = \accum, i, calcNext, isValid ->
+    when i is
+        Ok val ->
+            if isValid val then
+                # TODO: change this to List.appendUnsafe once capacity is set correctly
+                rangeHelp (List.append accum val) (calcNext val) calcNext isValid
+            else
+                accum
+        Err _ ->
+            # We went past the end of the numeric range and there is no next.
+            # return the generated list.
+            accum
 
-rangeLengthHelp = \accum, i, remaining, incByStep ->
+rangeLengthHelp = \accum, i, remaining, calcNext ->
     if remaining == 0 then
         accum
     else
-        rangeLengthHelp (List.appendUnsafe accum i) (incByStep i) (remaining - 1) incByStep
+        when i is
+            Ok val ->
+                rangeLengthHelp (List.appendUnsafe accum val) (calcNext val) (remaining - 1) calcNext
+            Err _ ->
+                # We went past the end of the numeric range and there is no next.
+                # The list is not the correct length yet, so we must crash.
+                crash "List.range: failed to generate enough elements to fill the range before overflowing the numeric type"
 
 expect
     List.range { start: At 0, end: At 4 } == [0, 1, 2, 3, 4]
@@ -753,6 +769,18 @@ expect
 
 expect
     List.range { start: At 4, end: Length 5, step: -3 } == [4, 1, -2, -5, -8]
+
+expect
+    List.range { start: After 250u8, end: At 255 } == [251, 252, 253, 254, 255]
+
+expect
+    List.range { start: After 250u8, end: At 255 , step: 10} == []
+
+expect
+    List.range { start: After 250u8, end: At 245 , step: 10} == []
+
+expect
+    List.range { start: At 4, end: At 0 } == [4, 3, 2, 1, 0]
 
 ## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
