@@ -191,16 +191,42 @@ encodeTag = \name, payload ->
         List.append bytesWithPayload (Num.toU8 ']')
         |> List.append (Num.toU8 '}')
 
+isEscapeSequence : U8, U8 -> Bool
+isEscapeSequence = \a, b ->
+    when P a b is
+        P '\\' 'b' -> Bool.true # Backspace
+        P '\\' 'f' -> Bool.true # Form feed
+        P '\\' 'n' -> Bool.true # Newline
+        P '\\' 'r' -> Bool.true # Carriage return
+        P '\\' 't' -> Bool.true # Tab
+        P '\\' '"' -> Bool.true # Double quote
+        P '\\' '\\' -> Bool.true # Backslash
+        _ -> Bool.false
+
 takeWhile = \list, predicate ->
     helper = \{ taken, rest } ->
-        when List.first rest is
-            Ok elem ->
-                if predicate elem then
-                    helper { taken: List.append taken elem, rest: List.split rest 1 |> .others }
+        when rest is
+            [a, b, ..] ->
+                if isEscapeSequence a b then
+                    helper {
+                        taken: taken |> List.append a |> List.append b,
+                        rest: List.drop rest 2,
+                    }
+                else if predicate a then
+                    helper {
+                        taken: List.append taken a,
+                        rest: List.dropFirst rest,
+                    }
                 else
                     { taken, rest }
 
-            Err _ -> { taken, rest }
+            [a, ..] if predicate a ->
+                helper {
+                    taken: List.append taken a,
+                    rest: List.dropFirst rest,
+                }
+
+            _ -> { taken, rest }
 
     helper { taken: [], rest: list }
 
@@ -463,3 +489,10 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
         when finalizer endStateResult is
             Ok val -> { result: Ok val, rest: afterRecordBytes }
             Err e -> { result: Err e, rest: afterRecordBytes }
+
+# Test json string decoding with escapes
+expect 
+    input = Str.toUtf8 "\"a\r\nbc\\\"xz\""
+    expected = Ok "a\r\nbc\\\"xz"
+    actual = Decode.fromBytes input fromUtf8
+    actual == expected
