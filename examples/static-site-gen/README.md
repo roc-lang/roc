@@ -9,7 +9,7 @@ To run, `cd` into this directory and run this in your terminal:
 
 If `roc` is on your PATH:
 ```bash
-roc run static-site.roc input/ output/
+roc run static-site.roc -- input/ output/
 ```
 
 If not, and you're building Roc from source:
