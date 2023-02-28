@@ -726,6 +726,7 @@ rangeHelp = \accum, i, calcNext, isValid ->
                 rangeHelp (List.append accum val) (calcNext val) calcNext isValid
             else
                 accum
+
         Err _ ->
             # We went past the end of the numeric range and there is no next.
             # return the generated list.
@@ -738,6 +739,7 @@ rangeLengthHelp = \accum, i, remaining, calcNext ->
         when i is
             Ok val ->
                 rangeLengthHelp (List.appendUnsafe accum val) (calcNext val) (remaining - 1) calcNext
+
             Err _ ->
                 # We went past the end of the numeric range and there is no next.
                 # The list is not the correct length yet, so we must crash.
@@ -774,10 +776,10 @@ expect
     List.range { start: After 250u8, end: At 255 } == [251, 252, 253, 254, 255]
 
 expect
-    List.range { start: After 250u8, end: At 255 , step: 10} == []
+    List.range { start: After 250u8, end: At 255, step: 10 } == []
 
 expect
-    List.range { start: After 250u8, end: At 245 , step: 10} == []
+    List.range { start: After 250u8, end: At 245, step: 10 } == []
 
 expect
     List.range { start: At 4, end: At 0 } == [4, 3, 2, 1, 0]
