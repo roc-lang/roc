@@ -935,10 +935,11 @@ All operators in Roc are syntax sugar for normal function calls. See the [Operat
 
 Sometimes you may want to document the type of a definition. For example, you might write:
 
-<pre><samp><span class="comment"># Takes a firstName string and a lastName string, and returns a string</span>
-fullName <span class="kw">=</span> <span class="kw">\</span>firstName, lastName<span class="hljs-function"> <span class="kw">-&gt;</span>
-<span class="str">    "</span><span class="str-interp">\(firstName) \(lastName)</span><span class="str">"</span>
-</samp></pre>
+```roc
+# Takes a firstName string and a lastName string, and returns a string
+fullName = \firstName, lastName ->
+    "\(firstName) \(lastName)"
+```
 
 Comments can be valuable documentation, but they can also get out of date and become misleading. If someone changes this function and forgets to update the comment, it will no longer be accurate.
 
@@ -946,10 +947,11 @@ Comments can be valuable documentation, but they can also get out of date and be
 
 Here's another way to document this function's type, which doesn't have that problem:
 
-<pre><samp>fullName <span class="colon">:</span> Str, Str <span class="kw">-&gt;</span> Str
-fullName <span class="kw">=</span> <span class="kw">\</span>firstName, lastName <span class="kw">-&gt;</span>
-<span class="str">    "</span><span class="str-interp">\(firstName) \(lastName)</span><span class="str">"</span>
-</samp></pre>
+```roc
+fullName : Str, Str -> Str
+fullName = \firstName, lastName ->
+    "\(firstName) \(lastName)"
+```
 
 The `fullName :` line is a _type annotation_. It's a strictly optional piece of metadata we can add above a def to describe its type. Unlike a comment, the Roc compiler will check type annotations for accuracy. If the annotation ever doesn't fit with the implementation, we'll get a compile-time error.
 
@@ -957,36 +959,39 @@ The annotation `fullName : Str, Str -> Str` says "`fullName` is a function that 
 
 We can give type annotations to any value, not just functions. For example:
 
-<pre><samp><span class="attribute">firstName</span> <span class="colon">:</span> Str
-firstName <span class="kw">=</span> <span class="str">"Amy"</span>
+```roc
+firstName : Str
+firstName = "Amy"
 
-<span class="hljs-literal">last</span>Name <span class="colon">:</span> Str
-<span class="hljs-literal">last</span>Name <span class="kw">=</span> <span class="str">"Lee"</span>
-</samp></pre>
+lastName : Str
+lastName = "Lee"
+```
 
 These annotations say that both `firstName` and `lastName` have the type `Str`.
 
 We can annotate records similarly. For example, we could move `firstName` and `lastName` into a record like so:
 
-<pre><samp>amy <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
-amy <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Amy"</span>, lastName<span class="colon">:</span> <span class="str">"Lee"</span> }
+```roc
+amy : { firstName : Str, lastName : Str }
+amy = { firstName: "Amy", lastName: "Lee" }
 
-jen <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
-jen <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Jen"</span>, lastName<span class="colon">:</span> <span class="str">"Majura"</span> }
-</samp></pre>
+jen : { firstName : Str, lastName : Str }
+jen = { firstName: "Jen", lastName: "Majura" }
+```
 
 ### [Type Aliases](#type-aliases) {#type-aliases}
 
 When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like so:
 
-<pre><samp>Musician <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
+```roc
+Musician : { firstName : Str, lastName : Str }
 
-amy <span class="colon">:</span> Musician
-amy <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Amy"</span>, lastName<span class="colon">:</span> <span class="str">"Lee"</span> }
+amy : Musician
+amy = { firstName: "Amy", lastName: "Lee" }
 
-simone <span class="colon">:</span> Musician
-simone <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Simone"</span>, lastName<span class="colon">:</span> <span class="str">"Simons"</span> }
-</samp></pre>
+simone : Musician
+simone = { firstName: "Simone", lastName: "Simons" }
+```
 
 Here, `Musician` is a _type alias_. A type alias is like a def, except it gives a name to a type instead of to a value. Just like how you can read `name : Str` as "`name` has the type `Str`," you can also read `Musician : { firstName : Str, lastName : Str }` as "`Musician` has the type `{ firstName : Str, lastName : Str }`."
 
@@ -994,9 +999,10 @@ Here, `Musician` is a _type alias_. A type alias is like a def, except it gives 
 
 Annotations for lists must specify what type the list's elements have:
 
-<pre><samp>names <span class="colon">:</span> List Str
-names <span class="kw">=</span> [<span class="str">"Amy"</span>, <span class="str">"Simone"</span>, <span class="str">"Tarja"</span>]
-</samp></pre>
+```roc
+names : List Str
+names = ["Amy", "Simone", "Tarja"]
+```
 
 You can read `List Str` as "a list of strings." Here, `Str` is a _type parameter_ that tells us what type of `List` we're dealing with. `List` is a _parameterized type_, which means it's a type that requires a type parameter. There's no way to give something a type of `List` without a type parameter. You have to specify what type of list it is, such as `List Str` or `List Bool` or `List { firstName : Str, lastName : Str }`.
 
@@ -1004,8 +1010,9 @@ You can read `List Str` as "a list of strings." Here, `Str` is a _type parameter
 
 There are some functions that work on any list, regardless of its type parameter. For example, `List.isEmpty` has this type:
 
-<pre><samp>isEmpty <span class="colon">:</span> List * <span class="kw">-&gt;</span> Bool
-</samp></pre>
+```roc
+isEmpty : List * -> Bool
+```
 
 The `*` is a _wildcard type_; a type that's compatible with any other type. `List *` is compatible with any type of `List` like `List Str`, `List Bool`, and so on. So you can call `List.isEmpty ["I am a List Str"]` as well as `List.isEmpty [Bool.true]`, and they will both work fine.
 
@@ -1015,12 +1022,13 @@ The wildcard type also comes up with empty lists. Suppose we have one function t
 
 `List.reverse` works similarly to `List.isEmpty`, but with an important distinction. As with `isEmpty`, we can call `List.reverse` on any list, regardless of its type parameter. However, consider these calls:
 
-<pre><samp>strings <span class="colon">:</span> List Str
-strings <span class="kw">=</span> List.reverse [<span class="str">"a"</span>, <span class="str">"b"</span>]
+```roc
+strings : List Str
+strings = List.reverse ["a", "b"]
 
-bools <span class="colon">:</span> List Bool
-bools <span class="kw">=</span> List.reverse [Bool.true, Bool.false]
-</samp></pre>
+bools : List Bool
+bools = List.reverse [Bool.true, Bool.false]
+```
 
 In the `strings` example, we have `List.reverse` returning a `List Str`. In the `bools` example, it's returning a `List Bool`. So what's the type of `List.reverse`?
 
@@ -1028,12 +1036,17 @@ We saw that `List.isEmpty` has the type `List * -> Bool`, so we might think the 
 
 What we want is something like one of these:
 
-<pre><samp>reverse <span class="colon">:</span> List elem <span class="kw">-&gt;</span> List elem
-</samp>
-<samp>reverse <span class="colon">:</span> <span class="hljs-type">List</span> value <span class="kw">-&gt;</span> <span class="hljs-type">List</span> value
-</samp>
-<samp>reverse <span class="colon">:</span> List a <span class="kw">-&gt;</span> List a
-</samp></pre>
+```roc
+reverse : List elem -> List elem
+```
+
+```roc
+reverse : List value -> List value
+```
+
+```roc
+reverse : List a -> List a
+```
 
 Any of these will work, because `elem`, `value`, and `a` are all _type variables_. A type variable connects two or more types in the same annotation. So you can read `List elem -> List elem` as "takes a list and returns a list that has **the same element type**." Just like `List.reverse` does!
 
@@ -1047,47 +1060,52 @@ Similarly, the only way to have a function whose type is `a -> a` is if the func
 
 We can also annotate types that include tags:
 
-<pre><samp>colorFromStr <span class="colon">:</span> Str <span class="kw">-&gt;</span> <span class="brace">[</span>Red<span class="comma">,</span> Green<span class="comma">,</span> Yellow<span class="brace">]</span>
-colorFromStr <span class="kw">=</span> <span class="kw">\</span>string <span class="kw">-&gt;</span>
-    <span class="kw">when</span> string <span class="kw">is</span>
-        <span class="str">"red"</span> <span class="kw">-&gt;</span> Red
-        <span class="str">"green"</span> <span class="kw">-&gt;</span> Green
-        <span class="kw">_</span> <span class="kw">-&gt;</span> Yellow
-</samp></pre>
+```roc
+colorFromStr : Str -> [Red, Green, Yellow]
+colorFromStr = \string ->
+    when string is
+        "red" -> Red
+        "green" -> Green
+        _ -> Yellow
+```
 
 You can read the type `[Red, Green, Yellow]` as "a tag union of the tags `Red`, `Green`, and `Yellow`."
 
 Some tag unions have only one tag in them. For example:
 
-<pre><samp>redTag <span class="colon">:</span> <span class="brace">[</span>Red<span class="brace">]</span>
-redTag <span class="kw">=</span> Red
-</samp></pre>
+```roc
+redTag : [Red]
+redTag = Red
+```
 
 ### [Accumulating Tag Types](#accumulating-tag-types) {#accumulating-tag-types}
 
 Tag union types can accumulate more tags based on how they're used. Consider this `if` expression:
 
-<pre><samp><span class="kw">\</span>str <span class="kw">-&gt;</span>
-    <span class="kw">if</span> Str.isEmpty str <span class="kw">then</span>
-        Ok <span class="str">"it was empty"</span>
-    <span class="kw">else</span>
-        Err <span class="brace">[</span><span class="str">"it was not empty"</span><span class="brace">]</span>
-</samp></pre>
+```roc
+\str ->
+    if Str.isEmpty str then
+        Ok "it was empty"
+    else
+        Err ["it was not empty"]
+```
 
 Here, Roc sees that the first branch has the type `[Ok Str]` and that the `else` branch has the type `[Err (List Str)]`, so it concludes that the whole `if` expression evaluates to the combination of those two tag unions: `[Ok Str, Err (List Str)]`.
 
 This means this entire `\str -> …` function has the type `Str -> [Ok Str, Err (List Str)]`. However, it would be most common to annotate it as `Result Str (List Str)` instead, because the `Result` type (for operations like `Result.withDefault`, which we saw earlier) is a type alias for a tag union with `Ok` and `Err` tags that each have one payload:
 
-<pre><samp>Result ok err <span class="colon">:</span> <span class="brace">[</span>Ok ok<span class="comma">,</span> Err err<span class="brace">]</span>
-</samp></pre>
+```roc
+Result ok err : [Ok ok, Err err]
+```
 
 We just saw how tag unions get combined when different branches of a conditional return different tags. Another way tag unions can get combined is through pattern matching. For example:
 
-<pre><samp><span class="kw">when</span> color <span class="kw">is</span>
-    Red <span class="kw">-&gt;</span> <span class="str">"red"</span>
-    Yellow <span class="kw">-&gt;</span> <span class="str">"yellow"</span>
-    Green <span class="kw">-&gt;</span> <span class="str">"green"</span>
-</samp></pre>
+```roc
+when color is
+    Red -> "red"
+    Yellow -> "yellow"
+    Green -> "green"
+```
 
 Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, because those are the three possibilities this `when` handles.
 
@@ -1100,16 +1118,17 @@ A type can be defined to be opaque to hide its internal structure. This is a lot
 
 You can create an opaque type with the `:=` operator. Let's make one called `Username`:	
 
-<pre><samp>Username <span class="colon">:=</span> Str
+```roc
+Username := Str
 
-fromStr <span class="colon">:</span> Str <span class="kw">-></span> Username
-fromStr <span class="kw">=</span> <span class="kw">\</span>str <span class="kw">-></span>
+fromStr : Str -> Username
+fromStr = \str ->
     @Username str
 
-toStr <span class="colon">:</span> Username <span class="kw">-></span> Str
-toStr <span class="kw">=</span> <span class="kw">\</span>@Username str <span class="kw">-></span>
+toStr : Username -> Str
+toStr = \@Username str ->
     str
-</pre></samp>
+```
 
 The `fromStr` function turns a string into a `Username` by calling `@Username` on that string. The `toStr` function turns a `Username` back into a string by pattern matching `@Username str` to unwrap the string from the `Username` opaque type.
 
@@ -1143,57 +1162,18 @@ Choosing a size depends on your performance needs and the range of numbers you w
 
 Here are the different fixed-size integer types that Roc supports:
 
-<pre><table id="integer-types">
-<thead>
-<tr>
-<th>Range</th>
-<th>Type</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>-128</code><br/><code>127</code></td>
-<td><code>I8</code></td>
-</tr>
-<tr>
-<td><code>0</code><br/><code>255</code></td>
-<td><code>U8</code></td>
-</tr>
-<tr>
-<td><code>-32_768</code><br/><code>32_767</code></td>
-<td><code>I16</code></td>
-</tr>
-<tr>
-<td><code>0</code><br/><code>65_535</code></td>
-<td><code>U16</code></td>
-</tr>
-<tr>
-<td><code>-2_147_483_648</code><br/><code>2_147_483_647</code></td>
-<td><code>I32</code></td>
-</tr>
-<tr>
-<td><code>0</code><br/>(over 4 billion) <code>4_294_967_295</code></td>
-<td><code>U32</code></td>
-</tr>
-<tr>
-<td><code>-9_223_372_036_854_775_808</code><br/><code>9_223_372_036_854_775_807</code></td>
-<td><code>I64</code></td>
-</tr>
-<tr>
-<td><code>0</code><br/><i>(over 18 quintillion)</i><code>18_446_744_073_709_551_615</code></td>
-<td><code>U64</code></td>
-</tr>
-<tr>
-<td><code>-170_141_183_460_469_231_731_687_303_715_884_105_728</code><br/><code>170_141_183_460_469_231_731_687_303_715_884_105_727</code></td>
-<td><code>I128</code></td>
-</tr>
-<tr>
-<td><code>0</code><br/><i>(over 340 undecillion)</i><code>340_282_366_920_938_463_463_374_607_431_768_211_455</code></td>
-<td><code>U128</code></td>
-</tr>
-</tbody>
-</table></pre>
-
+| Range                                                                                                             | Type   |
+|--:----------------------------------------------------------------------------------------------------------------|-:-:----|
+| `-128`  <br> `127`                                                                                                | `I8`   |
+| `0`     <br> `255`                                                                                                | `U8`   |
+| `-32_768`  <br> `32_767`                                                                                          | `I16`  |
+| `0`     <br>  `65_535`                                                                                            | `U16`  |
+| `-2_147_483_648` <br> `2_147_483_647`                                                                             | `I32`  |
+| `0`     <br> (over 4 billion) `4_294_967_295`                                                                     | `U32`  |
+| `-9_223_372_036_854_775_808` <br> `9_223_372_036_854_775_807`                                                     | `I64`  |
+| `0`     <br> _(over 18 quintillion)_`18_446_744_073_709_551_615`                                                  | `U64`  |
+| `-170_141_183_460_469_231_731_687_303_715_884_105_728` <br> `170_141_183_460_469_231_731_687_303_715_884_105_727` | `I128` |
+| `0`     <br>  _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455`                       | `U128` |
 
 Roc also has one variable-size integer type: `Nat` (short for "natural number"). The size of `Nat` is equal to the size of a memory address, which varies by system. For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`. When compiling for a 32-bit system, it works the same way as `U32`. Most popular computing devices today are 64-bit, so `Nat` is usually the same as `U64`, but Web Assembly is typically 32-bit - so when running a Roc program built for Web Assembly, `Nat` will work like a `U32` in that program.
 
@@ -1227,18 +1207,20 @@ There are some use cases where `F64` and `F32` can be better choices than `Dec` 
 
 Some operations work on specific numeric types - such as `I64` or `Dec` - but operations support multiple numeric types. For example, the `Num.abs` function works on any number, since you can take the [absolute value](https://en.wikipedia.org/wiki/Absolute_value) of integers and fractions alike. Its type is:
 
-<pre><samp>abs <span class="colon">:</span> Num a <span class="kw">-&gt;</span> Num a
-</samp></pre>
+```roc
+abs : Num a -> Num a
+```
 
 This type says `abs` takes a number and then returns a number of the same type. Remember that we can see the type of number is the same because the [type variable](#type-variables) `a` is used on both sides. That's because the `Num` type is compatible with both integers and fractions.
 
 There's also an `Int` type which is only compatible with integers, and a `Frac` type which is only compatible with fractions. For example:
 
-<pre><samp>Num.xor <span class="colon">:</span> Int <span class="hljs-selector-tag">a</span>, Int <span class="hljs-selector-tag">a</span> <span class="kw">-&gt;</span> Int a
-</samp>
-<samp>Num.cos <span class="colon">:</span> Frac <span class="hljs-selector-tag">a</span> <span class="kw">-&gt;</span> Frac a
-</samp></pre>
-
+```roc
+Num.xor : Int a, Int a -> Int a
+```
+```roc
+Num.cos : Frac a -> Frac a
+```
 When you write a number literal in Roc, it has the type `Num *`. So you could call `Num.xor 1 1` and also `Num.cos 1` and have them all work as expected; the number literal `1` has the type `Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason, you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
 
 ### [Number Literals](#number-literals) {#number-literals}
@@ -1267,12 +1249,13 @@ Crashes in Roc are not like [try/catch exceptions](https://en.wikipedia.org/wiki
 
 You can intentionally crash a Roc program, for example inside a conditional branch that you believe is unreachable. Suppose you're certain that a particular `List U8` contains valid UTF-8 bytes, which means when you call `Str.fromUtf8` on it, the `Result` it returns will always be `Ok`. In that scenario, you can use the `crash` keyword to handle the `Err` case like so:
 
-<pre><samp>answer <span class="colon">:</span> Str
-answer <span class="kw">=</span>
-    <span class="kw">when</span> Str.fromUtf8 definitelyValidUtf8 <span class="kw">is</span>
-        Ok str <span class="kw">-&gt;</span> str
-        Err _ <span class="kw">-&gt;</span> <span class="kw">crash</span> <span class="str">"This should never happen!"</span>
-</samp></pre>
+```roc
+answer : Str
+answer =
+    when Str.fromUtf8 definitelyValidUtf8 is
+        Ok str -> str
+        Err _ -> crash "This should never happen!"
+```
 
 If the unthinkable happens, and somehow the program reaches this `Err` branch even though that was thought to be impossible, then it will crash - just like if the system had run out of memory. The string passed to `crash` will be provided to the platform as context; each platform may do something different with it.
 
@@ -1282,11 +1265,12 @@ If the unthinkable happens, and somehow the program reaches this `Err` branch ev
 
 Another use for `crash` is as a TODO marker when you're in the middle of building something:
 
-<pre><samp><span class="kw">if</span> x <span class="op">&gt;</span> y <span class="kw">then</span>
-    transmogrify (x <span class="op">*</span> <span class="number">2</span>)
-<span class="kw">else</span>
-    <span class="kw">crash</span> <span class="str">"TODO handle the x &lt;= y case"</span>
-</samp></pre>
+```roc
+if x > y then
+    transmogrify (x * 2)
+else
+    crash "TODO handle the x <= y case"
+```
 
 This lets you do things like write tests for the non-`crash` branch, and then come back and finish the other branch later.
 
@@ -1302,43 +1286,46 @@ Errors that are recoverable should be represented using normal Roc types (like [
 
 You can write automated tests for your Roc code like so:
 
-<pre><samp>pluralize <span class="kw">=</span> <span class="kw">\</span>singular, plural, count <span class="kw">-&gt;</span>
-    countStr <span class="kw">=</span> <span class="hljs-type">Num</span>.toStr count
+```roc
+pluralize = \singular, plural, count ->
+    countStr = Num.toStr count
 
-    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> <span class="kw">then</span>
-        <span class="str">"<span class="str-interp">\(countStr)</span> <span class="str-interp">\(singular)</span>"</span>
-    <span class="kw">else</span>
-        <span class="str">"<span class="str-interp">\(countStr)</span> <span class="str-interp">\(plural)</span>"</span>
+    if count == 1 then
+        "\(countStr) \(singular)"
+    else
+        "\(countStr) \(plural)"
 
-<span class="kw">expect</span> pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</span> <span class="number">1</span> <span class="op">==</span> <span class="str">"1 cactus"</span>
+expect pluralize "cactus" "cacti" 1 == "1 cactus"
 
-<span class="kw">expect</span> pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</span> <span class="number">2</span> <span class="op">==</span> <span class="str">"2 cacti"</span>
-</samp></pre>
+expect pluralize "cactus" "cacti" 2 == "2 cacti"
+```
 
 If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect` expressions (that is, the two `pluralize` calls) and report any that returned `Bool.false`.
 
 If a test fails, it will not show the actual value that differs from the expected value. To show the actual value, you can write the expect like this:
 
-<pre><samp>expect
-    funcOut <span class="op">=</span> pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</span> 1
+```roc
+expect
+    funcOut = pluralize "cactus" "cacti" 1
 
-    funcOut <span class="op">==</span> <span class="str">"2 cactus"</span>
-</samp></pre>
+    funcOut == "2 cactus"
+```
 
 ### [Inline Expectations](#inline-expects) {#inline-expects}
 
 Expects do not have to be at the top level:
 
-<pre><samp>pluralize <span class="kw">=</span> <span class="kw">\</span>singular, plural, count <span class="kw">-&gt;</span>
-    countStr <span class="kw">=</span> <span class="hljs-type">Num</span>.toStr count
+```roc
+pluralize = \singular, plural, count ->
+    countStr = Num.toStr count
 
-    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> <span class="kw">then</span>
-        <span class="str">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
-    <span class="kw">else</span>
-        <span class="kw">expect</span> count <span class="op">&gt;</span> <span class="number">0</span>
+    if count == 1 then
+        "\(countStr) \(singular)"
+    else
+        expect count > 0
 
-        <span class="str">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(plural)</span>"</span>
-</samp></pre>
+        "\(countStr) \(plural)"
+```
 
 This `expect` will fail if you call `pluralize` passing a count of 0.
 
@@ -1381,11 +1368,12 @@ Besides being built into the compiler, the builtin modules are different from ot
 
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
-<pre><samp><span class="kw">app</span> "<span class="hljs-selector-tag">hello</span>"
-    <span class="kw">packages</span> <span class="brace">{</span> pf<span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
-    <span class="kw">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
-    <span class="kw">provides</span> <span class="hljs-selector-tag">main</span> <span class="kw">to</span> <span class="hljs-selector-tag">pf</span>
-</samp></pre>
+```roc
+app "hello"
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    imports [pf.Stdout]
+    provides main to pf
+```
 
 This is known as a _module header_. Every `.roc` file is a _module_, and there are different types of modules. We know this particular one is an _application module_ because it begins with the `app` keyword.
 
@@ -1393,10 +1381,11 @@ The line `app "hello"` states that this module defines a Roc application, and th
 
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
-<pre><samp><span class="kw">packages</span> <span class="brace">{</span> pf<span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
-    <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
-    <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
-</samp></pre>
+```roc
+packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    imports [pf.Stdout]
+    provides [main] to pf
+```
 
 The `packages { pf: "https://…tar.br" }` part says three things:
 
@@ -1408,8 +1397,9 @@ The `imports [pf.Stdout]` line says that we want to import the `Stdout` module f
 
 This import has a direct interaction with our definition of `main`. Let's look at that again:
 
-<pre><samp>main <span class="kw">=</span> Stdout.line <span class="str">"I'm a Roc application!"</span>
-</samp></pre>
+```roc
+main = Stdout.line "I'm a Roc application!"
+```
 
 Here, `main` is calling a function called `Stdout.line`. More specifically, it's calling a function named `line` which is exposed by a module named `Stdout`.
 
@@ -1417,8 +1407,9 @@ When we write `imports [pf.Stdout]`, it specifies that the `Stdout` module comes
 
 If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:
 
-<pre><samp><span class="kw">imports</span> [pf.Stdout, AdditionalModule, AnotherModule]</span>
-</samp></pre>
+```roc
+imports [pf.Stdout, AdditionalModule, AnotherModule]
+```
 
 You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
 
