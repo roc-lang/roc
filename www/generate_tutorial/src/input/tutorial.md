@@ -126,14 +126,15 @@ Let's move out of the REPL and create our first Roc application!
 
 Make a file named `main.roc` and put this in it:
 
-<pre><samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
-    <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
-    <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
+```roc
+app "hello"
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    imports [pf.Stdout]
+    provides [main] to pf
 
-main <span class="kw">=</span>
-    Stdout.line <span class="str">"I'm a Roc application!"</span>
-</samp></pre>
+main =
+    Stdout.line "I'm a Roc application!"
+```
 
 Try running this with:
 
@@ -149,15 +150,16 @@ Congratulations, you've written your first Roc application! We'll go over what t
 
 Try replacing the `main` line with this:
 
-<pre><samp>birds <span class="kw">=</span> 3
+```roc
+birds = 3
 
-iguanas <span class="kw">=</span> 2
+iguanas = 2
 
-total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <span class="op">+</span> iguanas<span class="paren">)</span>
+total = Num.toStr (birds + iguanas)
 
-main <span class="kw">=</span>
-    Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
-</samp></pre>
+main =
+    Stdout.line "There are \(total) animals."
+```
 
 Now run `roc dev` again. This time the "Downloading …" message won't appear; the file has been cached from last time, and won't need to be downloaded again.
 
@@ -177,28 +179,30 @@ Once we have a def, we can use its name in other expressions. For example, the `
 
 You can name a def using any combination of letters and numbers, but they have to start with a letter.
 
-<aside>
-    <p><b>Note:</b> Defs are constant; they can't be reassigned. We'd get an error if we wrote these two defs in the same scope:</p>
-    <pre><samp>birds <span class="kw">=</span> 3
-    birds <span class="kw">=</span> 2</samp></pre>
-</aside>
+**Note:** Defs are constant; they can't be reassigned. We'd get an error if we wrote these two defs in the same scope:
+
+```roc
+birds = 3
+birds = 2
+```
 
 ### [Defining Functions](#defining-functions) {#defining-functions}
 
 So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`. Next let's try defining a function of our own.
 
-<pre><samp><span>birds <span class="kw">=</span> 3
+```roc
+birds = 3
 
-iguanas <span class="kw">=</span> 2
+iguanas = 2
 
-total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <span class="op">+</span> iguanas<span class="paren">)</span>
+total = Num.toStr (birds + iguanas)
 
-main <span class="kw">=</span>
-    Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
+main =
+    Stdout.line "There are \(total) animals."
 
-addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
-    Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span>
-</samp></pre>
+addAndStringify = \num1, num2 ->
+    Num.toStr (num1 + num2)
+```
 
 This new `addAndStringify` function we've defined accepts two numbers, adds them, calls `Num.toStr` on the result, and returns that.
 
@@ -208,14 +212,15 @@ The `\num1, num2 ->` syntax defines a function's arguments, and the expression a
 
 Let's modify this function to return an empty string if the numbers add to zero.
 
-<pre><samp>addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
-    sum <span class="kw">=</span> num1 <span class="op">+</span> num2
+```roc
+addAndStringify = \num1, num2 ->
+    sum = num1 + num2
 
-    <span class="kw">if</span> sum <span class="op">==</span> 0 <span class="kw">then</span>
-        <span class="str">""</span>
-    <span class="kw">else</span>
-        Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span>
-</samp></pre>
+    if sum == 0 then
+        ""
+    else
+        Num.toStr (num1 + num2)
+```
 
 We did two things here:
 
@@ -228,30 +233,32 @@ Every `if` must be accompanied by both `then` and also `else`. Having an `if` wi
 
 We can combine `if` and `else` to get `else if`, like so:
 
-<pre><samp><span>addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
-    sum <span class="kw">=</span> num1 <span class="op">+</span> num2
+```roc
+addAndStringify = \num1, num2 ->
+    sum = num1 + num2
 
-    <span class="kw">if</span> sum <span class="op">==</span> 0 <span class="kw">then</span>
-        <span class="str">""</span></span>
-    <span class="kw">else if</span> sum <span class="op">&lt;</span> 0 <span class="kw">then</span>
-        <span class="str">"negative"</span>
-    <span><span class="kw">else</span>
-        Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span></span>
-</samp></pre>
+    if sum == 0 then
+        ""
+    else if sum < 0 then
+        "negative"
+    else
+        Num.toStr (num1 + num2)
+```
 
 Note that `else if` is not a separate language keyword! It's just an `if`/`else` where the `else` branch contains another `if`/`else`. This is easier to see with different indentation:
 
-<pre><samp><span>addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
-    sum <span class="kw">=</span> num1 <span class="op">+</span> num2
+```roc
+addAndStringify = \num1, num2 ->
+    sum = num1 + num2
 
-    <span class="kw">if</span> sum <span class="op">==</span> 0 <span class="kw">then</span>
-        <span class="str">""</span></span>
-    <span class="kw">else
-        if</span> sum <span class="op">&lt;</span> 0 <span class="kw">then</span>
-            <span class="str">"negative"</span>
-        <span><span class="kw">else</span>
-            Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span></span>
-</samp></pre>
+    if sum == 0 then
+        ""
+    else
+        if sum < 0 then
+            "negative"
+        else
+            Num.toStr (num1 + num2)
+```
 
 This differently-indented version is equivalent to writing `else if sum < 0 then` on the same line, although the convention is to use the original version's style.
 
@@ -259,7 +266,9 @@ This differently-indented version is equivalent to writing `else if sum < 0 then
 
 This is a comment in Roc:
 
-<samp><span class="comment"># The 'name' field is unused by addAndStringify</span></samp>
+```roc
+# The 'name' field is unused by addAndStringify
+```
 
 Whenever you write `#` it means that the rest of the line is a comment, and will not affect the
 running program. Roc does not have multiline comment syntax.
@@ -268,11 +277,12 @@ running program. Roc does not have multiline comment syntax.
 
 Comments that begin with `##` are "doc comments" which will be included in generated documentation (`roc docs`). They can include code blocks by adding five spaces after `##`.
 
-<pre><samp><span class="comment">## This is a comment for documentation, and includes a code block.
+```roc
+## This is a comment for documentation, and includes a code block.
 ##
 ##     x = 2
-##     expect x == 2</span>
-</samp></pre>
+##     expect x == 2
+```
 
 Like other comments, doc comments do not affect the running program.
 
@@ -280,14 +290,15 @@ Like other comments, doc comments do not affect the running program.
 
 [Print debugging](https://en.wikipedia.org/wiki/Debugging#Techniques) is the most common debugging technique in the history of programming, and Roc has a `dbg` keyword to facilitate it. Here's an example of how to use `dbg`:
 
-<pre><samp>pluralize <span class="kw">=</span> <span class="kw">\</span>singular, plural, count <span class="kw">-&gt;</span>
-    <span class="kw">dbg</span> count
+```roc
+pluralize = \singular, plural, count ->
+    dbg count
 
-    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> <span class="kw">then</span>
+    if count == 1 then
         singular
-    <span class="kw">else</span>
+    else
         plural
-</samp></pre>
+```
 
 Whenever this `dbg` line of code is reached, the value of `count` will be printed to [stderr](<https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)>), along with the source code file and line number where the `dbg` itself was written:
 
@@ -297,11 +308,15 @@ Here, `[pluralize.roc 6:8]` tells us that this `dbg` was written in the file `pl
 
 You can give `dbg` any expression you like, for example:
 
-<samp><span class="kw">dbg</span> Str.concat singular plural</samp>
+```roc
+dbg Str.concat singular plural
+```
 
 An easy way to print multiple values at a time is to wrap them in a tag, for example a concise tag like `T`:
 
-<samp><span class="kw">dbg</span> T "the value of `count` is:" count</samp>
+```roc
+dbg T "the value of count is:" count
+```
 
 > **Note:** `dbg` is a debugging tool, and is only available when running your program via a `roc` subcommand (for example using `roc dev`, `roc run`, or `roc test`). When you build a standalone application with `roc build`, any uses of `dbg` won't be included!
 
@@ -309,11 +324,12 @@ An easy way to print multiple values at a time is to wrap them in a tag, for exa
 
 Currently our `addAndStringify` function takes two arguments. We can instead make it take one argument like so:
 
-<pre><samp>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds<span class="colon">:</span> 5<span class="comma">,</span> iguanas<span class="colon">:</span> 7 <span class="brace">}</span>
+```roc
+total = addAndStringify { birds: 5, iguanas: 7 }
 
-addAndStringify <span class="kw">=</span> <span class="kw">\</span>counts <span class="kw">-></span>
-    Num.toStr <span class="paren">(</span>counts.birds <span class="op">+</span> counts.iguanas<span class="paren">)</span>
-</samp></pre>
+addAndStringify = \counts ->
+    Num.toStr (counts.birds + counts.iguanas)
+```
 
 The function now takes a _record_, which is a group of named values. Records are not [objects](https://en.wikipedia.org/wiki/Object_(computer_science)); they don't have methods or inheritance, they just store information.
 
@@ -329,13 +345,15 @@ When we use [`==`](/builtins/Bool#isEq) on records, it compares all the fields i
 
 The `addAndStringify` function will accept any record with at least the fields `birds` and `iguanas`, but it will also accept records with more fields. For example:
 
-<pre><samp><span>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds<span class="colon">:</span> 5<span class="comma">,</span> iguanas<span class="colon">:</span> 7 <span class="brace">}</span>
-</span>
-<span class="comment"># The `name` field is unused by addAndStringify</span>
-totalWithNote <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds: 4<span class="comma">,</span> iguanas: 3<span class="comma">,</span> name: <span class="str">"Whee!"</span> <span class="brace">}</span>
+```roc
+total = addAndStringify { birds: 5, iguanas: 7 }
 
-<span>addAndStringify <span class="kw">=</span> <span class="kw">\</span>counts <span class="kw">-></span>
-    Num.toStr <span class="paren">(</span>counts.birds <span class="op">+</span> counts.iguanas<span class="paren">)</span></span></samp></pre>
+# The `name` field is unused by addAndStringify
+totalWithNote = addAndStringify { birds: 4, iguanas: 3, name: "Whee!" }
+
+addAndStringify = \counts ->
+    Num.toStr (counts.birds + counts.iguanas)
+```
 
 This works because `addAndStringify` only uses `counts.birds` and `counts.iguanas`. If we were to use `counts.note` inside `addAndStringify`, then we would get an error because `total` is calling `addAndStringify` passing a record that doesn't have a `note` field.
 
@@ -345,13 +363,14 @@ Roc has a couple of shorthands you can use to express some record-related operat
 
 Instead of writing `\record -> record.x` we can write `.x` and it will evaluate to the same thing: a function that takes a record and returns its `x` field. You can do this with any field you want. For example:
 
-<pre><samp><span class="comment"># returnFoo is a function that takes a record</span>
-<span class="comment"># and returns the `foo` field of that record.</span>
-returnFoo <span class="kw">=</span> .foo
+```roc
+# returnFoo is a function that takes a record
+# and returns the `foo` field of that record.
+returnFoo = .foo
 
-returnFoo <span class="brace">{</span> foo<span class="colon">:</span> <span class="str">"hi!"</span><span class="comma">,</span> bar<span class="colon">:</span> <span class="str">"blah"</span> <span class="brace">}</span></span>
-<span class="comment"># returns "hi!"</span>
-</samp></pre>
+returnFoo { foo: "hi!", bar: "blah" }
+# returns "hi!"
+```
 
 Sometimes we assign a def to a field that happens to have the same name—for example, `{ x: x }`.
 In these cases, we shorten it to writing the name of the def alone—for example, `{ x }`. We can do this with as many fields as we like; here are several different ways to define the same record:
@@ -365,30 +384,35 @@ In these cases, we shorten it to writing the name of the def alone—for example
 
 We can use _destructuring_ to avoid naming a record in a function argument, instead giving names to its individual fields:
 
-<pre><samp>addAndStringify <span class="kw">=</span> <span class="kw">\</span><span class="brace">{</span> birds<span class="comma">,</span> iguanas <span class="brace">}</span><span class="kw"> -></span>
-    Num.toStr <span class="paren">(</span>birds <span class="op">+</span> iguanas<span class="paren">)</span>
-</samp></pre>
+```roc
+addAndStringify = \{ birds, iguanas } ->
+    Num.toStr (birds + iguanas)
+```
 
 Here, we've _destructured_ the record to create a `birds` def that's assigned to its `birds` field, and an `iguanas` def that's assigned to its `iguanas` field. We can customize this if we like:
 
-<pre><samp>addAndStringify <span class="kw">=</span> <span class="kw">\</span><span class="brace">{</span> birds<span class="comma">,</span> iguanas<span class="colon">:</span> lizards <span class="brace">}</span><span class="kw"> -></span>
-    Num.toStr <span class="paren">(</span>birds <span class="op">+</span> lizards<span class="paren">)</span>
-</samp></pre>
+```roc
+addAndStringify = \{ birds, iguanas: lizards } ->
+    Num.toStr (birds + lizards)
+```
 
 In this version, we created a `lizards` def that's assigned to the record's `iguanas` field. (We could also do something similar with the `birds` field if we like.)
 
 Finally, destructuring can be used in defs too:
 
-<pre><samp><span class="brace">{</span> x<span class="comma">,</span> y <span class="brace">}</span> <span class="kw">=</span> <span class="brace">{</span> x<span class="colon">:</span> 5<span class="comma">,</span> y<span class="colon">:</span> 10 <span class="brace">}</span></samp></pre>
+```roc
+{ x, y } = { x: 5, y: 10 }
+```
 
 ### [Making records from other records](#making-records-from-other-records) {#making-records-from-other-records}
 
 So far we've only constructed records from scratch, by specifying all of their fields. We can also construct new records by using another record to use as a starting point, and then specifying only the fields we want to be different. For example, here are two ways to get the same record:
 
-<pre><samp>original <span class="kw">=</span> <span class="brace">{</span> birds<span class="colon">:</span> 5<span class="comma">,</span> zebras<span class="colon">:</span> 2<span class="comma">,</span> iguanas<span class="colon">:</span> 7<span class="comma">,</span> goats<span class="colon">:</span> 1 <span class="brace">}</span>
-fromScratch <span class="kw">=</span> <span class="brace">{</span> birds<span class="colon">:</span> 4<span class="comma">,</span> zebras<span class="colon">:</span> 2<span class="comma">,</span> iguanas<span class="colon">:</span> 3<span class="comma">,</span> goats<span class="colon">:</span> 1 <span class="brace">}</span>
-fromOriginal <span class="kw">=</span> <span class="brace">{</span> original <span class="kw">&amp;</span> birds<span class="colon">:</span> 4<span class="comma">,</span> iguanas<span class="colon">:</span> 3<span class="comma"> <span class="brace">}</span>
-</samp></pre>
+```roc
+original = { birds: 5, zebras: 2, iguanas: 7, goats: 1 }
+fromScratch = { birds: 4, zebras: 2, iguanas: 3, goats: 1 }
+fromOriginal = { original & birds: 4, iguanas: 3 }
+```
 
 The `fromScratch` and `fromOriginal` records are equal, although they're defined in different ways.
 
@@ -404,29 +428,31 @@ Roc supports optional record fields using the `?` operator. This can be a useful
 
 In Roc you can write a function like:
 
-<pre><samp>table <span class="kw">=</span> <span class="kw">\</span><span class="paren">{</span> 
+```roc
+table = \{ 
         height, 
         width, 
-        title<span class="colon">?</span> "oak", 
-        description<span class="colon">?</span> "a wooden table" <span class="paren">
-    }</span>
-    <span class="kw">-></span>
-</pre></samp>
+        title? "oak", 
+        description? "a wooden table" 
+    }
+    ->
+```
 
 This is using *optional field destructuring* to destructure a record while
 also providing default values for any fields that might be missing.
 
 Here's the type of `table`:
 
-<pre><samp>table <span class="colon">:</span>
-    <span class="paren">{</span>
-        height <span class="colon">:</span> Pixels,
-        width <span class="colon">:</span> Pixels,
-        title <span class="colon">?</span> Str,
-        description <span class="colon">?</span> Str,
-    <span class="paren">}</span>
-    <span class="kw">-></span> Table
-</pre></samp>
+```roc
+table :
+    {
+        height: Pixels,
+        width: Pixels,
+        title? Str,
+        description? Str,
+    }
+    -> Table
+```
 
 This says that `table` takes a record with two *required* fields, `height` and
 `width`, and two *optional* fields, `title` and `description`. It also says that
@@ -451,14 +477,15 @@ ergonomics of destructuring mean this wouldn't be a good fit for data modeling, 
 
 Sometimes we want to represent that something can have one of several values. For example:
 
-<pre><samp><span class="attr">stoplightColor</span> <span class="kw">=</span>
-    <span class="kw">if</span> something <span class="op">&gt;</span> <span class="number">0</span> <span class="kw">then</span>
+```roc
+stoplightColor =
+    if something > 0 then
         Red
-    <span class="kw">else</span> <span class="kw">if</span> <span class="attr">something</span> <span class="op">==</span> <span class="number">0</span> <span class="kw">then</span>
+    else if something == 0 then
         Yellow
-    <span class="kw">else</span>
+    else
         Green
-</samp></pre>
+```
 
 Here, `stoplightColor` can have one of three values: `Red`, `Yellow`, or `Green`. The capitalization is very important! If these were lowercase (`red`, `yellow`, `green`), then they would refer to defs. However, because they are capitalized, they instead refer to _tags_.
 
@@ -466,23 +493,25 @@ A tag is a literal value just like a number or a string. Similarly to how I can 
 
 Let's say we wanted to turn `stoplightColor` from a `Red`, `Green`, or `Yellow` into a string. Here's one way we could do that:
 
-<pre><samp><span class="attr">stoplightStr</span> <span class="kw">=</span>
-    <span class="kw">if</span> <span class="attr">stoplightColor</span> <span class="op">==</span> Red <span class="kw">then</span>
-        <span class="str">"red"</span>
-    <span class="kw">else</span> <span class="kw">if</span> <span class="attr">stoplightColor</span> <span class="op">==</span> Green <span class="kw">then</span>
-        <span class="str">"green"</span>
-    <span class="kw">else</span>
-        <span class="str">"yellow"</span>
-</samp></pre>
+```roc
+stoplightStr =
+    if stoplightColor == Red then
+        "red"
+    else if stoplightColor == Green then
+        "green"
+    else
+        "yellow"
+```
 
 We can express this logic more concisely using `when`/`is` instead of `if`/`then`:
 
-<pre><samp>stoplightStr <span class="kw">=</span>
-    <span class="kw">when</span> stoplightColor <span class="kw">is</span>
-        Red <span class="kw">-&gt;</span> <span class="str">"red"</span>
-        Green <span class="kw">-&gt;</span> <span class="str">"green"</span>
-        Yellow <span class="kw">-&gt;</span> <span class="str">"yellow"</span>
-</samp></pre>
+```roc
+stoplightStr =
+    when stoplightColor is
+        Red -> "red"
+        Green -> "green"
+        Yellow -> "yellow"
+```
 
 This results in the same value for `stoplightStr`. In both the `when` version and the `if` version, we have three conditional branches, and each of them evaluates to a string. The difference is how the conditions are specified; here, we specify between `when` and `is` that we're making comparisons against `stoplightColor`, and then we specify the different things we're comparing it to: `Red`, `Green`, and `Yellow`.
 
@@ -493,11 +522,12 @@ Besides being more concise, there are other advantages to using `when` here.
 
 We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing `else`, we write `\_ ->` like so:
 
-<pre><samp>stoplightStr <span class="kw">=</span>
-<span class="kw">    when</span> stoplightColor <span class="kw">is</span>
-        Red<span class="hljs-function"> <span class="kw">-&gt;</span> <span class="str">"red"</span>
-        _<span class="hljs-function"> <span class="kw">-&gt;</span> <span class="str">"not red"</span>
-</samp></pre>
+```roc
+stoplightStr =
+    when stoplightColor is
+        Red -> "red"
+        _ -> "not red"
+```
 
 This lets us more concisely handle multiple cases. However, it has the downside that if we add a new case - for example, if we introduce the possibility of `stoplightColor` being `Orange`, the compiler can no longer tell us we forgot to handle that possibility in our `when`. After all, we are handling it - just maybe not in the way we'd decide to if the compiler had drawn our attention to it!
 
