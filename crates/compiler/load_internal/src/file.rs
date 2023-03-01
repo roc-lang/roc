@@ -3376,7 +3376,7 @@ fn finish_specialization<'a>(
 
     let State {
         toplevel_expects,
-        mut procedures,
+        procedures,
         module_cache,
         output_path,
         platform_data,
@@ -3419,31 +3419,23 @@ fn finish_specialization<'a>(
                     arena.alloc(layout),
                 );
 
-                let getter_names = all_glue_procs
-                    .getters
-                    .iter()
-                    .flat_map(|(_, glue_procs)| glue_procs.iter().map(|glue_proc| glue_proc.name));
-                exposed_to_host.getters.extend(getter_names);
-
                 let lambda_set_names = all_glue_procs
                     .extern_names
                     .iter()
                     .map(|(lambda_set_id, _)| (*_name, *lambda_set_id));
                 exposed_to_host.lambda_sets.extend(lambda_set_names);
 
+                let getter_names = all_glue_procs
+                    .getters
+                    .iter()
+                    .flat_map(|(_, glue_procs)| glue_procs.iter().map(|glue_proc| glue_proc.name));
+                exposed_to_host.getters.extend(getter_names);
+
                 glue_getters.extend(all_glue_procs.getters.iter().flat_map(|(_, glue_procs)| {
                     glue_procs
                         .iter()
                         .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
                 }));
-
-                procedures.extend(all_glue_procs.getters.into_iter().flat_map(
-                    |(_, glue_procs)| {
-                        glue_procs.into_iter().map(|glue_proc| {
-                            (((glue_proc.name), glue_proc.proc_layout), glue_proc.proc)
-                        })
-                    },
-                ));
             }
         }
     }

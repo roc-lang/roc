@@ -210,7 +210,7 @@ impl ExposedSymbols {
             custom_names.extend([
                 format!("roc__{}_1_exposed", sym),
                 format!("roc__{}_1_exposed_generic", sym),
-                format!("roc__{}_size", sym),
+                format!("roc__{}_1_exposed_size", sym),
             ]);
 
             let exported_closure_types = exposed_to_host
@@ -220,9 +220,9 @@ impl ExposedSymbols {
 
             for closure_type in exported_closure_types {
                 custom_names.extend([
-                    format!("roc__{}_1_{}_caller", sym, closure_type),
-                    format!("roc__{}_1_{}_size", sym, closure_type),
-                    format!("roc__{}_1_{}_result_size", sym, closure_type),
+                    format!("roc__{}_0_{}_caller", sym, closure_type),
+                    format!("roc__{}_0_{}_size", sym, closure_type),
+                    format!("roc__{}_0_{}_result_size", sym, closure_type),
                 ]);
             }
         }

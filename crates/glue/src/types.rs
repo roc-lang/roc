@@ -858,21 +858,6 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub fn vars_to_types<I>(&mut self, variables: I) -> Types
-    where
-        I: Iterator<Item = Variable>,
-    {
-        let mut types = Types::with_capacity(variables.size_hint().0);
-
-        for var in variables {
-            self.add_type(var, &mut types);
-        }
-
-        self.resolve_pending_recursive_types(&mut types);
-
-        types
-    }
-
     fn resolve_pending_recursive_types(&mut self, types: &mut Types) {
         // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
         let pending = core::mem::take(&mut self.pending_recursive_types);
