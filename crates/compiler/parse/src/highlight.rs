@@ -318,10 +318,7 @@ fn highlight_inner<'a>(
                 }
                 '/' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(
-                        Region::between(start, state.pos()),
-                        Token::Slash,
-                    ));
+                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Slash));
                 }
                 '{' | '}' => {
                     state.advance_mut(1);
