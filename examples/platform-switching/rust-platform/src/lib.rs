@@ -1,18 +1,14 @@
 #![allow(non_snake_case)]
 
-mod glue;
-
 use core::ffi::c_void;
-use glue::Op;
 use roc_std::RocStr;
 use std::ffi::CStr;
 use std::io::Write;
-use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut Op);
+    fn roc_main(_: &mut RocStr);
 }
 
 #[no_mangle]
@@ -89,43 +85,12 @@ pub unsafe extern "C" fn roc_shm_open(
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    use glue::discriminant_Op::*;
+    let mut roc_str = RocStr::default();
+    unsafe { roc_main(&mut roc_str) };
 
-    println!("Let's do things!");
-
-    let mut op: Op = unsafe {
-        let mut mem = MaybeUninit::uninit();
-
-        roc_main(mem.as_mut_ptr());
-
-        mem.assume_init()
-    };
-
-    loop {
-        match dbg!(op.discriminant()) {
-            StdoutWrite => {
-                let output: RocStr = unsafe { op.get_StdoutWrite_0() };
-                op = unsafe { op.get_StdoutWrite_1().force_thunk(()) };
-
-                if let Err(e) = std::io::stdout().write_all(output.as_bytes()) {
-                    panic!("Writing to stdout failed! {:?}", e);
-                }
-            }
-            StderrWrite => {
-                let output: RocStr = unsafe { op.get_StderrWrite_0() };
-                op = unsafe { op.get_StderrWrite_1().force_thunk(()) };
-
-                if let Err(e) = std::io::stderr().write_all(output.as_bytes()) {
-                    panic!("Writing to stdout failed! {:?}", e);
-                }
-            }
-            Done => {
-                break;
-            }
-        }
+    if let Err(e) = std::io::stdout().write_all(roc_str.as_bytes()) {
+        panic!("Writing to stdout failed! {:?}", e);
     }
-
-    println!("Done!");
 
     // Exit code
     0
