@@ -1,5 +1,5 @@
 app "roc-tutorial"
-    packages { pf: "../../../examples/static-site-gen/platform/main.roc" }    
+    packages { pf: "https://asdfasdf23452.s3.ap-southeast-2.amazonaws.com/OxoFqBH2_DkdWJrIbzcy8YD9dgRHNUq6vB0DGvFJ_pA.tar.br" }    
     imports [
         pf.Html.{ html, head, body, footer, script, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta },
         pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, class, title, charset, src },
