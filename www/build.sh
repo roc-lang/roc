@@ -20,7 +20,7 @@ DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
 DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
 DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
 
-curl -LJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT  
+curl -LJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
 tar -xzf $DESIGN_ASSETS_TARFILE
 mv $DESIGN_ASSETS_DIR/fonts build/
 rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
