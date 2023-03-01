@@ -262,11 +262,10 @@ impl VariableUsage {
         expr: &Expr<'a>,
     ) -> VariableUsage {
         match expr {
-            Expr::Literal(_) => {
-                // Literals are not reference counted.
+            Expr::Literal(_) | Expr::EmptyArray | Expr::RuntimeErrorFunction(_) => {
+                // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
                 VariableUsage::None
             }
-
             Expr::Call(Call {
                 arguments,
                 call_type,
@@ -287,11 +286,14 @@ impl VariableUsage {
             Expr::Tag { arguments, .. } | Expr::Struct(arguments) => VariableUsage::Owned(
                 Self::owned_usages(variable_rc_types, arguments.iter().copied()),
             ),
-
+            Expr::ExprBox { symbol } => {
+                VariableUsage::Owned(Self::owned_usages(variable_rc_types, iter::once(*symbol)))
+            }
             Expr::GetTagId { structure, .. }
             | Expr::StructAtIndex { structure, .. }
-            | Expr::UnionAtIndex { structure, .. } => {
-                // All structures are alive at this point and don't have to be copied in order to take an index out.
+            | Expr::UnionAtIndex { structure, .. }
+            | Expr::ExprUnbox { symbol: structure } => {
+                // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
                 // But we do want to make sure to decrement this item if it is the last reference.
                 VariableUsage::Borrowed(*structure)
             }
@@ -310,17 +312,9 @@ impl VariableUsage {
                     }),
                 ))
             }
-            Expr::EmptyArray => {
-                // Empty arrays have no reference counted elements.
-                VariableUsage::None
-            }
-            Expr::ExprBox { symbol } | Expr::ExprUnbox { symbol } => {
-                VariableUsage::Owned(Self::owned_usages(variable_rc_types, iter::once(*symbol)))
-            }
             Expr::Reuse { .. } | Expr::Reset { .. } => {
                 unreachable!("Reset and reuse should not exist at this point")
             }
-            Expr::RuntimeErrorFunction(_) => todo!(),
         }
     }
 
@@ -776,7 +770,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
 
             let mut body_env = environment.clone();
 
-            let mut parameter_variables = parameters.iter().map(|Param { symbol, .. }| *symbol);
+            let parameter_variables = parameters.iter().map(|Param { symbol, .. }| *symbol);
             let parameter_variables_set = parameter_variables.clone().collect::<MutSet<_>>();
             body_env.add_variables(parameter_variables);
 
