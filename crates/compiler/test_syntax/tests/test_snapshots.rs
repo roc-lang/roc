@@ -568,6 +568,15 @@ mod test_snapshots {
             Err(err) => Err(format!("{:?}", err)),
         };
 
+        if expect == TestExpectation::Pass {
+            let tokens = roc_parse::highlight::highlight(&source);
+            for token in tokens {
+                if token.value == roc_parse::highlight::Token::Error {
+                    panic!("Found an error highlight token in the input: {:?}", token);
+                }
+            }
+        }
+
         let actual_result =
             if expect == TestExpectation::Pass || expect == TestExpectation::Malformed {
                 result.expect("The source code for this test did not successfully parse!")

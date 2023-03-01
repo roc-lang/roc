@@ -129,6 +129,10 @@ impl Position {
             offset: self.offset - count as u32,
         }
     }
+
+    pub fn byte_offset(&self) -> usize {
+        self.offset as usize
+    }
 }
 
 impl Debug for Position {
@@ -321,6 +325,10 @@ impl<T> Loc<T> {
             region: self.region,
             value: transform(self.value),
         }
+    }
+
+    pub fn byte_range(&self) -> std::ops::Range<usize> {
+        self.region.start.byte_offset()..self.region.end.byte_offset()
     }
 }
 
