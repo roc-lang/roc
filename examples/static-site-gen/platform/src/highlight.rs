@@ -44,6 +44,9 @@ pub fn highlight_roc_code(code: &str) -> String {
             Token::Comma => {
                 buf = push_html_span(buf, current_text, "comma");
             }
+            Token::QuestionMark => {
+                buf = push_html_span(buf, current_text, "qmark");
+            }
             Token::Colon => {
                 buf = push_html_span(buf, current_text, "colon");
             }
