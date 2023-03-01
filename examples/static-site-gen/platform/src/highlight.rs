@@ -50,7 +50,7 @@ pub fn highlight_roc_code(code: &str) -> String {
             Token::Colon => {
                 buf = push_html_span(buf, current_text, "colon");
             }
-            Token::GreaterThan | Token::Minus | Token::LessThan | Token::Plus | Token::Equals => {
+            Token::Slash | Token::GreaterThan | Token::Minus | Token::LessThan | Token::Plus | Token::Equals => {
                 buf = push_html_span(buf, current_text, "op");
             }
             Token::Paren => {

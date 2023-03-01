@@ -39,6 +39,7 @@ pub enum Token {
     LessThan,
     Comma,
     Backslash,
+    Slash,
     Brace,
     Bracket,
     Paren,
@@ -313,6 +314,13 @@ fn highlight_inner<'a>(
                     tokens.push(Loc::at(
                         Region::between(start, state.pos()),
                         Token::Backslash,
+                    ));
+                }
+                '/' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(
+                        Region::between(start, state.pos()),
+                        Token::Slash,
                     ));
                 }
                 '{' | '}' => {
@@ -627,6 +635,29 @@ mod tests {
                 Loc::at(
                     Region::between(Position::new(7), Position::new(10)),
                     Token::UpperIdent
+                ),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_highlight_slash() {
+        let text = "first / second";
+        let tokens = highlight(text);
+        assert_eq!(
+            tokens,
+            vec![
+                Loc::at(
+                    Region::between(Position::new(0), Position::new(5)),
+                    Token::LowerIdent
+                ),
+                Loc::at(
+                    Region::between(Position::new(6), Position::new(7)),
+                    Token::Slash
+                ),
+                Loc::at(
+                    Region::between(Position::new(8), Position::new(14)),
+                    Token::LowerIdent
                 ),
             ]
         )
