@@ -28,6 +28,7 @@ pub enum Token {
     UpperIdent,
     LowerIdent,
     Number,
+    QuestionMark,
     Other,
     Minus,
     Plus,
@@ -153,18 +154,16 @@ fn combine_tokens(locations: Vec<Loc<Token>>) -> Vec<Loc<Token>> {
                     }
                 }
             }
-            _ => {
-                match previous_location {
-                    Some(prev) => {
-                        tokens.push(prev);
-                        tokens.push(location);
-                        previous_location = None;
-                    }
-                    None => {
-                        tokens.push(location);
-                    }
+            _ => match previous_location {
+                Some(prev) => {
+                    tokens.push(prev);
+                    tokens.push(location);
+                    previous_location = None;
                 }
-            }
+                None => {
+                    tokens.push(location);
+                }
+            },
         }
     }
 
@@ -301,6 +300,13 @@ fn highlight_inner<'a>(
                 ',' => {
                     state.advance_mut(1);
                     tokens.push(Loc::at(Region::between(start, state.pos()), Token::Comma));
+                }
+                '?' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(
+                        Region::between(start, state.pos()),
+                        Token::QuestionMark,
+                    ));
                 }
                 '\\' => {
                     state.advance_mut(1);
@@ -602,5 +608,27 @@ mod tests {
             ]
         )
     }
-    
+
+    #[test]
+    fn test_highlight_question_mark() {
+        let text = "title? Str";
+        let tokens = highlight(text);
+        assert_eq!(
+            tokens,
+            vec![
+                Loc::at(
+                    Region::between(Position::new(0), Position::new(5)),
+                    Token::LowerIdent
+                ),
+                Loc::at(
+                    Region::between(Position::new(5), Position::new(6)),
+                    Token::QuestionMark
+                ),
+                Loc::at(
+                    Region::between(Position::new(7), Position::new(10)),
+                    Token::UpperIdent
+                ),
+            ]
+        )
+    }
 }
