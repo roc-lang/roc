@@ -124,7 +124,7 @@ fn combine_tokens(locations: Vec<Loc<Token>>) -> Vec<Loc<Token>> {
                             }
                         }
                     }
-                    _ => {
+                    None => {
                         tokens.push(location);
                     }
                 }
@@ -154,7 +154,16 @@ fn combine_tokens(locations: Vec<Loc<Token>>) -> Vec<Loc<Token>> {
                 }
             }
             _ => {
-                tokens.push(location);
+                match previous_location {
+                    Some(prev) => {
+                        tokens.push(prev);
+                        tokens.push(location);
+                        previous_location = None;
+                    }
+                    None => {
+                        tokens.push(location);
+                    }
+                }
             }
         }
     }
@@ -562,4 +571,36 @@ mod tests {
 
         assert_eq!(actual, expected);
     }
+
+    #[test]
+    fn test_highlight_pattern_matching() {
+        let text = "Green | Yellow -> \"not red\"";
+        let tokens = highlight(text);
+        assert_eq!(
+            tokens,
+            vec![
+                Loc::at(
+                    Region::between(Position::new(0), Position::new(5)),
+                    Token::UpperIdent
+                ),
+                Loc::at(
+                    Region::between(Position::new(6), Position::new(7)),
+                    Token::Bar
+                ),
+                Loc::at(
+                    Region::between(Position::new(8), Position::new(14)),
+                    Token::UpperIdent
+                ),
+                Loc::at(
+                    Region::between(Position::new(15), Position::new(17)),
+                    Token::Arrow
+                ),
+                Loc::at(
+                    Region::between(Position::new(18), Position::new(27)),
+                    Token::String
+                ),
+            ]
+        )
+    }
+    
 }
