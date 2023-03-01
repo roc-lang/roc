@@ -741,19 +741,79 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             lookups,
             variables,
             remainder,
-        } => todo!(),
+        } => {
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+
+            let new_expect = arena.alloc(Stmt::Expect {
+                condition: *condition,
+                region: *region,
+                lookups,
+                variables,
+                remainder: new_remainder,
+            });
+
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                &VariableUsage::owned_usages(
+                    environment.variables_rc_types,
+                    lookups.iter().copied(),
+                ),
+                new_expect,
+            )
+        }
         Stmt::ExpectFx {
             condition,
             region,
             lookups,
             variables,
             remainder,
-        } => todo!(),
+        } => {
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+
+            let new_expectfx = arena.alloc(Stmt::ExpectFx {
+                condition: *condition,
+                region: *region,
+                lookups,
+                variables,
+                remainder: new_remainder,
+            });
+
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                &VariableUsage::owned_usages(
+                    environment.variables_rc_types,
+                    lookups.iter().copied(),
+                ),
+                new_expectfx,
+            )
+        }
         Stmt::Dbg {
             symbol,
             variable,
             remainder,
-        } => todo!(),
+        } => {
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+
+            let new_debug = arena.alloc(Stmt::Dbg {
+                symbol: *symbol,
+                variable: *variable,
+                remainder: new_remainder,
+            });
+
+            // TODO this assumes the debug statement to consume the variable. I'm not sure if that is (always) the case.
+            // But the old inc_dec pass passes variables
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                &VariableUsage::owned_usages(
+                    environment.variables_rc_types,
+                    std::iter::once(symbol).copied(),
+                ),
+                new_debug,
+            )
+        }
         Stmt::Join {
             id: joinpoint_id,
             parameters,
@@ -862,7 +922,22 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 new_jump,
             )
         }
-        Stmt::Crash(_, _) => todo!(),
+        Stmt::Crash(symbol, crash_tag) => {
+            // We don't have to worry about reference counting *after* the crash.
+            // But we do need to make sure the symbol of the crash is live until the crash.
+            // So we insert increment statements for the symbol (if it is reference counted)
+            let new_crash = arena.alloc(Stmt::Crash(*symbol, *crash_tag));
+
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                &VariableUsage::owned_usages(
+                    environment.variables_rc_types,
+                    std::iter::once(symbol).copied(),
+                ),
+                new_crash,
+            )
+        }
     }
 }
 
