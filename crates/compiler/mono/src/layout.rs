@@ -1313,6 +1313,14 @@ impl<'a> Niche<'a> {
             ]),
         }
     }
+
+    pub fn dbg_deep<'r, I: LayoutInterner<'a>>(
+        &'r self,
+        interner: &'r I,
+    ) -> crate::layout::intern::dbg::DbgFields<'a, 'r, I> {
+        let NichePriv::Captures(caps) = &self.0;
+        interner.dbg_deep_iter(caps)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

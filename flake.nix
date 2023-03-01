@@ -44,7 +44,6 @@
             xorg.libXrandr
             xorg.libXi
             xorg.libxcb
-            alsa-lib
           ];
 
         darwinInputs = with pkgs;

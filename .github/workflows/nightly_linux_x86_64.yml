@@ -17,7 +17,7 @@ jobs:
         run: ./ci/write_version.sh
 
       - name: build release
-        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release --locked
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --release --locked
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
 
       - name: get commit SHA
