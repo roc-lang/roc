@@ -533,37 +533,40 @@ This lets us more concisely handle multiple cases. However, it has the downside 
 
 We can make this `when` _exhaustive_ (that is, covering all possibilities) without using `_ ->` by using `|` to specify multiple matching conditions for the same branch:
 
-<pre><samp>stoplightStr <span class="kw">=</span>
-<span class="kw">    when</span> stoplightColor <span class="kw">is</span>
-        Red <span class="kw">-&gt;</span> <span class="str">"red"</span>
-        Green <span class="kw">|</span> Yellow <span class="kw">-&gt;</span> <span class="str">"not red"</span>
-</samp></pre>
+```roc
+stoplightStr =
+    when stoplightColor is
+        Red -> "red"
+        Green | Yellow -> "not red"
+```
 
 You can read `Green | Yellow` as "either `Green` or `Yellow`". By writing it this way, if we introduce the possibility that `stoplightColor` can be `Orange`, we'll get a compiler error telling us we forgot to cover that case in this `when`, and then we can handle it however we think is best.
 
 We can also combine `if` and `when` to make branches more specific:
 
-<pre><samp>stoplightStr <span class="kw">=</span>
-<span class="kw">    when</span> stoplightColor <span class="kw">is</span>
-        Red <span class="kw">-&gt;</span> <span class="str">"red"</span>
-        Green <span class="kw">|</span> Yellow <span class="kw">if</span> contrast <span class="op">&gt;</span> 75 <span class="kw">-&gt;</span> <span class="str">"not red, but very high contrast"</span>
-        Green <span class="kw">|</span> Yellow <span class="kw">if</span> contrast <span class="op">&gt;</span> 50 <span class="kw">-&gt;</span> <span class="str">"not red, but high contrast"</span>
-        Green <span class="kw">|</span> Yellow <span class="kw">-&gt;</span> <span class="str">"not red"</span>
-</samp></pre>
+```roc
+stoplightStr =
+    when stoplightColor is
+        Red -> "red"
+        Green | Yellow if contrast > 75 -> "not red, but very high contrast"
+        Green | Yellow if contrast > 50 -> "not red, but high contrast"
+        Green | Yellow -> "not red"
+```
 
 This will give the same answer for `stoplightStr` as if we had written the following:
 
-<pre><samp>stoplightStr <span class="kw">=</span>
-<span class="kw">    when</span> stoplightColor <span class="kw">is</span>
-        Red <span class="kw">-&gt;</span> <span class="str">"red"</span>
-        Green <span class="kw">|</span> Yellow <span class="kw">-&gt;</span>
-<span class="kw">            if</span> contrast <span class="op">&gt;</span> <span class="number">75</span> <span class="kw">then</span>
-<span class="str">                "not red, but very high contrast"</span>
-<span class="kw">            else</span> <span class="kw">if</span> contrast <span class="op">&gt;</span> <span class="number">50</span> <span class="kw">then</span>
-<span class="str">                "not red, but high contrast"</span>
-<span class="kw">            else</span>
-<span class="str">                "not red"</span>
-</samp></pre>
+```roc
+stoplightStr =
+    when stoplightColor is
+        Red -> "red"
+        Green | Yellow ->
+            if contrast > 75 then
+                "not red, but very high contrast"
+            else if contrast > 50 then
+                "not red, but high contrast"
+            else
+                "not red"
+```
 
 Either style can be a reasonable choice depending on the circumstances.
 
@@ -571,22 +574,23 @@ Either style can be a reasonable choice depending on the circumstances.
 
 Tags can have _payloads_â€”that is, values inside them. For example:
 
-<pre><samp>stoplightColor <span class="kw">=</span>
-    <span class="kw">if</span> something <span class="op">&gt;</span> <span class="number">100</span> <span class="kw">then</span>
+```roc
+stoplightColor =
+    if something > 100 then
         Red
-    <span class="kw">else</span> <span class="kw">if</span> something <span class="op">&gt;</span> <span class="number">0</span> <span class="kw">then</span>
+    else if something > 0 then
         Yellow
-    <span class="kw">else</span> <span class="kw">if</span> something <span class="op">==</span> <span class="number">0</span> <span class="kw">then</span>
+    else if something == 0 then
         Green
-    <span class="kw">else</span>
-        Custom <span class="str">"some other color"</span>
+    else
+        Custom "some other color"
 
-stoplightStr <span class="kw">=</span>
-    <span class="kw">when</span> stoplightColor <span class="kw">is</span>
-        Red <span class="kw">-&gt;</span> <span class="str">"red"</span>
-        Green <span class="kw">|</span> Yellow <span class="kw">-&gt;</span> <span class="str">"not red"</span>
-        Custom description <span class="kw">-&gt;</span> description
-</samp></pre>
+stoplightStr =
+    when stoplightColor is
+        Red -> "red"
+        Green | Yellow -> "not red"
+        Custom description -> description
+```
 
 This makes two changes to our earlier `stoplightColor` / `stoplightStr` example.
 
@@ -603,17 +607,18 @@ We refer to whatever comes before a `->` in a `when` expression as a _pattern_â€
 
 You can also pattern match on lists, like so:
 
-<pre><samp><span class="kw">when</span> myList <span class="kw">is</span>
-    <span class="brace">[]</span> <span class="kw">-&gt;</span> <span class="number">0</span> <span class="comment"># the list is empty</span>
-    <span class="brace">[</span>Foo<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">1</span> <span class="comment"># it starts with a Foo tag</span>
-    <span class="brace">[</span>_<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">2</span> <span class="comment"># it contains at least one element, which we ignore</span>
-    <span class="brace">[</span>Foo<span class="comma">,</span> Bar<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">3</span> <span class="comment"># it starts with a Foo tag followed by a Bar tag</span>
-    <span class="brace">[</span>Foo<span class="comma">,</span> Bar<span class="comma">,</span> Baz<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">4</span> <span class="comment"># it has exactly 3 elements: Foo, Bar, and Baz</span>
-    <span class="brace">[</span>Foo<span class="comma">,</span> a<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">5</span> <span class="comment"># its first element is Foo, and its second we name `a`</span>
-    <span class="brace">[</span>Ok a<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">6</span> <span class="comment"># it starts with an Ok containing a payload named `a`</span>
-    <span class="brace">[</span>..<span class="comma">,</span> Foo<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">7</span> <span class="comment"># it ends with a Foo tag</span>
-    <span class="brace">[</span>A<span class="comma">,</span> B, ..<span class="comma">,</span> C<span class="comma">,</span> D<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">8</span> <span class="comment"># it has certain elements at the beginning and end</span>
-</samp></pre>
+```roc
+when myList is
+    [] -> 0 # the list is empty
+    [Foo, ..] -> 1 # it starts with a Foo tag
+    [_, ..] -> 2 # it contains at least one element, which we ignore
+    [Foo, Bar, ..] -> 3 # it starts with a Foo tag followed by a Bar tag
+    [Foo, Bar, Baz] -> 4 # it has exactly 3 elements: Foo, Bar, and Baz
+    [Foo, a, ..] -> 5 # its first element is Foo, and its second we name `a`
+    [Ok a, ..] -> 6 # it starts with an Ok containing a payload named `a`
+    [.., Foo] -> 7 # it ends with a Foo tag
+    [A, B, .., C, D] -> 8 # it has certain elements at the beginning and end
+```
 
 This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get) multiple times, since each call to `get` requires a separate conditional to handle the different `Result`s they return.
 
@@ -631,11 +636,15 @@ As an example of why tags are encouraged for data modeling, in many languages it
 
 Another thing we can do in Roc is to make a _list_ of values. Here's an example:
 
-<samp><span class="attr">names</span> <span class="kw">=</span> [<span class="str">"Sam"</span>, <span class="str">"Lee"</span>, <span class="str">"Ari"</span>]</samp>
+```roc
+names = ["Sam", "Lee", "Ari"]
+```
 
 This is a list with three elements in it, all strings. We can add a fourth element using `List.append` like so:
 
-<samp>List.append names <span class="str">"Jess"</span></samp>
+```roc
+List.append names "Jess"
+```
 
 This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the original list at all. All values in Roc (including lists, but also records, strings, numbers, and so on) are immutable, meaning whenever we want to "change" them, we want to instead pass them to a function which returns some variation of what was passed in.
 
@@ -643,8 +652,9 @@ This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the 
 
 A common way to transform one list into another is to use `List.map`. Here's an example of how to use it:
 
-<samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> <span class="kw">&bsol;</span>num <span class="kw">-&gt;</span> num <span class="op">*<span> <span class="number">2</span>
-</samp>
+```roc
+List.map [1, 2, 3] \num -> num * 2
+```
 
 This returns `[2, 4, 6]`.
 
@@ -657,7 +667,9 @@ It then returns a list which it creates by calling the given function on each el
 
 We can also give `List.map` a named function, instead of an anonymous one:
 
-<samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> Num.isOdd</samp>
+```roc
+List.map [1, 2, 3] Num.isOdd
+```
 
 This `Num.isOdd` function returns `Bool.true` if it's given an odd number, and `Bool.false` otherwise. So `Num.isOdd 5` returns `Bool.true` and `Num.isOdd 2` returns `Bool.false`.
 
@@ -667,22 +679,25 @@ As such, calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[Bool.tru
 
 If we tried to give `List.map` a function that didn't work on the elements in the list, then we'd get an error at compile time. Here's a valid, and then an invalid example:
 
-<pre><samp><span class="comment"># working example</span>
-List.map [<span class="number">-1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">-4</span>] Num.isNegative
-<span class="comment"># returns [Bool.<span class="hljs-literal">true</span>, Bool.<span class="hljs-literal">false</span>, Bool.<span class="hljs-literal">false</span>, Bool.<span class="hljs-literal">true</span>]</span>
-</samp></pre>
+```roc
+# working example
+List.map [-1, 2, 3, -4] Num.isNegative
+# returns [Bool.true, Bool.false, Bool.false, Bool.true]
+```
 
-<pre><samp><span class="comment"># invalid example</span>
-List.map [<span class="str">"A"</span>, <span class="str">"B"</span>, <span class="str">"C"</span>] Num.isNegative
-<span class="comment"># error: isNegative doesn't work on strings!</span>
-</samp></pre>
+```roc
+# invalid example
+List.map ["A", "B", "C"] Num.isNegative
+# error: isNegative doesn't work on strings!
+```
 
 Because `Num.isNegative` works on numbers and not strings, calling `List.map` with `Num.isNegative` and a list of numbers works, but doing the same with a list of strings doesn't work.
 
 This wouldn't work either:
 
-<pre><samp>List.map [<span class="str">"A"</span>, <span class="str">"B"</span>, <span class="str">"C"</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isNegative
-</samp></pre>
+```roc
+List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
+```
 
 Every element in a Roc list has to share the same type. For example, we can have a list of strings like `["Sam", "Lee", "Ari"]`, or a list of numbers like `[1, 2, 3, 4, 5]` but we can't have a list which mixes strings and numbers like `["Sam", 1, "Lee", 2, 3]`, that would be a compile-time error.
 
@@ -692,17 +707,19 @@ Ensuring that all elements in a list share a type eliminates entire categories o
 
 We can use tags with payloads to make a list that contains a mixture of different types. For example:
 
-<pre><samp>List.map [StrElem <span class="str">"A"</span>, StrElem <span class="str">"b"</span>, NumElem <span class="number">1</span>, StrElem <span class="str">"c"</span>, NumElem -<span class="number">3</span>] <span class="kw">\</span>elem <span class="kw">-&gt;</span>
-    <span class="kw">when</span> elem <span class="kw">is</span>
-        NumElem num <span class="kw">-&gt;</span> Num.isNegative num
-        StrElem str <span class="kw">-&gt;</span> Str.isCapitalized str
-<span class="comment"># returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]</span>
-</samp></pre>
+```roc
+List.map [StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3] \elem ->
+    when elem is
+        NumElem num -> Num.isNegative num
+        StrElem str -> Str.isCapitalized str
+# returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
+```
 
 Compare this with the example from earlier, which caused a compile-time error:
 
-<pre><samp>List.map [<span class="str">"A"</span>, <span class="str">"B"</span>, <span class="str">"C"</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isNegative
-</samp></pre>
+```roc
+List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
+```
 
 The version that uses tags works because we aren't trying to call `Num.isNegative` on each element. Instead, we're using a `when` to tell when we've got a string or a number, and then calling either `Num.isNegative` or `Str.isCapitalized` depending on which type we have.
 
@@ -712,13 +729,15 @@ We could take this as far as we like, adding more different tags (e.g. `BoolElem
 
 Let's say I want to apply a tag to a bunch of elements in a list. For example:
 
-<pre><samp>List.map [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="kw">\</span>str <span class="kw">-&gt;</span> Foo str
-</samp></pre>
+```roc
+List.map ["a", "b", "c"] \str -> Foo str
+```
 
 This is a perfectly reasonable way to write it, but I can also write it like this:
 
-<pre><samp>List.map <span class="hljs-meta">[</span><span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span><span class="hljs-meta">]</span> Foo
-</samp></pre>
+```roc
+List.map ["a", "b", "c"] Foo
+```
 
 These two versions compile to the same thing. As a convenience, Roc lets you specify a tag name where a function is expected; when you do this, the compiler infers that you want a function which uses all of its arguments as the payload to the given tag.
 
@@ -726,43 +745,50 @@ These two versions compile to the same thing. As a convenience, Roc lets you spe
 
 There are several functions that work like `List.map`, they walk through each element of a list and do something with it. Another is `List.any`, which returns `Bool.true` if calling the given function on any element in the list returns `Bool.true`:
 
-<pre><samp>List.any [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isOdd
-<span class="comment"># returns `Bool.true` because 1 and 3 are odd</span>
-</samp></pre>
+```roc
+List.any [1, 2, 3] Num.isOdd
+# returns `Bool.true` because 1 and 3 are odd
+```
 
-<pre><samp>List.any [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isNegative
-<span class="comment"># returns `Bool.false` because none of these is negative</span>
-</samp></pre>
+```roc
+List.any [1, 2, 3] Num.isNegative
+# returns `Bool.false` because none of these is negative
+```
 
 There's also `List.all` which only returns `Bool.true` if all the elements in the list pass the test:
 
-<pre><samp>List.all [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isOdd
-<span class="comment"># returns `Bool.<span class="hljs-literal">false</span>` because 2 is not odd</span>
-</samp></pre>
+```roc
+List.all [1, 2, 3] Num.isOdd
+# returns `Bool.false` because 2 is not odd
+```
 
-<pre><samp>List.all [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isPositive
-<span class="comment"># returns `Bool.<span class="hljs-literal">true</span>` because all of these are positive</span>
-</samp></pre>
+```roc
+List.all [1, 2, 3] Num.isPositive
+# returns `Bool.true` because all of these are positive
+```
 
 ### [Removing elements from a list](#removing-elements-from-a-list) {#removing-elements-from-a-list}
 
 You can also drop elements from a list. One way is `List.dropAt` - for example:
 
-<pre><samp>List.dropAt [<span class="str">"Sam"</span>, <span class="str">"Lee"</span>, <span class="str">"Ari"</span>] <span class="number">1</span>
-<span class="comment"># drops the element at offset 1 ("Lee") and returns ["Sam", "Ari"]</span>
-</samp></pre>
+```roc
+List.dropAt ["Sam", "Lee", "Ari"] 1
+# drops the element at offset 1 ("Lee") and returns ["Sam", "Ari"]
+```
 
 Another way is to use `List.keepIf`, which passes each of the list's elements to the given function, and then keeps them only if that function returns `Bool.true`.
 
-<pre><samp>List.keepIf [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] Num.isEven
-<span class="comment"># returns [2, 4]</span>
-</samp></pre>
+```roc
+List.keepIf [1, 2, 3, 4, 5] Num.isEven
+# returns [2, 4]
+```
 
 There's also `List.dropIf`, which does the opposite:
 
-<pre><samp>List.dropIf [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] Num.isEven
-<span class="comment"># returns [1, 3, 5]</span>
-</samp></pre>
+```roc
+List.dropIf [1, 2, 3, 4, 5] Num.isEven
+# returns [1, 3, 5]
+```
 
 ### [Getting an individual element from a list](#getting-an-individual-element-from-a-list) {#getting-an-individual-element-from-a-list}
 
@@ -770,32 +796,38 @@ Another thing we can do with a list is to get an individual element out of it. `
 
 For example, what do each of these return?
 
-<pre><samp>List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="number">1</span>
-</samp>
-<samp>List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="number">100</span>
-</samp></pre>
+```roc
+List.get ["a", "b", "c"] 1
+```
+
+```roc
+List.get ["a", "b", "c"] 100
+```
 
 The answer is that the first one returns `Ok "b"` and the second one returns `Err OutOfBounds`. They both return tags! This is done so that the caller becomes responsible for handling the possibility that the index is outside the bounds of that particular list.
 
 Here's how calling `List.get` can look in practice:
 
-<pre><samp><span class="kw">when</span> List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] index <span class="kw">is</span>
-    Ok str <span class="kw">-&gt;</span> <span class="str">"I got this string: <span class="str-interp">\(str)</span>"</span>
-    Err OutOfBounds <span class="kw">-&gt;</span> <span class="str">"That index was out of bounds, sorry!"</span>
-</samp></pre>
+```roc
+when List.get ["a", "b", "c"] index is
+    Ok str -> "I got this string: \(str)"
+    Err OutOfBounds -> "That index was out of bounds, sorry!"
+```
 
 There's also `List.first`, which always gets the first element, and `List.last` which always gets the last. They return `Err ListWasEmpty` instead of `Err OutOfBounds`, because the only way they can fail is if you pass them an empty list!
 
 These functions demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
 
-<pre><samp>Result.withDefault (List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="number">100</span>) <span class="str">""</span>
-<span class="comment"># returns <span class="str">""</span> because that<span class="hljs-symbol">'s</span> the default we said to use if List.get returned an <span class="hljs-literal">Err</span></span>
-</samp>
-<samp>Result.isOk (List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="number">1</span>)
-<span class="comment"># returns `Bool.true` because `List.get` returned an `Ok` tag. (The payload gets ignored.)</span>
+```roc
+Result.withDefault (List.get ["a", "b", "c"] 100) ""
+# returns "" because that's the default we said to use if List.get returned an Err
+```
+```roc
+Result.isOk (List.get ["a", "b", "c"] 1)
+# returns `Bool.true` because `List.get` returned an `Ok` tag. (The payload gets ignored.)
 
-<span class="comment"># Note: There's a Result.isErr function that works similarly.</span>
-</samp></pre>
+# Note: There's a Result.isErr function that works similarly.
+```
 
 ### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
 
@@ -814,14 +846,15 @@ because it's more concise, runs faster, and doesn't give you any `Result`s to de
 
 Here's an example:
 
-<pre><samp>List.walk [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] { evens<span class="colon">:</span> [], odds<span class="colon">:</span> [] } <span class="kw">\</span>state, elem <span class="kw">-&gt;</span>
-    <span class="kw">if</span> Num.isEven elem <span class="kw">then</span>
-        { state &amp; evens<span class="colon">:</span> List.append state.evens elem }
-    <span class="kw">else</span>
-        { state &amp; odds<span class="colon">:</span> List.append state.odds elem }
+```roc
+List.walk [1, 2, 3, 4, 5] { evens: [], odds: [] } \state, elem ->
+    if Num.isEven elem then
+        { state & evens: List.append state.evens elem }
+    else
+        { state & odds: List.append state.odds elem }
 
-<span class="comment"># returns { evens: [2, 4], odds: [1, 3, 5] }</span>
-</samp></pre>
+# returns { evens: [2, 4], odds: [1, 3, 5] }
+```
 
 In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds` field of a `state` record: `{ evens, odds }`. By the end, that record has a list of all the even numbers in the list and a list of all the odd numbers.
 
@@ -833,44 +866,13 @@ In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to
 
 It then proceeds to walk over each element in the list and call that function. Each time, the state that function returns becomes the argument to the next function call. Here are the arguments the function will receive, and what it will return, as `List.walk` walks over the list `[1, 2, 3, 4, 5]`:
 
-<pre>
-<table>
-<thead>
-<tr>
-    <th>state</th>
-    <th>element</th>
-    <th>return value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-    <td><code>{ evens: [], odds: [] }</code></td>
-    <td><code>1</code></td>
-    <td><code>{ evens: [], odds: [1] }</code></td>
-</tr>
-<tr>
-    <td><code>{ evens: [], odds: [1] }</code></td>
-    <td><code>2</code></td>
-    <td><code>{ evens: [2], odds: [1] }</code></td>
-</tr>
-<tr>
-    <td><code>{ evens: [2], odds: [1] }</code></td>
-    <td><code>3</code></td>
-    <td><code>{ evens: [2], odds: [1, 3] }</code></td>
-</tr>
-<tr>
-    <td><code>{ evens: [2], odds: [1, 3] }</code></td>
-    <td><code>4</code></td>
-    <td><code>{ evens: [2, 4], odds: [1, 3] }</code></td>
-</tr>
-<tr>
-    <td><code>{ evens: [2, 4], odds: [1, 3] }</code></td>
-    <td><code>4</code></td>
-    <td><code>{ evens: [2, 4], odds: [1, 3, 5] }</code></td>
-</tr>
-</tbody>
-</table>
-</pre>
+|               State               | Element |             Return Value             |
+| :-------------------------------: | :-----: | :----------------------------------: |
+|     `{ evens: [], odds: [] }`     |   `1`   |      `{ evens: [], odds: [1] }`      |
+|     `{ evens: [], odds: [1] }`    |   `2`   |      `{ evens: [2], odds: [1] }`     |
+|    `{ evens: [2], odds: [1] }`    |   `3`   |    `{ evens: [2], odds: [1, 3] }`    |
+|   `{ evens: [2], odds: [1, 3] }`  |   `4`   |   `{ evens: [2, 4], odds: [1, 3] }`  |
+| `{ evens: [2, 4], odds: [1, 3] }` |   `4`   | `{ evens: [2, 4], odds: [1, 3, 5] }` |
 
 Note that the initial `state` argument is `{ evens: [], odds: [] }` because that's the argument
 we passed `List.walk` for its initial state. From then on, each `state` argument is whatever the
@@ -888,40 +890,44 @@ A helpful way to remember the argument order for `List.walk` is that that its ar
 
 When you have nested function calls, sometimes it can be clearer to write them in a "pipelined" style using the `|>` operator. Here are three examples of writing the same expression; they all compile to exactly the same thing, but two of them use the `|>` operator to change how the calls look.
 
-<pre><samp>Result.withDefault (List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="number">1</span>) <span class="str">""</span>
-</samp>
-<samp>List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="number">1</span>
-<span class="kw">|&gt;</span> Result.withDefault <span class="str">""</span>
-</samp></pre>
+```roc
+Result.withDefault (List.get ["a", "b", "c"] 1) ""
+```
+```roc
+List.get ["a", "b", "c"] 1
+|> Result.withDefault ""
+```
 
 The `|>` operator takes the value that comes before the `|>` and passes it as the first argument to whatever comes after the `|>`. So in the example above, the `|>` takes `List.get ["a", "b", "c"] 1` and passes that value as the first argument to `Result.withDefault`, making `""` the second argument to `Result.withDefault`.
 
 We can take this a step further like so:
 
-<pre><samp>[<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>]
-<span class="kw">|&gt;</span> List.get <span class="number">1</span>
-<span class="kw">|&gt;</span> Result.withDefault <span class="str">""</span>
-</samp></pre>
+```roc
+["a", "b", "c"]
+|> List.get 1
+|> Result.withDefault ""
+```
 
 This is still equivalent to the first expression. Since `|>` is known as the "pipe operator," we can read this as "start with `["a", "b", "c"]`, then pipe it to `List.get`, then pipe it to `Result.withDefault`."
 
 One reason the `|>` operator injects the value as the first argument is to make it work better with functions where argument order matters. For example, these two uses of `List.append` are equivalent:
 
-<pre><samp>List.append [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="str">"d"</span>
-</samp>
-<samp>[<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>]
-<span class="kw">|&gt;</span> List.append <span class="str">"d"</span>
-</samp></pre>
+```roc
+List.append ["a", "b", "c"] "d"
+```
+```roc
+["a", "b", "c"]
+|> List.append "d"
+```
 
 Another example is `Num.div`. All three of the following do the same thing, because `a / b` in Roc is syntax sugar for `Num.div a b`:
 
-<pre><samp>first <span class="op">/</span> second
-</samp>
-<samp>Num.div first second
-</samp>
-<samp>first
-<span class="kw">|&gt;</span> Num.div second
-</samp></pre>
+```roc
+first / second
+```
+```roc
+Num.div first second
+```
 
 All operators in Roc are syntax sugar for normal function calls. See the [Operator Desugaring Table](https://www.roc-lang.org/tutorial#operator-desugaring-table) at the end of this tutorial for a complete list of them.
 
