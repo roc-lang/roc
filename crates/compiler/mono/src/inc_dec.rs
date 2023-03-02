@@ -672,14 +672,14 @@ impl<'a, 'i> Context<'a, 'i> {
                     match ownership {
                         DataOwnedFunctionOwns | DataBorrowedFunctionOwns => {
                             // elements have been consumed, must still consume the list itself
-                            let rest = self.arena.alloc($stmt);
+                            let rest = self.arena.alloc(stmt);
                             let rc = Stmt::Refcounting(ModifyRc::DecRef(argument), rest);
 
                             stmt = self.arena.alloc(rc);
                         }
                         DataOwnedFunctionBorrows => {
                             // must consume list and elements
-                            let rest = self.arena.alloc($stmt);
+                            let rest = self.arena.alloc(stmt);
                             let rc = Stmt::Refcounting(ModifyRc::Dec(argument), rest);
 
                             stmt = self.arena.alloc(rc);
