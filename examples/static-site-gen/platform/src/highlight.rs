@@ -32,20 +32,35 @@ pub fn highlight_roc_code(code: &str) -> String {
             Token::Arrow => {
                 buf = push_html_span(buf, current_text, "arrow");
             }
+            Token::Bar => {
+                buf = push_html_span(buf, current_text, "bar");
+            }
             Token::Backpass => {
-                buf = push_html_span(buf, current_text, "arrow");
+                buf = push_html_span(buf, current_text, "backpass");
+            }
+            Token::Backslash => {
+                buf = push_html_span(buf, current_text, "backslash");
             }
             Token::Comma => {
                 buf = push_html_span(buf, current_text, "comma");
             }
-            Token::Colon | Token::Backslash => {
+            Token::QuestionMark => {
+                buf = push_html_span(buf, current_text, "qmark");
+            }
+            Token::Colon => {
                 buf = push_html_span(buf, current_text, "colon");
             }
-            Token::GreaterThan | Token::Minus | Token::LessThan | Token::Plus | Token::Equals => {
+            Token::Slash | Token::GreaterThan | Token::Minus | Token::LessThan | Token::Plus | Token::Equals => {
                 buf = push_html_span(buf, current_text, "op");
             }
-            Token::Brace | Token::Bracket | Token::Paren => {
+            Token::Paren => {
                 buf = push_html_span(buf, current_text, "paren");
+            }
+            Token::Bracket => {
+                buf = push_html_span(buf, current_text, "bracket");
+            }
+            Token::Brace => {
+                buf = push_html_span(buf, current_text, "brace");
             }
             _ => {
                 buf = push_html(buf, current_text);
