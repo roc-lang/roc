@@ -59,22 +59,18 @@ samp .autovar .comment {
 }
 
 samp .kw {
-  /* language keywords, e.g. `if`*/
   color: #004cc2;
 }
 
-samp .arrow {
-  /* operators, e.g. `+` */
+samp .arrow, samp .backslash, samp .bar {
   color: #0600c2;
 }
 
 samp .pipe {
-  /* operators, e.g. `+` */
   color: #0600c2;
 }
 
 samp .op {
-  /* operators, e.g. `+` */
   color: #0600c2;
 }
 
@@ -82,7 +78,7 @@ samp .assign {
   color: #48fd00;
 }
 
-samp .paren {
+samp .paren, samp .bracket, samp .brace {
   color: #ff0000;
 }
 

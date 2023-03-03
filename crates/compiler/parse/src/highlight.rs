@@ -28,6 +28,7 @@ pub enum Token {
     UpperIdent,
     LowerIdent,
     Number,
+    QuestionMark,
     Other,
     Minus,
     Plus,
@@ -38,6 +39,7 @@ pub enum Token {
     LessThan,
     Comma,
     Backslash,
+    Slash,
     Brace,
     Bracket,
     Paren,
@@ -124,7 +126,7 @@ fn combine_tokens(locations: Vec<Loc<Token>>) -> Vec<Loc<Token>> {
                             }
                         }
                     }
-                    _ => {
+                    None => {
                         tokens.push(location);
                     }
                 }
@@ -153,9 +155,16 @@ fn combine_tokens(locations: Vec<Loc<Token>>) -> Vec<Loc<Token>> {
                     }
                 }
             }
-            _ => {
-                tokens.push(location);
-            }
+            _ => match previous_location {
+                Some(prev) => {
+                    tokens.push(prev);
+                    tokens.push(location);
+                    previous_location = None;
+                }
+                None => {
+                    tokens.push(location);
+                }
+            },
         }
     }
 
@@ -293,12 +302,23 @@ fn highlight_inner<'a>(
                     state.advance_mut(1);
                     tokens.push(Loc::at(Region::between(start, state.pos()), Token::Comma));
                 }
+                '?' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(
+                        Region::between(start, state.pos()),
+                        Token::QuestionMark,
+                    ));
+                }
                 '\\' => {
                     state.advance_mut(1);
                     tokens.push(Loc::at(
                         Region::between(start, state.pos()),
                         Token::Backslash,
                     ));
+                }
+                '/' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Slash));
                 }
                 '{' | '}' => {
                     state.advance_mut(1);
@@ -561,5 +581,82 @@ mod tests {
         ];
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_highlight_pattern_matching() {
+        let text = "Green | Yellow -> \"not red\"";
+        let tokens = highlight(text);
+        assert_eq!(
+            tokens,
+            vec![
+                Loc::at(
+                    Region::between(Position::new(0), Position::new(5)),
+                    Token::UpperIdent
+                ),
+                Loc::at(
+                    Region::between(Position::new(6), Position::new(7)),
+                    Token::Bar
+                ),
+                Loc::at(
+                    Region::between(Position::new(8), Position::new(14)),
+                    Token::UpperIdent
+                ),
+                Loc::at(
+                    Region::between(Position::new(15), Position::new(17)),
+                    Token::Arrow
+                ),
+                Loc::at(
+                    Region::between(Position::new(18), Position::new(27)),
+                    Token::String
+                ),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_highlight_question_mark() {
+        let text = "title? Str";
+        let tokens = highlight(text);
+        assert_eq!(
+            tokens,
+            vec![
+                Loc::at(
+                    Region::between(Position::new(0), Position::new(5)),
+                    Token::LowerIdent
+                ),
+                Loc::at(
+                    Region::between(Position::new(5), Position::new(6)),
+                    Token::QuestionMark
+                ),
+                Loc::at(
+                    Region::between(Position::new(7), Position::new(10)),
+                    Token::UpperIdent
+                ),
+            ]
+        )
+    }
+
+    #[test]
+    fn test_highlight_slash() {
+        let text = "first / second";
+        let tokens = highlight(text);
+        assert_eq!(
+            tokens,
+            vec![
+                Loc::at(
+                    Region::between(Position::new(0), Position::new(5)),
+                    Token::LowerIdent
+                ),
+                Loc::at(
+                    Region::between(Position::new(6), Position::new(7)),
+                    Token::Slash
+                ),
+                Loc::at(
+                    Region::between(Position::new(8), Position::new(14)),
+                    Token::LowerIdent
+                ),
+            ]
+        )
     }
 }
