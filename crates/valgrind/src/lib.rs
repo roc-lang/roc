@@ -7,8 +7,7 @@ static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
 #[cfg(all(target_os = "linux"))]
 fn build_host() {
-    use roc_build::link::preprocessed_host_filename;
-    use roc_linker::build_and_preprocess_host;
+    use roc_linker::{build_and_preprocess_host, preprocessed_host_filename};
 
     let platform_main_roc = std::env::current_dir()
         .unwrap()

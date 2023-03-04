@@ -3,11 +3,12 @@
 #[macro_use]
 extern crate const_format;
 
-use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
-use roc_build::program::{CodeGenBackend, CodeGenOptions};
+use roc_build::program::{
+    standard_load_config, BuildFileError, BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions,
+};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
@@ -29,11 +30,8 @@ use target_lexicon::{
 #[cfg(not(target_os = "linux"))]
 use tempfile::TempDir;
 
-pub mod build;
 mod format;
 pub use format::format;
-
-use crate::build::{standard_load_config, BuildFileError, BuildOrdering};
 
 const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
@@ -520,7 +518,7 @@ pub fn build(
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
-    use build::build_file;
+    use roc_build::program::build_file;
     use BuildConfig::*;
 
     let filename = matches.value_of_os(ROC_FILE).unwrap();

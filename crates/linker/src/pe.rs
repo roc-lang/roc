@@ -1357,8 +1357,8 @@ mod test {
     use object::read::pe::PeFile64;
     use object::{pe, LittleEndian as LE, Object};
 
+    use crate::preprocessed_host_filename;
     use indoc::indoc;
-    use roc_build::link::preprocessed_host_filename;
     use target_lexicon::Triple;
 
     use super::*;
