@@ -786,7 +786,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         @memcpy(source_b, source_a, byte_count_a);
 
         // deinit list a.
-        source_a.deinit(alignment);
+        list_a.deinit(alignment);
 
         return resized_list_b;
     }
