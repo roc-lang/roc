@@ -625,7 +625,7 @@ cannotDeriveDefault = \types, type ->
             List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
 
 hasFloat = \types, type ->
-    hasFloatHelp types type Set.empty
+    hasFloatHelp types type (Set.empty {})
 
 hasFloatHelp = \types, type, doNotRecurse ->
     # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
