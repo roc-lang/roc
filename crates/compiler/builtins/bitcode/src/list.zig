@@ -765,7 +765,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         @memcpy(source_a + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
         // deinit list b.
-        source_b.deinit(alignment);
+        list_b.deinit(alignment);
 
         return resized_list_a;
     } else if (list_b.isUnique()) {
