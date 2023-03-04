@@ -46,7 +46,7 @@ jobs:
 
       - run: |
           curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/roc/releases/download/nightly/windows-roc-testing.zip
-          7z x windows-roc-testing.zip -o.
+          7z x windows-roc-testing.zip
           ls
       
       - run: |
