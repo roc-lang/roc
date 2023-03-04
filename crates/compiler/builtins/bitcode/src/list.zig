@@ -129,7 +129,7 @@ pub const RocList = extern struct {
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
         const data_bytes = self.capacity * element_width;
-        utils.decref(self.bytes, data_bytes, alignment);
+        self.deinit(alignment);
 
         return new_list;
     }
@@ -193,7 +193,7 @@ pub const RocList = extern struct {
             @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
 
-        utils.decref(self.bytes, old_length * element_width, alignment);
+        self.deinit(alignment);
 
         return result;
     }
@@ -574,7 +574,7 @@ pub fn listSublist(
 
             @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
 
-            utils.decref(list.bytes, size * element_width, alignment);
+            self.deinit(alignment);
 
             return output;
         }
@@ -605,9 +605,9 @@ pub fn listDropAt(
         // NOTE
         // we need to return an empty list explicitly,
         // because we rely on the pointer field being null if the list is empty
-        // which also requires duplicating the utils.decref call to spend the RC token
+        // which also requires duplicating the deinit call to spend the RC token
         if (size < 2) {
-            utils.decref(list.bytes, size * element_width, alignment);
+            list.deinit(alignment);
             return RocList.empty();
         }
 
@@ -637,7 +637,7 @@ pub fn listDropAt(
         const tail_size = (size - drop_index - 1) * element_width;
         @memcpy(tail_target, tail_source, tail_size);
 
-        utils.decref(list.bytes, size * element_width, alignment);
+        list.deinit(alignment);
 
         return output;
     } else {
@@ -765,8 +765,8 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         const source_b = list_b.bytes orelse unreachable;
         @memcpy(source_a + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
-        // decrement list b.
-        utils.decref(source_b, list_b.len(), alignment);
+        // deinit list b.
+        source_b.deinit(alignment);
 
         return resized_list_a;
     } else if (list_b.isUnique()) {
@@ -786,8 +786,8 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         mem.copyBackwards(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
         @memcpy(source_b, source_a, byte_count_a);
 
-        // decrement list a.
-        utils.decref(source_a, list_a.capacity, alignment);
+        // deinit list a.
+        source_a.deinit(alignment);
 
         return resized_list_b;
     }
@@ -803,9 +803,9 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     @memcpy(target, source_a, list_a.len() * element_width);
     @memcpy(target + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
-    // decrement list a and b.
-    utils.decref(source_a, list_a.capacity, alignment);
-    utils.decref(source_b, list_b.capacity, alignment);
+    // deinit list a and b.
+    source_a.deinit(alignment);
+    source_b.deinit(alignment);
 
     return output;
 }
