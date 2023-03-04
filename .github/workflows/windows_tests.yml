@@ -51,11 +51,23 @@ jobs:
       
       - run: |
           .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc
+
+      - run: |
           .\windows-roc\roc.exe run .\crates\cli_testing_examples\algorithms\fibonacci.roc
+      
+      - run: |
           .\windows-roc\roc.exe run .\crates\cli_testing_examples\benchmarks\TestBase64.roc
+
+      - run: |
           .\windows-roc\roc.exe run .\crates\cli_testing_examples\benchmarks\Closure.roc
+
+      - run: |
           .\windows-roc\roc.exe run .\crates\cli_testing_examples\algorithms\quicksort.roc
+
+      - run: |
           .\windows-roc\roc.exe run .\examples\cli\false-interpreter\False.roc -- examples\cli\false-interpreter\examples\hello.false
+
+      - run: |
           .\windows-roc\roc.exe run .\examples\platform-switching\main.roc
       
       #- name: Build tests --release without running. Twice for zig lld-link error.
