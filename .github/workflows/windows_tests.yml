@@ -86,16 +86,36 @@ jobs:
           .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
           
       - run: |
-          .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          .\examples\platform-switching\rocLovesRust.exe
+        if: always()
           
       - run: |
           .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
           
       - run: |
-          .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          .\examples\platform-switching\rocLovesRust.exe
+        if: always()
           
       - run: |
           .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+        if: always()
+          
+      - run: |
+          .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+        if: always()
+          
+      - run: |
+          .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+        if: always()
           
       - run: |
           .\windows-roc\roc.exe run .\crates\cli_testing_examples\algorithms\fibonacci.roc
