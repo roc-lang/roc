@@ -523,6 +523,8 @@ pub fn build(
     use build::build_file;
     use BuildConfig::*;
 
+    println!("build_fun start");
+
     let filename = matches.value_of_os(ROC_FILE).unwrap();
     let path_buf = {
         let path = Path::new(filename);
@@ -673,6 +675,8 @@ pub fn build(
 
     let load_config = standard_load_config(&triple, build_ordering, threading);
 
+    println!("pre_build_file_call");
+
     let res_binary_path = build_file(
         &arena,
         &triple,
@@ -686,6 +690,8 @@ pub fn build(
         roc_cache_dir,
         load_config,
     );
+
+    println!("post_build_file_call");
 
     match res_binary_path {
         Ok(BuiltFile {
