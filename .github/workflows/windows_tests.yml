@@ -50,8 +50,23 @@ jobs:
           ls
       
       - run: |
-          .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc
+          .\windows-roc\roc.exe build .\examples\platform-switching\rocLovesRust.roc
 
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
       - run: |
           .\windows-roc\roc.exe run .\crates\cli_testing_examples\algorithms\fibonacci.roc
       
