@@ -51,6 +51,36 @@ jobs:
       
       - run: |
           .\windows-roc\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
 
       - run: |
           .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
