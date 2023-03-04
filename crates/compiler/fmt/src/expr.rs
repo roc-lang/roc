@@ -1,4 +1,4 @@
-use crate::annotation::{except_last, Formattable, Newlines, Parens};
+use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::def::fmt_defs;
 use crate::pattern::fmt_pattern;
@@ -49,7 +49,7 @@ impl<'a> Formattable for Expr<'a> {
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
 
-            List(items) => items.iter().any(|loc_expr| loc_expr.is_multiline()),
+            List(items) => is_collection_multiline(items),
 
             Str(literal) => is_str_multiline(literal),
             Apply(loc_expr, args, _) => {
@@ -96,9 +96,9 @@ impl<'a> Formattable for Expr<'a> {
                         .any(|loc_pattern| loc_pattern.is_multiline())
             }
 
-            Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
-            Tuple(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
-            RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Record(fields) => is_collection_multiline(fields),
+            Tuple(fields) => is_collection_multiline(fields),
+            RecordUpdate { fields, .. } => is_collection_multiline(fields),
         }
     }
 
@@ -1319,7 +1319,7 @@ fn fmt_record<'a, 'buf>(
     let loc_fields = fields.items;
     let final_comments = fields.final_comments();
     buf.indent(indent);
-    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
+    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) && update.is_none() {
         buf.push_str("{}");
     } else {
         buf.push('{');

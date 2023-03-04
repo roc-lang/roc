@@ -1319,6 +1319,7 @@ define_builtins! {
         53 STR_WITH_CAPACITY: "withCapacity"
         54 STR_WITH_PREFIX: "withPrefix"
         55 STR_GRAPHEMES: "graphemes"
+        56 STR_IS_VALID_SCALAR: "isValidScalar"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1401,6 +1402,7 @@ define_builtins! {
         77 LIST_COUNT_IF: "countIf"
         78 LIST_WALK_FROM: "walkFrom"
         79 LIST_WALK_FROM_UNTIL: "walkFromUntil"
+        80 LIST_ITER_HELP: "iterHelp"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
