@@ -751,7 +751,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
             return list_b;
         } else {
             // we must consume this list. Even though it has no elements, it could still have capacity
-            utils.decref(list_b.bytes, list_b.capacity, alignment);
+            list_b.deinit(alignment);
 
             return list_a;
         }
