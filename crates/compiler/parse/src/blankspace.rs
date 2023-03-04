@@ -1,5 +1,6 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
+use crate::parser::Progress;
 use crate::parser::SpaceProblem;
 use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
 use crate::state::State;
@@ -7,6 +8,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::Loc;
 use roc_region::all::Position;
+use roc_region::all::Region;
 
 pub fn space0_around_ee<'a, P, S, E>(
     parser: P,
@@ -386,98 +388,132 @@ pub fn spaces<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
     E: 'a + SpaceProblem,
 {
-    move |arena, mut state: State<'a>, _min_indent: u32| {
+    move |arena, state: State<'a>, _min_indent: u32| {
         let mut newlines = Vec::new_in(arena);
-        let mut progress = NoProgress;
-        loop {
-            let whitespace = fast_eat_whitespace(state.bytes());
-            if whitespace > 0 {
-                state.advance_mut(whitespace);
-                progress = MadeProgress;
-            }
 
-            match state.bytes().first() {
-                Some(b'#') => {
-                    state.advance_mut(1);
+        match consume_spaces(state, |_, space, _| newlines.push(space)) {
+            Ok((progress, state)) => Ok((progress, newlines.into_bump_slice(), state)),
+            Err((progress, err)) => Err((progress, err)),
+        }
+    }
+}
 
-                    let is_doc_comment = state.bytes().first() == Some(&b'#')
-                        && (state.bytes().get(1) == Some(&b' ')
-                            || state.bytes().get(1) == Some(&b'\n')
-                            || begins_with_crlf(&state.bytes()[1..])
-                            || Option::is_none(&state.bytes().get(1)));
+pub fn loc_spaces<'a, E>() -> impl Parser<'a, &'a [Loc<CommentOrNewline<'a>>], E>
+where
+    E: 'a + SpaceProblem,
+{
+    move |arena, state: State<'a>, _min_indent: u32| {
+        let mut newlines = Vec::new_in(arena);
 
-                    if is_doc_comment {
-                        state.advance_mut(1);
-                        if state.bytes().first() == Some(&b' ') {
-                            state.advance_mut(1);
-                        }
-                    }
+        match consume_spaces(state, |start, space, end| {
+            newlines.push(Loc::at(Region::between(start, end), space))
+        }) {
+            Ok((progress, state)) => Ok((progress, newlines.into_bump_slice(), state)),
+            Err((progress, err)) => Err((progress, err)),
+        }
+    }
+}
 
-                    let len = fast_eat_until_control_character(state.bytes());
-
-                    // We already checked that the string is valid UTF-8
-                    debug_assert!(std::str::from_utf8(&state.bytes()[..len]).is_ok());
-                    let text = unsafe { std::str::from_utf8_unchecked(&state.bytes()[..len]) };
-
-                    let comment = if is_doc_comment {
-                        CommentOrNewline::DocComment(text)
-                    } else {
-                        CommentOrNewline::LineComment(text)
-                    };
-                    newlines.push(comment);
-                    state.advance_mut(len);
-
-                    if begins_with_crlf(state.bytes()) {
-                        state.advance_mut(1);
-                        state = state.advance_newline();
-                    } else if state.bytes().first() == Some(&b'\n') {
-                        state = state.advance_newline();
-                    }
-
-                    progress = MadeProgress;
-                }
-                Some(b'\r') => {
-                    if state.bytes().get(1) == Some(&b'\n') {
-                        newlines.push(CommentOrNewline::Newline);
-                        state.advance_mut(1);
-                        state = state.advance_newline();
-                        progress = MadeProgress;
-                    } else {
-                        return Err((
-                            progress,
-                            E::space_problem(
-                                BadInputError::HasMisplacedCarriageReturn,
-                                state.pos(),
-                            ),
-                        ));
-                    }
-                }
-                Some(b'\n') => {
-                    newlines.push(CommentOrNewline::Newline);
-                    state = state.advance_newline();
-                    progress = MadeProgress;
-                }
-                Some(b'\t') => {
-                    return Err((
-                        progress,
-                        E::space_problem(BadInputError::HasTab, state.pos()),
-                    ));
-                }
-                Some(x) if *x < b' ' => {
-                    return Err((
-                        progress,
-                        E::space_problem(BadInputError::HasAsciiControl, state.pos()),
-                    ));
-                }
-                _ => {
-                    if !newlines.is_empty() {
-                        state = state.mark_current_indent();
-                    }
-                    break;
-                }
-            }
+fn consume_spaces<'a, E, F>(
+    mut state: State<'a>,
+    mut on_space: F,
+) -> Result<(Progress, State<'a>), (Progress, E)>
+where
+    E: 'a + SpaceProblem,
+    F: FnMut(Position, CommentOrNewline<'a>, Position),
+{
+    let mut progress = NoProgress;
+    let mut found_newline = false;
+    loop {
+        let whitespace = fast_eat_whitespace(state.bytes());
+        if whitespace > 0 {
+            state.advance_mut(whitespace);
+            progress = MadeProgress;
         }
 
-        Ok((progress, newlines.into_bump_slice(), state))
+        let start = state.pos();
+
+        match state.bytes().first() {
+            Some(b'#') => {
+                state.advance_mut(1);
+
+                let is_doc_comment = state.bytes().first() == Some(&b'#')
+                    && (state.bytes().get(1) == Some(&b' ')
+                        || state.bytes().get(1) == Some(&b'\n')
+                        || begins_with_crlf(&state.bytes()[1..])
+                        || Option::is_none(&state.bytes().get(1)));
+
+                if is_doc_comment {
+                    state.advance_mut(1);
+                    if state.bytes().first() == Some(&b' ') {
+                        state.advance_mut(1);
+                    }
+                }
+
+                let len = fast_eat_until_control_character(state.bytes());
+
+                // We already checked that the string is valid UTF-8
+                debug_assert!(std::str::from_utf8(&state.bytes()[..len]).is_ok());
+                let text = unsafe { std::str::from_utf8_unchecked(&state.bytes()[..len]) };
+
+                let comment = if is_doc_comment {
+                    CommentOrNewline::DocComment(text)
+                } else {
+                    CommentOrNewline::LineComment(text)
+                };
+                state.advance_mut(len);
+                on_space(start, comment, state.pos());
+                found_newline = true;
+
+                if begins_with_crlf(state.bytes()) {
+                    state.advance_mut(1);
+                    state = state.advance_newline();
+                } else if state.bytes().first() == Some(&b'\n') {
+                    state = state.advance_newline();
+                }
+
+                progress = MadeProgress;
+            }
+            Some(b'\r') => {
+                if state.bytes().get(1) == Some(&b'\n') {
+                    state.advance_mut(1);
+                    state = state.advance_newline();
+                    on_space(start, CommentOrNewline::Newline, state.pos());
+                    found_newline = true;
+                    progress = MadeProgress;
+                } else {
+                    return Err((
+                        progress,
+                        E::space_problem(BadInputError::HasMisplacedCarriageReturn, state.pos()),
+                    ));
+                }
+            }
+            Some(b'\n') => {
+                state = state.advance_newline();
+                on_space(start, CommentOrNewline::Newline, state.pos());
+                found_newline = true;
+                progress = MadeProgress;
+            }
+            Some(b'\t') => {
+                return Err((
+                    progress,
+                    E::space_problem(BadInputError::HasTab, state.pos()),
+                ));
+            }
+            Some(x) if *x < b' ' => {
+                return Err((
+                    progress,
+                    E::space_problem(BadInputError::HasAsciiControl, state.pos()),
+                ));
+            }
+            _ => {
+                if found_newline {
+                    state = state.mark_current_indent();
+                }
+                break;
+            }
+        }
     }
+
+    Ok((progress, state))
 }
