@@ -75,8 +75,8 @@ pub const RocList = extern struct {
         return list;
     }
 
-    pub fn deinit(self: RocList, comptime T: type) void {
-        utils.decref(self.bytes, self.capacity, @alignOf(T));
+    pub fn deinit(self: RocList, alignment: u32) void {
+        utils.decref(self.bytes, self.capacity, alignment);
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -128,7 +128,6 @@ pub const RocList = extern struct {
         @memcpy(new_bytes, old_bytes, number_of_bytes);
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
-        const data_bytes = self.capacity * element_width;
         self.deinit(alignment);
 
         return new_list;
@@ -574,7 +573,7 @@ pub fn listSublist(
 
             @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
 
-            self.deinit(alignment);
+            list.deinit(alignment);
 
             return output;
         }
@@ -874,14 +873,14 @@ test "listConcat: non-unique with unique overlapping" {
     const ptr_width = @sizeOf(usize);
     const refcount_ptr = @ptrCast([*]isize, @alignCast(ptr_width, bytes) - ptr_width);
     utils.increfC(&refcount_ptr[0], 1);
-    defer nonUnique.deinit(u8); // listConcat will dec the other refcount
+    defer nonUnique.deinit(@alignOf(u8)); // listConcat will dec the other refcount
 
     var unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..]);
-    defer unique.deinit(u8);
+    defer unique.deinit(@alignOf(u8));
 
     var concatted = listConcat(nonUnique, unique, 1, 1);
     var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3, 4 })[0..]);
-    defer wanted.deinit(u8);
+    defer wanted.deinit(@alignOf(u8));
 
     try expect(concatted.eql(wanted));
 }
