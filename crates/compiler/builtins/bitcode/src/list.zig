@@ -804,7 +804,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
 
     // deinit list a and b.
     list_a.deinit(alignment);
-    source_b.deinit(alignment);
+    list_b.deinit(alignment);
 
     return output;
 }
