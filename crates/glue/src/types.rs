@@ -59,11 +59,13 @@ pub struct Types {
     /// This is important for declaration order in C; we need to output a
     /// type declaration earlier in the file than where it gets referenced by another type.
     deps: VecMap<TypeId, Vec<TypeId>>,
+    target: TargetInfo,
 }
 
 impl Types {
-    pub fn with_capacity(cap: usize) -> Self {
+    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
         Self {
+            target: target_info,
             types: Vec::with_capacity(cap),
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             sizes: Vec::new(),
@@ -936,7 +938,7 @@ impl<'a> Env<'a> {
     where
         I: Iterator<Item = Variable>,
     {
-        let mut types = Types::with_capacity(variables.size_hint().0);
+        let mut types = Types::with_capacity(variables.size_hint().0, self.target);
 
         for var in variables {
             self.add_type(var, &mut types);
