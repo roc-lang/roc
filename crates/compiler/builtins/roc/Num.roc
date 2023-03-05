@@ -748,6 +748,7 @@ sqrtChecked = \x ->
     else
         Ok (Num.sqrt x)
 
+## Natural logarithm
 log : Frac a -> Frac a
 
 logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]

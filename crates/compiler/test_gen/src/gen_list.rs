@@ -3696,6 +3696,24 @@ fn list_walk_from_even_prefix_sum() {
     );
 }
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// TODO: update how roc decides whether or not to print `User crashed` or `Roc failed` such that this prints `Roc failed ...``
+#[should_panic(
+    expected = r#"User crash with message: "List.range: failed to generate enough elements to fill the range before overflowing the numeric type"#
+)]
+fn list_range_length_overflow() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.range {start: At 255u8, end: Length 2}
+               "#
+        ),
+        RocList::<u8>::default(),
+        RocList::<u8>
+    );
+}
+
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 mod pattern_match {
     #[cfg(feature = "gen-llvm")]

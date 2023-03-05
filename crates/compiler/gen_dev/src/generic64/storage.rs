@@ -753,7 +753,7 @@ impl<
                         debug_assert_eq!(from_offset % 8, 0);
                         debug_assert_eq!(size % 8, 0);
                         debug_assert_eq!(size, layout_interner.stack_size(*layout));
-                        self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
+                        self.copy_to_stack_offset(buf, size, from_offset, to_offset)
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         debug_assert_eq!(to_offset % 8, 0);
@@ -795,7 +795,7 @@ impl<
                     debug_assert_eq!(from_offset % 8, 0);
                     debug_assert_eq!(size % 8, 0);
                     debug_assert_eq!(size, layout_interner.stack_size(*layout));
-                    self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
+                    self.copy_to_stack_offset(buf, size, from_offset, to_offset)
                 }
             },
             Layout::Boxed(_) => {
@@ -824,13 +824,13 @@ impl<
                 debug_assert_eq!(from_offset % 8, 0);
                 debug_assert_eq!(size % 8, 0);
                 debug_assert_eq!(size, layout_interner.stack_size(*layout));
-                self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
+                self.copy_to_stack_offset(buf, size, from_offset, to_offset)
             }
             x => todo!("copying data to the stack with layout, {:?}", x),
         }
     }
 
-    pub fn copy_symbol_to_stack_offset_help(
+    pub fn copy_to_stack_offset(
         &mut self,
         buf: &mut Vec<'a, u8>,
         size: u32,

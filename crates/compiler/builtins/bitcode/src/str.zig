@@ -2159,125 +2159,45 @@ test "isWhitespace" {
 pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
-    if (!string.isEmpty()) {
-        const bytes_ptr = string.asU8ptrMut();
-
-        const leading_bytes = countLeadingWhitespaceBytes(string);
-        const original_len = string.len();
-
-        if (original_len == leading_bytes) {
-            string.deinit();
-            return RocStr.empty();
-        }
-
-        const trailing_bytes = countTrailingWhitespaceBytes(string);
-        const new_len = original_len - leading_bytes - trailing_bytes;
-
-        if (string.isSmallStr() or !string.isRefcountOne()) {
-            // consume the input string; this will not free the
-            // bytes because the string is small or shared
-            const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
-
-            string.decref();
-
-            return result;
-        } else {
-            // nonempty, large, and unique: shift everything over in-place if necessary.
-            // Note: must use memmove over memcpy, because the bytes definitely overlap!
-            if (leading_bytes > 0) {
-                // Zig doesn't seem to have `memmove` in the stdlib anymore; this is based on:
-                // https://github.com/ziglang/zig/blob/52ba2c3a43a88a4db30cff47f2f3eff8c3d5be19/lib/std/special/c.zig#L115
-                // Copyright Andrew Kelley, MIT licensed.
-                const src = bytes_ptr + leading_bytes;
-                var index: usize = 0;
-
-                while (index != new_len) : (index += 1) {
-                    bytes_ptr[index] = src[index];
-                }
-            }
-
-            var new_string = string;
-            new_string.str_len = new_len;
-
-            return new_string;
-        }
+    if (string.isEmpty()) {
+        string.deinit();
+        return RocStr.empty();
     }
 
-    return RocStr.empty();
-}
+    const bytes_ptr = string.asU8ptrMut();
 
-pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
-    if (string.str_bytes) |bytes_ptr| {
-        const leading_bytes = countLeadingWhitespaceBytes(string);
-        const original_len = string.len();
+    const leading_bytes = countLeadingWhitespaceBytes(string);
+    const original_len = string.len();
 
-        if (original_len == leading_bytes) {
-            string.deinit();
-            return RocStr.empty();
-        }
-
-        const new_len = original_len - leading_bytes;
-
-        if (string.isSmallStr() or !string.isRefcountOne()) {
-            // if the trimmed string fits in a small string,
-            // make the result a small string and decref the original string
-            const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
-
-            string.decref();
-
-            return result;
-        } else {
-            // nonempty, large, and unique: shift everything over in-place if necessary.
-            // Note: must use memmove over memcpy, because the bytes definitely overlap!
-            if (leading_bytes > 0) {
-                // Zig doesn't seem to have `memmove` in the stdlib anymore; this is based on:
-                // https://github.com/ziglang/zig/blob/52ba2c3a43a88a4db30cff47f2f3eff8c3d5be19/lib/std/special/c.zig#L115
-                // Copyright Andrew Kelley, MIT licensed.
-                const src = bytes_ptr + leading_bytes;
-                var index: usize = 0;
-
-                while (index != new_len) : (index += 1) {
-                    bytes_ptr[index] = src[index];
-                }
-            }
-
-            var new_string = string;
-            new_string.str_len = new_len;
-
-            return new_string;
-        }
+    if (original_len == leading_bytes) {
+        string.deinit();
+        return RocStr.empty();
     }
 
-    return RocStr.empty();
-}
+    const trailing_bytes = countTrailingWhitespaceBytes(string);
+    const new_len = original_len - leading_bytes - trailing_bytes;
 
-pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
-    if (string.str_bytes) |bytes_ptr| {
-        const trailing_bytes = countTrailingWhitespaceBytes(string);
-        const original_len = string.len();
+    if (string.isSmallStr() or !string.isRefcountOne()) {
+        // consume the input string; this will not free the
+        // bytes because the string is small or shared
+        const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
 
-        if (original_len == trailing_bytes) {
-            string.deinit();
-            return RocStr.empty();
-        }
+        string.decref();
 
-        const new_len = original_len - trailing_bytes;
+        return result;
+    } else {
+        // nonempty, large, and unique: shift everything over in-place if necessary.
+        // Note: must use memmove over memcpy, because the bytes definitely overlap!
+        if (leading_bytes > 0) {
+            // Zig doesn't seem to have `memmove` in the stdlib anymore; this is based on:
+            // https://github.com/ziglang/zig/blob/52ba2c3a43a88a4db30cff47f2f3eff8c3d5be19/lib/std/special/c.zig#L115
+            // Copyright Andrew Kelley, MIT licensed.
+            const src = bytes_ptr + leading_bytes;
+            var index: usize = 0;
 
-        if (string.isSmallStr() or !string.isRefcountOne()) {
-            const result = RocStr.init(string.asU8ptr(), new_len);
-
-            string.decref();
-
-            return result;
-        }
-
-        // nonempty, large, and unique:
-
-        var i: usize = 0;
-        while (i < new_len) : (i += 1) {
-            const dest = bytes_ptr + i;
-            const source = dest;
-            @memcpy(dest, source, 1);
+            while (index != new_len) : (index += 1) {
+                bytes_ptr[index] = src[index];
+            }
         }
 
         var new_string = string;
@@ -2285,8 +2205,99 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 
         return new_string;
     }
+}
 
-    return RocStr.empty();
+pub fn strTrimLeft(input_string: RocStr) callconv(.C) RocStr {
+    var string = input_string;
+
+    if (string.isEmpty()) {
+        string.deinit();
+        return RocStr.empty();
+    }
+
+    const bytes_ptr = string.asU8ptrMut();
+
+    const leading_bytes = countLeadingWhitespaceBytes(string);
+    const original_len = string.len();
+
+    if (original_len == leading_bytes) {
+        string.deinit();
+        return RocStr.empty();
+    }
+
+    const new_len = original_len - leading_bytes;
+
+    if (string.isSmallStr() or !string.isRefcountOne()) {
+        // if the trimmed string fits in a small string,
+        // make the result a small string and decref the original string
+        const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+
+        string.decref();
+
+        return result;
+    } else {
+        // nonempty, large, and unique: shift everything over in-place if necessary.
+        // Note: must use memmove over memcpy, because the bytes definitely overlap!
+        if (leading_bytes > 0) {
+            // Zig doesn't seem to have `memmove` in the stdlib anymore; this is based on:
+            // https://github.com/ziglang/zig/blob/52ba2c3a43a88a4db30cff47f2f3eff8c3d5be19/lib/std/special/c.zig#L115
+            // Copyright Andrew Kelley, MIT licensed.
+            const src = bytes_ptr + leading_bytes;
+            var index: usize = 0;
+
+            while (index != new_len) : (index += 1) {
+                bytes_ptr[index] = src[index];
+            }
+        }
+
+        var new_string = string;
+        new_string.str_len = new_len;
+
+        return new_string;
+    }
+}
+
+pub fn strTrimRight(input_string: RocStr) callconv(.C) RocStr {
+    var string = input_string;
+
+    if (string.isEmpty()) {
+        string.deinit();
+        return RocStr.empty();
+    }
+
+    const bytes_ptr = string.asU8ptrMut();
+
+    const trailing_bytes = countTrailingWhitespaceBytes(string);
+    const original_len = string.len();
+
+    if (original_len == trailing_bytes) {
+        string.deinit();
+        return RocStr.empty();
+    }
+
+    const new_len = original_len - trailing_bytes;
+
+    if (string.isSmallStr() or !string.isRefcountOne()) {
+        const result = RocStr.init(string.asU8ptr(), new_len);
+
+        string.decref();
+
+        return result;
+    }
+
+    // nonempty, large, and unique:
+
+    var i: usize = 0;
+    while (i < new_len) : (i += 1) {
+        const dest = bytes_ptr + i;
+        const source = dest;
+        @memcpy(dest, source, 1);
+    }
+
+    var new_string = string;
+    new_string.str_len = new_len;
+
+    return new_string;
 }
 
 fn countLeadingWhitespaceBytes(string: RocStr) usize {

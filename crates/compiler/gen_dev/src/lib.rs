@@ -751,6 +751,30 @@ trait Backend<'a> {
                 );
                 self.build_num_gte(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::NumLogUnchecked => {
+                let float_width = match arg_layouts[0] {
+                    Layout::F64 => FloatWidth::F64,
+                    Layout::F32 => FloatWidth::F32,
+                    _ => unreachable!("invalid layout for sqrt"),
+                };
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::NUM_LOG[float_width].to_string(),
+                    args,
+                    arg_layouts,
+                    ret_layout,
+                )
+            }
+            LowLevel::NumSqrtUnchecked => {
+                let float_width = match arg_layouts[0] {
+                    Layout::F64 => FloatWidth::F64,
+                    Layout::F32 => FloatWidth::F32,
+                    _ => unreachable!("invalid layout for sqrt"),
+                };
+
+                self.build_num_sqrt(*sym, args[0], float_width);
+            }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND_F64[IntWidth::I64].to_string(),
@@ -1260,6 +1284,9 @@ trait Backend<'a> {
         src2: &Symbol,
         arg_layout: &InLayout<'a>,
     );
+
+    /// build_sqrt stores the result of `sqrt(src)` into dst.
+    fn build_num_sqrt(&mut self, dst: Symbol, src: Symbol, float_width: FloatWidth);
 
     /// build_list_len returns the length of a list.
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);

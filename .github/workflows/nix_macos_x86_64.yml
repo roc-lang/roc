@@ -19,13 +19,7 @@ jobs:
         with:
           clean: "true"
 
-      - uses: cachix/install-nix-action@v15
-
-      # to cache nix packages
-      - uses: cachix/cachix-action@v10
-        with:
-          name: enigmaticsunrise
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: cachix/install-nix-action@v20
 
       - name: execute cli_run tests only, the full tests take too long but are run nightly
         run: nix develop -c cargo test --locked --release -p roc_cli
