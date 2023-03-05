@@ -7,10 +7,11 @@ use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_build::program::{
-    standard_load_config, BuildFileError, BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions,
+    handle_error_module, handle_loading_problem, standard_load_config, BuildFileError,
+    BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
 use roc_error_macros::{internal_error, user_error};
-use roc_load::{ExpectMetadata, LoadingProblem, Threading};
+use roc_load::{ExpectMetadata, Threading};
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
@@ -32,8 +33,6 @@ use tempfile::TempDir;
 
 mod format;
 pub use format::format;
-
-const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
@@ -762,48 +761,6 @@ pub fn build(
             handle_error_module(module, total_time, filename, true)
         }
         Err(BuildFileError::LoadingProblem(problem)) => handle_loading_problem(problem),
-    }
-}
-
-fn handle_error_module(
-    mut module: roc_load::LoadedModule,
-    total_time: std::time::Duration,
-    filename: &OsStr,
-    print_run_anyway_hint: bool,
-) -> io::Result<i32> {
-    debug_assert!(module.total_problems() > 0);
-
-    let problems = roc_build::program::report_problems_typechecked(&mut module);
-
-    problems.print_to_stdout(total_time);
-
-    if print_run_anyway_hint {
-        // If you're running "main.roc" then you can just do `roc run`
-        // to re-run the program.
-        print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
-
-        if filename != DEFAULT_ROC_FILENAME {
-            print!(" {}", &filename.to_string_lossy());
-        }
-
-        println!("\x1B[39m");
-    }
-
-    Ok(problems.exit_code())
-}
-
-fn handle_loading_problem(problem: LoadingProblem) -> io::Result<i32> {
-    match problem {
-        LoadingProblem::FormattedReport(report) => {
-            print!("{}", report);
-            Ok(1)
-        }
-        _ => {
-            // TODO: tighten up the types here, we should always end up with a
-            // formatted report from load.
-            print!("Failed with error: {:?}", problem);
-            Ok(1)
-        }
     }
 }
 

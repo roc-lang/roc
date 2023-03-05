@@ -18,6 +18,7 @@ use roc_reporting::{
     report::{RenderTarget, DEFAULT_PALETTE},
 };
 use roc_target::TargetInfo;
+use std::ffi::OsStr;
 use std::ops::Deref;
 use std::{
     path::{Path, PathBuf},
@@ -28,6 +29,8 @@ use target_lexicon::Triple;
 
 #[cfg(feature = "target-wasm32")]
 use roc_collections::all::MutSet;
+
+pub const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
@@ -643,6 +646,48 @@ impl<'a> BuildFileError<'a> {
                 module,
                 total_time: compilation_start.elapsed(),
             },
+        }
+    }
+}
+
+pub fn handle_error_module(
+    mut module: roc_load::LoadedModule,
+    total_time: std::time::Duration,
+    filename: &OsStr,
+    print_run_anyway_hint: bool,
+) -> std::io::Result<i32> {
+    debug_assert!(module.total_problems() > 0);
+
+    let problems = report_problems_typechecked(&mut module);
+
+    problems.print_to_stdout(total_time);
+
+    if print_run_anyway_hint {
+        // If you're running "main.roc" then you can just do `roc run`
+        // to re-run the program.
+        print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
+
+        if filename != DEFAULT_ROC_FILENAME {
+            print!(" {}", &filename.to_string_lossy());
+        }
+
+        println!("\x1B[39m");
+    }
+
+    Ok(problems.exit_code())
+}
+
+pub fn handle_loading_problem(problem: LoadingProblem) -> std::io::Result<i32> {
+    match problem {
+        LoadingProblem::FormattedReport(report) => {
+            print!("{}", report);
+            Ok(1)
+        }
+        _ => {
+            // TODO: tighten up the types here, we should always end up with a
+            // formatted report from load.
+            print!("Failed with error: {:?}", problem);
+            Ok(1)
         }
     }
 }
