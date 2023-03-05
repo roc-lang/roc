@@ -5,5 +5,5 @@ platform "echo-in-zig"
     imports []
     provides [mainForHost]
 
-mainForHost : Str
-mainForHost = main
+mainForHost : { bar: Str, foo: I64 -> I64 }
+mainForHost = { bar: main, foo: \x -> x }

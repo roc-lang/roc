@@ -76,25 +76,21 @@ RocType : [
     Struct
         {
             name : Str,
-            fields : List { name : Str, id : TypeId },
+            fields : RocStructFields,
         },
     TagUnionPayload
         {
             name : Str,
-            fields : List { discriminant : Nat, id : TypeId },
+            fields : RocStructFields,
         },
     ## A recursive pointer, e.g. in StrConsList : [Nil, Cons Str StrConsList],
     ## this would be the field of Cons containing the (recursive) StrConsList type,
     ## and the TypeId is the TypeId of StrConsList itself.
     RecursivePointer TypeId,
-    Function
-        {
-            name : Str,
-            args : List TypeId,
-            ret : TypeId,
-        },
+    Function RocFn,
     # A zero-sized type, such as an empty record or a single-tag union with no payload
     Unit,
+    Unsized,
 ]
 
 RocNum : [
@@ -165,7 +161,7 @@ RocTagUnion : [
         {
             name : Str,
             tagName : Str,
-            payloadFields : List TypeId,
+            payload: RocSingleTagPayload,
         },
     ## A recursive tag union with only two variants, where one is empty.
     ## Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
@@ -179,3 +175,21 @@ RocTagUnion : [
             whichTagIsNull : [FirstTagIsNull, SecondTagIsNull],
         },
 ]
+
+RocStructFields : [
+    HasNoClosure (List { name: Str, id: TypeId }),
+    HasClosure (List { name: Str, id: TypeId, accessors: { getter: Str } }),
+]
+
+RocSingleTagPayload: [
+    HasClosure (List { name: Str, id: TypeId }),
+    HasNoClosure (List { id: TypeId }),
+]
+
+RocFn : {
+    functionName: Str,
+    externName: Str,
+    args: List TypeId,
+    lambdaSet: TypeId,
+    ret: TypeId,
+}

@@ -39,7 +39,7 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, CrashTag, EntryPoint, HostExposedLambdaSet, JoinPointId,
+    BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet, JoinPointId,
     ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
@@ -3841,6 +3841,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         Some(env.context.i64_type().as_basic_type_enum()),
         &[],
     );
+
     let size_function_name: String = format!("roc__{}_size", ident_string);
 
     let size_function = add_func(
@@ -3972,13 +3973,17 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                 &param_types[..param_types.len().saturating_sub(1)],
             )
         }
-        (RocReturn::Return | RocReturn::ByPointer, CCReturn::Void) => {
+        (RocReturn::Return, CCReturn::Void) => {
+            // the roc function returns a unit value. like `{}` or `{ { {}, {} }, {} }`.
+            // In C, this is modelled as a function returning void
+            (&params[..], &param_types[..])
+        }
+        (RocReturn::ByPointer, CCReturn::Void) => {
             // the roc function returns a unit value. like `{}` or `{ { {}, {} }, {} }`.
             // In C, this is modelled as a function returning void
             (
                 &params[..],
-                // &param_types[..param_types.len().saturating_sub(1)],
-                &param_types[..],
+                &param_types[..param_types.len().saturating_sub(1)],
             )
         }
         _ => (&params[..], &param_types[..]),
@@ -4149,7 +4154,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
         Some(env.context.i64_type().as_basic_type_enum()),
         &[],
     );
-    let size_function_name: String = format!("roc__{}_size", ident_string);
+    let size_function_name: String = format!("{}_size", c_function_name);
 
     let size_function = add_func(
         env.context,
@@ -4609,8 +4614,9 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
+    glue_layouts: &GlueLayouts<'a>,
 ) {
-    build_procedures_help(
+    let mod_solutions = build_procedures_help(
         env,
         layout_interner,
         opt_level,
@@ -4618,6 +4624,43 @@ pub fn build_procedures<'a, 'ctx, 'env>(
         entry_point,
         debug_output_file,
     );
+
+    let niche = Niche::NONE;
+
+    for (symbol, top_level) in glue_layouts.getters.iter().copied() {
+        let it = top_level.arguments.iter().copied();
+        let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, niche, top_level.result);
+        let func_name = FuncName(&bytes);
+        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+        let mut it = func_solutions.specs();
+        let Some(func_spec) = it.next() else {
+            // TODO this means a function was not considered host-exposed in mono
+            continue;
+        };
+        debug_assert!(
+            it.next().is_none(),
+            "we expect only one specialization of this symbol"
+        );
+
+        // NOTE fake layout; it is only used for debug prints
+        let getter_fn =
+            function_value_by_func_spec(env, *func_spec, symbol, &[], niche, Layout::UNIT);
+
+        let name = getter_fn.get_name().to_str().unwrap();
+        let getter_name = symbol.as_str(&env.interns);
+
+        // Add the getter function to the module.
+        let _ = expose_function_to_host_help_c_abi(
+            env,
+            layout_interner,
+            name,
+            getter_fn,
+            top_level.arguments,
+            top_level.result,
+            getter_name,
+        );
+    }
 }
 
 pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
@@ -4937,13 +4980,10 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
-    proc_name: LambdaName,
+    fn_name: &str,
     alias_symbol: Symbol,
     hels: &HostExposedLambdaSet<'a>,
 ) {
-    let ident_string = proc_name.name().as_str(&env.interns);
-    let fn_name: String = format!("{}_1", ident_string);
-
     match hels.raw_function_layout {
         RawFunctionLayout::Function(arguments, closure, result) => {
             // define closure size and return value size, e.g.
@@ -4989,7 +5029,7 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
             build_closure_caller(
                 env,
                 layout_interner,
-                &fn_name,
+                fn_name,
                 evaluator,
                 alias_symbol,
                 arguments,
@@ -5008,7 +5048,7 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
 
             build_host_exposed_alias_size_help(
                 env,
-                &fn_name,
+                fn_name,
                 alias_symbol,
                 Some("result"),
                 result_type,
@@ -5055,13 +5095,8 @@ fn build_closure_caller<'a, 'ctx, 'env>(
 
     // STEP 1: build function header
 
-    // e.g. `roc__main_1_Fx_caller`
-    let function_name = format!(
-        "roc__{}_{}_{}_caller",
-        def_name,
-        alias_symbol.module_string(&env.interns),
-        alias_symbol.as_str(&env.interns)
-    );
+    // e.g. `roc__mainForHost_0_caller` (def_name is `mainForHost_0`)
+    let function_name = format!("roc__{}_caller", def_name);
 
     let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
 
@@ -5172,7 +5207,7 @@ fn build_host_exposed_alias_size<'a, 'r, 'ctx, 'env>(
 fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
-    alias_symbol: Symbol,
+    _alias_symbol: Symbol,
     opt_label: Option<&str>,
     basic_type: BasicTypeEnum<'ctx>,
 ) {
@@ -5182,20 +5217,9 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     let i64 = env.context.i64_type().as_basic_type_enum();
     let size_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(i64), &[]);
     let size_function_name: String = if let Some(label) = opt_label {
-        format!(
-            "roc__{}_{}_{}_{}_size",
-            def_name,
-            alias_symbol.module_string(&env.interns),
-            alias_symbol.as_str(&env.interns),
-            label
-        )
+        format!("roc__{}_{}_size", def_name, label)
     } else {
-        format!(
-            "roc__{}_{}_{}_size",
-            def_name,
-            alias_symbol.module_string(&env.interns),
-            alias_symbol.as_str(&env.interns)
-        )
+        format!("roc__{}_size", def_name,)
     };
 
     let size_function = add_func(
@@ -5214,7 +5238,7 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     builder.build_return(Some(&size));
 }
 
-pub fn build_proc<'a, 'ctx, 'env>(
+fn build_proc<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
@@ -5237,11 +5261,14 @@ pub fn build_proc<'a, 'ctx, 'env>(
                 }
                 Binary | BinaryDev => {
                     for (alias_name, hels) in aliases.iter() {
+                        let ident_string = proc.name.name().as_str(&env.interns);
+                        let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
+
                         expose_alias_to_host(
                             env,
                             layout_interner,
                             mod_solutions,
-                            proc.name,
+                            &fn_name,
                             *alias_name,
                             hels,
                         )
@@ -6106,7 +6133,7 @@ pub fn add_func<'ctx>(
 ) -> FunctionValue<'ctx> {
     if cfg!(debug_assertions) {
         if let Some(func) = module.get_function(name) {
-            panic!("Attempting to redefine LLVM function {}, which was already defined in this module as:\n\n{:?}", name, func);
+            panic!("Attempting to redefine LLVM function {}, which was already defined in this module as:\n\n{:#?}", name, func);
         }
     }
 

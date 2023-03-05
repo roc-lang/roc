@@ -23,17 +23,17 @@ extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
     fn roc_main(output: *mut u8);
 
-    #[link_name = "roc__mainForHost_size"]
+    #[link_name = "roc__mainForHost_1_exposed_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1__Fx_caller"]
+    #[link_name = "roc__mainForHost_0_caller"]
     fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
 
     #[allow(dead_code)]
-    #[link_name = "roc__mainForHost_1__Fx_size"]
+    #[link_name = "roc__mainForHost_0_size"]
     fn size_Fx() -> i64;
 
-    #[link_name = "roc__mainForHost_1__Fx_result_size"]
+    #[link_name = "roc__mainForHost_0_result_size"]
     fn size_Fx_result() -> i64;
 }
 

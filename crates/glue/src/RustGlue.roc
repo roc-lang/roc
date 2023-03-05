@@ -55,8 +55,8 @@ convertTypesToFile = \types ->
                 TagUnion (NullableUnwrapped { name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull }) ->
                     generateNullableUnwrapped buf types id name nullTag nonNullTag nonNullPayload whichTagIsNull
 
-                TagUnion (SingleTagStruct { name, tagName, payloadFields }) ->
-                    generateSingleTagStruct buf types name tagName payloadFields
+                TagUnion (SingleTagStruct { name, tagName, payload }) ->
+                    generateSingleTagStruct buf types name tagName payload
 
                 TagUnion (NonNullableUnwrapped { name, tagName, payload }) ->
                     generateRecursiveTagUnion buf types id name [{ name: tagName, payload: Some payload }] 0 0 None
@@ -71,6 +71,7 @@ convertTypesToFile = \types ->
                     buf
 
                 Unit
+                | Unsized
                 | EmptyTagUnion
                 | Num _
                 | Bool
@@ -90,13 +91,18 @@ convertTypesToFile = \types ->
         content,
     }
 
-generateStruct = \buf, types, id, name, fields, visibility ->
+generateStruct = \buf, types, id, name, structFields, visibility ->
     escapedName = escapeKW name
     repr =
-        if List.len fields == 1 then
+        length =
+            when structFields is
+                HasClosure fields -> List.len fields
+                HasNoClosure fields -> List.len fields
+        if length <= 1 then
             "transparent"
         else
             "C"
+
     pub =
         when visibility is
             Public -> "pub"
@@ -107,10 +113,17 @@ generateStruct = \buf, types, id, name, fields, visibility ->
     buf
     |> generateDeriveStr types structType IncludeDebug
     |> Str.concat "#[repr(\(repr))]\n\(pub) struct \(escapedName) {\n"
-    |> \b -> List.walk fields b (generateStructFields types Public)
+    |> generateStructFields types Public structFields
     |> Str.concat "}\n\n"
 
-generateStructFields = \types, visibility ->
+generateStructFields = \buf, types, visibility, structFields ->
+    when structFields is
+        HasNoClosure fields ->
+            List.walk fields buf (generateStructFieldWithoutClosure types visibility)
+        HasClosure _ ->
+            Str.concat buf "// TODO: Struct fields with closures"
+
+generateStructFieldWithoutClosure = \types, visibility ->
     \accum, { name: fieldName, id } ->
         typeStr = typeName types id
         escapedFieldName = escapeKW fieldName
@@ -122,13 +135,16 @@ generateStructFields = \types, visibility ->
 
         Str.concat accum "\(indent)\(pub) \(escapedFieldName): \(typeStr),\n"
 
-nameTagUnionPayloadFields = \fields ->
+nameTagUnionPayloadFields = \payloadFields ->
     # Tag union payloads have numbered fields, so we prefix them
     # with an "f" because Rust doesn't allow struct fields to be numbers.
-    List.map fields \{ discriminant, id } ->
-        discStr = Num.toStr discriminant
-
-        { name: "f\(discStr)", id }
+    when payloadFields is
+        HasNoClosure fields ->
+            renamedFields = List.map fields \{ name, id } -> { name: "f\(name)", id }
+            HasNoClosure renamedFields
+        HasClosure fields ->
+            renamedFields = List.map fields \{ name, id, accessors } -> { name: "f\(name)", id, accessors }
+            HasClosure renamedFields
 
 generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     escapedName = escapeKW name
@@ -358,41 +374,50 @@ generateUnionField = \types ->
 generateNullableUnwrapped = \buf, _types, _id, _name, _nullTag, _nonNullTag, _nonNullPayload, _whichTagIsNull ->
     Str.concat buf "// TODO: TagUnion NullableUnwrapped\n\n"
 
-generateSingleTagStruct = \buf, types, name, tagName, payloadFields ->
+generateSingleTagStruct = \buf, types, name, tagName, payload ->
     # Store single-tag unions as structs rather than enums,
     # because they have only one alternative. However, still
     # offer the usual tag union APIs.
     escapedName = escapeKW name
     repr =
-        if List.len payloadFields <= 1 then
+        length =
+            when payload is
+                HasClosure fields -> List.len fields
+                HasNoClosure fields -> List.len fields
+        if length <= 1 then
             "transparent"
         else
             "C"
 
-    asStructFields =
-        List.mapWithIndex payloadFields \id, index ->
-            indexStr = Num.toStr index
+    when payload is
+        HasNoClosure fields ->
+            asStructFields =
+                List.mapWithIndex fields \{ id }, index ->
+                    indexStr = Num.toStr index
 
-            { name: "f\(indexStr)", id }
-    asStructType =
-        Struct {
-            name,
-            fields: asStructFields,
-        }
+                    { name: "f\(indexStr)", id }
+                |> HasNoClosure
+            asStructType =
+                Struct {
+                    name,
+                    fields: asStructFields,
+                }
 
-    buf
-    |> generateDeriveStr types asStructType ExcludeDebug
-    |> Str.concat "#[repr(\(repr))]\npub struct \(escapedName) "
-    |> \b ->
-        if List.isEmpty payloadFields then
-            generateZeroElementSingleTagStruct b escapedName tagName
-        else
-            generateMultiElementSingleTagStruct b types escapedName tagName payloadFields asStructFields
+            buf
+            |> generateDeriveStr types asStructType ExcludeDebug
+            |> Str.concat "#[repr(\(repr))]\npub struct \(escapedName) "
+            |> \b ->
+                if List.isEmpty fields then
+                    generateZeroElementSingleTagStruct b escapedName tagName
+                else
+                    generateMultiElementSingleTagStruct b types escapedName tagName fields asStructFields
+        HasClosure _ ->
+            Str.concat buf "\\TODO: SingleTagStruct with closures"
 
 generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields, asStructFields ->
     buf
     |> Str.concat "{\n"
-    |> \b -> List.walk asStructFields b (generateStructFields types Private)
+    |> generateStructFields types Private asStructFields
     |> Str.concat "}\n\n"
     |> Str.concat
         """
@@ -402,7 +427,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
     |> \b ->
         fieldTypes =
             payloadFields
-            |> List.map \id ->
+            |> List.map \{ id } ->
                 typeName types id
         args =
             fieldTypes
@@ -586,10 +611,13 @@ generateDeriveStr = \buf, types, type, includeDebug ->
 
 cannotDeriveCopy = \types, type ->
     when type is
-        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
+        Unit | Unsized | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.true
-        TagUnion (SingleTagStruct { payloadFields }) ->
-            List.any payloadFields \id -> cannotDeriveCopy types (getType types id)
+        TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
+
+        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
 
         TagUnion (NonRecursive { tags }) ->
             List.any tags \{ payload } ->
@@ -601,16 +629,16 @@ cannotDeriveCopy = \types, type ->
             cannotDeriveCopy types (getType types okId)
             || cannotDeriveCopy types (getType types errId)
 
-        Struct { fields } ->
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
 
-        TagUnionPayload { fields } ->
+        Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
             List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
 
 cannotDeriveDefault = \types, type ->
     when type is
-        Unit | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
-        RocStr | Bool | Num _ -> Bool.false
+        Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
+        RocStr | Bool | Num _ | Struct { fields: HasClosure _ } | TagUnionPayload { fields: HasClosure _ } -> Bool.false
         RocList id | RocSet id | RocBox id ->
             cannotDeriveDefault types (getType types id)
 
@@ -618,10 +646,7 @@ cannotDeriveDefault = \types, type ->
             cannotDeriveCopy types (getType types keyId)
             || cannotDeriveCopy types (getType types valId)
 
-        Struct { fields } ->
-            List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
-
-        TagUnionPayload { fields } ->
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
 
 hasFloat = \types, type ->
@@ -637,7 +662,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
                 F32 | F64 -> Bool.true
                 _ -> Bool.false
 
-        Unit | EmptyTagUnion | RocStr | Bool | TagUnion (Enumeration _) | Function _ -> Bool.false
+        Unit | Unsized | EmptyTagUnion | RocStr | Bool | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocList id | RocSet id | RocBox id ->
             hasFloatHelp types (getType types id) doNotRecurse
 
@@ -645,14 +670,17 @@ hasFloatHelp = \types, type, doNotRecurse ->
             hasFloatHelp types (getType types id0) doNotRecurse
             || hasFloatHelp types (getType types id1) doNotRecurse
 
-        Struct { fields } ->
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
 
-        TagUnionPayload { fields } ->
+        Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
             List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
 
-        TagUnion (SingleTagStruct { payloadFields }) ->
-            List.any payloadFields \id -> hasFloatHelp types (getType types id) doNotRecurse
+        TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+
+        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
 
         TagUnion (Recursive { tags }) ->
             List.any tags \{ payload } ->
@@ -699,6 +727,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
 typeName = \types, id ->
     when getType types id is
         Unit -> "()"
+        Unsized -> "roc_std::RocList<u8>"
         EmptyTagUnion -> "std::convert::Infallible"
         RocStr -> "roc_std::RocStr"
         Bool -> "bool"
@@ -754,7 +783,7 @@ typeName = \types, id ->
         TagUnion (NullableUnwrapped { name }) -> escapeKW name
         TagUnion (NonNullableUnwrapped { name }) -> escapeKW name
         TagUnion (SingleTagStruct { name }) -> escapeKW name
-        Function { name } -> escapeKW name
+        Function { functionName } -> escapeKW functionName
 
 getType = \types, id ->
     when List.get types.types id is

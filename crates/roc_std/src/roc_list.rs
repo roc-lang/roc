@@ -9,7 +9,7 @@ use core::{
     intrinsics::copy_nonoverlapping,
     iter::FromIterator,
     mem::{self, ManuallyDrop},
-    ops::Deref,
+    ops::{Deref, DerefMut},
     ptr::{self, NonNull},
 };
 
@@ -121,6 +121,14 @@ impl<T> RocList<T> {
         }
     }
 
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.as_mut_slice().as_mut_ptr()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_slice().as_ptr()
+    }
+
     /// Marks a list as readonly. This means that it will be leaked.
     /// For constants passed in from platform to application, this may be reasonable.
     ///
@@ -152,6 +160,19 @@ impl<T> RocList<T> {
     /// on that.
     pub fn as_slice(&self) -> &[T] {
         &*self
+    }
+
+    /// Note that there is no way to convert directly to a Vec.
+    ///
+    /// This is because RocList values are not allocated using the system allocator, so
+    /// handing off any heap-allocated bytes to a Vec would not work because its Drop
+    /// implementation would try to free those bytes using the wrong allocator.
+    ///
+    /// Instead, if you want a Rust Vec, you need to do a fresh allocation and copy the
+    /// bytes over - in other words, calling this `as_slice` method and then calling `to_vec`
+    /// on that.
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut *self
     }
 
     #[inline(always)]
@@ -386,6 +407,19 @@ impl<T> Deref for RocList<T> {
             unsafe { &*elements }
         } else {
             &[]
+        }
+    }
+}
+
+impl<T> DerefMut for RocList<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        if let Some(elements) = self.elements {
+            let ptr = elements.as_ptr().cast::<T>();
+            let elements = ptr::slice_from_raw_parts_mut(ptr, self.length);
+
+            unsafe { &mut *elements }
+        } else {
+            &mut []
         }
     }
 }
