@@ -4634,7 +4634,10 @@ pub fn build_procedures<'a, 'ctx, 'env>(
         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
         let mut it = func_solutions.specs();
-        let func_spec = it.next().unwrap();
+        let Some(func_spec) = it.next() else {
+            // TODO this means a function was not considered host-exposed in mono
+            continue;
+        };
         debug_assert!(
             it.next().is_none(),
             "we expect only one specialization of this symbol"
