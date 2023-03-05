@@ -47,7 +47,24 @@ pub fn highlight_roc_code(code: &str) -> String {
             Token::ColonEquals | Token::Colon => {
                 buf = push_html_span(buf, current_text, "colon");
             }
-            Token::Slash | Token::GreaterThan | Token::GreaterThanEquals | Token::Minus | Token::LessThan | Token::LessThanEquals | Token::DoubleEquals | Token::DoubleBar | Token::Plus | Token::Equals => {
+            Token::Percent
+            | Token::Caret
+            | Token::Bang
+            | Token::BangEquals
+            | Token::Slash
+            | Token::DoubleSlash
+            | Token::Pipe
+            | Token::GreaterThan
+            | Token::GreaterThanEquals
+            | Token::Minus
+            | Token::LessThan
+            | Token::LessThanEquals
+            | Token::DoubleEquals
+            | Token::DoubleBar
+            | Token::Plus
+            | Token::And
+            | Token::DoubleAnd
+            | Token::Equals => {
                 buf = push_html_span(buf, current_text, "op");
             }
             Token::Paren => {
@@ -59,7 +76,13 @@ pub fn highlight_roc_code(code: &str) -> String {
             Token::Brace => {
                 buf = push_html_span(buf, current_text, "brace");
             }
-            _ => {
+            Token::UpperIdent => {
+                buf = push_html_span(buf, current_text, "upperident");
+            } 
+            Token::LowerIdent => {
+                buf = push_html_span(buf, current_text, "lowerident");
+            } 
+            Token::Error | Token::Other => {
                 buf = push_html(buf, current_text);
             }
         }
