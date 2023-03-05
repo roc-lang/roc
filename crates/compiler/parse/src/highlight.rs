@@ -29,17 +29,30 @@ pub enum Token {
     LowerIdent,
     Number,
     QuestionMark,
+    Percent,
+    Caret,
     Other,
     Minus,
+    Bang,
+    BangEquals,
     Plus,
     Colon,
+    ColonEquals,
     Bar,
+    DoubleBar,
+    And,
+    DoubleAnd,
     Equals,
+    DoubleEquals,
     GreaterThan,
+    GreaterThanEquals,
     LessThan,
+    LessThanEquals,
     Comma,
     Backslash,
     Slash,
+    DoubleSlash,
+    Pizza,
     Brace,
     Bracket,
     Paren,
@@ -64,108 +77,6 @@ pub fn highlight(text: &str) -> Vec<Loc<Token>> {
         highlight_inner(&arena, new_state, &mut tokens, &body_keywords);
     } else {
         highlight_inner(&arena, state, &mut tokens, &body_keywords);
-    }
-
-    tokens = combine_tokens(tokens);
-
-    tokens
-}
-
-fn combine_tokens(locations: Vec<Loc<Token>>) -> Vec<Loc<Token>> {
-    let mut tokens: Vec<Loc<Token>> = Vec::new();
-    let mut previous_location: Option<Loc<Token>> = None;
-
-    for location in locations {
-        match location.value {
-            // Catch tokens which may combine for a different meaning
-            Token::LessThan => match previous_location {
-                Some(prev) => {
-                    tokens.push(prev);
-                    tokens.push(location);
-                    previous_location = None;
-                }
-                None => {
-                    previous_location = Some(location);
-                }
-            },
-            Token::Bar => match previous_location {
-                Some(prev) => {
-                    tokens.push(prev);
-                    tokens.push(location);
-                    previous_location = None;
-                }
-                None => {
-                    previous_location = Some(location);
-                }
-            },
-            // Combination tokens
-            Token::GreaterThan => {
-                match previous_location {
-                    Some(prev) => {
-                        match prev.value {
-                            Token::Minus => {
-                                // arrow operator "->"
-                                tokens.push(Loc::at(
-                                    Region::between(prev.region.start(), location.region.end()),
-                                    Token::Arrow,
-                                ));
-                                previous_location = None;
-                            }
-                            Token::Bar => {
-                                // pipe operator "|>"
-                                tokens.push(Loc::at(
-                                    Region::between(prev.region.start(), location.region.end()),
-                                    Token::Pipe,
-                                ));
-                                previous_location = None;
-                            }
-                            _ => {
-                                tokens.push(prev);
-                                tokens.push(location);
-                                previous_location = None;
-                            }
-                        }
-                    }
-                    None => {
-                        tokens.push(location);
-                    }
-                }
-            }
-            Token::Minus => {
-                match previous_location {
-                    Some(prev) => {
-                        match prev.value {
-                            Token::LessThan => {
-                                // backpass operator "<-"
-                                tokens.push(Loc::at(
-                                    Region::between(prev.region.start(), location.region.end()),
-                                    Token::Backpass,
-                                ));
-                                previous_location = None;
-                            }
-                            _ => {
-                                tokens.push(prev);
-                                tokens.push(location);
-                                previous_location = None;
-                            }
-                        }
-                    }
-                    None => {
-                        previous_location = Some(location);
-                    }
-                }
-            }
-            _ => match previous_location {
-                Some(prev) => {
-                    tokens.push(prev);
-                    tokens.push(location);
-                    previous_location = None;
-                }
-                None => {
-                    tokens.push(location);
-                }
-            },
-        }
     }
 
     tokens
@@ -266,15 +177,46 @@ fn highlight_inner<'a>(
                 }
                 ':' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Colon));
+                    let tok = if state.bytes().first() == Some(&b'=') {
+                        state.advance_mut(1);
+                        Token::ColonEquals
+                    } else {
+                        Token::Colon
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
                 }
                 '|' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Bar));
+                    let tok = if state.bytes().first() == Some(&b'>') {
+                        state.advance_mut(1);
+                        Token::Pizza
+                    } else if state.bytes().first() == Some(&b'|') {
+                        state.advance_mut(1);
+                        Token::DoubleBar
+                    } else {
+                        Token::Bar
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
+                }
+                '&' => {
+                    state.advance_mut(1);
+                    let tok = if state.bytes().first() == Some(&b'&') {
+                        state.advance_mut(1);
+                        Token::DoubleAnd
+                    } else {
+                        Token::And
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
                 }
                 '-' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Minus));
+                    let tok = if state.bytes().first() == Some(&b'>') {
+                        state.advance_mut(1);
+                        Token::Arrow
+                    } else {
+                        Token::Minus
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
                 }
                 '+' => {
                     state.advance_mut(1);
@@ -282,21 +224,46 @@ fn highlight_inner<'a>(
                 }
                 '=' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Equals));
+                    let tok = if state.bytes().first() == Some(&b'=') {
+                        state.advance_mut(1);
+                        Token::DoubleEquals
+                    } else {
+                        Token::Equals
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
                 }
                 '>' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(
-                        Region::between(start, state.pos()),
-                        Token::GreaterThan,
-                    ));
+                    let tok = if state.bytes().first() == Some(&b'=') {
+                        state.advance_mut(1);
+                        Token::GreaterThanEquals
+                    } else {
+                        Token::GreaterThan
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
                 }
                 '<' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(
-                        Region::between(start, state.pos()),
-                        Token::LessThan,
-                    ));
+                    let tok = if state.bytes().first() == Some(&b'=') {
+                        state.advance_mut(1);
+                        Token::LessThanEquals
+                    } else if state.bytes().first() == Some(&b'-') {
+                        state.advance_mut(1);
+                        Token::Backpass
+                    } else {
+                        Token::LessThan
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
+                }
+                '!' => {
+                    state.advance_mut(1);
+                    let tok = if state.bytes().first() == Some(&b'=') {
+                        state.advance_mut(1);
+                        Token::BangEquals
+                    } else {
+                        Token::Bang
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
                 }
                 ',' => {
                     state.advance_mut(1);
@@ -309,6 +276,14 @@ fn highlight_inner<'a>(
                         Token::QuestionMark,
                     ));
                 }
+                '%' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Percent));
+                }
+                '^' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Caret));
+                }
                 '\\' => {
                     state.advance_mut(1);
                     tokens.push(Loc::at(
@@ -318,7 +293,13 @@ fn highlight_inner<'a>(
                 }
                 '/' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Slash));
+                    let tok = if state.bytes().first() == Some(&b'/') {
+                        state.advance_mut(1);
+                        Token::DoubleSlash
+                    } else {
+                        Token::Slash
+                    };
+                    tokens.push(Loc::at(Region::between(start, state.pos()), tok));
                 }
                 '{' | '}' => {
                     state.advance_mut(1);
@@ -534,49 +515,41 @@ mod tests {
 
     #[test]
     fn test_combine_tokens() {
-        let input: Vec<Loc<Token>> = vec![
-            // arrow operator "->"
-            Loc::at(
-                Region::between(Position::new(0), Position::new(5)),
-                Token::Minus,
-            ),
-            Loc::at(
-                Region::between(Position::new(6), Position::new(7)),
-                Token::GreaterThan,
-            ),
-            // pipe operator "|>"
-            Loc::at(
-                Region::between(Position::new(8), Position::new(9)),
-                Token::Bar,
-            ),
-            Loc::at(
-                Region::between(Position::new(10), Position::new(11)),
-                Token::GreaterThan,
-            ),
-            // backpass operator "<-"
-            Loc::at(
-                Region::between(Position::new(12), Position::new(13)),
-                Token::LessThan,
-            ),
-            Loc::at(
-                Region::between(Position::new(14), Position::new(15)),
-                Token::Minus,
-            ),
-        ];
+        let text = "-> := <- |> || >= <= ==";
+        let actual = highlight(text);
 
-        let actual = combine_tokens(input);
         let expected = vec![
             Loc::at(
-                Region::between(Position::new(0), Position::new(7)),
+                Region::between(Position::new(0), Position::new(2)),
                 Token::Arrow,
             ),
             Loc::at(
-                Region::between(Position::new(8), Position::new(11)),
-                Token::Pipe,
+                Region::between(Position::new(3), Position::new(5)),
+                Token::ColonEquals,
             ),
             Loc::at(
-                Region::between(Position::new(12), Position::new(15)),
+                Region::between(Position::new(6), Position::new(8)),
                 Token::Backpass,
+            ),
+            Loc::at(
+                Region::between(Position::new(9), Position::new(11)),
+                Token::Pizza,
+            ),
+            Loc::at(
+                Region::between(Position::new(12), Position::new(14)),
+                Token::DoubleBar,
+            ),
+            Loc::at(
+                Region::between(Position::new(15), Position::new(17)),
+                Token::GreaterThanEquals,
+            ),
+            Loc::at(
+                Region::between(Position::new(18), Position::new(20)),
+                Token::LessThanEquals,
+            ),
+            Loc::at(
+                Region::between(Position::new(21), Position::new(23)),
+                Token::DoubleEquals,
             ),
         ];
 
