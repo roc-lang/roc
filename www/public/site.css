@@ -153,12 +153,12 @@ samp .autovar {
     color: #338545;
 }
 
-samp .kw {
+samp .kw, samp .pipe, samp .backslash, samp .arrow, samp .backpass, samp .brace, samp .bracket, samp .paren {
     /* language keywords, e.g. `if`*/
     color: #004cc2;
 }
 
-samp .op, samp .paren, samp .brace, samp .comma, samp .colon {
+samp .op, samp .comma, samp .qmark, samp .bar, samp .colon {
     /* operators, e.g. `+` */
     color: #c20000;
 }
@@ -558,12 +558,12 @@ h4 {
         scrollbar-color: #444444 #2f2f2f;
     }
 
-    samp .kw {
+    samp .kw, samp .pipe, samp .backslash, samp .arrow, samp .backpass, samp .brace, samp .bracket, samp .paren {
         /* language keywords, e.g. `if` */
         color: #00c3ff;
     }
 
-    samp .colon, samp .op, samp .paren, samp .brace, samp .comma, .repl-err {
+    samp .op, samp .comma, samp .qmark, samp .bar, samp .colon {
         /* operators, e.g. `+` */
         color: #ff3966;
     }

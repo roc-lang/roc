@@ -1,5 +1,4 @@
 use crate::target::{arch_str, target_zig_str};
-use const_format::concatcp;
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
@@ -15,13 +14,7 @@ use std::{env, fs};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum LinkType {
-    // These numbers correspond to the --lib and --no-link flags
-    Executable = 0,
-    Dylib = 1,
-    None = 2,
-}
+pub use roc_linker::LinkType;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkingStrategy {
@@ -61,134 +54,15 @@ pub fn link(
     }
 }
 
-const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
-
-const WASM_TARGET_STR: &str = "wasm32";
-const LINUX_X86_64_TARGET_STR: &str = "linux-x86_64";
-const LINUX_ARM64_TARGET_STR: &str = "linux-arm64";
-const MACOS_ARM64_TARGET_STR: &str = "macos-arm64";
-const MACOS_X86_64_TARGET_STR: &str = "macos-x86_64";
-const WINDOWS_X86_64_TARGET_STR: &str = "windows-x86_64";
-const WINDOWS_X86_32_TARGET_STR: &str = "windows-x86_32";
-const WIDNOWS_ARM64_TARGET_STR: &str = "windows-arm64";
-
-pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str> {
-    // Don't try to split this match off in a different function, it will not work with concatcp
-    match target {
-        Triple {
-            architecture: Architecture::Wasm32,
-            ..
-        } => Some(concatcp!(WASM_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(concatcp!(
-            LINUX_X86_64_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(concatcp!(LINUX_ARM64_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(concatcp!(MACOS_ARM64_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(concatcp!(
-            MACOS_X86_64_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(concatcp!(
-            WINDOWS_X86_64_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_32(_),
-            ..
-        } => Some(concatcp!(
-            WINDOWS_X86_32_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(concatcp!(
-            WIDNOWS_ARM64_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        _ => None,
-    }
-}
-
-pub fn get_target_triple_str(target: &Triple) -> Option<&'static str> {
-    match target {
-        Triple {
-            architecture: Architecture::Wasm32,
-            ..
-        } => Some(WASM_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(LINUX_X86_64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(LINUX_ARM64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(MACOS_ARM64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(MACOS_X86_64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(WINDOWS_X86_64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_32(_),
-            ..
-        } => Some(WINDOWS_X86_32_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(WIDNOWS_ARM64_TARGET_STR),
-        _ => None,
-    }
-}
-
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
 pub fn legacy_host_filename(target: &Triple) -> Option<String> {
     let os = roc_target::OperatingSystem::from(target.operating_system);
     let ext = os.object_file_ext();
 
-    Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
+    Some(
+        roc_linker::preprocessed_host_filename(target)?
+            .replace(roc_linker::PRECOMPILED_HOST_EXT, ext),
+    )
 }
 
 fn find_zig_str_path() -> PathBuf {

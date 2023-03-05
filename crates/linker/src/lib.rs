@@ -5,13 +5,12 @@
 //! practical to use a regular linker.
 use memmap2::{Mmap, MmapMut};
 use object::Object;
-use roc_build::link::{get_target_triple_str, rebuild_host, LinkType};
 use roc_error_macros::internal_error;
 use roc_load::{EntryPoint, ExecutionMode, ExposedToHost, LoadConfig, Threading};
 use roc_module::symbol::Interns;
-use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_target::get_target_triple_str;
 use std::cmp::Ordering;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -23,6 +22,14 @@ mod pe;
 
 mod generate_dylib;
 mod metadata;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LinkType {
+    // These numbers correspond to the --lib and --no-link flags
+    Executable = 0,
+    Dylib = 1,
+    None = 2,
+}
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
     if let LinkType::Executable = link_type {
@@ -55,59 +62,10 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
     }
 }
 
-pub fn build_and_preprocess_host(
-    opt_level: OptLevel,
-    target: &Triple,
-    platform_main_roc: &Path,
-    preprocessed_host_path: &Path,
-    exposed_symbols: ExposedSymbols,
-) {
-    let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
+pub const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
 
-    build_and_preprocess_host_lowlevel(
-        opt_level,
-        target,
-        platform_main_roc,
-        preprocessed_host_path,
-        &stub_dll_symbols,
-    )
-}
-
-pub fn build_and_preprocess_host_lowlevel(
-    opt_level: OptLevel,
-    target: &Triple,
-    platform_main_roc: &Path,
-    preprocessed_host_path: &Path,
-    stub_dll_symbols: &[String],
-) {
-    let stub_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        platform_main_roc.with_file_name("libapp.dll")
-    } else {
-        platform_main_roc.with_file_name("libapp.so")
-    };
-
-    let dynhost = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        platform_main_roc.with_file_name("dynhost.exe")
-    } else {
-        platform_main_roc.with_file_name("dynhost")
-    };
-
-    generate_dynamic_lib(target, stub_dll_symbols, &stub_lib);
-    rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
-
-    let metadata = platform_main_roc.with_file_name(metadata_file_name(target));
-    // let prehost = host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
-
-    preprocess(
-        target,
-        &dynhost,
-        &metadata,
-        preprocessed_host_path,
-        &stub_lib,
-        stub_dll_symbols,
-        false,
-        false,
-    )
+pub fn preprocessed_host_filename(target: &Triple) -> Option<String> {
+    roc_target::get_target_triple_str(target).map(|x| format!("{}.{}", x, PRECOMPILED_HOST_EXT))
 }
 
 fn metadata_file_name(target: &Triple) -> String {
@@ -192,6 +150,16 @@ pub fn generate_stub_lib(
     Ok(0)
 }
 
+pub fn generate_stub_lib_from_loaded(target: &Triple, platform_main_roc: &Path) -> PathBuf {
+    let stub_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+        platform_main_roc.with_file_name("libapp.dll")
+    } else {
+        platform_main_roc.with_file_name("libapp.so")
+    };
+
+    stub_lib
+}
+
 pub struct ExposedSymbols {
     // usually just `mainForhost`
     pub top_level_values: Vec<String>,
@@ -249,7 +217,7 @@ impl ExposedSymbols {
         custom_names
     }
 
-    fn stub_dll_symbols(&self) -> Vec<String> {
+    pub fn stub_dll_symbols(&self) -> Vec<String> {
         let mut custom_names = Vec::new();
 
         for sym in &self.top_level_values {
@@ -407,6 +375,32 @@ fn stub_lib_is_up_to_date(target: &Triple, stub_lib_path: &Path, custom_names: &
     let it2 = custom_names.iter().map(|s| s.as_bytes());
 
     it1.eq(it2)
+}
+
+pub fn preprocess_host(
+    target: &Triple,
+    platform_main_roc: &Path,
+    preprocessed_path: &Path,
+    shared_lib: &Path,
+    stub_dll_symbols: &[String],
+) {
+    let metadata_path = platform_main_roc.with_file_name(metadata_file_name(target));
+    let host_exe_path = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+        platform_main_roc.with_file_name("dynhost.exe")
+    } else {
+        platform_main_roc.with_file_name("dynhost")
+    };
+
+    preprocess(
+        target,
+        &host_exe_path,
+        &metadata_path,
+        preprocessed_path,
+        shared_lib,
+        stub_dll_symbols,
+        false,
+        false,
+    )
 }
 
 /// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk

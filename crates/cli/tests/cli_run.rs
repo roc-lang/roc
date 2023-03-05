@@ -533,6 +533,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
@@ -676,6 +677,7 @@ mod cli_run {
     }
 
     #[cfg_attr(windows, ignore)] // flaky error; issue #5024
+    #[serial(breakout)]
     #[test]
     fn breakout() {
         test_roc_app_slim(
@@ -688,6 +690,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(breakout)]
     fn breakout_hello_gui() {
         test_roc_app_slim(
             "examples/gui/breakout",
@@ -861,6 +864,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
