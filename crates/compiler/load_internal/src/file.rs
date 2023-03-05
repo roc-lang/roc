@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::docs::ModuleDocumentation;
-use bumpalo::Bump;
+use bumpalo::{collections::CollectIn, Bump};
 use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
@@ -5692,10 +5692,14 @@ fn make_specializations<'a>(
 
     let mut procs = Procs::new_in(arena);
 
+    let host_exposed_symbols: bumpalo::collections::Vec<_> =
+        procs_base.get_host_exposed_symbols().collect_in(arena);
+
     for (symbol, partial_proc) in procs_base.partial_procs.into_iter() {
         procs.partial_procs.insert(symbol, partial_proc);
     }
 
+    procs.host_exposed_symbols = host_exposed_symbols.into_bump_slice();
     procs.module_thunks = procs_base.module_thunks;
     procs.runtime_errors = procs_base.runtime_errors;
     procs.imported_module_thunks = procs_base.imported_module_thunks;

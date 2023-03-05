@@ -92,7 +92,7 @@ pub fn build_and_preprocess_host_lowlevel(
         platform_main_roc.with_file_name("dynhost")
     };
 
-    generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
+    generate_dynamic_lib(target, stub_dll_symbols, &stub_lib);
     rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 
     let metadata = platform_main_roc.with_file_name(metadata_file_name(target));
@@ -104,7 +104,7 @@ pub fn build_and_preprocess_host_lowlevel(
         &metadata,
         preprocessed_host_path,
         &stub_lib,
-        &stub_dll_symbols,
+        stub_dll_symbols,
         false,
         false,
     )
@@ -218,11 +218,11 @@ impl ExposedSymbols {
                 .iter()
                 .map(|x| format!("{}_{}", x.module_string(interns), x.as_str(interns)));
 
-            for closure_type in exported_closure_types {
+            for (i, _) in exported_closure_types.enumerate() {
                 custom_names.extend([
-                    format!("roc__{}_0_{}_caller", sym, closure_type),
-                    format!("roc__{}_0_{}_size", sym, closure_type),
-                    format!("roc__{}_0_{}_result_size", sym, closure_type),
+                    format!("roc__{}_{i}_caller", sym),
+                    format!("roc__{}_{i}_size", sym),
+                    format!("roc__{}_{i}_result_size", sym),
                 ]);
             }
         }
@@ -230,7 +230,7 @@ impl ExposedSymbols {
         for x in &exposed_to_host.getters {
             let sym = x.as_str(interns);
             custom_names.extend([
-                format!("{sym}"),
+                sym.to_string(),
                 format!("{sym}_generic"),
                 format!("{sym}_size"),
             ]);

@@ -944,6 +944,16 @@ pub struct ProcsBase<'a> {
     pub imported_module_thunks: &'a [Symbol],
 }
 
+impl<'a> ProcsBase<'a> {
+    pub fn get_host_exposed_symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.host_specializations
+            .symbol_or_lambdas
+            .iter()
+            .copied()
+            .map(|n| n.name())
+    }
+}
+
 /// The current set of functions under specialization. They form a stack where the latest
 /// specialization to be seen is at the head of the stack.
 #[derive(Clone, Debug)]
@@ -962,14 +972,16 @@ impl<'a> SpecializationStack<'a> {
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
-    pub imported_module_thunks: &'a [Symbol],
-    pub module_thunks: &'a [Symbol],
     pending_specializations: PendingSpecializations<'a>,
     specialized: Specialized<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
     symbol_specializations: SymbolSpecializations<'a>,
     specialization_stack: SpecializationStack<'a>,
+
+    pub imported_module_thunks: &'a [Symbol],
+    pub module_thunks: &'a [Symbol],
+    pub host_exposed_symbols: &'a [Symbol],
 }
 
 impl<'a> Procs<'a> {
@@ -977,14 +989,16 @@ impl<'a> Procs<'a> {
         Self {
             partial_procs: PartialProcs::new_in(arena),
             ability_member_aliases: AbilityAliases::new_in(arena),
-            imported_module_thunks: &[],
-            module_thunks: &[],
             pending_specializations: PendingSpecializations::Finding(Suspended::new_in(arena)),
             specialized: Specialized::default(),
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
             symbol_specializations: Default::default(),
             specialization_stack: SpecializationStack(Vec::with_capacity_in(16, arena)),
+
+            imported_module_thunks: &[],
+            module_thunks: &[],
+            host_exposed_symbols: &[],
         }
     }
 
@@ -3011,15 +3025,8 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, variable, host_exposed_aliases) in it {
-        specialize_external_help(
-            env,
-            procs,
-            layout_cache,
-            symbol,
-            offset_variable(variable),
-            &host_exposed_aliases,
-        )
+    for (symbol, variable, _host_exposed_aliases) in it {
+        specialize_external_help(env, procs, layout_cache, symbol, offset_variable(variable))
     }
 }
 
@@ -3044,7 +3051,7 @@ fn specialize_external_specializations<'a>(
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            specialize_external_help(env, procs, layout_cache, symbol, imported_variable, &[])
+            specialize_external_help(env, procs, layout_cache, symbol, imported_variable)
         }
     }
 }
@@ -3055,7 +3062,6 @@ fn specialize_external_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     name: LambdaName<'a>,
     variable: Variable,
-    host_exposed_aliases: &[(Symbol, Variable)],
 ) {
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
@@ -3075,7 +3081,7 @@ fn specialize_external_help<'a>(
                 debug_assert!(top_level.arguments.is_empty());
             }
 
-            if !host_exposed_aliases.is_empty() {
+            if procs.host_exposed_symbols.contains(&proc.name.name()) {
                 // layouts that are (transitively) used in the type of `mainForHost`.
                 let mut host_exposed_layouts: Vec<_> = top_level
                     .arguments
@@ -3118,11 +3124,6 @@ fn specialize_external_help<'a>(
                     let mut aliases = BumpMap::default();
 
                     for (id, mut raw_function_layout) in extern_names {
-                        // generates the same name as the loop below
-                        if true {
-                            continue;
-                        }
-
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
 
@@ -3161,6 +3162,7 @@ fn specialize_external_help<'a>(
                         aliases.insert(key, hels);
                     }
 
+                    /*
                     // pre-glue: generate named callers for as-exposed aliases
                     for (alias_name, variable) in host_exposed_aliases {
                         let raw_function_layout = layout_cache
@@ -3191,6 +3193,7 @@ fn specialize_external_help<'a>(
 
                         aliases.insert(*alias_name, hels);
                     }
+                    */
 
                     match &mut proc.host_exposed_layouts {
                         HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
@@ -11179,6 +11182,7 @@ pub struct GlueLayouts<'a> {
 
 type GlueProcId = u16;
 
+#[derive(Debug)]
 pub struct GlueProc<'a> {
     pub name: Symbol,
     pub proc_layout: ProcLayout<'a>,
@@ -11198,10 +11202,6 @@ impl LambdaSetId {
     pub fn next(self) -> Self {
         debug_assert!(self.0 < u32::MAX);
         Self(self.0 + 1)
-    }
-
-    pub const fn invalid() -> Self {
-        Self(u32::MAX)
     }
 }
 

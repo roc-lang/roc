@@ -15,17 +15,17 @@ extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
     fn roc_main(output: *mut u8, args: &RocStr);
 
-    #[link_name = "roc__mainForHost_size"]
+    #[link_name = "roc__mainForHost_1_exposed_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1__Fx_caller"]
+    #[link_name = "roc__mainForHost_0_caller"]
     fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
 
     #[allow(dead_code)]
-    #[link_name = "roc__mainForHost_1__Fx_size"]
+    #[link_name = "roc__mainForHost_0_size"]
     fn size_Fx() -> i64;
 
-    #[link_name = "roc__mainForHost_1__Fx_result_size"]
+    #[link_name = "roc__mainForHost_0_result_size"]
     fn size_Fx_result() -> i64;
 }
 
@@ -176,14 +176,14 @@ pub extern "C" fn roc_fx_getChar() -> u8 {
 pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
-    std::io::stdout().lock().flush();
+    let _ = std::io::stdout().lock().flush();
 }
 
 #[no_mangle]
 pub extern "C" fn roc_fx_putRaw(line: &RocStr) {
     let string = line.as_str();
     print!("{}", string);
-    std::io::stdout().lock().flush();
+    let _ = std::io::stdout().lock().flush();
 }
 
 #[no_mangle]
@@ -212,7 +212,8 @@ pub extern "C" fn roc_fx_getFileBytes(br_ptr: *mut BufReader<File>) -> RocList<u
 #[no_mangle]
 pub extern "C" fn roc_fx_closeFile(br_ptr: *mut BufReader<File>) {
     unsafe {
-        Box::from_raw(br_ptr);
+        let boxed = Box::from_raw(br_ptr);
+        drop(boxed)
     }
 }
 
@@ -232,7 +233,7 @@ pub extern "C" fn roc_fx_openFile(name: &RocStr) -> *mut BufReader<File> {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_withFileOpen(name: &RocStr, buffer: *const u8) {
+pub extern "C" fn roc_fx_withFileOpen(_name: &RocStr, _buffer: *const u8) {
     // TODO: figure out accepting a closure in an fx and passing data to it.
     // let f = File::open(name.as_str()).expect("Unable to open file");
     // let mut br = BufReader::new(f);

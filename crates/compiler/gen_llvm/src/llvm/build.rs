@@ -3841,6 +3841,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         Some(env.context.i64_type().as_basic_type_enum()),
         &[],
     );
+
     let size_function_name: String = format!("roc__{}_size", ident_string);
 
     let size_function = add_func(
@@ -4630,10 +4631,16 @@ pub fn build_procedures<'a, 'ctx, 'env>(
         let it = top_level.arguments.iter().copied();
         let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, niche, top_level.result);
         let func_name = FuncName(&bytes);
-        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+        let func_solutions = match mod_solutions.func_solutions(func_name) {
+            Err(_) => continue,
+            Ok(func_solutions) => func_solutions,
+        };
 
         let mut it = func_solutions.specs();
-        let func_spec = it.next().unwrap();
+        let func_spec = match it.next() {
+            None => continue,
+            Some(func_spec) => func_spec,
+        };
         debug_assert!(
             it.next().is_none(),
             "we expect only one specialization of this symbol"
@@ -5209,7 +5216,7 @@ fn build_host_exposed_alias_size<'a, 'r, 'ctx, 'env>(
 fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
-    alias_symbol: Symbol,
+    _alias_symbol: Symbol,
     opt_label: Option<&str>,
     basic_type: BasicTypeEnum<'ctx>,
 ) {
@@ -5219,20 +5226,9 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     let i64 = env.context.i64_type().as_basic_type_enum();
     let size_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(i64), &[]);
     let size_function_name: String = if let Some(label) = opt_label {
-        format!(
-            "roc__{}_{}_{}_{}_size",
-            def_name,
-            alias_symbol.module_string(&env.interns),
-            alias_symbol.as_str(&env.interns),
-            label
-        )
+        format!("roc__{}_{}_size", def_name, label)
     } else {
-        format!(
-            "roc__{}_{}_{}_size",
-            def_name,
-            alias_symbol.module_string(&env.interns),
-            alias_symbol.as_str(&env.interns)
-        )
+        format!("roc__{}_size", def_name,)
     };
 
     let size_function = add_func(
@@ -6146,7 +6142,7 @@ pub fn add_func<'ctx>(
 ) -> FunctionValue<'ctx> {
     if cfg!(debug_assertions) {
         if let Some(func) = module.get_function(name) {
-            panic!("Attempting to redefine LLVM function {}, which was already defined in this module as:\n\n{:?}", name, func);
+            panic!("Attempting to redefine LLVM function {}, which was already defined in this module as:\n\n{:#?}", name, func);
         }
     }
 
