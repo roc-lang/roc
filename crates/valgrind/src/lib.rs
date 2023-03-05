@@ -26,7 +26,7 @@ fn build_host() {
         &target,
         &platform_main_roc,
         &preprocessed_host_path,
-        ExposedSymbols {
+        roc_linker::ExposedSymbols {
             top_level_values: vec![String::from("mainForHost")],
             exported_closure_types: vec![],
         },
