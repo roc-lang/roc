@@ -3398,13 +3398,17 @@ fn finish_specialization<'a>(
     let module_id = state.root_id;
     let mut glue_getters = Vec::new();
 
-    if let EntryPoint::Executable {
-        exposed_to_host: exposed_top_levels,
-        ..
-    } = &entry_point
+    // the REPL does not have any platform data
+    if let (
+        EntryPoint::Executable {
+            exposed_to_host: exposed_top_levels,
+            ..
+        },
+        Some(platform_data),
+    ) = (&entry_point, platform_data.as_ref())
     {
         // Expose glue for the platform, not for the app module!
-        let module_id = platform_data.as_ref().unwrap().module_id;
+        let module_id = platform_data.module_id;
 
         for (_name, proc_layout) in exposed_top_levels.iter() {
             let ret = &proc_layout.result;
