@@ -26,17 +26,14 @@ pub fn highlight_roc_code(code: &str) -> String {
             Token::Number => {
                 buf = push_html_span(buf, current_text, "number");
             }
-            Token::Pipe => {
+            Token::Pizza => {
                 buf = push_html_span(buf, current_text, "pipe");
             }
-            Token::Arrow => {
+            Token::Arrow | Token::Backpass => {
                 buf = push_html_span(buf, current_text, "arrow");
             }
             Token::Bar => {
                 buf = push_html_span(buf, current_text, "bar");
-            }
-            Token::Backpass => {
-                buf = push_html_span(buf, current_text, "backpass");
             }
             Token::Backslash => {
                 buf = push_html_span(buf, current_text, "backslash");
@@ -47,10 +44,27 @@ pub fn highlight_roc_code(code: &str) -> String {
             Token::QuestionMark => {
                 buf = push_html_span(buf, current_text, "qmark");
             }
-            Token::Colon => {
+            Token::ColonEquals | Token::Colon => {
                 buf = push_html_span(buf, current_text, "colon");
             }
-            Token::Slash | Token::GreaterThan | Token::Minus | Token::LessThan | Token::Plus | Token::Equals => {
+            Token::Percent
+            | Token::Caret
+            | Token::Bang
+            | Token::BangEquals
+            | Token::Slash
+            | Token::DoubleSlash
+            | Token::Pipe
+            | Token::GreaterThan
+            | Token::GreaterThanEquals
+            | Token::Minus
+            | Token::LessThan
+            | Token::LessThanEquals
+            | Token::DoubleEquals
+            | Token::DoubleBar
+            | Token::Plus
+            | Token::And
+            | Token::DoubleAnd
+            | Token::Equals => {
                 buf = push_html_span(buf, current_text, "op");
             }
             Token::Paren => {
@@ -62,7 +76,13 @@ pub fn highlight_roc_code(code: &str) -> String {
             Token::Brace => {
                 buf = push_html_span(buf, current_text, "brace");
             }
-            _ => {
+            Token::UpperIdent => {
+                buf = push_html_span(buf, current_text, "upperident");
+            } 
+            Token::LowerIdent => {
+                buf = push_html_span(buf, current_text, "lowerident");
+            } 
+            Token::Error | Token::Other => {
                 buf = push_html(buf, current_text);
             }
         }
