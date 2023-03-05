@@ -184,6 +184,14 @@ mod glue_cli_run {
                 .expect("Unable to remove test_glue dir in order to regenerate it in the test");
         }
 
+        let rust_glue_spec = fixture_templates_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("src")
+            .join("RustGlue.roc");
+
         // Generate a fresh test_glue for this platform
         let glue_out = run_glue(
             // converting these all to String avoids lifetime issues
@@ -191,6 +199,7 @@ mod glue_cli_run {
                 args.into_iter().map(|arg| arg.to_string()).chain([
                     platform_module_path.to_str().unwrap().to_string(),
                     glue_dir.to_str().unwrap().to_string(),
+                    rust_glue_spec.to_str().unwrap().to_string(),
                 ]),
             ),
         );

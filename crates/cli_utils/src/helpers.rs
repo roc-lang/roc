@@ -16,6 +16,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::Mutex;
 use tempfile::NamedTempFile;
 
 #[derive(Debug)]
@@ -79,11 +80,19 @@ pub fn build_roc_bin_cached() -> PathBuf {
     roc_binary_path
 }
 
+// Since glue is always compiling the same plugin, it can not be run in parallel.
+// That would lead to a race condition in writing the output shared library.
+// Thus, all calls to glue in a test are made sequential.
+// TODO: In the future, look into compiling the shared libary once and then caching it.
+static GLUE_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn run_glue<I, S>(args: I) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let _guard = GLUE_LOCK.lock().unwrap();
+
     run_roc_with_stdin(&path_to_roc_binary(), args, &[])
 }
 
