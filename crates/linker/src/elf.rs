@@ -1637,8 +1637,8 @@ fn surgery_elf_help(
 mod tests {
     use super::*;
 
+    use crate::preprocessed_host_filename;
     use indoc::indoc;
-    use roc_build::link::preprocessed_host_filename;
     use target_lexicon::Triple;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];

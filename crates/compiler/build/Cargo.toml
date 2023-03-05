@@ -28,6 +28,8 @@ roc_reporting = { path = "../../reporting" }
 roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std" }
 roc_utils = { path = "../../utils" }
+roc_packaging = { path = "../../packaging" }
+roc_linker = { path = "../../linker" }
 
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
@@ -37,6 +39,7 @@ libloading.workspace = true
 tempfile.workspace = true
 target-lexicon.workspace = true
 inkwell.workspace = true
+indoc.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 serde_json = "1.0.85"
