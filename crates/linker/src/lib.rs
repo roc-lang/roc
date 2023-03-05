@@ -151,13 +151,11 @@ pub fn generate_stub_lib(
 }
 
 pub fn generate_stub_lib_from_loaded(target: &Triple, platform_main_roc: &Path) -> PathBuf {
-    let stub_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+    if let target_lexicon::OperatingSystem::Windows = target.operating_system {
         platform_main_roc.with_file_name("libapp.dll")
     } else {
         platform_main_roc.with_file_name("libapp.so")
-    };
-
-    stub_lib
+    }
 }
 
 pub struct ExposedSymbols {

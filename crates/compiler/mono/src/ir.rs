@@ -3162,39 +3162,6 @@ fn specialize_external_help<'a>(
                         aliases.insert(key, hels);
                     }
 
-                    /*
-                    // pre-glue: generate named callers for as-exposed aliases
-                    for (alias_name, variable) in host_exposed_aliases {
-                        let raw_function_layout = layout_cache
-                            .raw_from_var(env.arena, *variable, env.subs)
-                            .unwrap();
-
-                        let symbol = env.unique_symbol();
-                        let lambda_name = LambdaName::no_niche(symbol);
-
-                        let (proc_name, (proc_layout, proc)) = generate_host_exposed_function(
-                            env,
-                            procs,
-                            layout_cache,
-                            lambda_name,
-                            raw_function_layout,
-                        );
-
-                        procs
-                            .specialized
-                            .insert_specialized(proc_name, proc_layout, proc);
-
-                        let hels = HostExposedLambdaSet {
-                            id: LambdaSetId::default(),
-                            symbol: proc_name,
-                            proc_layout,
-                            raw_function_layout,
-                        };
-
-                        aliases.insert(*alias_name, hels);
-                    }
-                    */
-
                     match &mut proc.host_exposed_layouts {
                         HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
                         hep @ HostExposedLayouts::NotHostExposed => {
@@ -11264,8 +11231,6 @@ where
                 Builtin::List(element) => stack.push(layout_interner.get(element)),
             },
             Layout::Struct { field_layouts, .. } => {
-                // handle_struct_field_layouts!(field_layouts);
-
                 if field_layouts.iter().any(|l| {
                     layout_interner
                         .get(*l)

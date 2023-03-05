@@ -4631,16 +4631,10 @@ pub fn build_procedures<'a, 'ctx, 'env>(
         let it = top_level.arguments.iter().copied();
         let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, niche, top_level.result);
         let func_name = FuncName(&bytes);
-        let func_solutions = match mod_solutions.func_solutions(func_name) {
-            Err(_) => continue,
-            Ok(func_solutions) => func_solutions,
-        };
+        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
         let mut it = func_solutions.specs();
-        let func_spec = match it.next() {
-            None => continue,
-            Some(func_spec) => func_spec,
-        };
+        let func_spec = it.next().unwrap();
         debug_assert!(
             it.next().is_none(),
             "we expect only one specialization of this symbol"
@@ -5098,14 +5092,8 @@ fn build_closure_caller<'a, 'ctx, 'env>(
 
     // STEP 1: build function header
 
-    // e.g. `roc__main_1_Fx_caller`
-    let function_name = format!(
-        // "roc__{}_{}_{}_caller",
-        "roc__{}_caller",
-        def_name,
-        // alias_symbol.module_string(&env.interns),
-        // alias_symbol.as_str(&env.interns)
-    );
+    // e.g. `roc__mainForHost_0_caller` (def_name is `mainForHost_0`)
+    let function_name = format!("roc__{}_caller", def_name);
 
     let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
 
