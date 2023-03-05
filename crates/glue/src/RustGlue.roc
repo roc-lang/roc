@@ -415,7 +415,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             |> List.mapWithIndex \_, index ->
                 indexStr = Num.toStr index
 
-                "f\(indexStr),"
+                "f\(indexStr)"
 
         fieldAccesses =
             fields
@@ -483,7 +483,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             """
             \(indent)/// Since `\(name)` only has one tag (namely, `\(tagName)`),
             \(indent)/// convert it to `\(tagName)`'s payload.
-            \(indent)pub fn as_\(tagName)(self) -> \(retType) {
+            \(indent)pub fn as_\(tagName)(&self) -> \(retType) {
             \(indent)    \(retExpr)
             \(indent)}
             
@@ -493,7 +493,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         }
 
 
-        impl core::fmt::Dbg for \(name) {
+        impl core::fmt::Debug for \(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.debug_tuple("\(name)::\(tagName)")
         
@@ -548,7 +548,7 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
             }
         }
 
-        impl core::fmt::Dbg for \(name) {
+        impl core::fmt::Debug for \(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str("\(name)::\(tagName)")
             }
