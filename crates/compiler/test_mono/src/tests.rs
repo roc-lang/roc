@@ -2725,7 +2725,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
 }
 
 #[mono_test]
-fn inline_return_joinpoints() {
+fn inline_return_joinpoints_in_bool_lambda_set() {
     indoc!(
         r#"
         app "test" provides [f] to "./platform"
