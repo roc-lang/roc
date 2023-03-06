@@ -1172,6 +1172,11 @@ fn add_type_help<'a>(
                             }
                         }
                     }
+                    Layout::Struct { .. } if *name == Symbol::RESULT_RESULT => {
+                        // can happen if one or both of a and b in `Result.Result a b` are the
+                        // empty tag union `[]`
+                        add_type_help(env, layout, *real_var, opt_name, types)
+                    }
                     Layout::Struct { .. } if *name == Symbol::DICT_DICT => {
                         let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
 
@@ -1883,8 +1888,9 @@ fn single_tag_payload<'a>(
 ) -> (String, &'a [Variable]) {
     let mut iter = union_tags.iter_from_subs(subs);
     let (tag_name, payload_vars) = iter.next().unwrap();
-    // This should be a single-tag union.
-    debug_assert!(iter.next().is_none());
+
+    // This should be a single-tag union, but it could be the remnant of a `Result.Result a []`,
+    // where the `Err` branch is inconsequential, but still part of the type
 
     (tag_name.union_tag_name(), payload_vars)
 }
