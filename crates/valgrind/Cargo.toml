@@ -6,7 +6,6 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 
 [dev-dependencies]
-roc_cli = { path = "../cli" }
 cli_utils = { path = "../cli_utils" }
 roc_build = { path = "../compiler/build" }
 roc_mono = { path = "../compiler/mono" }

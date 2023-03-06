@@ -30,6 +30,4 @@ roc_debug_flags = { path = "../debug_flags" }
 ven_pretty = { path = "../../vendor/pretty" }
 
 bumpalo.workspace = true
-indoc.workspace = true
-pretty_assertions.workspace = true
 insta.workspace = true
