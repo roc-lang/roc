@@ -6,6 +6,7 @@ members = [
     "crates/editor",
     "crates/ast",
     "crates/cli",
+    "crates/cli_utils",
     "crates/code_markup",
     "crates/highlight",
     "crates/error_macros",
@@ -16,6 +17,7 @@ members = [
     "crates/repl_test",
     "crates/repl_wasm",
     "crates/repl_expect",
+    "crates/roc_std",
     "crates/test_utils",
     "crates/valgrind",
     "crates/tracing",
@@ -32,13 +34,6 @@ exclude = [
     # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
     "crates/cli_testing_examples",
     "examples",
-    # Ignore building these normally. They are only imported by tests.
-    # The tests will still correctly build them.
-    "crates/cli_utils",
-    "crates/compiler/test_mono_macros",
-    "crates/compiler/str",
-    # `cargo build` would cause roc_std to be built with default features which errors on windows
-    "crates/roc_std",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.

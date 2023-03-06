@@ -3839,6 +3839,13 @@ name = "roc_std"
 version = "0.0.1"
 dependencies = [
  "arrayvec 0.7.2",
+ "indoc",
+ "libc",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "serde",
+ "serde_json",
  "static_assertions",
 ]
 
