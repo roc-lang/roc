@@ -71,7 +71,7 @@ arrayvec = "0.7.2"
 bincode = "1.3.3"
 bitvec = "1.0.1"
 bumpalo = { version = "3.11.1", features = ["collections"] }
-capstone = "0.11.0"
+capstone = { version = "0.11.0", default-features = false }
 clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = { version = "0.2.23", features = ["const_generics"] }
 criterion = { git = "https://github.com/Anton-4/criterion.rs", features = ["html_reports"]}
