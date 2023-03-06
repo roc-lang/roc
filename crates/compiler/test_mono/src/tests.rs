@@ -2723,3 +2723,16 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
         "#
     )
 }
+
+#[mono_test]
+fn inline_return_joinpoints() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = if Bool.false then f else \n -> n
+            caller (x + 1)
+        "#
+    )
+}
