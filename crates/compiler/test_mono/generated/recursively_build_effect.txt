@@ -14,27 +14,26 @@ procedure Test.11 (Test.29, #Attr.12):
 procedure Test.11 (Test.29, Test.10):
     ret Test.10;
 
-procedure Test.14 (Test.36, #Attr.12):
-    let Test.12 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
-    let Test.13 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    dec #Attr.12;
-    let Test.46 : {} = Struct {};
-    let Test.45 : {} = CallByName Test.11 Test.46 Test.12;
-    let Test.38 : [<r>C {}, C I64 {}] = CallByName Test.9 Test.45 Test.13;
-    let Test.40 : {} = Struct {};
-    let Test.41 : U8 = GetTagId Test.38;
-    joinpoint Test.42 Test.39:
-        ret Test.39;
+procedure Test.14 (Test.62, Test.63):
+    joinpoint Test.37 Test.36 #Attr.12:
+        let Test.12 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
+        let Test.13 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+        dec #Attr.12;
+        let Test.43 : {} = Struct {};
+        let Test.42 : {} = CallByName Test.11 Test.43 Test.12;
+        let Test.38 : [<r>C {}, C I64 {}] = CallByName Test.9 Test.42 Test.13;
+        let Test.40 : {} = Struct {};
+        let Test.41 : U8 = GetTagId Test.38;
+        switch Test.41:
+            case 0:
+                let Test.39 : {} = CallByName Test.11 Test.40 Test.38;
+                ret Test.39;
+        
+            default:
+                jump Test.37 Test.40 Test.38;
+        
     in
-    switch Test.41:
-        case 0:
-            let Test.43 : {} = CallByName Test.11 Test.40 Test.38;
-            jump Test.42 Test.43;
-    
-        default:
-            let Test.44 : {} = CallByName Test.14 Test.40 Test.38;
-            jump Test.42 Test.44;
-    
+    jump Test.37 Test.62 Test.63;
 
 procedure Test.2 ():
     let Test.6 : Str = "Hello";
@@ -50,15 +49,15 @@ procedure Test.2 ():
     ret Test.19;
 
 procedure Test.3 (Test.8):
-    let Test.57 : I64 = 0i64;
-    let Test.58 : Int1 = lowlevel Eq Test.57 Test.8;
-    if Test.58 then
+    let Test.54 : I64 = 0i64;
+    let Test.55 : Int1 = lowlevel Eq Test.54 Test.8;
+    if Test.55 then
         let Test.27 : {} = Struct {};
         let Test.26 : [<r>C {}, C I64 {}] = CallByName Test.4 Test.27;
         ret Test.26;
     else
-        let Test.52 : {} = Struct {};
-        let Test.33 : {} = CallByName Test.4 Test.52;
+        let Test.49 : {} = Struct {};
+        let Test.33 : {} = CallByName Test.4 Test.49;
         let Test.32 : [<r>C {}, C I64 {}] = CallByName Test.5 Test.33 Test.8;
         ret Test.32;
 
@@ -73,11 +72,11 @@ procedure Test.5 (Test.16, Test.13):
     let Test.35 : [<r>C {}, C I64 {}] = TagId(1) Test.13 Test.16;
     ret Test.35;
 
-procedure Test.9 (Test.47, Test.8):
-    let Test.51 : I64 = 1i64;
-    let Test.50 : I64 = CallByName Num.20 Test.8 Test.51;
-    let Test.49 : [<r>C {}, C I64 {}] = CallByName Test.3 Test.50;
-    ret Test.49;
+procedure Test.9 (Test.44, Test.8):
+    let Test.48 : I64 = 1i64;
+    let Test.47 : I64 = CallByName Num.20 Test.8 Test.48;
+    let Test.46 : [<r>C {}, C I64 {}] = CallByName Test.3 Test.47;
+    ret Test.46;
 
 procedure Test.0 ():
     let Test.24 : I64 = 4i64;
