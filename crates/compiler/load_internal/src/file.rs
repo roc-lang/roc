@@ -117,11 +117,11 @@ pub enum ExecutionMode {
 
 impl ExecutionMode {
     fn goal_phase(&self) -> Phase {
+        use ExecutionMode::*;
+
         match self {
-            ExecutionMode::Executable => Phase::MakeSpecializations,
-            ExecutionMode::Check | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
-                Phase::SolveTypes
-            }
+            Executable => Phase::MakeSpecializations,
+            Check | ExecutableIfCheck | Test => Phase::SolveTypes,
         }
     }
 
