@@ -91,11 +91,11 @@ roc_repl_expect = { path = "../repl_expect" }
 [dev-dependencies]
 roc_test_utils = { path = "../test_utils" }
 roc_utils = { path = "../utils" }
-indoc = "1.0.7"
 serial_test = "0.9.0"
 cli_utils = { path = "../cli_utils" }
 
 criterion.workspace = true
+indoc.workspace = true
 parking_lot.workspace = true
 pretty_assertions.workspace = true
 
