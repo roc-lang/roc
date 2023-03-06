@@ -74,9 +74,9 @@ interface List
 ## Types
 ## A sequential list of values.
 ##
-## >>> [1, 2, 3] # a list of numbers
-## >>> ["a", "b", "c"] # a list of strings
-## >>> [[1.1], [], [2.2, 3.3]] # a list of lists of numbers
+##     [1, 2, 3] # a list of numbers
+##     ["a", "b", "c"] # a list of strings
+##     [[1.1], [], [2.2, 3.3]] # a list of lists of numbers
 ##
 ## The maximum size of a [List] is limited by the amount of heap memory available
 ## to the current process. If there is not enough memory available, attempting to
@@ -207,9 +207,9 @@ interface List
 ## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way [List] worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using [List] under the hood!
 ##  Check if the list is empty.
 ##
-## >>> List.isEmpty [1, 2, 3]
+##     List.isEmpty [1, 2, 3]
 ##
-## >>> List.isEmpty []
+##     List.isEmpty []
 isEmpty : List a -> Bool
 isEmpty = \list ->
     List.len list == 0
@@ -238,7 +238,7 @@ replace = \list, index, newValue ->
 
 ## Replaces the element at the given index with a replacement.
 ##
-## >>> List.set ["a", "b", "c"] 1 "B"
+##     List.set ["a", "b", "c"] 1 "B"
 ##
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
@@ -250,10 +250,10 @@ set = \list, index, value ->
 
 ## Add a single element to the end of a list.
 ##
-## >>> List.append [1, 2, 3] 4
+##     List.append [1, 2, 3] 4
 ##
-## >>> [0, 1, 2]
-## >>>     |> List.append 3
+##     [0, 1, 2]
+##         |> List.append 3
 append : List a, a -> List a
 append = \list, element ->
     list
@@ -269,10 +269,10 @@ appendUnsafe : List a, a -> List a
 
 ## Add a single element to the beginning of a list.
 ##
-## >>> List.prepend [1, 2, 3] 0
+##     List.prepend [1, 2, 3] 0
 ##
-## >>> [2, 3, 4]
-## >>>     |> List.prepend 1
+##     [2, 3, 4]
+##         |> List.prepend 1
 prepend : List a, a -> List a
 
 ## Returns the length of the list - the number of elements it contains.
@@ -290,10 +290,10 @@ reserve : List a, Nat -> List a
 
 ## Put two lists together.
 ##
-## >>> List.concat [1, 2, 3] [4, 5]
+##     List.concat [1, 2, 3] [4, 5]
 ##
-## >>> [0, 1, 2]
-## >>>     |> List.concat [3, 4]
+##     [0, 1, 2]
+##         |> List.concat [3, 4]
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
@@ -330,7 +330,7 @@ repeatHelp = \value, count, accum ->
 
 ## Returns the list with its elements reversed.
 ##
-## >>> List.reverse [1, 2, 3]
+##     List.reverse [1, 2, 3]
 reverse : List a -> List a
 reverse = \list ->
     reverseHelp list 0 (Num.subSaturated (List.len list) 1)
@@ -343,11 +343,11 @@ reverseHelp = \list, left, right ->
 
 ## Join the given lists together into one list.
 ##
-## >>> List.join [[1, 2, 3], [4, 5], [], [6, 7]]
+##     List.join [[1, 2, 3], [4, 5], [], [6, 7]]
 ##
-## >>> List.join [[], []]
+##     List.join [[], []]
 ##
-## >>> List.join []
+##     List.join []
 join : List (List a) -> List a
 join = \lists ->
     totalLength =
@@ -495,7 +495,7 @@ all = \list, predicate ->
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.true`.
 ##
-## >>> List.keepIf [1, 2, 3, 4] (\num -> num > 2)
+##     List.keepIf [1, 2, 3, 4] (\num -> num > 2)
 ##
 ## ## Performance Details
 ##
@@ -532,7 +532,7 @@ keepIfHelp = \list, predicate, kept, index, length ->
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.false`.
 ##
-## >>> List.dropIf [1, 2, 3, 4] (\num -> num > 2)
+##     List.dropIf [1, 2, 3, 4] (\num -> num > 2)
 ##
 ## ## Performance Details
 ##
@@ -557,11 +557,11 @@ countIf = \list, predicate ->
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
 ##
-## >>> List.keepOks [["a", "b"], [], [], ["c", "d", "e"]] List.last
+##     List.keepOks [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
-## >>> fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
+##     fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
 ## >>>
-## >>> List.keepOks ["", "a", "bc", "", "d", "ef", ""]
+##     List.keepOks ["", "a", "bc", "", "d", "ef", ""]
 keepOks : List before, (before -> Result after *) -> List after
 keepOks = \list, toResult ->
     walker = \accum, element ->
@@ -574,11 +574,11 @@ keepOks = \list, toResult ->
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Err` are kept. Any that are wrapped in `Ok` are dropped.
 ##
-## >>> List.keepErrs [["a", "b"], [], [], ["c", "d", "e"]] List.last
+##     List.keepErrs [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
-## >>> fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
+##     fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
 ## >>>
-## >>> List.keepErrs ["", "a", "bc", "", "d", "ef", ""]
+##     List.keepErrs ["", "a", "bc", "", "d", "ef", ""]
 keepErrs : List before, (before -> Result * after) -> List after
 keepErrs = \list, toResult ->
     walker = \accum, element ->
@@ -603,7 +603,7 @@ map : List a, (a -> b) -> List b
 ## Some languages have a function named `zip`, which does something similar to
 ## calling [List.map2] passing two lists and `Pair`:
 ##
-## >>> zipped = List.map2 ["a", "b", "c"] [1, 2, 3] Pair
+##     zipped = List.map2 ["a", "b", "c"] [1, 2, 3] Pair
 map2 : List a, List b, (a, b -> c) -> List c
 
 ## Run a transformation function on the first element of each list,
@@ -826,12 +826,12 @@ dropLast = \list ->
 
 ## Returns the given number of elements from the beginning of the list.
 ##
-## >>> List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
+##     List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
 ##
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
 ##
-## >>> List.takeFirst [1, 2] 5
+##     List.takeFirst [1, 2] 5
 ##
 ## To *remove* elements from the beginning of the list, use `List.takeLast`.
 ##
@@ -855,12 +855,12 @@ takeFirst = \list, outputLength ->
 
 ## Returns the given number of elements from the end of the list.
 ##
-## >>> List.takeLast [1, 2, 3, 4, 5, 6, 7, 8] 4
+##     List.takeLast [1, 2, 3, 4, 5, 6, 7, 8] 4
 ##
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
 ##
-## >>> List.takeLast [1, 2] 5
+##     List.takeLast [1, 2] 5
 ##
 ## To *remove* elements from the end of the list, use `List.takeFirst`.
 ##
@@ -1002,11 +1002,11 @@ findLastIndex = \list, matches ->
 ##
 ## If `start` is outside the bounds of the given list, returns the empty list.
 ##
-## >>> List.sublist [1, 2, 3] { start: 4, len: 0 }
+##     List.sublist [1, 2, 3] { start: 4, len: 0 }
 ##
 ## If more elements are requested than exist in the list, returns as many as it can.
 ##
-## >>> List.sublist [1, 2, 3, 4, 5] { start: 2, len: 10 }
+##     List.sublist [1, 2, 3, 4, 5] { start: 2, len: 10 }
 ##
 ## > If you want a sublist which goes all the way to the end of the list, no
 ## > matter how long the list is, `List.takeLast` can do that more efficiently.
@@ -1023,7 +1023,7 @@ sublist = \list, config ->
 sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
-## >>> List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
+##     List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
 intersperse : List elem, elem -> List elem
 intersperse = \list, sep ->
     capacity = 2 * List.len list

@@ -5,9 +5,9 @@
 ## Unicode can represent text values which span multiple languages, symbols, and emoji.
 ## Here are some valid Roc strings:
 ##
-## "Roc!"
-## "鹏"
-## "🕊"
+##     "Roc!"
+##     "鹏"
+##     "🕊"
 ##
 ## Every Unicode string is a sequence of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster).
 ## An extended grapheme cluster represents what a person reading a string might

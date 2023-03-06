@@ -192,7 +192,7 @@ interface Num
 ## If this default of [I64] is not big enough for your purposes,
 ## you can add an `i128` to the end of the number literal, like so:
 ##
-## >>> Num.toStr 5_000_000_000i128
+##     Num.toStr 5_000_000_000i128
 ##
 ## This `i128` suffix specifies that you want this number literal to be
 ## an [I128] instead of a `Num *`. All the other numeric types have
@@ -259,14 +259,14 @@ Num range := range
 ##
 ## All number literals without decimal points are compatible with [Int] values.
 ##
-## >>> 1
+##     1
 ##
-## >>> 0
+##     0
 ##
 ## You can optionally put underscores in your [Int] literals.
 ## They have no effect on the number's value, but can make large numbers easier to read.
 ##
-## >>> 1_000_000
+##     1_000_000
 ##
 ## Integers come in two flavors: *signed* and *unsigned*.
 ##
@@ -493,13 +493,13 @@ Dec : Num (FloatingPoint Decimal)
 ## This is the same as calling `Num.format {}` - so for more details on
 ## exact formatting, see `Num.format`.
 ##
-## >>> Num.toStr 42
+##     Num.toStr 42
 ##
 ## Only [Frac] values will include a decimal point, and they will always include one.
 ##
-## >>> Num.toStr 4.2
+##     Num.toStr 4.2
 ##
-## >>> Num.toStr 4.0
+##     Num.toStr 4.0
 ##
 ## When this function is given a non-[finite](Num.isFinite)
 ## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
@@ -540,8 +540,8 @@ compare : Num a, Num a -> [LT, EQ, GT]
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ##
-## >>> 5
-## >>>     |> Num.isLt 6
+##     5
+##         |> Num.isLt 6
 isLt : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the first number is greater than the second.
@@ -551,8 +551,8 @@ isLt : Num a, Num a -> Bool
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ##
-## >>> 6
-## >>>     |> Num.isGt 5
+##     6
+##         |> Num.isGt 5
 isGt : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the first number is less than or equal to the second.
@@ -602,13 +602,13 @@ toFrac : Num * -> Frac *
 ## * For a negative number, returns the same number except positive.
 ## * For zero, returns zero.
 ##
-## >>> Num.abs 4
+##     Num.abs 4
 ##
-## >>> Num.abs -2.5
+##     Num.abs -2.5
 ##
-## >>> Num.abs 0
+##     Num.abs 0
 ##
-## >>> Num.abs 0.0
+##     Num.abs 0.0
 ##
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
@@ -621,13 +621,13 @@ abs : Num a -> Num a
 
 ## Return a negative number when given a positive one, and vice versa.
 ##
-## >>> Num.neg 5
+##     Num.neg 5
 ##
-## >>> Num.neg -2.5
+##     Num.neg -2.5
 ##
-## >>> Num.neg 0
+##     Num.neg 0
 ##
-## >>> Num.neg 0.0
+##     Num.neg 0.0
 ##
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
@@ -646,14 +646,14 @@ neg : Num a -> Num a
 ##
 ## `a + b` is shorthand for `Num.add a b`.
 ##
-## >>> 5 + 7
+##     5 + 7
 ##
-## >>> Num.add 5 7
+##     Num.add 5 7
 ##
 ## `Num.add` can be convenient in pipelines.
 ##
-## >>> Frac.pi
-## >>>     |> Num.add 1.0
+##     Frac.pi
+##         |> Num.add 1.0
 ##
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
@@ -667,14 +667,14 @@ add : Num a, Num a -> Num a
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
 ##
-## >>> 7 - 5
+##     7 - 5
 ##
-## >>> Num.sub 7 5
+##     Num.sub 7 5
 ##
 ## `Num.sub` can be convenient in pipelines.
 ##
-## >>> Frac.pi
-## >>>     |> Num.sub 2.0
+##     Frac.pi
+##         |> Num.sub 2.0
 ##
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
@@ -688,14 +688,14 @@ sub : Num a, Num a -> Num a
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
 ##
-## >>> 5 * 7
+##     5 * 7
 ##
-## >>> Num.mul 5 7
+##     Num.mul 5 7
 ##
 ## `Num.mul` can be convenient in pipelines.
 ##
-## >>> Frac.pi
-## >>>     |> Num.mul 2.0
+##     Frac.pi
+##         |> Num.mul 2.0
 ##
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
@@ -732,13 +732,13 @@ atan : Frac a -> Frac a
 ## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
 ## > access to hardware-accelerated performance, Roc follows these rules exactly.
 ##
-## >>> Num.sqrt 4.0
+##     Num.sqrt 4.0
 ##
-## >>> Num.sqrt 1.5
+##     Num.sqrt 1.5
 ##
-## >>> Num.sqrt 0.0
+##     Num.sqrt 0.0
 ##
-## >>> Num.sqrt -4.0f64
+##     Num.sqrt -4.0f64
 sqrt : Frac a -> Frac a
 
 sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]
@@ -780,14 +780,14 @@ logChecked = \x ->
 ## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
 ## one of the functions in this module like #toDec.
 ##
-## >>> 5.0 / 7.0
+##     5.0 / 7.0
 ##
-## >>> Num.div 5 7
+##     Num.div 5 7
 ##
 ## `Num.div` can be convenient in pipelines.
 ##
-## >>> Num.pi
-## >>>     |> Num.div 2.0
+##     Num.pi
+##         |> Num.div 2.0
 div : Frac a, Frac a -> Frac a
 
 divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]
@@ -814,13 +814,13 @@ divCeilChecked = \a, b ->
 ## sure never to pass zero as the denomaintor to this function! If you do,
 ## it will crash.
 ##
-## >>> 5 // 7
+##     5 // 7
 ##
-## >>> Num.divTrunc 5 7
+##     Num.divTrunc 5 7
 ##
-## >>> 8 // -3
+##     8 // -3
 ##
-## >>> Num.divTrunc 8 -3
+##     Num.divTrunc 8 -3
 ##
 divTrunc : Int a, Int a -> Int a
 
@@ -835,13 +835,13 @@ divTruncChecked = \a, b ->
 ##
 ## `a % b` is shorthand for `Num.rem a b`.
 ##
-## >>> 5 % 7
+##     5 % 7
 ##
-## >>> Num.rem 5 7
+##     Num.rem 5 7
 ##
-## >>> -8 % -3
+##     -8 % -3
 ##
-## >>> Num.rem -8 -3
+##     Num.rem -8 -3
 rem : Int a, Int a -> Int a
 
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]
@@ -862,9 +862,9 @@ bitwiseOr : Int a, Int a -> Int a
 ## The least significant bits always become 0. This means that shifting left is
 ## like multiplying by factors of two for unsigned integers.
 ##
-## >>> shiftLeftBy 0b0000_0011 2 == 0b0000_1100
+##     shiftLeftBy 0b0000_0011 2 == 0b0000_1100
 ##
-## >>> 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
+##     0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
 ##
 ## In some languages `shiftLeftBy` is implemented as a binary operator `<<`.
 shiftLeftBy : Int a, U8 -> Int a
@@ -873,11 +873,11 @@ shiftLeftBy : Int a, U8 -> Int a
 ##
 ## The most significant bits are copied from the current.
 ##
-## >>> shiftRightBy 0b0000_0011 2 == 0b0000_1100
+##     shiftRightBy 0b0000_0011 2 == 0b0000_1100
 ##
-## >>> 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
+##     0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
 ##
-## >>> 0b1001_0000 |> shiftRightBy 2 == 0b1110_0100
+##     0b1001_0000 |> shiftRightBy 2 == 0b1110_0100
 ##
 ## In some languages `shiftRightBy` is implemented as a binary operator `>>>`.
 shiftRightBy : Int a, U8 -> Int a
@@ -887,11 +887,11 @@ shiftRightBy : Int a, U8 -> Int a
 ## The most significant bits always become 0. This means that shifting left is
 ## like dividing by factors of two for unsigned integers.
 ##
-## >>> shiftRightBy 0b0010_1000 2 == 0b0000_1010
+##     shiftRightBy 0b0010_1000 2 == 0b0000_1010
 ##
-## >>> 0b0010_1000 |> shiftRightBy 2 == 0b0000_1010
+##     0b0010_1000 |> shiftRightBy 2 == 0b0000_1010
 ##
-## >>> 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
+##     0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
 ##
 ## In some languages `shiftRightBy` is implemented as a binary operator `>>`.
 shiftRightZfBy : Int a, U8 -> Int a
@@ -914,13 +914,13 @@ pow : Frac a, Frac a -> Frac a
 ## For a [Frac] alternative to this function, which supports negative exponents,
 ## see #Num.exp.
 ##
-## >>> Num.exp 5 0
+##     Num.exp 5 0
 ##
-## >>> Num.exp 5 1
+##     Num.exp 5 1
 ##
-## >>> Num.exp 5 2
+##     Num.exp 5 2
 ##
-## >>> Num.exp 5 6
+##     Num.exp 5 6
 ##
 ## ## Performance Notes
 ##
@@ -1285,9 +1285,9 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]
 ##
 ## Always returns `Bool.false` when given a [Dec].
 ##
-## >>> Num.isNaN 12.3
+##     Num.isNaN 12.3
 ##
-## >>> Num.isNaN (Num.pow -1 0.5)
+##     Num.isNaN (Num.pow -1 0.5)
 ##
 ## *NaN* is unusual from other numberic values in that:
 ## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `Bool.false` if either argument is *NaN*.
@@ -1390,7 +1390,7 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]
 # ## If `max` is less than `min`, then first the number will be truncated to `max`
 # ## digits, and then zeroes will be added afterwards until it reaches `min` digits.
 # ##
-# ## >>> Num.format 1.23 { decPlaces: 0, decPointVis: AlwaysShow }
+# ##     Num.format 1.23 { decPlaces: 0, decPointVis: AlwaysShow }
 # ##
 # ## ### minIntDigits
 # ##
@@ -1405,13 +1405,13 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]
 # ## Examples:
 # ##
 # ## In some countries (e.g. USA and UK), a comma is used to separate thousands:
-# ## >>> Num.format 1_000_000 { pf: Decimal, wholeSep: { mark: ",", places: 3 } }
+# ##     Num.format 1_000_000 { pf: Decimal, wholeSep: { mark: ",", places: 3 } }
 # ##
 # ## Sometimes when rendering bits, it's nice to group them into groups of 4:
-# ## >>> Num.format 1_000_000 { pf: Binary, wholeSep: { mark: " ", places: 4 } }
+# ##     Num.format 1_000_000 { pf: Binary, wholeSep: { mark: " ", places: 4 } }
 # ##
 # ## It's also common to render hexadecimal in groups of 2:
-# ## >>> Num.format 1_000_000 { pf: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
+# ##     Num.format 1_000_000 { pf: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
 # format :
 #     Num *,
 #     {

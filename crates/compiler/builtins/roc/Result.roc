@@ -8,7 +8,7 @@ Result ok err : [Ok ok, Err err]
 
 ## Return `Bool.true` if the result indicates a success, else return `Bool.false`
 ##
-## >>> Result.isOk (Ok 5)
+##     Result.isOk (Ok 5)
 isOk : Result ok err -> Bool
 isOk = \result ->
     when result is
@@ -17,7 +17,7 @@ isOk = \result ->
 
 ## Return `Bool.true` if the result indicates a failure, else return `Bool.false`
 ##
-## >>> Result.isErr (Err "uh oh")
+##     Result.isErr (Err "uh oh")
 isErr : Result ok err -> Bool
 isErr = \result ->
     when result is
@@ -27,9 +27,9 @@ isErr = \result ->
 ## If the result is `Ok`, return the value it holds. Otherwise, return
 ## the given default value.
 ##
-## >>> Result.withDefault (Ok 7) 42
+##     Result.withDefault (Ok 7) 42
 ##
-## >>> Result.withDefault (Err "uh oh") 42
+##     Result.withDefault (Err "uh oh") 42
 withDefault : Result ok err, ok -> ok
 withDefault = \result, default ->
     when result is
@@ -41,9 +41,9 @@ withDefault = \result, default ->
 ##
 ## (If the result is `Err`, this has no effect. Use [mapErr] to transform an `Err`.)
 ##
-## >>> Result.map (Ok 12) Num.negate
+##     Result.map (Ok 12) Num.negate
 ##
-## >>> Result.map (Err "yipes!") Num.negate
+##     Result.map (Err "yipes!") Num.negate
 ##
 ## `map` functions like this are common in Roc, and they all work similarly.
 ## See for example [List.map], `Set.map`, and `Dict.map`.
@@ -58,9 +58,9 @@ map = \result, transform ->
 ##
 ## (If the result is `Ok`, this has no effect. Use [map] to transform an `Ok`.)
 ##
-## >>> Result.mapErr (Err "yipes!") Str.isEmpty
+##     Result.mapErr (Err "yipes!") Str.isEmpty
 ##
-## >>> Result.mapErr (Ok 12) Str.isEmpty
+##     Result.mapErr (Ok 12) Str.isEmpty
 mapErr : Result ok a, (a -> b) -> Result ok b
 mapErr = \result, transform ->
     when result is
@@ -72,9 +72,9 @@ mapErr = \result, transform ->
 ##
 ## (If the result is `Err`, this has no effect. Use `onErr` to transform an `Err`.)
 ##
-## >>> Result.try (Ok -1) \num -> if num < 0 then Err "negative!" else Ok -num
+##     Result.try (Ok -1) \num -> if num < 0 then Err "negative!" else Ok -num
 ##
-## >>> Result.try (Err "yipes!") \num -> if num < 0 then Err "negative!" else Ok -num
+##     Result.try (Err "yipes!") \num -> if num < 0 then Err "negative!" else Ok -num
 try : Result a err, (a -> Result b err) -> Result b err
 try = \result, transform ->
     when result is
@@ -86,9 +86,9 @@ try = \result, transform ->
 ##
 ## (If the result is `Ok`, this has no effect. Use `try` to transform an `Ok`.)
 ##
-## >>> Result.onErr (Ok 10) \errorNum -> Str.toNat errorNum
+##     Result.onErr (Ok 10) \errorNum -> Str.toNat errorNum
 ##
-## >>> Result.onErr (Err "42") \errorNum -> Str.toNat errorNum
+##     Result.onErr (Err "42") \errorNum -> Str.toNat errorNum
 onErr : Result a err, (err -> Result a otherErr) -> Result a otherErr
 onErr = \result, transform ->
     when result is
