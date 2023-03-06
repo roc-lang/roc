@@ -2056,6 +2056,8 @@ fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
         }
     }
 
+    derives.sort();
+
     format!("#[derive({})]", derives.join(", "))
 }
 
