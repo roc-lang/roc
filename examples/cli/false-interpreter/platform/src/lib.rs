@@ -134,17 +134,27 @@ pub extern "C" fn rust_main() -> i32 {
 
 unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
     let size = size_Fx_result() as usize;
-    let layout = Layout::array::<u8>(size).unwrap();
-    let buffer = std::alloc::alloc(layout) as *mut u8;
 
-    call_Fx(
-        // This flags pointer will never get dereferenced
-        MaybeUninit::uninit().as_ptr(),
-        closure_data_ptr as *const u8,
-        buffer as *mut u8,
-    );
+    if size == 0 {
+        call_Fx(
+            // This flags pointer will never get dereferenced
+            MaybeUninit::uninit().as_ptr(),
+            closure_data_ptr as *const u8,
+            std::ptr::null_mut(),
+        );
+    } else {
+        let layout = Layout::array::<u8>(size).unwrap();
+        let buffer = std::alloc::alloc(layout) as *mut u8;
 
-    std::alloc::dealloc(buffer, layout);
+        call_Fx(
+            // This flags pointer will never get dereferenced
+            MaybeUninit::uninit().as_ptr(),
+            closure_data_ptr as *const u8,
+            buffer as *mut u8,
+        );
+
+        std::alloc::dealloc(buffer, layout);
+    }
 
     0
 }
