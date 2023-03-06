@@ -8,8 +8,6 @@ use std::fs;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
-mod highlight;
-
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
     fn roc_transformFileContentForHost(relPath: &RocStr, content: &RocStr) -> RocStr;
@@ -224,7 +222,7 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                     // Format the whole multi-line code block as HTML all at once
                     let highlighted_html: String;
                     if is_roc_code {
-                        highlighted_html = crate::highlight::highlight_roc_code(&to_highlight)
+                        highlighted_html = roc_highlight::highlight_roc_code(&to_highlight)
                     } else {
                         highlighted_html = format!("<pre><samp>{}</pre></samp>", &to_highlight)
                     }

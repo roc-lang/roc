@@ -4,8 +4,9 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
-description = "For syntax highlighting, starts with a string and returns our markup nodes."
+description = "For syntax highlighting Roc code such as the generated documentation."
 
 [dependencies]
-peg = "0.8.1"
-roc_code_markup = { path = "../code_markup"}
+roc_region = { path = "../compiler/region" }
+roc_parse = { path = "../compiler/parse" }
+html-escape = "0.2"

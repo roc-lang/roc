@@ -21,8 +21,10 @@
   --body-bg-color: #ffffff;
   --border-color: #e9e9e9;
   --faded-color: #4c4c4c;
-  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
+    monospace;
   --top-header-height: 67px;
   --sidebar-width: 280px;
   --top-bar-bg: #8257e5;
@@ -37,7 +39,8 @@ a {
   color: #972395;
 }
 
-table tr th, table tr td {
+table tr th,
+table tr td {
   padding: 6px 13px;
 }
 
@@ -104,7 +107,8 @@ a {
   text-decoration: none;
 }
 
-a:hover, a:hover code {
+a:hover,
+a:hover code {
   text-decoration: underline;
 }
 
@@ -116,7 +120,8 @@ a:hover, a:hover code {
   background-color: var(--top-bar-bg);
 }
 
-.pkg-and-logo a, .pkg-and-logo a:visited {
+.pkg-and-logo a,
+.pkg-and-logo a:visited {
   color: var(--top-bar-fg);
 }
 
@@ -140,7 +145,9 @@ a:hover, a:hover code {
 
 body {
   display: grid;
-  grid-template-columns: [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr;
+  grid-template-columns: [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(
+      calc(1280px - var(--sidebar-width))
+    ) [end] 1fr;
   grid-template-rows: [top-header] var(--top-header-height) [above-footer] auto [footer] auto;
   box-sizing: border-box;
   margin: 0;
@@ -226,8 +233,8 @@ section > *:last-child {
 }
 
 p {
-    overflow-wrap: break-word;
-    margin: 24px 0;
+  overflow-wrap: break-word;
+  margin: 24px 0;
 }
 
 footer {
@@ -290,7 +297,8 @@ footer p {
   margin-bottom: 48px;
 }
 
-.module-name a, .module-name a:visited {
+.module-name a,
+.module-name a:visited {
   color: inherit;
 }
 
@@ -311,7 +319,8 @@ footer p {
   font-weight: bold;
 }
 
-a, a:visited {
+a,
+a:visited {
   color: var(--link-color);
 }
 
@@ -350,14 +359,16 @@ p code {
   border-radius: 4px;
 }
 
-code a, a code {
+code a,
+a code {
   text-decoration: none;
   color: var(--code-link-color);
   background: none;
   padding: 0;
 }
 
-code a:visited, a:visited code {
+code a:visited,
+a:visited code {
   color: var(--code-link-color);
 }
 
@@ -376,23 +387,22 @@ pre {
 }
 
 .syntax-number {
-    color: #60B7BF;
+  color: #60b7bf;
 }
 .syntax-string {
-  color:#F7577C;
+  color: #f7577c;
 }
 
 .syntax-bracket {
-  color:#FF335F;
+  color: #ff335f;
 }
 .syntax-closure-dash,
 .syntax-closure-arrow,
-.syntax-operator
-{
-    color: #ffffff;
+.syntax-operator {
+  color: #ffffff;
 }
 .syntax-comma {
-  color: #9573E6;
+  color: #9573e6;
 }
 .syntax-comment {
   color: #ff0000;
@@ -404,7 +414,8 @@ pre {
   height: 0;
 }
 
-#module-search, #module-search:focus {
+#module-search,
+#module-search:focus {
   opacity: 1;
   padding: 12px 16px;
   height: 48px;
@@ -495,6 +506,47 @@ pre {
   html {
     scrollbar-color: #444444 #2f2f2f;
   }
+
+  samp .kw,
+  samp .pipe,
+  samp .backslash,
+  samp .arrow,
+  samp .backpass,
+  samp .brace,
+  samp .bracket,
+  samp .paren {
+    /* language keywords, e.g. `if` */
+    color: #00c3ff;
+  }
+
+  samp .op,
+  samp .comma,
+  samp .qmark,
+  samp .bar,
+  samp .colon {
+    /* operators, e.g. `+` */
+    color: #ff3966;
+  }
+
+  samp .str {
+    /* string literals */
+    color: var(--link-color);
+  }
+
+  code .str {
+    /* string literals */
+    color: var(--link-color);
+  }
+
+  /* autovar = automatic variable names in the repl, e.g. # val1 */
+  samp .comment,
+  samp .autovar {
+    color: #4ed86c;
+  }
+
+  samp .number {
+    color: #00c3ff;
+  }
 }
 
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
@@ -582,7 +634,7 @@ pre {
   body {
     grid-template-columns: auto;
     grid-template-rows: [top-header] var(--top-header-height) [before-sidebar] auto [sidebar] auto [above-footer] auto [footer] auto;
-/* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
+    /* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
 
     margin: 0;
     min-width: 320px;
@@ -605,4 +657,59 @@ pre {
     padding-top: 24px;
     padding-bottom: 12px;
   }
+}
+
+samp .ann {
+  /* type annotation - purple in the repl */
+  color: #f384fd;
+}
+
+samp .autovar {
+  /* automatic variable names in the repl, e.g. # val1 */
+  color: #338545;
+}
+
+samp .kw,
+samp .pipe,
+samp .backslash,
+samp .arrow,
+samp .backpass,
+samp .brace,
+samp .bracket,
+samp .paren {
+  /* language keywords, e.g. `if`*/
+  color: #004cc2;
+}
+
+samp .op,
+samp .comma,
+samp .qmark,
+samp .bar,
+samp .colon {
+  /* operators, e.g. `+` */
+  color: #c20000;
+}
+
+samp .number {
+  /* number literals */
+  color: #158086;
+}
+
+samp .str {
+  /* string literals */
+  color: #158086;
+}
+
+samp .str-esc,
+samp .str-interp {
+  /* escapes inside string literals, e.g. \t */
+  color: #3474db;
+}
+
+samp .dim {
+  opacity: 0.55;
+}
+
+samp .comment {
+  color: #338545;
 }

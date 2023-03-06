@@ -3,13 +3,8 @@
 extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::Bump;
-use docs_error::{DocsError, DocsResult};
-use html::mark_node_to_html;
 use roc_can::scope::Scope;
-use roc_code_markup::markup::nodes::MarkupNode;
-use roc_code_markup::slow_pool::SlowPool;
 use roc_collections::VecSet;
-use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -20,9 +15,6 @@ use roc_parse::state::State;
 use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-mod docs_error;
-mod html;
 
 const BUILD_DIR: &str = "./generated-docs";
 
@@ -132,47 +124,47 @@ fn page_title(package_name: &str, module_name: &str) -> String {
 }
 
 // converts plain-text code to highlighted html
-pub fn syntax_highlight_expr(code_str: &str) -> DocsResult<String> {
-    let trimmed_code_str = code_str.trim_end().trim();
-    let mut mark_node_pool = SlowPool::default();
+// pub fn syntax_highlight_expr(code_str: &str) -> DocsResult<String> {
+//     let trimmed_code_str = code_str.trim_end().trim();
+//     let mut mark_node_pool = SlowPool::default();
 
-    let mut highlighted_html_str = String::new();
+//     let mut highlighted_html_str = String::new();
 
-    match highlight_expr(trimmed_code_str, &mut mark_node_pool) {
-        Ok(root_mark_node_id) => {
-            let root_mark_node = mark_node_pool.get(root_mark_node_id);
-            mark_node_to_html(root_mark_node, &mark_node_pool, &mut highlighted_html_str);
+//     match highlight_expr(trimmed_code_str, &mut mark_node_pool) {
+//         Ok(root_mark_node_id) => {
+//             let root_mark_node = mark_node_pool.get(root_mark_node_id);
+//             mark_node_to_html(root_mark_node, &mark_node_pool, &mut highlighted_html_str);
 
-            Ok(highlighted_html_str)
-        }
-        Err(err) => Err(DocsError::from(err)),
-    }
-}
+//             Ok(highlighted_html_str)
+//         }
+//         Err(err) => Err(DocsError::from(err)),
+//     }
+// }
 
 // converts plain-text code to highlighted html
-pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
-    let trimmed_code_str = code_str.trim_end().trim();
+// pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
+//     let trimmed_code_str = code_str.trim_end().trim();
 
-    let mut mark_node_pool = SlowPool::default();
+//     let mut mark_node_pool = SlowPool::default();
 
-    let mut highlighted_html_str = String::new();
+//     let mut highlighted_html_str = String::new();
 
-    match highlight_defs(trimmed_code_str, &mut mark_node_pool) {
-        Ok(mark_node_id_vec) => {
-            let def_mark_nodes: Vec<&MarkupNode> = mark_node_id_vec
-                .iter()
-                .map(|mn_id| mark_node_pool.get(*mn_id))
-                .collect();
+//     match highlight_defs(trimmed_code_str, &mut mark_node_pool) {
+//         Ok(mark_node_id_vec) => {
+//             let def_mark_nodes: Vec<&MarkupNode> = mark_node_id_vec
+//                 .iter()
+//                 .map(|mn_id| mark_node_pool.get(*mn_id))
+//                 .collect();
 
-            for mn in def_mark_nodes {
-                mark_node_to_html(mn, &mark_node_pool, &mut highlighted_html_str)
-            }
+//             for mn in def_mark_nodes {
+//                 mark_node_to_html(mn, &mark_node_pool, &mut highlighted_html_str)
+//             }
 
-            Ok(highlighted_html_str)
-        }
-        Err(err) => Err(DocsError::from(err)),
-    }
-}
+//             Ok(highlighted_html_str)
+//         }
+//         Err(err) => Err(DocsError::from(err)),
+//     }
+// }
 
 fn render_module_documentation(
     module: &ModuleDocumentation,
@@ -857,7 +849,8 @@ fn markdown_to_html(
 
     let markdown_options = pulldown_cmark::Options::ENABLE_TABLES;
 
-    let mut expecting_code_block = false;
+    let mut in_code_block = false;
+    let mut to_highlight = String::new();
 
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_with_broken_link_callback(
@@ -932,30 +925,28 @@ fn markdown_to_html(
 
                 (start_quote_count, end_quote_count)
             }
-            Event::Start(CodeBlock(CodeBlockKind::Fenced(_))) => {
-                expecting_code_block = true;
-                docs_parser.push(event);
+            Event::Start(CodeBlock(_)) => {
+                in_code_block = true;
                 (0, 0)
             }
             Event::End(CodeBlock(_)) => {
-                expecting_code_block = false;
-                docs_parser.push(event);
+                if in_code_block {
+                    let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                    docs_parser.push(pulldown_cmark::Event::Html(
+                        pulldown_cmark::CowStr::from(highlighted_html),
+                    ));
+                    to_highlight = String::new();
+                    in_code_block = false;
+                }
                 (0, 0)
             }
-            Event::Text(CowStr::Borrowed(code_str)) if expecting_code_block => {
-
-                match syntax_highlight_expr(
-                    code_str
-                )
-                {
-                    Ok(highlighted_code_str) => {
-                        docs_parser.push(Event::Html(CowStr::from(highlighted_code_str)));
-                    }
-                    Err(syntax_error) => {
-                        panic!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
-                    }
-                };
-
+            Event::Text(t) => {
+                if in_code_block {
+                    // If we're in a code block, build up the string of text
+                    to_highlight.push_str(&t);
+                } else {
+                    docs_parser.push(event);
+                }
                 (0, 0)
             }
             _ => {

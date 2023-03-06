@@ -18,10 +18,8 @@ path = "src/main.rs"
 
 [dependencies]
 roc_std = { path = "../../../crates/roc_std" }
-roc_region = { path = "../../../crates/compiler/region" }
-roc_parse = { path = "../../../crates/compiler/parse" }
+roc_highlight = { path = "../../../crates/highlight" }
 libc = "0.2"
-html-escape = "0.2"
 
 # Default features include building a binary that we don't need
 pulldown-cmark = { version = "0.9.2", default-features = false }
