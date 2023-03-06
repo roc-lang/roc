@@ -123,49 +123,6 @@ fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
 
-// converts plain-text code to highlighted html
-// pub fn syntax_highlight_expr(code_str: &str) -> DocsResult<String> {
-//     let trimmed_code_str = code_str.trim_end().trim();
-//     let mut mark_node_pool = SlowPool::default();
-
-//     let mut highlighted_html_str = String::new();
-
-//     match highlight_expr(trimmed_code_str, &mut mark_node_pool) {
-//         Ok(root_mark_node_id) => {
-//             let root_mark_node = mark_node_pool.get(root_mark_node_id);
-//             mark_node_to_html(root_mark_node, &mark_node_pool, &mut highlighted_html_str);
-
-//             Ok(highlighted_html_str)
-//         }
-//         Err(err) => Err(DocsError::from(err)),
-//     }
-// }
-
-// converts plain-text code to highlighted html
-// pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
-//     let trimmed_code_str = code_str.trim_end().trim();
-
-//     let mut mark_node_pool = SlowPool::default();
-
-//     let mut highlighted_html_str = String::new();
-
-//     match highlight_defs(trimmed_code_str, &mut mark_node_pool) {
-//         Ok(mark_node_id_vec) => {
-//             let def_mark_nodes: Vec<&MarkupNode> = mark_node_id_vec
-//                 .iter()
-//                 .map(|mn_id| mark_node_pool.get(*mn_id))
-//                 .collect();
-
-//             for mn in def_mark_nodes {
-//                 mark_node_to_html(mn, &mark_node_pool, &mut highlighted_html_str)
-//             }
-
-//             Ok(highlighted_html_str)
-//         }
-//         Err(err) => Err(DocsError::from(err)),
-//     }
-// }
-
 fn render_module_documentation(
     module: &ModuleDocumentation,
     root_module: &LoadedModule,
@@ -942,7 +899,7 @@ fn markdown_to_html(
             Event::Text(t) => {
                 if in_code_block {
                     // If we're in a code block, build up the string of text
-                    to_highlight.push_str(&t);
+                    to_highlight.push_str(t);
                 } else {
                     docs_parser.push(event);
                 }
