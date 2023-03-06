@@ -911,11 +911,23 @@ impl<'a> Env<'a> {
                         // the lambda set itself can contain more lambda sets
                         stack.push(*lambda_set_var);
                     }
-                    FlatType::Record(_, _) => todo!(),
-                    FlatType::Tuple(_, _) => todo!(),
-                    FlatType::TagUnion(_, _) => todo!(),
-                    FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
-                    FlatType::RecursiveTagUnion(_, union_tags, ext) => {
+                    FlatType::Record(fields, ext) => {
+                        stack.extend(self.subs.get_subs_slice(fields.variables()).iter().rev());
+                        stack.push(*ext);
+                    }
+                    FlatType::Tuple(elements, ext) => {
+                        stack.extend(self.subs.get_subs_slice(elements.variables()).iter().rev());
+                        stack.push(*ext);
+                    }
+                    FlatType::FunctionOrTagUnion(_, _, ext) => {
+                        // just the ext
+                        match ext {
+                            roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                            roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                        }
+                    }
+                    FlatType::TagUnion(union_tags, ext)
+                    | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
                         for tag in union_tags.variables() {
                             stack.extend(
                                 self.subs
@@ -1541,7 +1553,7 @@ where
             RocStructFields::HasClosure { fields }
         }
         None => {
-            debug_assert!(layout.has_varying_stack_size(&env.layout_cache.interner, arena));
+            debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
 
             let fields: Vec<(String, TypeId)> = sortables
                 .into_iter()
