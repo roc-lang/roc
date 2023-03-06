@@ -9,10 +9,9 @@ use core::mem::MaybeUninit;
 use glue::Metadata;
 use roc_std::{RocDict, RocList, RocResult, RocStr};
 use std::borrow::{Borrow, Cow};
-use std::ffi::{CStr, OsStr};
+use std::ffi::{ OsStr};
 use std::fs::File;
 use std::io::Write;
-use std::os::raw::c_char;
 use std::path::Path;
 use std::time::Duration;
 

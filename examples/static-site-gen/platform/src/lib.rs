@@ -283,11 +283,16 @@ fn find_files(dir: &Path, file_paths: &mut Vec<PathBuf>) -> std::io::Result<()> 
 /// and there seems to be no good way to strip it. So we resort to some string manipulation.
 pub fn strip_windows_prefix(path_buf: PathBuf) -> std::path::PathBuf {
     #[cfg(not(windows))]
-    return path_buf;
+    {
+        path_buf
+    }
 
-    let path_str = path_buf.display().to_string();
+    #[cfg(windows)]
+    {
+        let path_str = path_buf.display().to_string();
 
-    std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
+        std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
+    }
 }
 
 fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
