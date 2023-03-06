@@ -2736,3 +2736,20 @@ fn inline_return_joinpoints_in_bool_lambda_set() {
         "#
     )
 }
+
+#[mono_test]
+fn inline_return_joinpoints_in_enum_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n
+                C -> \n -> n + 1
+                D -> \n -> n + 2
+            (caller A) (x + 1)
+        "#
+    )
+}

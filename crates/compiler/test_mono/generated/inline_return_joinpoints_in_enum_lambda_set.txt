@@ -1,0 +1,60 @@
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.258 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.258;
+
+procedure Test.2 (Test.3):
+    switch Test.3:
+        case 0:
+            let Test.16 : U8 = 0u8;
+            ret Test.16;
+    
+        case 1:
+            let Test.17 : U8 = 1u8;
+            ret Test.17;
+    
+        case 2:
+            let Test.19 : U8 = 2u8;
+            ret Test.19;
+    
+        default:
+            let Test.22 : U8 = 3u8;
+            ret Test.22;
+    
+
+procedure Test.4 (Test.5):
+    ret Test.5;
+
+procedure Test.6 (Test.7):
+    let Test.21 : I64 = 1i64;
+    let Test.20 : I64 = CallByName Num.19 Test.7 Test.21;
+    ret Test.20;
+
+procedure Test.8 (Test.9):
+    let Test.24 : I64 = 2i64;
+    let Test.23 : I64 = CallByName Num.19 Test.9 Test.24;
+    ret Test.23;
+
+procedure Test.0 (Test.30):
+    joinpoint Test.11 Test.1:
+        let Test.25 : I64 = 1i64;
+        let Test.13 : I64 = CallByName Num.19 Test.1 Test.25;
+        let Test.15 : U8 = 0u8;
+        let Test.14 : U8 = CallByName Test.2 Test.15;
+        switch Test.14:
+            case 0:
+                jump Test.11 Test.13;
+        
+            case 1:
+                let Test.12 : I64 = CallByName Test.4 Test.13;
+                ret Test.12;
+        
+            case 2:
+                let Test.12 : I64 = CallByName Test.6 Test.13;
+                ret Test.12;
+        
+            default:
+                let Test.12 : I64 = CallByName Test.8 Test.13;
+                ret Test.12;
+        
+    in
+    jump Test.11 Test.30;
