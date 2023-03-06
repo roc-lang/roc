@@ -2317,15 +2317,6 @@ impl<'a> Stmt<'a> {
         String::from_utf8(w).unwrap()
     }
 
-    pub fn is_terminal(&self) -> bool {
-        use Stmt::*;
-
-        matches!(
-            self,
-            Switch { .. } | Ret(_) | Jump(_, _) // TODO for Switch; is this the reason Lean only looks at the outermost `when`?
-        )
-    }
-
     pub fn if_then_else(
         arena: &'a Bump,
         condition_symbol: Symbol,
