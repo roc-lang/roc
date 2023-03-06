@@ -78,10 +78,10 @@ pub fn highlight_roc_code(code: &str) -> String {
             }
             Token::UpperIdent => {
                 buf = push_html_span(buf, current_text, "upperident");
-            } 
+            }
             Token::LowerIdent => {
                 buf = push_html_span(buf, current_text, "lowerident");
-            } 
+            }
             Token::Error | Token::Other => {
                 buf = push_html(buf, current_text);
             }

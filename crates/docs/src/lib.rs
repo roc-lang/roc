@@ -859,7 +859,6 @@ fn markdown_to_html(
         Some(&mut broken_link_callback),
     )
     .fold((0, 0), |(start_quote_count, end_quote_count), event| {
-
         match &event {
             // Replace this sequence (`>>>` syntax):
             //     Start(BlockQuote)
@@ -932,9 +931,9 @@ fn markdown_to_html(
             Event::End(CodeBlock(_)) => {
                 if in_code_block {
                     let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
-                    docs_parser.push(pulldown_cmark::Event::Html(
-                        pulldown_cmark::CowStr::from(highlighted_html),
-                    ));
+                    docs_parser.push(pulldown_cmark::Event::Html(pulldown_cmark::CowStr::from(
+                        highlighted_html,
+                    )));
                     to_highlight = String::new();
                     in_code_block = false;
                 }
