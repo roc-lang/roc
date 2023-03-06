@@ -10,7 +10,9 @@ description = "Our own markup language for Roc code. Used by the editor and the 
 roc_ast = { path = "../ast" }
 roc_module = { path = "../compiler/module" }
 roc_utils = { path = "../utils" }
-serde = { version = "1.0.144", features = ["derive"] }
 palette = "0.6.1"
-snafu = { version = "0.7.1", features = ["backtraces"] }
-bumpalo = { version = "3.11.1", features = ["collections"] }
+
+bumpalo.workspace = true
+serde.workspace = true
+snafu.workspace = true
+

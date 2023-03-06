@@ -7,4 +7,4 @@ edition = "2021"
 description = "Data structures for storing source-code-location information, used heavily for contextual error messages."
 
 [dependencies]
-static_assertions = "1.1.0"
+static_assertions.workspace = true

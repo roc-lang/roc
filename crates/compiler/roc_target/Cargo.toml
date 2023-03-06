@@ -7,6 +7,7 @@ edition = "2021"
 description = "Provides types and helpers for compiler targets such as default_x86_64."
 
 [dependencies]
-target-lexicon = "0.12.3"
-strum = "0.24.0"
-strum_macros = "0.24"
+
+strum.workspace = true
+strum_macros.workspace = true
+target-lexicon.workspace = true

@@ -89,14 +89,15 @@ roc_repl_expect = { path = "../repl_expect" }
 
 
 [dev-dependencies]
-pretty_assertions = "1.3.0"
 roc_test_utils = { path = "../test_utils" }
 roc_utils = { path = "../utils" }
 indoc = "1.0.7"
 serial_test = "0.9.0"
-criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 cli_utils = { path = "../cli_utils" }
-parking_lot = "0.12"
+
+criterion.workspace = true
+parking_lot.workspace = true
+pretty_assertions.workspace = true
 
 [[bench]]
 name = "time_bench"

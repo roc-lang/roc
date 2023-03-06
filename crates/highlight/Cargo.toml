@@ -7,5 +7,6 @@ edition = "2021"
 description = "For syntax highlighting, starts with a string and returns our markup nodes."
 
 [dependencies]
-peg = "0.8.1"
 roc_code_markup = { path = "../code_markup"}
+
+peg.workspace = true

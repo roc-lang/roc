@@ -15,4 +15,5 @@ roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
-arrayvec = "0.7.2"
+
+arrayvec.workspace = true

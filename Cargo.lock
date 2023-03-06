@@ -3378,7 +3378,6 @@ name = "roc_glue"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "clap 3.2.20",
  "cli_utils",
  "dircpy",
  "fnv",

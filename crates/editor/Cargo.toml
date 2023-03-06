@@ -33,10 +33,6 @@ roc_packaging = { path = "../packaging" }
 roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
 ven_graph = { path = "../vendor/pathfinding" }
-bumpalo = { version = "3.11.1", features = ["collections"] }
-arrayvec = "0.7.2"
-libc = "0.2.135"
-page_size = "0.4.2"
 # once winit 0.26 is out, check if copypasta can be updated simultaneously so they use the same versions for their dependencies. This will save build time.
 winit = "0.26.0"
 wgpu = "0.12.0"
@@ -45,7 +41,6 @@ glyph_brush = "0.7.5"
 log = "0.4.14"
 futures = "0.3.24"
 cgmath = "0.18.0"
-snafu = { version = "0.7.1", features = ["backtraces"] }
 colored = "2.0.0"
 pest = "2.3.1"
 pest_derive = "2.3.1"
@@ -54,11 +49,16 @@ palette = "0.6.1"
 confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }
-serde = { version = "1.0.144", features = ["derive"] }
 nonempty = "0.8.0"
 threadpool = "1.8.1"
 
+arrayvec.workspace = true
+bumpalo.workspace = true
 fs_extra.workspace = true
+libc.workspace = true
+page_size.workspace = true
+serde.workspace = true
+snafu.workspace = true
 
 [dependencies.bytemuck]
 version = "1.12.1"
@@ -66,5 +66,6 @@ features = ["derive"]
 
 [dev-dependencies]
 rand = "0.8.4"
-tempfile = "3.2.0"
 uuid = { version = "1.1.2", features = ["v4"] }
+
+tempfile.workspace = true
