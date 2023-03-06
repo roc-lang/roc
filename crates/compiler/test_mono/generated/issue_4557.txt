@@ -12,8 +12,24 @@ procedure Test.1 (Test.2, Test.3):
     let Test.31 : Int1 = StructAtIndex 1 Test.17;
     let Test.19 : Int1 = CallByName Test.1 Test.31 Test.32;
     let Test.26 : {} = Struct {};
-    joinpoint Test.27 Test.28:
-        jump Test.27 Test.28;
+    joinpoint Test.27 Test.21:
+        let Test.23 : {} = Struct {};
+        joinpoint Test.24 Test.22:
+            let Test.20 : Int1 = CallByName Bool.11 Test.21 Test.22;
+            dec Test.22;
+            dec Test.21;
+            let Test.18 : Int1 = CallByName Bool.4 Test.19 Test.20;
+            ret Test.18;
+        in
+        switch Test.31:
+            case 0:
+                let Test.25 : Str = CallByName Test.9 Test.23;
+                jump Test.24 Test.25;
+        
+            default:
+                let Test.25 : Str = CallByName Test.11 Test.23;
+                jump Test.24 Test.25;
+        
     in
     switch Test.32:
         case 0:

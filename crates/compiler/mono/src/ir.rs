@@ -10840,7 +10840,7 @@ fn union_lambda_set_to_switch<'a>(
         return empty_lambda_set_error(env);
     }
 
-    let (opt_join, assigned, hole) = match hole {
+    let (opt_join, branch_assigned, branch_hole) = match hole {
         Stmt::Ret(_) => {
             // No need to jump to a joinpoint, inline the return in each statement as-is.
             // This makes further analyses, like TCO, easier as well.
@@ -10874,8 +10874,8 @@ fn union_lambda_set_to_switch<'a>(
             argument_symbols,
             argument_layouts,
             return_layout,
-            assigned,
-            hole,
+            branch_assigned,
+            branch_hole,
         );
         branches.push((i as u64, BranchInfo::None, stmt));
     }
@@ -11017,7 +11017,7 @@ fn enum_lambda_set_to_switch<'a>(
 ) -> Stmt<'a> {
     debug_assert_ne!(lambda_set.len(), 0);
 
-    let (opt_join, assigned, hole) = match hole {
+    let (opt_join, branch_assigned, branch_hole) = match hole {
         Stmt::Ret(_) => {
             // No need to jump to a joinpoint, inline the return in each statement as-is.
             // This makes further analyses, like TCO, easier as well.
@@ -11041,8 +11041,8 @@ fn enum_lambda_set_to_switch<'a>(
             argument_symbols,
             argument_layouts,
             return_layout,
-            assigned,
-            hole,
+            branch_assigned,
+            branch_hole,
         );
         branches.push((i as u64, BranchInfo::None, stmt));
     }
