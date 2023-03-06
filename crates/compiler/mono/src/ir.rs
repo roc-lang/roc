@@ -11001,18 +11001,32 @@ fn enum_lambda_set_to_switch<'a>(
 ) -> Stmt<'a> {
     debug_assert_ne!(lambda_set.len(), 0);
 
-    let join_point_id = JoinPointId(env.unique_symbol());
+    let (opt_join, assigned, hole) = match hole {
+        Stmt::Ret(_) => {
+            // No need to jump to a joinpoint, inline the return in each statement as-is.
+            // This makes further analyses, like TCO, easier as well.
+            (None, assigned, hole)
+        }
+        _ => {
+            let join_point_id = JoinPointId(env.unique_symbol());
+            let assigned = env.unique_symbol();
+            let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
+
+            (Some(join_point_id), assigned, &*env.arena.alloc(hole))
+        }
+    };
 
     let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
 
     for (i, lambda_name) in lambda_set.into_iter().enumerate() {
         let stmt = enum_lambda_set_branch(
             env,
-            join_point_id,
             lambda_name,
             argument_symbols,
             argument_layouts,
             return_layout,
+            assigned,
+            hole,
         );
         branches.push((i as u64, BranchInfo::None, stmt));
     }
@@ -11031,17 +11045,22 @@ fn enum_lambda_set_to_switch<'a>(
         ret_layout: return_layout,
     };
 
-    let param = Param {
-        symbol: assigned,
-        layout: return_layout,
-        ownership: Ownership::Owned,
-    };
+    match opt_join {
+        None => switch,
+        Some(join_point_id) => {
+            let param = Param {
+                symbol: assigned,
+                layout: return_layout,
+                ownership: Ownership::Owned,
+            };
 
-    Stmt::Join {
-        id: join_point_id,
-        parameters: &*env.arena.alloc([param]),
-        body: hole,
-        remainder: env.arena.alloc(switch),
+            Stmt::Join {
+                id: join_point_id,
+                parameters: &*env.arena.alloc([param]),
+                body: hole,
+                remainder: env.arena.alloc(switch),
+            }
+        }
     }
 }
 
@@ -11049,18 +11068,13 @@ fn enum_lambda_set_to_switch<'a>(
 #[allow(clippy::too_many_arguments)]
 fn enum_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
-    join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
     argument_symbols: &'a [Symbol],
     argument_layouts: &'a [InLayout<'a>],
     return_layout: InLayout<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let result_symbol = env.unique_symbol();
-
-    let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
-
-    let assigned = result_symbol;
-
     let call = self::Call {
         call_type: CallType::ByName {
             name: lambda_name,
@@ -11070,7 +11084,7 @@ fn enum_lambda_set_branch<'a>(
         },
         arguments: argument_symbols,
     };
-    build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
+    build_call(env, call, assigned, return_layout, hole)
 }
 
 #[allow(clippy::too_many_arguments)]
