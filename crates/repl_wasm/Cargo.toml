@@ -2,10 +2,10 @@
 name = "roc_repl_wasm"
 description = "Provides a build of the REPL for the Roc website using WebAssembly."
 
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+authors = ["The Roc Contributors"]
+edition = "2021"
+license = "UPL-1.0"
+version = "0.0.1"
 
 [lib]
 crate-type = ["cdylib"]
@@ -20,6 +20,7 @@ tempfile.workspace = true
 bumpalo.workspace = true
 console_error_panic_hook = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+getrandom = { version = "0.2", features = ["js"] } # not a direct dependency, needed because of https://docs.rs/getrandom/latest/getrandom/#webassembly-support
 js-sys.workspace = true
 wasm-bindgen-futures.workspace = true
 wasm-bindgen.workspace = true
