@@ -13,10 +13,10 @@ path = "src/lib.rs"
 
 [dependencies]
 roc_mono = { path = "../compiler/mono" }
-roc_build = { path = "../compiler/build" }
 roc_collections = { path = "../compiler/collections" }
 roc_error_macros = { path = "../error_macros" }
 roc_load = { path = "../compiler/load" }
+roc_target = { path = "../compiler/roc_target" }
 roc_packaging = { path = "../packaging" }
 roc_reporting = { path = "../reporting" }
 
