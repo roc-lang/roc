@@ -7,7 +7,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_can = { path = "../can" }
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
 roc_module = { path = "../module" }

@@ -19,7 +19,6 @@ bumpalo.workspace = true
 criterion.workspace = true
 serde-xml-rs.workspace = true
 serde.workspace = true
-strip-ansi-escapes.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]

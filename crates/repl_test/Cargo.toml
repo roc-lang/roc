@@ -30,3 +30,6 @@ target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
 wasm = ["target-wasm32"]
 
 target-all = ["target-aarch64", "target-arm", "target-x86", "target-x86_64", "target-wasm32"]
+
+[package.metadata.cargo-udeps.ignore]
+development = ["roc_wasm_interp"]

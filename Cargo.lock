@@ -463,7 +463,6 @@ dependencies = [
  "roc_utils",
  "serde",
  "serde-xml-rs",
- "strip-ansi-escapes",
  "tempfile",
 ]
 
@@ -3196,7 +3195,6 @@ dependencies = [
 name = "roc_derive_key"
 version = "0.0.1"
 dependencies = [
- "roc_can",
  "roc_collections",
  "roc_error_macros",
  "roc_module",
@@ -3702,7 +3700,6 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
- "roc_utils",
  "tempfile",
  "wasi_libc_sys",
  "wasm-bindgen",
@@ -3800,7 +3797,6 @@ name = "roc_std"
 version = "0.0.1"
 dependencies = [
  "arrayvec 0.7.2",
- "indoc",
  "libc",
  "pretty_assertions",
  "quickcheck",

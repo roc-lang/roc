@@ -12,7 +12,6 @@ crate-type = ["cdylib"]
 
 [build-dependencies]
 roc_builtins = { path = "../compiler/builtins" }
-roc_utils = { path = "../utils" }
 wasi_libc_sys = { path = "../wasi-libc-sys" }
 
 tempfile.workspace = true

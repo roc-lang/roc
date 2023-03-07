@@ -15,7 +15,6 @@ serde = { workspace = true, optional = true }
 static_assertions.workspace = true
 
 [dev-dependencies]
-indoc.workspace = true
 libc.workspace = true
 pretty_assertions.workspace = true
 quickcheck.workspace = true
@@ -25,3 +24,6 @@ serde_json.workspace = true
 [features]
 serde = ["dep:serde"]
 std = []
+
+[package.metadata.cargo-udeps.ignore]
+development = ["quickcheck_macros", "serde_json"]
