@@ -153,7 +153,7 @@ strum_macros = "0.24.1"
 syn = { version = "1.0.81", features = ["full", "extra-traits"] }
 tar = "0.4.38"
 target-lexicon = "0.12.3"
-tempfile = "3.2.0"
+tempfile = "=3.2.0"
 threadpool = "1.8.1"
 tracing = { version = "0.1.36", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
