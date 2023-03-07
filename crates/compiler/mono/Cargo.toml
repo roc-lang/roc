@@ -1,10 +1,11 @@
 [package]
 name = "roc_mono"
+description = "Roc's main intermediate representation (IR), which is responsible for monomorphization, defunctionalization, inserting ref-count instructions, and transforming a Roc program into a form that is easy to consume by a backend."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Roc's main intermediate representation (IR), which is responsible for monomorphization, defunctionalization, inserting ref-count instructions, and transforming a Roc program into a form that is easy to consume by a backend."
 
 [dependencies]
 roc_collections = { path = "../collections" }

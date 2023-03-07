@@ -1,10 +1,11 @@
 [package]
 name = "roc_types"
+description = "Various representations and utilities for dealing with types in the Roc compiler."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Various representations and utilities for dealing with types in the Roc compiler."
 
 [dependencies]
 roc_collections = { path = "../collections" }

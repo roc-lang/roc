@@ -1,10 +1,11 @@
 [package]
 name = "roc_highlight"
+description = "For syntax highlighting, starts with a string and returns our markup nodes."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "For syntax highlighting, starts with a string and returns our markup nodes."
 
 [dependencies]
 roc_code_markup = { path = "../code_markup"}

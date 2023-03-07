@@ -1,7 +1,8 @@
 [package]
 name = "roc_ident"
+description = "Implements data structures used for efficiently representing small strings, like identifiers."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Implements data structures used for efficiently representing small strings, like identifiers."

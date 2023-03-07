@@ -1,10 +1,11 @@
 [package]
 name = "roc_parse"
+description = "Implements the Roc parser, which transforms a textual representation of a Roc program to an AST."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Implements the Roc parser, which transforms a textual representation of a Roc program to an AST."
 
 [features]
 "parse_debug_trace" = []
@@ -18,8 +19,7 @@ bumpalo.workspace = true
 encode_unicode.workspace = true
 
 [dev-dependencies]
-proptest = "1.0.0"
-
+proptest.workspace = true
 criterion.workspace = true
 pretty_assertions.workspace = true
 indoc.workspace = true

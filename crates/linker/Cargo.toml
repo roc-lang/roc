@@ -1,11 +1,12 @@
 [package]
 name = "roc_linker"
+description = "A surgical linker for Roc"
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-description = "A surgical linker for Roc"
 
 [lib]
 name = "roc_linker"

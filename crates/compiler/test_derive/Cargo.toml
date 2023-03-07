@@ -1,10 +1,11 @@
 [package]
 name = "test_derive"
+description = "Tests Roc's auto-derivers."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Tests Roc's auto-derivers."
 
 [[test]]
 name = "test_derive"

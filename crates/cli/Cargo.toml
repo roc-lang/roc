@@ -1,12 +1,13 @@
 [package]
 name = "roc_cli"
+description = "The Roc binary that brings together all functionality in the Roc toolset."
+default-run = "roc"
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-description = "The Roc binary that brings together all functionality in the Roc toolset."
-default-run = "roc"
 
 [[bin]]
 name = "roc"
@@ -80,7 +81,6 @@ tempfile.workspace = true
 strum.workspace = true
 libloading.workspace = true
 signal-hook.workspace = true
-
 inkwell.workspace = true
 
 # for now, uses unix/libc functions that windows does not support
@@ -91,12 +91,12 @@ roc_repl_expect = { path = "../repl_expect" }
 [dev-dependencies]
 roc_test_utils = { path = "../test_utils" }
 roc_utils = { path = "../utils" }
-serial_test = "1.0.0"
 cli_utils = { path = "../cli_utils" }
 
 criterion.workspace = true
 indoc.workspace = true
 parking_lot.workspace = true
+serial_test.workspace = true
 pretty_assertions.workspace = true
 
 [[bench]]

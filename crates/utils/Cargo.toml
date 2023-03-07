@@ -1,12 +1,13 @@
 [package]
 name = "roc_utils"
+description = "Utility functions used all over the code base."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Utility functions used all over the code base."
 
 [dependencies]
-snafu = { version = "0.7.1", features = ["backtraces"] }
+snafu.workspace = true
 
 [dev-dependencies]

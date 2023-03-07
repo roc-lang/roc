@@ -1,10 +1,11 @@
 [package]
 name = "roc_exhaustive"
+description = "Provides exhaustiveness checking for Roc."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Provides exhaustiveness checking for Roc."
 
 [dependencies]
 roc_collections = { path = "../collections" }

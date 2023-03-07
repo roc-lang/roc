@@ -1,16 +1,18 @@
 [package]
 name = "roc_module"
+description = "Implements data structures used for efficiently representing unique modules and identifiers in Roc programs."
+
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Implements data structures used for efficiently representing unique modules and identifiers in Roc programs."
 
 [dependencies]
 roc_region = { path = "../region" }
 roc_ident = { path = "../ident" }
 roc_collections = { path = "../collections" }
 roc_error_macros = {path = "../../error_macros"}
+
 bumpalo.workspace = true
 static_assertions.workspace = true
 snafu.workspace = true

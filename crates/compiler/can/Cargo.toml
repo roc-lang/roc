@@ -1,10 +1,11 @@
 [package]
 name = "roc_can"
+description = "Canonicalize a roc abstract syntax tree, resolving symbols, re-ordering definitions, and preparing a module for type inference."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Canonicalize a roc abstract syntax tree, resolving symbols, re-ordering definitions, and preparing a module for type inference."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -17,11 +18,11 @@ roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_serialize = { path = "../serialize" }
 
+ven_pretty = { path = "../../vendor/pretty" }
+
 bumpalo.workspace = true
 static_assertions.workspace = true
 bitvec.workspace = true
-
-ven_pretty = { path = "../../vendor/pretty" }
 
 [dev-dependencies]
 pretty_assertions.workspace = true

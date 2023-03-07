@@ -1,9 +1,10 @@
 [package]
 name = "roc_debug_flags"
+description = "Environment variables that can be toggled to aid debugging of the compiler itself."
+
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Environment variables that can be toggled to aid debugging of the compiler itself."
 
 [dependencies]

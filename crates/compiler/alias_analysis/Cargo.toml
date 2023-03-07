@@ -1,8 +1,9 @@
 [package]
+name = "roc_alias_analysis"
+
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-name = "roc_alias_analysis"
 version.workspace = true
 
 [dependencies]
@@ -12,4 +13,5 @@ roc_error_macros = {path = "../../error_macros"}
 roc_module = {path = "../module"}
 roc_mono = {path = "../mono"}
 roc_debug_flags = {path = "../debug_flags"}
+
 bumpalo.workspace = true

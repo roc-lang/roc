@@ -1,5 +1,6 @@
 [package]
 name = "valgrind"
+
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -13,6 +14,7 @@ roc_load = { path = "../compiler/load" }
 roc_reporting = { path = "../reporting" }
 roc_linker = { path = "../linker" }
 roc_packaging = { path = "../packaging" }
+
 bumpalo.workspace = true
 target-lexicon.workspace = true
 tempfile.workspace = true

@@ -1,10 +1,11 @@
 [package]
 name = "roc_load_internal"
+description = "The internal implementation of roc_load, separate from roc_load to support caching."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "The internal implementation of roc_load, separate from roc_load to support caching."
 
 [dependencies]
 roc_collections = { path = "../collections" }

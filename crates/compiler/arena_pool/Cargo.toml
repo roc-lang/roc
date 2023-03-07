@@ -1,11 +1,12 @@
 [package]
 name = "arena-pool"
+description = "An implementation of an arena allocator designed for the compiler's workloads."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-description = "An implementation of an arena allocator designed for the compiler's workloads."
 
 [dependencies]
 roc_error_macros = { path = "../../error_macros" }

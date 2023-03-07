@@ -1,13 +1,12 @@
 [package]
 name = "cli_utils"
+description = "Provides shared code for cli tests and benchmarks."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 edition.workspace = true
-description = "Provides shared code for cli tests and benchmarks."
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
@@ -16,12 +15,12 @@ roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
 roc_utils = { path = "../utils" }
 
-bumpalo = { version = "3.8.0", features = ["collections"] }
-criterion = { git = "https://github.com/Anton-4/criterion.rs"}
-serde = { version = "1.0.130", features = ["derive"] }
-serde-xml-rs = "0.5.1"
-strip-ansi-escapes = "0.1.1"
-tempfile = "3.2.0"
+bumpalo.workspace = true
+criterion.workspace = true
+serde.workspace = true
+serde-xml-rs.workspace = true
+strip-ansi-escapes.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-rlimit = "0.6.2"
+rlimit.workspace = true

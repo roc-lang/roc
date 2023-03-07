@@ -1,10 +1,11 @@
 [package]
 name = "roc_builtins"
+description = "Provides the Roc functions and modules that are implicitly imported into every module."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Provides the Roc functions and modules that are implicitly imported into every module."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -12,12 +13,14 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_target = { path = "../roc_target" }
 roc_utils = { path = "../../utils" }
+
 tempfile.workspace = true
 
 [build-dependencies]
+roc_utils = { path = "../../utils" }
+
 # dunce can be removed once ziglang/zig#5109 is fixed
 dunce = "1.0.3"
-roc_utils = { path = "../../utils" }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 tempfile.workspace = true

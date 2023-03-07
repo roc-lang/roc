@@ -1,10 +1,11 @@
 [package]
 name = "roc_editor"
+description = "An editor for Roc"
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "An editor for Roc"
 
 [package.metadata.cargo-udeps.ignore]
 # confy is currently unused but should not be removed
@@ -33,25 +34,23 @@ roc_packaging = { path = "../packaging" }
 roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
 ven_graph = { path = "../vendor/pathfinding" }
-# once winit 0.26 is out, check if copypasta can be updated simultaneously so they use the same versions for their dependencies. This will save build time.
-winit = "0.26.0"
-wgpu = "0.12.0"
-wgpu_glyph = "0.16.0"
-glyph_brush = "0.7.5"
-log = "0.4.14"
-futures = "0.3.24"
-cgmath = "0.18.0"
-colored = "2.0.0"
-pest = "2.3.1"
-pest_derive = "2.3.1"
-copypasta = "0.8.1"
-palette = "0.6.1"
-confy = { git = 'https://github.com/rust-cli/confy', features = [
-  "yaml_conf"
-], default-features = false }
-nonempty = "0.8.0"
-threadpool = "1.8.1"
 
+winit.workspace = true
+wgpu.workspace = true
+wgpu_glyph.workspace = true
+glyph_brush.workspace = true
+log.workspace = true
+futures.workspace = true
+cgmath.workspace = true
+colored.workspace = true
+pest.workspace = true
+pest_derive.workspace = true
+copypasta.workspace = true
+palette.workspace = true
+confy.workspace = true
+nonempty.workspace = true
+threadpool.workspace = true
+bytemuck.workspace = true
 arrayvec.workspace = true
 bumpalo.workspace = true
 fs_extra.workspace = true
@@ -60,12 +59,7 @@ page_size.workspace = true
 serde.workspace = true
 snafu.workspace = true
 
-[dependencies.bytemuck]
-version = "1.12.1"
-features = ["derive"]
-
 [dev-dependencies]
-rand = "0.8.4"
-uuid = { version = "1.1.2", features = ["v4"] }
-
+rand.workspace = true
+uuid.workspace = true
 tempfile.workspace = true

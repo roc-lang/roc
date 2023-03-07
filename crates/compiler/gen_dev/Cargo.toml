@@ -1,6 +1,7 @@
 [package]
 name = "roc_gen_dev"
 description = "The development backend for the Roc compiler"
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true

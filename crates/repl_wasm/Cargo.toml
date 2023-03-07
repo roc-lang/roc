@@ -1,10 +1,11 @@
 [package]
-edition.workspace = true
 name = "roc_repl_wasm"
+description = "Provides a build of the REPL for the Roc website using WebAssembly."
+
+edition.workspace = true
 version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Provides a build of the REPL for the Roc website using WebAssembly."
 
 [lib]
 crate-type = ["cdylib"]
@@ -13,15 +14,16 @@ crate-type = ["cdylib"]
 roc_builtins = {path = "../compiler/builtins"}
 roc_utils = {path = "../utils"}
 wasi_libc_sys = { path = "../wasi-libc-sys" }
+
 tempfile.workspace = true
 
 [dependencies]
 bumpalo.workspace = true
-console_error_panic_hook = {version = "0.1.7", optional = true}
-futures = {version = "0.3.24", optional = true}
-js-sys = "0.3.60"
-wasm-bindgen = "0.2.79"
-wasm-bindgen-futures = "0.4.33"
+console_error_panic_hook = {workspace = true, optional = true}
+futures = {workspace = true, optional = true}
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
 
 roc_collections = {path = "../compiler/collections"}
 roc_gen_wasm = {path = "../compiler/gen_wasm"}

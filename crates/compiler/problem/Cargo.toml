@@ -1,10 +1,11 @@
 [package]
 name = "roc_problem"
+description = "Provides types to describe problems that can occur when compiling Roc code."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Provides types to describe problems that can occur when compiling Roc code."
 
 [dependencies]
 roc_collections = { path = "../collections" }

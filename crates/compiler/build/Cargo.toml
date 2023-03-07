@@ -1,10 +1,11 @@
 [package]
 name = "roc_build"
+description = "Responsible for coordinating building and linking of a Roc app with its host."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Responsible for coordinating building and linking of a Roc app with its host."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -41,7 +42,7 @@ inkwell.workspace = true
 indoc.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-serde_json = "1.0.85"
+serde_json.workspace = true
 
 [features]
 target-arm = []

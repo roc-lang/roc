@@ -1,19 +1,13 @@
 [package]
 name = "roc_repl_expect"
+description = "Supports evaluating expect and printing contextual information when they fail."
+
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Supports evaluating expect and printing contextual information when they fail."
 
 [dependencies]
-bumpalo.workspace = true
-target-lexicon.workspace = true
-libloading.workspace = true
-signal-hook.workspace = true
-libc.workspace = true
-inkwell.workspace = true
-
 roc_builtins = {path = "../compiler/builtins"}
 roc_can = {path = "../compiler/can"}
 roc_collections = {path = "../compiler/collections"}
@@ -31,6 +25,13 @@ roc_gen_llvm = {path = "../compiler/gen_llvm"}
 roc_region = { path = "../compiler/region" }
 roc_build = { path = "../compiler/build" }
 roc_error_macros = { path = "../error_macros" }
+
+bumpalo.workspace = true
+target-lexicon.workspace = true
+libloading.workspace = true
+signal-hook.workspace = true
+libc.workspace = true
+inkwell.workspace = true
 
 [dev-dependencies]
 roc_build = { path = "../compiler/build", features = ["target-aarch64", "target-x86_64"]  }

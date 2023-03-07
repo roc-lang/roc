@@ -1,23 +1,24 @@
 [package]
-edition.workspace = true
 name = "repl_test"
+description = "Tests the roc REPL."
+
+edition.workspace = true
 version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Tests the roc REPL."
 
 [build-dependencies]
 roc_cli = {path = "../cli"}
 
 [dev-dependencies]
-indoc = "1.0.7"
-strip-ansi-escapes = "0.1.1"
-bumpalo.workspace = true
-
 roc_build = { path = "../compiler/build" }
 roc_repl_cli = {path = "../repl_cli"}
 roc_test_utils = {path = "../test_utils"}
 roc_wasm_interp = {path = "../wasm_interp"}
+
+indoc.workspace = true
+strip-ansi-escapes.workspace = true
+bumpalo.workspace = true
 
 [features]
 default = ["target-aarch64", "target-x86_64", "target-wasm32"]

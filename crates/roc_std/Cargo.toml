@@ -1,25 +1,26 @@
 [package]
-authors.workspace = true
+name = "roc_std"
 description = "Rust representations of Roc data structures"
+readme = "README.md"
+
+authors.workspace = true
 edition.workspace = true
 license.workspace = true
-name = "roc_std"
-readme = "README.md"
 repository.workspace = true
 version.workspace = true
 
 [dependencies]
-static_assertions = "1.1.0"
-arrayvec = "0.7.2"
-serde = { version = "1", optional = true }
+static_assertions.workspace = true
+arrayvec.workspace = true
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
-indoc = "1.0.3"
-libc = "0.2.135"
-pretty_assertions = "1.0.0"
-quickcheck = "1.0.3"
-quickcheck_macros = "1.0.0"
-serde_json = "1.0.83"
+indoc.workspace = true
+libc.workspace = true
+pretty_assertions.workspace = true
+quickcheck.workspace = true
+quickcheck_macros.workspace = true
+serde_json.workspace = true
 
 [features]
 std = []

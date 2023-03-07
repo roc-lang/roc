@@ -1,10 +1,11 @@
 [package]
 name = "roc_collections"
+description = "Domain-specific collections created for the needs of the compiler."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Domain-specific collections created for the needs of the compiler."
 
 [dependencies]
 fnv.workspace = true

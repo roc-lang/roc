@@ -1,10 +1,11 @@
 [package]
 name = "roc_glue"
+description = "Generates code needed for platform hosts to communicate with Roc apps. This tool is not necessary for writing a platform in another language, however, it's a great convenience! Currently supports Rust platforms, and the plan is to support any language via a plugin model."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Generates code needed for platform hosts to communicate with Roc apps. This tool is not necessary for writing a platform in another language, however, it's a great convenience! Currently supports Rust platforms, and the plan is to support any language via a plugin model."
 
 [dependencies]
 roc_std = { path = "../roc_std"}
@@ -20,17 +21,17 @@ roc_collections = { path = "../compiler/collections" }
 roc_target = { path = "../compiler/roc_target" }
 roc_error_macros = { path = "../error_macros" }
 roc_tracing = { path = "../tracing" }
-indexmap = "1.8.1"
 
 bumpalo.workspace = true
 fnv.workspace = true
+indexmap.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 target-lexicon.workspace = true
 
 [dev-dependencies]
 cli_utils = { path = "../cli_utils" }
-dircpy = "0.3.13"
+dircpy.workspace = true
 
 indoc.workspace = true
 pretty_assertions.workspace = true

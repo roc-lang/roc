@@ -1,13 +1,14 @@
 [package]
 name = "roc_test_utils"
+description = "Utility functions used all over the code base."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Utility functions used all over the code base."
 
 [dependencies]
-pretty_assertions = "1.3.0"
-remove_dir_all = "0.8.0"
+pretty_assertions.workspace = true
+remove_dir_all.workspace = true
 
 [dev-dependencies]

@@ -1,10 +1,11 @@
 [package]
 name = "roc_gen_wasm"
+description = "Provides the WASM backend to generate Roc binaries."
+
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Provides the WASM backend to generate Roc binaries."
 
 [dependencies]
 roc_builtins = { path = "../builtins" }

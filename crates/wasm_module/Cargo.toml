@@ -1,10 +1,11 @@
 [package]
 name = "roc_wasm_module"
+description = "Parse, manipulate, and serialize WebAssembly modules."
+
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Parse, manipulate, and serialize WebAssembly modules."
 
 [dependencies]
 roc_error_macros = { path = "../error_macros" }

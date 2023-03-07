@@ -1,10 +1,11 @@
 [package]
 name = "roc_solve"
+description = "The entry point of Roc's type inference system. Implements type inference and specialization of abilities."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "The entry point of Roc's type inference system. Implements type inference and specialization of abilities."
 
 [dependencies]
 roc_collections = { path = "../collections" }

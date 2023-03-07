@@ -1,16 +1,17 @@
 [package]
 name = "roc_code_markup"
+description = "Our own markup language for Roc code. Used by the editor and the docs."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Our own markup language for Roc code. Used by the editor and the docs."
 
 [dependencies]
 roc_ast = { path = "../ast" }
 roc_module = { path = "../compiler/module" }
 roc_utils = { path = "../utils" }
-palette = "0.6.1"
+palette.workspace = true
 
 bumpalo.workspace = true
 serde.workspace = true

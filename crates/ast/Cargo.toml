@@ -1,10 +1,11 @@
 [package]
 name = "roc_ast"
+description = "AST as used by the editor and (soon) docs. In contrast to the compiler, these types do not keep track of a location in a file."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "AST as used by the editor and (soon) docs. In contrast to the compiler, these types do not keep track of a location in a file."
 
 [dependencies]
 roc_builtins = { path = "../compiler/builtins"}
@@ -35,5 +36,4 @@ libc.workspace = true
 indoc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3.9", features = ["memoryapi"]}
-
+winapi.workspace = true

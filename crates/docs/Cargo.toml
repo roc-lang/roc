@@ -1,13 +1,13 @@
 [package]
 name = "roc_docs"
+description = "Generates html documentation from Roc files and is used for Rocs builtins."
+
 version.workspace = true
 license.workspace = true
 authors.workspace = true
 edition.workspace = true
-description = "Generates html documentation from Roc files and is used for Rocs builtins."
 
 [dependencies]
-pulldown-cmark = { version = "0.9.2", default-features = false }
 roc_ast = { path = "../ast" }
 roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }
@@ -22,6 +22,8 @@ roc_collections = { path = "../compiler/collections" }
 roc_highlight = { path = "../highlight"}
 roc_packaging = { path = "../packaging"}
 roc_reporting = { path = "../reporting"}
+
+pulldown-cmark.workspace = true
 bumpalo.workspace = true
 snafu.workspace  = true
 peg.workspace = true

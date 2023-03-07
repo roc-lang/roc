@@ -1,10 +1,11 @@
 [package]
 name = "roc_derive"
+description = "Provides auto-derivers for builtin abilities like `Hash` and `Decode`."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Provides auto-derivers for builtin abilities like `Hash` and `Decode`."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -15,6 +16,7 @@ roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
+
 bumpalo.workspace = true
 
 [features]

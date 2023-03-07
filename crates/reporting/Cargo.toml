@@ -1,10 +1,11 @@
 [package]
 name = "roc_reporting"
+description = "Responsible for generating warning and error messages."
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Responsible for generating warning and error messages."
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
@@ -20,6 +21,7 @@ roc_fmt = { path = "../compiler/fmt" }
 roc_solve_problem = { path = "../compiler/solve_problem" }
 roc_std = { path = "../roc_std" }
 ven_pretty = { path = "../vendor/pretty" }
+
 distance.workspace = true
 bumpalo.workspace = true
 

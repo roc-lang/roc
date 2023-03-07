@@ -1,9 +1,10 @@
 [package]
-authors.workspace = true
 description = "Rust wrapper for a WebAssembly test platform built on libc"
+name = "wasi_libc_sys"
+
+authors.workspace = true
 edition.workspace = true
 license.workspace = true
-name = "wasi_libc_sys"
 repository.workspace = true
 version.workspace = true
 

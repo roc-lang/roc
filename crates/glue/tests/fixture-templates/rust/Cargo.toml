@@ -11,11 +11,12 @@
 
 [package]
 name = "host"
+links = "app"
+
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-links = "app"
 
 [lib]
 name = "host"
@@ -28,7 +29,8 @@ path = "src/main.rs"
 
 [dependencies]
 roc_std = { path = "../../../../roc_std" }
-libc = "0.2"
-indoc = "1.0.6"
+
+libc.workspace = true
+indoc.workspace = true
 
 [workspace]
