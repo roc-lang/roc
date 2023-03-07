@@ -1,29 +1,26 @@
 procedure Test.1 (Test.2):
-    let Test.14 : Int1 = false;
-    ret Test.14;
+    let Test.11 : Int1 = false;
+    ret Test.11;
 
-procedure Test.3 (Test.13):
-    let Test.15 : Str = "t1";
+procedure Test.3 (Test.10):
+    let Test.12 : Str = "t1";
+    ret Test.12;
+
+procedure Test.4 (Test.13):
+    let Test.15 : Str = "t2";
     ret Test.15;
 
-procedure Test.4 (Test.16):
-    let Test.18 : Str = "t2";
-    ret Test.18;
-
 procedure Test.0 ():
-    let Test.19 : Str = "abc";
-    let Test.6 : Int1 = CallByName Test.1 Test.19;
-    dec Test.19;
+    let Test.16 : Str = "abc";
+    let Test.6 : Int1 = CallByName Test.1 Test.16;
+    dec Test.16;
     let Test.9 : {} = Struct {};
-    joinpoint Test.10 Test.8:
-        ret Test.8;
-    in
     switch Test.6:
         case 0:
-            let Test.11 : Str = CallByName Test.3 Test.9;
-            jump Test.10 Test.11;
+            let Test.8 : Str = CallByName Test.3 Test.9;
+            ret Test.8;
     
         default:
-            let Test.12 : Str = CallByName Test.4 Test.9;
-            jump Test.10 Test.12;
+            let Test.8 : Str = CallByName Test.4 Test.9;
+            ret Test.8;
     

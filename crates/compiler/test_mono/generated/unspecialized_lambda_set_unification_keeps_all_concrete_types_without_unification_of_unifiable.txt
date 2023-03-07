@@ -56,26 +56,23 @@ procedure Encode.23 (Encode.94, Encode.102, Encode.96):
 
 procedure Encode.23 (Encode.94, Encode.102, Encode.96):
     let Encode.117 : U8 = GetTagId Encode.102;
-    joinpoint Encode.118 Encode.116:
-        ret Encode.116;
-    in
     switch Encode.117:
         case 0:
-            let Encode.119 : List U8 = CallByName #Derived.2 Encode.94 Encode.96 Encode.102;
-            jump Encode.118 Encode.119;
+            let Encode.116 : List U8 = CallByName #Derived.2 Encode.94 Encode.96 Encode.102;
+            ret Encode.116;
     
         default:
-            let Encode.120 : List U8 = CallByName #Derived.7 Encode.94 Encode.96 Encode.102;
-            jump Encode.118 Encode.120;
+            let Encode.116 : List U8 = CallByName #Derived.7 Encode.94 Encode.96 Encode.102;
+            ret Encode.116;
     
 
 procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.132 : List U8 = CallByName Json.129 Encode.94 Encode.96 Encode.102;
-    ret Encode.132;
+    let Encode.129 : List U8 = CallByName Json.129 Encode.94 Encode.96 Encode.102;
+    ret Encode.129;
 
 procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.136 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
-    Crash Encode.136
+    let Encode.133 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Crash Encode.133
 
 procedure Encode.25 (Encode.100, Encode.101):
     let Encode.104 : List U8 = Array [];

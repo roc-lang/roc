@@ -1,0 +1,34 @@
+procedure Bool.1 ():
+    let Bool.23 : Int1 = false;
+    ret Bool.23;
+
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.256 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.256;
+
+procedure Test.3 (Test.4):
+    ret Test.4;
+
+procedure Test.0 (Test.14):
+    joinpoint Test.5 Test.1:
+        joinpoint Test.10 Test.2:
+            let Test.8 : I64 = 1i64;
+            let Test.7 : I64 = CallByName Num.19 Test.1 Test.8;
+            switch Test.2:
+                case 0:
+                    jump Test.5 Test.7;
+            
+                default:
+                    let Test.6 : I64 = CallByName Test.3 Test.7;
+                    ret Test.6;
+            
+        in
+        let Test.12 : Int1 = CallByName Bool.1;
+        if Test.12 then
+            let Test.9 : Int1 = false;
+            jump Test.10 Test.9;
+        else
+            let Test.9 : Int1 = true;
+            jump Test.10 Test.9;
+    in
+    jump Test.5 Test.14;
