@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 #[macro_use]
 extern crate pretty_assertions;
 extern crate quickcheck;

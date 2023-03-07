@@ -154,7 +154,7 @@ impl RocStr {
     /// bytes over - in other words, calling this `as_str` method and then calling `to_string`
     /// on that.
     pub fn as_str(&self) -> &str {
-        &*self
+        self
     }
 
     /// Create an empty RocStr with enough space preallocated to store
@@ -562,8 +562,8 @@ impl Deref for RocStr {
 
     fn deref(&self) -> &Self::Target {
         match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(h) => unsafe { core::str::from_utf8_unchecked(&*h) },
-            RocStrInnerRef::SmallString(s) => &*s,
+            RocStrInnerRef::HeapAllocated(h) => unsafe { core::str::from_utf8_unchecked(h) },
+            RocStrInnerRef::SmallString(s) => s,
         }
     }
 }
