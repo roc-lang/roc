@@ -1,9 +1,9 @@
 [package]
 name = "roc_constrain"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
 description = "Responsible for building the set of constraints that are used during type inference of a program, and for gathering context needed for pleasant error messages when a type error occurs."
 
 [dependencies]

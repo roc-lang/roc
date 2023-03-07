@@ -1,9 +1,9 @@
 [package]
 name = "roc_wasm_module"
-version = "0.0.1"
-edition = "2021"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Parse, manipulate, and serialize WebAssembly modules."
 
 [dependencies]

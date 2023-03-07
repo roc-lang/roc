@@ -1,9 +1,9 @@
 [package]
 name = "roc_builtins"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
 description = "Provides the Roc functions and modules that are implicitly imported into every module."
 
 [dependencies]

@@ -1,11 +1,11 @@
 [package]
-authors = ["The Roc Contributors"]
+authors.workspace = true
 description = "Rust wrapper for a WebAssembly test platform built on libc"
-edition = "2021"
-license = "UPL-1.0"
+edition.workspace = true
+license.workspace = true
 name = "wasi_libc_sys"
-repository = "https://github.com/roc-lang/roc"
-version = "0.0.1"
+repository.workspace = true
+version.workspace = true
 
 [build-dependencies]
 roc_utils = {path = "../utils"}

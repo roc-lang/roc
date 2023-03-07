@@ -1,9 +1,9 @@
 [package]
-edition = "2021"
+edition.workspace = true
 name = "repl_test"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Tests the roc REPL."
 
 [build-dependencies]

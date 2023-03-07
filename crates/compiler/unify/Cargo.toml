@@ -1,9 +1,9 @@
 [package]
-authors = ["The Roc Contributors"]
-edition = "2021"
-license = "UPL-1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 name = "roc_unify"
-version = "0.0.1"
+version.workspace = true
 description = "Implements Roc's unification algorithm, the heartstone of Roc's type inference."
 
 [dependencies]

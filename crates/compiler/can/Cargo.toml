@@ -1,9 +1,9 @@
 [package]
 name = "roc_can"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
 description = "Canonicalize a roc abstract syntax tree, resolving symbols, re-ordering definitions, and preparing a module for type inference."
 
 [dependencies]

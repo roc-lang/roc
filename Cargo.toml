@@ -42,6 +42,13 @@ exclude = [
 # workspace, and without `resolver = "2"` here, you can't use `-p` like this.
 resolver = "2"
 
+[workspace.package]
+authors = ["The Roc Contributors"]
+edition = "2021"
+license = "UPL-1.0"
+repository = "https://github.com/roc-lang/roc"
+version = "0.0.1"
+
 [workspace.dependencies]
 # NOTE: roc-lang/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #

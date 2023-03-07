@@ -1,9 +1,9 @@
 [package]
 name = "valgrind"
-version = "0.1.0"
-edition = "2021"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [dev-dependencies]
 cli_utils = { path = "../cli_utils" }

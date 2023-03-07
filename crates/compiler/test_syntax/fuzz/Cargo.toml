@@ -1,9 +1,9 @@
 [package]
 name = "test_syntax-fuzz"
-version = "0.0.0"
-authors = ["Automatically generated"]
+version.workspace = true
+authors.workspace = true
 publish = false
-edition = "2021"
+edition.workspace = true
 
 [package.metadata]
 cargo-fuzz = true

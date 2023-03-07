@@ -1,9 +1,9 @@
 [package]
 name = "roc_exhaustive"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
 description = "Provides exhaustiveness checking for Roc."
 
 [dependencies]

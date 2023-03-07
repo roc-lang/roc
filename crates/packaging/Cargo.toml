@@ -1,10 +1,10 @@
 [package]
 name = "roc_packaging"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-repository = "https://github.com/roc-lang/roc"
-edition = "2021"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
 description = "Functionality for packaging Roc source code - e.g. for distribution over the network"
 
 [dependencies]

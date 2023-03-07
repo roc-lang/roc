@@ -3912,7 +3912,7 @@ dependencies = [
 
 [[package]]
 name = "roc_wasm_interp"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitvec",
  "bumpalo",
@@ -5000,7 +5000,7 @@ dependencies = [
 
 [[package]]
 name = "valgrind"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bumpalo",
  "cli_utils",

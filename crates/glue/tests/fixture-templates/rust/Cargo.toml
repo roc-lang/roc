@@ -11,10 +11,10 @@
 
 [package]
 name = "host"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2018"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
 links = "app"
 
 [lib]
