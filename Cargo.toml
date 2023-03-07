@@ -99,7 +99,7 @@ fnv = "1.0.7"
 fs_extra = "1.3.0"
 futures = "0.3.26"
 glyph_brush = "0.7.7"
-hashbrown = { version = "0.12.3", features = ["bumpalo"] }
+hashbrown = { version = "0.13.2", features = ["bumpalo"] }
 iced-x86 = { version = "1.18.0", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"] }
 im = "15.1.0"
 im-rc = "15.1.0"
@@ -109,7 +109,7 @@ insta = "1.28.0"
 js-sys = "0.3.61"
 lazy_static = "1.4.0"
 libc = "0.2.139"
-libfuzzer-sys = "0.3"
+libfuzzer-sys = "0.4"
 libloading = "0.7.4"
 log = "0.4.17"
 mach_object = "0.1"
@@ -119,11 +119,11 @@ mimalloc = { version = "0.1.34", default-features = false }
 nonempty = "0.8.1"
 object = { version = "0.30.3", features = ["read", "write"] }
 packed_struct = "0.10.1"
-page_size = "0.4.2"
+page_size = "0.5.0"
 palette = "0.6.1"
 parking_lot = "0.12"
 peg = "0.8.1"
-perfcnt = "0.7.3"
+perfcnt = "0.8.0"
 pest = "2.5.6"
 pest_derive = "2.5.6"
 pretty_assertions = "1.3.0"
@@ -137,11 +137,11 @@ rand = "0.8.5"
 regex = "1.7.1"
 remove_dir_all = "0.8.1"
 reqwest = { version = "0.11.14", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
-rlimit = "0.6.2"
+rlimit = "0.9.1"
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 serde = { version = "1.0.153", features = ["derive"] }
-serde-xml-rs = "0.5.1"
+serde-xml-rs = "0.6.0"
 serde_json = "1.0.94"
 serial_test = "1.0.0"
 signal-hook = "0.3.15"
