@@ -2,10 +2,10 @@
 name = "roc_docs_cli"
 description = "Provides a binary that is only used for static build servers."
 
-version.workspace = true
-license.workspace = true
 authors.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 # This binary is only used on static build servers, e.g. Netlify.
 # Having its own (extremely minimal) CLI means docs can be generated
@@ -24,4 +24,4 @@ roc_docs = { path = "../docs" }
 clap.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-libc.workspace = true 
+libc.workspace = true

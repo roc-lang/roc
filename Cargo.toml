@@ -1,39 +1,40 @@
 [workspace]
 members = [
-    "crates/compiler/*",
-    "crates/vendor/*",
-    "crates/glue",
-    "crates/editor",
-    "crates/ast",
-    "crates/cli",
-    "crates/cli_utils",
-    "crates/code_markup",
-    "crates/highlight",
-    "crates/error_macros",
-    "crates/reporting",
-    "crates/packaging",
-    "crates/repl_cli",
-    "crates/repl_eval",
-    "crates/repl_test",
-    "crates/repl_wasm",
-    "crates/repl_expect",
-    "crates/roc_std",
-    "crates/test_utils",
-    "crates/valgrind",
-    "crates/tracing",
-    "crates/utils",
-    "crates/docs",
-    "crates/docs_cli",
-    "crates/linker",
-    "crates/wasi-libc-sys",
-    "crates/wasm_module",
-    "crates/wasm_interp",
+  "crates/compiler/*",
+  "crates/vendor/*",
+  "crates/glue",
+  "crates/editor",
+  "crates/ast",
+  "crates/cli",
+  "crates/cli_utils",
+  "crates/code_markup",
+  "crates/highlight",
+  "crates/error_macros",
+  "crates/reporting",
+  "crates/packaging",
+  "crates/repl_cli",
+  "crates/repl_eval",
+  "crates/repl_test",
+  "crates/repl_wasm",
+  "crates/repl_expect",
+  "crates/roc_std",
+  "crates/test_utils",
+  "crates/valgrind",
+  "crates/tracing",
+  "crates/utils",
+  "crates/docs",
+  "crates/docs_cli",
+  "crates/linker",
+  "crates/wasi-libc-sys",
+  "crates/wasm_module",
+  "crates/wasm_interp",
 ]
+
 exclude = [
-    "ci/benchmarks/bench-runner",
-    # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
-    "crates/cli_testing_examples",
-    "examples",
+  "ci/benchmarks/bench-runner",
+  # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
+  "crates/cli_testing_examples",
+  "examples",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.
@@ -67,117 +68,117 @@ version = "0.0.1"
 # commit of TheDan64/inkwell, push a new tag which points to the latest commit,
 # change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
 # This way, GitHub Actions works and nobody's builds get broken.
-inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-15", features = [ "llvm13-0" ] }
+inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-15", features = ["llvm13-0"] }
 
-syn = { version = "1.0.81", features = ["full", "extra-traits"] }
-quote = "1.0.10"
-proc-macro2 = "1.0.32"
 arrayvec = "0.7.2"
-libfuzzer-sys = "0.3"
+base64-url = "1.4.13"
 bincode = "1.3.3"
+bitflags = "1.3.2"
 bitvec = "1.0.1"
+blake3 = "1.3.1"
+brotli = "3.3.4"                                                                                                         # used for decompressing tarballs over HTTPS, if the server supports brotli
 bumpalo = { version = "3.11.1", features = ["collections"] }
+bytemuck = { version = "1.12.1", features = ["derive"] }
 capstone = { version = "0.11.0", default-features = false }
+cgmath = "0.18.0"
 clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions"] }
+colored = "2.0.0"
+confy = { git = 'https://github.com/rust-cli/confy', features = ["yaml_conf"], default-features = false }
+console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.23", features = ["const_generics"] }
-criterion = { git = "https://github.com/Anton-4/criterion.rs", features = ["html_reports"]}
-criterion-perf-events ={ git = "https://github.com/Anton-4/criterion-perf-events" }
-perfcnt = "0.7.1"
-serde-xml-rs = "0.5.1"
-rlimit = "0.6.2"
+copypasta = "0.8.1"
+criterion = { git = "https://github.com/Anton-4/criterion.rs", features = ["html_reports"] }
+criterion-perf-events = { git = "https://github.com/Anton-4/criterion-perf-events" }
 crossbeam = "0.8.2"
+dircpy = "0.3.13"
 distance = "0.4.0"
 encode_unicode = "1.0.0"
 errno = "0.2.8"
+flate2 = "1.0.24"
 fnv = "1.0.7"
 fs_extra = "1.2.0"
-hashbrown = { version = "0.12.3", features = [ "bumpalo" ] }
+futures = "0.3.24"
+glyph_brush = "0.7.5"
+hashbrown = { version = "0.12.3", features = ["bumpalo"] }
 iced-x86 = { version = "1.15.0", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"] }
-im    = "15.0.0"
+im = "15.0.0"
 im-rc = "15.0.0"
+indexmap = "1.8.1"
 indoc = "1.0.7"
 insta = "1.20.0"
+js-sys = "0.3.60"
 lazy_static = "1.4.0"
 libc = "0.2.135"
+libfuzzer-sys = "0.3"
 libloading = "0.7.1"
+log = "0.4.14"
 mach_object = "0.1"
 maplit = "1.0.2"
 memmap2 = "0.5.7"
 mimalloc = { version = "0.1.26", default-features = false }
+nonempty = "0.8.0"
+object = { version = "0.30.3", features = ["read", "write"] }
 packed_struct = "0.10.0"
 page_size = "0.4.2"
+palette = "0.6.1"
 parking_lot = "0.12"
 peg = "0.8.1"
+perfcnt = "0.7.1"
+pest = "2.3.1"
+pest_derive = "2.3.1"
 pretty_assertions = "1.3.0"
+proc-macro2 = "1.0.32"
+proptest = "1.0.0"
+pulldown-cmark = { version = "0.9.2", default-features = false }
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0.0"
+quote = "1.0.10"
+rand = "0.8.4"
 regex = "1.5.5"
-rustyline = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
-rustyline-derive = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
+remove_dir_all = "0.8.0"
+reqwest = { version = "0.11.13", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
+rlimit = "0.6.2"
+rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
+rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 serde = { version = "1.0.144", features = ["derive"] }
+serde-xml-rs = "0.5.1"
 serde_json = "1.0.83"
+serial_test = "1.0.0"
 signal-hook = "0.3.14"
 snafu = { version = "0.7.1", features = ["backtraces"] }
 static_assertions = "1.1.0"
 strip-ansi-escapes = "0.1.1"
 strum = { version = "0.24.1", features = ["derive"] }
 strum_macros = "0.24.1"
+syn = { version = "1.0.81", features = ["full", "extra-traits"] }
+tar = "0.4.38"
 target-lexicon = "0.12.3"
 tempfile = "3.2.0"
-unicode-segmentation = "1.10.0"
-walkdir = "2.3.2"
-wyhash = "0.5.0"
-object = { version = "0.30.3", features = ["read", "write"] }
-winapi = { version = "0.3.9", features = ["memoryapi"]}
-serial_test = "1.0.0"
-indexmap = "1.8.1"
-dircpy = "0.3.13"
-pulldown-cmark = { version = "0.9.2", default-features = false }
-winit = "0.26.0"
-wgpu = "0.12.0"
-wgpu_glyph = "0.16.0"
-glyph_brush = "0.7.5"
-log = "0.4.14"
-futures = "0.3.24"
-cgmath = "0.18.0"
-colored = "2.0.0"
-pest = "2.3.1"
-pest_derive = "2.3.1"
-copypasta = "0.8.1"
-palette = "0.6.1"
-confy = { git = 'https://github.com/rust-cli/confy', features = [ "yaml_conf" ], default-features = false }
-nonempty = "0.8.0"
 threadpool = "1.8.1"
-bytemuck = { version = "1.12.1", features = ["derive"]  }
-rand = "0.8.4"
-proptest = "1.0.0"
-bitflags = "1.3.2"
-uuid = { version = "1.1.2", features = ["v4"] }
 tracing = { version = "0.1.36", features = ["release_max_level_off"] }
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 tracing-appender = "0.2.2"
-tar = "0.4.38"
-brotli = "3.3.4" # used for decompressing tarballs over HTTPS, if the server supports brotli
-flate2 = "1.0.24"
-blake3 = "1.3.1"
-base64-url = "1.4.13"
-reqwest = { version = "0.11.13", default-features = false, features = [ "blocking", "rustls-tls" ] } # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
-console_error_panic_hook = "0.1.7"
-js-sys = "0.3.60"
-remove_dir_all = "0.8.0"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+unicode-segmentation = "1.10.0"
+uuid = { version = "1.1.2", features = ["v4"] }
+walkdir = "2.3.2"
 wasm-bindgen = "0.2.79"
 wasm-bindgen-futures = "0.4.33"
+wgpu = "0.12.0"
+wgpu_glyph = "0.16.0"
+winapi = { version = "0.3.9", features = ["memoryapi"] }
+winit = "0.26.0"
+wyhash = "0.5.0"
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]
-lto = "thin"
 codegen-units = 1
+lto = "thin"
 
 # debug = true # enable when profiling
 [profile.bench]
-lto = "thin"
 codegen-units = 1
+lto = "thin"
 
 [profile.release-with-debug]
-inherits = "release"
 debug = true
+inherits = "release"

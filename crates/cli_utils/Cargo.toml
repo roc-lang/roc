@@ -2,23 +2,23 @@
 name = "cli_utils"
 description = "Provides shared code for cli tests and benchmarks."
 
-version.workspace = true
 authors.workspace = true
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
-edition.workspace = true
+version.workspace = true
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
-roc_reporting = { path = "../reporting" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
+roc_reporting = { path = "../reporting" }
 roc_utils = { path = "../utils" }
 
 bumpalo.workspace = true
 criterion.workspace = true
-serde.workspace = true
 serde-xml-rs.workspace = true
+serde.workspace = true
 strip-ansi-escapes.workspace = true
 tempfile.workspace = true
 

@@ -2,10 +2,10 @@
 name = "roc_editor"
 description = "An editor for Roc"
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [package.metadata.cargo-udeps.ignore]
 # confy is currently unused but should not be removed
@@ -18,48 +18,48 @@ default = []
 
 [dependencies]
 roc_ast = { path = "../ast" }
-roc_collections = { path = "../compiler/collections" }
-roc_load = { path = "../compiler/load" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
-roc_code_markup = { path = "../code_markup"}
-roc_parse = { path = "../compiler/parse" }
-roc_region = { path = "../compiler/region" }
+roc_code_markup = { path = "../code_markup" }
+roc_collections = { path = "../compiler/collections" }
+roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
-roc_problem = { path = "../compiler/problem" }
-roc_types = { path = "../compiler/types" }
-roc_unify = { path = "../compiler/unify" }
-roc_utils = { path = "../utils"}
 roc_packaging = { path = "../packaging" }
+roc_parse = { path = "../compiler/parse" }
+roc_problem = { path = "../compiler/problem" }
+roc_region = { path = "../compiler/region" }
 roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
+roc_types = { path = "../compiler/types" }
+roc_unify = { path = "../compiler/unify" }
+roc_utils = { path = "../utils" }
 ven_graph = { path = "../vendor/pathfinding" }
 
-winit.workspace = true
-wgpu.workspace = true
-wgpu_glyph.workspace = true
-glyph_brush.workspace = true
-log.workspace = true
-futures.workspace = true
-cgmath.workspace = true
-colored.workspace = true
-pest.workspace = true
-pest_derive.workspace = true
-copypasta.workspace = true
-palette.workspace = true
-confy.workspace = true
-nonempty.workspace = true
-threadpool.workspace = true
-bytemuck.workspace = true
 arrayvec.workspace = true
 bumpalo.workspace = true
+bytemuck.workspace = true
+cgmath.workspace = true
+colored.workspace = true
+confy.workspace = true
+copypasta.workspace = true
 fs_extra.workspace = true
+futures.workspace = true
+glyph_brush.workspace = true
 libc.workspace = true
+log.workspace = true
+nonempty.workspace = true
 page_size.workspace = true
+palette.workspace = true
+pest.workspace = true
+pest_derive.workspace = true
 serde.workspace = true
 snafu.workspace = true
+threadpool.workspace = true
+wgpu.workspace = true
+wgpu_glyph.workspace = true
+winit.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
-uuid.workspace = true
 tempfile.workspace = true
+uuid.workspace = true

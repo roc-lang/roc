@@ -2,15 +2,15 @@
 name = "test_mono_macros"
 description = "Macros for use in test_mono."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [lib]
 proc-macro = true
 
 [dependencies]
-syn.workspace = true
-quote.workspace = true
 proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true

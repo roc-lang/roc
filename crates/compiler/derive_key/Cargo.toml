@@ -1,15 +1,15 @@
 [package]
 name = "roc_derive_key"
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
+roc_can = { path = "../can" }
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
-roc_region = { path = "../region" }
 roc_module = { path = "../module" }
+roc_region = { path = "../region" }
 roc_types = { path = "../types" }
-roc_can = { path = "../can" }

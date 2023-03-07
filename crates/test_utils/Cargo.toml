@@ -2,10 +2,10 @@
 name = "roc_test_utils"
 description = "Utility functions used all over the code base."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
 pretty_assertions.workspace = true

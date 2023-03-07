@@ -2,18 +2,18 @@
 name = "roc_code_markup"
 description = "Our own markup language for Roc code. Used by the editor and the docs."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
 roc_ast = { path = "../ast" }
 roc_module = { path = "../compiler/module" }
 roc_utils = { path = "../utils" }
+
 palette.workspace = true
 
 bumpalo.workspace = true
 serde.workspace = true
 snafu.workspace = true
-

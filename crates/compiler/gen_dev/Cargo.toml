@@ -2,28 +2,28 @@
 name = "roc_gen_dev"
 description = "The development backend for the Roc compiler"
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_region = { path = "../region" }
-roc_module = { path = "../module" }
-roc_problem = { path = "../problem" }
-roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
-roc_unify = { path = "../unify" }
-roc_solve = { path = "../solve" }
-roc_mono = { path = "../mono" }
-roc_target = { path = "../roc_target" }
+roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
+roc_module = { path = "../module" }
+roc_mono = { path = "../mono" }
+roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
+roc_solve = { path = "../solve" }
+roc_target = { path = "../roc_target" }
+roc_types = { path = "../types" }
+roc_unify = { path = "../unify" }
 
 bumpalo.workspace = true
-target-lexicon.workspace = true
 object.workspace = true
 packed_struct.workspace = true
+target-lexicon.workspace = true
 
 [dev-dependencies]
 roc_can = { path = "../can" }

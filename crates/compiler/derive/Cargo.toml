@@ -2,26 +2,26 @@
 name = "roc_derive"
 description = "Provides auto-derivers for builtin abilities like `Hash` and `Decode`."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_error_macros = { path = "../../error_macros" }
-roc_derive_key = { path = "../derive_key" }
-roc_region = { path = "../region" }
-roc_module = { path = "../module" }
-roc_types = { path = "../types" }
 roc_can = { path = "../can" }
+roc_collections = { path = "../collections" }
+roc_derive_key = { path = "../derive_key" }
+roc_error_macros = { path = "../../error_macros" }
+roc_module = { path = "../module" }
+roc_region = { path = "../region" }
+roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
 
 bumpalo.workspace = true
 
 [features]
-default = []
 debug-derived-symbols = ["roc_module/debug-symbols"]
+default = []
 # Enables open extension variables for constructed records and tag unions.
 # This is not necessary for code generation, but may be necessary if you are
 # constraining and solving generated derived bodies.

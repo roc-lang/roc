@@ -2,25 +2,25 @@
 name = "test_mono"
 description = "Tests Roc's generation of the mono intermediate representation."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [[test]]
 name = "test_mono"
 path = "src/tests.rs"
 
 [dev-dependencies]
-roc_collections = { path = "../collections" }
-roc_module = { path = "../module", features = ["debug-symbols"] }
 roc_builtins = { path = "../builtins" }
-roc_load = { path = "../load" }
 roc_can = { path = "../can" }
+roc_collections = { path = "../collections" }
+roc_load = { path = "../load" }
+roc_module = { path = "../module", features = ["debug-symbols"] }
 roc_mono = { path = "../mono" }
-roc_target = { path = "../roc_target" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
+roc_target = { path = "../roc_target" }
 roc_tracing = { path = "../../tracing" }
 
 test_mono_macros = { path = "../test_mono_macros" }

@@ -2,30 +2,30 @@
 name = "roc_load"
 description = "Used to load a .roc file and coordinate the compiler pipeline, including parsing, type checking, and code generation."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
-roc_load_internal = { path = "../load_internal" }
-roc_target = { path = "../roc_target" }
 roc_can = { path = "../can" }
-roc_types = { path = "../types" }
-roc_module = { path = "../module" }
 roc_collections = { path = "../collections" }
+roc_load_internal = { path = "../load_internal" }
+roc_module = { path = "../module" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
+roc_target = { path = "../roc_target" }
+roc_types = { path = "../types" }
 
 bumpalo.workspace = true
 
 [build-dependencies]
 roc_builtins = { path = "../builtins" }
+roc_can = { path = "../can" }
 roc_module = { path = "../module" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
-roc_can = { path = "../can" }
 
 bumpalo.workspace = true
 

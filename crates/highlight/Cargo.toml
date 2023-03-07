@@ -2,12 +2,12 @@
 name = "roc_highlight"
 description = "For syntax highlighting, starts with a string and returns our markup nodes."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
-roc_code_markup = { path = "../code_markup"}
+roc_code_markup = { path = "../code_markup" }
 
 peg.workspace = true

@@ -2,24 +2,24 @@
 name = "test_syntax"
 description = "Tests for the parse + fmt crates."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [features]
 "parse_debug_trace" = ["roc_parse/parse_debug_trace"]
 
 [dependencies]
+bumpalo.workspace = true
 roc_collections = { path = "../collections" }
-roc_region = { path = "../region" }
+roc_fmt = { path = "../fmt" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
-roc_fmt = { path = "../fmt" }
+roc_region = { path = "../region" }
 roc_test_utils = { path = "../../test_utils" }
-bumpalo.workspace = true 
 
 [dev-dependencies]
-pretty_assertions.workspace = true
 indoc.workspace = true
+pretty_assertions.workspace = true
 walkdir.workspace = true

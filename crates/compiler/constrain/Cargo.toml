@@ -2,19 +2,19 @@
 name = "roc_constrain"
 description = "Responsible for building the set of constraints that are used during type inference of a program, and for gathering context needed for pleasant error messages when a type error occurs."
 
-version.workspace = true
 authors.workspace = true
-license.workspace = true
 edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
+roc_can = { path = "../can" }
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
-roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
 roc_types = { path = "../types" }
-roc_can = { path = "../can" }
 
 arrayvec.workspace = true
