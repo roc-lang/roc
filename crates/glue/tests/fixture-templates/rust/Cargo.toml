@@ -11,12 +11,11 @@
 
 [package]
 name = "host"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2018"
 links = "app"
-
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
 
 [lib]
 name = "host"
@@ -29,8 +28,7 @@ path = "src/main.rs"
 
 [dependencies]
 roc_std = { path = "../../../../roc_std" }
-
-indoc.workspace = true
-libc.workspace = true
+libc = "0.2"
+indoc = "1.0.6"
 
 [workspace]
