@@ -2317,15 +2317,6 @@ impl<'a> Stmt<'a> {
         String::from_utf8(w).unwrap()
     }
 
-    pub fn is_terminal(&self) -> bool {
-        use Stmt::*;
-
-        matches!(
-            self,
-            Switch { .. } | Ret(_) | Jump(_, _) // TODO for Switch; is this the reason Lean only looks at the outermost `when`?
-        )
-    }
-
     pub fn if_then_else(
         arena: &'a Bump,
         condition_symbol: Symbol,
@@ -10849,7 +10840,20 @@ fn union_lambda_set_to_switch<'a>(
         return empty_lambda_set_error(env);
     }
 
-    let join_point_id = JoinPointId(env.unique_symbol());
+    let (opt_join, branch_assigned, branch_hole) = match hole {
+        Stmt::Ret(_) => {
+            // No need to jump to a joinpoint, inline the return in each statement as-is.
+            // This makes further analyses, like TCO, easier as well.
+            (None, assigned, hole)
+        }
+        _ => {
+            let join_point_id = JoinPointId(env.unique_symbol());
+            let assigned = env.unique_symbol();
+            let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
+
+            (Some(join_point_id), assigned, &*env.arena.alloc(hole))
+        }
+    };
 
     let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
 
@@ -10865,12 +10869,13 @@ fn union_lambda_set_to_switch<'a>(
 
         let stmt = union_lambda_set_branch(
             env,
-            join_point_id,
             lambda_name,
             closure_info,
             argument_symbols,
             argument_layouts,
             return_layout,
+            branch_assigned,
+            branch_hole,
         );
         branches.push((i as u64, BranchInfo::None, stmt));
     }
@@ -10889,34 +10894,36 @@ fn union_lambda_set_to_switch<'a>(
         ret_layout: return_layout,
     };
 
-    let param = Param {
-        symbol: assigned,
-        layout: return_layout,
-        ownership: Ownership::Owned,
-    };
+    match opt_join {
+        None => switch,
+        Some(join_point_id) => {
+            let param = Param {
+                symbol: assigned,
+                layout: return_layout,
+                ownership: Ownership::Owned,
+            };
 
-    Stmt::Join {
-        id: join_point_id,
-        parameters: &*env.arena.alloc([param]),
-        body: hole,
-        remainder: env.arena.alloc(switch),
+            Stmt::Join {
+                id: join_point_id,
+                parameters: &*env.arena.alloc([param]),
+                body: hole,
+                remainder: env.arena.alloc(switch),
+            }
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
-    join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
     closure_info: ClosureInfo<'a>,
     argument_symbols_slice: &'a [Symbol],
     argument_layouts_slice: &'a [InLayout<'a>],
     return_layout: InLayout<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let result_symbol = env.unique_symbol();
-
-    let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
-
     union_lambda_set_branch_help(
         env,
         lambda_name,
@@ -10924,7 +10931,7 @@ fn union_lambda_set_branch<'a>(
         argument_symbols_slice,
         argument_layouts_slice,
         return_layout,
-        result_symbol,
+        assigned,
         env.arena.alloc(hole),
     )
 }
@@ -11010,18 +11017,32 @@ fn enum_lambda_set_to_switch<'a>(
 ) -> Stmt<'a> {
     debug_assert_ne!(lambda_set.len(), 0);
 
-    let join_point_id = JoinPointId(env.unique_symbol());
+    let (opt_join, branch_assigned, branch_hole) = match hole {
+        Stmt::Ret(_) => {
+            // No need to jump to a joinpoint, inline the return in each statement as-is.
+            // This makes further analyses, like TCO, easier as well.
+            (None, assigned, hole)
+        }
+        _ => {
+            let join_point_id = JoinPointId(env.unique_symbol());
+            let assigned = env.unique_symbol();
+            let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
+
+            (Some(join_point_id), assigned, &*env.arena.alloc(hole))
+        }
+    };
 
     let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
 
     for (i, lambda_name) in lambda_set.into_iter().enumerate() {
         let stmt = enum_lambda_set_branch(
             env,
-            join_point_id,
             lambda_name,
             argument_symbols,
             argument_layouts,
             return_layout,
+            branch_assigned,
+            branch_hole,
         );
         branches.push((i as u64, BranchInfo::None, stmt));
     }
@@ -11040,17 +11061,22 @@ fn enum_lambda_set_to_switch<'a>(
         ret_layout: return_layout,
     };
 
-    let param = Param {
-        symbol: assigned,
-        layout: return_layout,
-        ownership: Ownership::Owned,
-    };
+    match opt_join {
+        None => switch,
+        Some(join_point_id) => {
+            let param = Param {
+                symbol: assigned,
+                layout: return_layout,
+                ownership: Ownership::Owned,
+            };
 
-    Stmt::Join {
-        id: join_point_id,
-        parameters: &*env.arena.alloc([param]),
-        body: hole,
-        remainder: env.arena.alloc(switch),
+            Stmt::Join {
+                id: join_point_id,
+                parameters: &*env.arena.alloc([param]),
+                body: hole,
+                remainder: env.arena.alloc(switch),
+            }
+        }
     }
 }
 
@@ -11058,18 +11084,13 @@ fn enum_lambda_set_to_switch<'a>(
 #[allow(clippy::too_many_arguments)]
 fn enum_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
-    join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
     argument_symbols: &'a [Symbol],
     argument_layouts: &'a [InLayout<'a>],
     return_layout: InLayout<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let result_symbol = env.unique_symbol();
-
-    let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
-
-    let assigned = result_symbol;
-
     let call = self::Call {
         call_type: CallType::ByName {
             name: lambda_name,
@@ -11079,7 +11100,7 @@ fn enum_lambda_set_branch<'a>(
         },
         arguments: argument_symbols,
     };
-    build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
+    build_call(env, call, assigned, return_layout, hole)
 }
 
 #[allow(clippy::too_many_arguments)]

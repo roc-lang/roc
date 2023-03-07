@@ -15,26 +15,23 @@ procedure Num.21 (#Attr.2, #Attr.3):
     ret Num.257;
 
 procedure Test.0 (Test.8):
-    let Test.23 : Int1 = CallByName Bool.2;
-    if Test.23 then
-        let Test.24 : Int1 = true;
-        ret Test.24;
+    let Test.20 : Int1 = CallByName Bool.2;
+    if Test.20 then
+        let Test.21 : Int1 = true;
+        ret Test.21;
     else
-        let Test.22 : Int1 = false;
-        ret Test.22;
+        let Test.19 : Int1 = false;
+        ret Test.19;
 
 procedure Test.5 (Test.6, Test.2):
-    joinpoint Test.19 Test.18:
-        ret Test.18;
-    in
     switch Test.2:
         case 0:
-            let Test.20 : U64 = CallByName Num.19 Test.6 Test.6;
-            jump Test.19 Test.20;
+            let Test.18 : U64 = CallByName Num.19 Test.6 Test.6;
+            ret Test.18;
     
         default:
-            let Test.21 : U64 = CallByName Num.21 Test.6 Test.6;
-            jump Test.19 Test.21;
+            let Test.18 : U64 = CallByName Num.21 Test.6 Test.6;
+            ret Test.18;
     
 
 procedure Test.7 ():
