@@ -48,7 +48,7 @@ false = @Bool False
 ## the logic [AND](https://en.wikipedia.org/wiki/Logical_conjunction)
 ## gate. The infix operator `&&` can also be used as shorthand for
 ## `Bool.and`.
-## 
+##
 ## ```
 ## expect (Bool.and Bool.true Bool.true) == Bool.true
 ## expect (Bool.true && Bool.true) == Bool.true

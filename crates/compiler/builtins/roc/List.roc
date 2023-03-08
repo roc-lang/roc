@@ -562,7 +562,7 @@ countIf = \list, predicate ->
 ## List.keepOks [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
 ## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
-## 
+##
 ## List.keepOks ["", "a", "bc", "", "d", "ef", ""]
 ## ```
 keepOks : List before, (before -> Result after *) -> List after
@@ -580,7 +580,7 @@ keepOks = \list, toResult ->
 ## List.keepErrs [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
 ## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
-## 
+##
 ## List.keepErrs ["", "a", "bc", "", "d", "ef", ""]
 ## ```
 keepErrs : List before, (before -> Result * after) -> List after
