@@ -1115,7 +1115,7 @@ fn link_linux(
             "--eh-frame-hdr",
             "-A",
             arch_str(target),
-            "-pie",
+            // "-pie",
             &*crti_path.to_string_lossy(),
             &*crtn_path.to_string_lossy(),
         ])
