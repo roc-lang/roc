@@ -159,7 +159,7 @@ impl<T> RocList<T> {
     /// bytes over - in other words, calling this `as_slice` method and then calling `to_vec`
     /// on that.
     pub fn as_slice(&self) -> &[T] {
-        &*self
+        self
     }
 
     /// Note that there is no way to convert directly to a Vec.

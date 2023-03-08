@@ -2723,3 +2723,48 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
         "#
     )
 }
+
+#[mono_test]
+fn inline_return_joinpoints_in_bool_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = if Bool.false then f else \n -> n
+            caller (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_enum_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n
+                C -> \n -> n + 1
+                D -> \n -> n + 2
+            (caller A) (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_union_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n + x
+            (caller A) (x + 1)
+        "#
+    )
+}

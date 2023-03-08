@@ -5,12 +5,7 @@ use core::{
 };
 
 #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(C)]
-struct Unit;
-
-#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct RocSet<T>(RocDict<T, Unit>);
+pub struct RocSet<T>(RocDict<T, ()>);
 
 impl<T> RocSet<T> {
     pub fn len(&self) -> usize {
@@ -32,10 +27,11 @@ impl<T> RocSet<T> {
     }
 }
 
-impl<T: Hash> RocSet<T> {
-    #[allow(unused)]
-    pub fn from_iter<I: Iterator<Item = T>>(src: I) -> Self {
-        Self(RocDict::from_iter(src.map(|elem| (elem, Unit))))
+impl<T: Hash> FromIterator<T> for RocSet<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(into_iter: I) -> Self {
+        Self(RocDict::from_iter(
+            into_iter.into_iter().map(|elem| (elem, ())),
+        ))
     }
 }
 
