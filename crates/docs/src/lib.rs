@@ -677,7 +677,6 @@ fn doc_url<'a>(
                 module_name = symbol.module_string(interns);
             }
             Err(_) => {
-                
                 // TODO return Err here
                 panic!(
                     "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
@@ -846,20 +845,15 @@ fn markdown_to_html(
                     Some(cow_str) => {
                         if cow_str.contains("unchecked") {
                             // TODO HANDLE UNCHECKED
-
-                            let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
-                            docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
-                        } else if cow_str.contains("repl") {
-                            // TODO HANDLE REPL
-
-                            let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
-                            docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
-                        } else {
-                            // TODO HANDLE CHECKING BY DEFAULT
-
-                            let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
-                            docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
                         }
+
+                        if cow_str.contains("repl") {
+                            // TODO HANDLE REPL
+                        }
+
+                        // TODO HANDLE CHECKING BY DEFAULT
+                        let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                        docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
                     }
                     None => {
                         // Indented code block
