@@ -1415,9 +1415,29 @@ You can find documentation for the `Stdout.line` function in the [Stdout](https:
 
 ### [Package Modules](#interface-modules) {#interface-modules}
 
-\[This part of the tutorial has not been written yet. Coming soon!\]
+Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [ MyInterface ] packages {}`. The modules that are listed in the `exposes` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
 See [Parser Package](https://github.com/roc-lang/roc/tree/main/examples/parser/package) for an example.
+
+Package documentation can be generated using the Roc cli with `roc docs /package/*.roc`.
+
+Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.  
+
+You can import a package that is available either locally, or from a URL into a Roc application or platform. This is achieved by specifying the package in the `packages` section of the application or platform file structure. For example, `packages { .., parser: "<package URL>" }` is an example that imports a parser module from a URL.
+
+How does the Roc cli import and download a package from a URL? 
+
+1. First it checks to see whether the relevant folder already exists in the local filesystem and if not, creates it. If there is a package already downloaded then there is no need to download or extract anything. Packages are cached in a directory, typically `~/.cache/roc` on UNIX, and `%APPDATA%\\Roc` on Windows.
+2. It then downloads the file at that URL and verifies that the hash of the file matches the hash at the end of the URL.
+3. If the hash of the file matches the hash in the URL, then decompress and extract its contents into the cache folder so that it can be used.
+
+Why is a Roc package URL so long?
+
+Including the hash solves a number of problems:
+
+1. The package at the URL can not suddenly change and cause different behavior.
+2. Because of 1. there is no need to check the URL on every compilation to see if we have the latest version.
+3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.   
 
 ### [Interface Modules](#interface-modules) {#interface-modules}
 
