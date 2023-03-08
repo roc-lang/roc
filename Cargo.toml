@@ -134,3 +134,11 @@ codegen-units = 1
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+# The goal of this profile is compile on systems with low memmory.
+# A secondary goal is for it to compile fast-ish.
+[profile.low-mem]
+inherits = "release"
+opt-level = 1
+lto = "off"
+strip = "symbols"
