@@ -1,16 +1,17 @@
 [package]
 name = "roc_collections"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Domain-specific collections created for the needs of the compiler."
 
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
 [dependencies]
-fnv.workspace = true
-im.workspace = true
-im-rc.workspace = true
-wyhash.workspace = true
-bumpalo.workspace = true
-hashbrown.workspace = true
 bitvec.workspace = true
+bumpalo.workspace = true
+fnv.workspace = true
+hashbrown.workspace = true
+im-rc.workspace = true
+im.workspace = true
+wyhash.workspace = true

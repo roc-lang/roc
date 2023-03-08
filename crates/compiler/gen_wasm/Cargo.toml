@@ -1,19 +1,20 @@
 [package]
 name = "roc_gen_wasm"
-version = "0.0.1"
-edition = "2021"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
 description = "Provides the WASM backend to generate Roc binaries."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
 roc_builtins = { path = "../builtins" }
 roc_collections = { path = "../collections" }
+roc_error_macros = { path = "../../error_macros" }
 roc_module = { path = "../module" }
 roc_mono = { path = "../mono" }
-roc_target = { path = "../roc_target" }
 roc_std = { path = "../../roc_std" }
-roc_error_macros = { path = "../../error_macros" }
+roc_target = { path = "../roc_target" }
 roc_wasm_module = { path = "../../wasm_module" }
 
 bitvec.workspace = true

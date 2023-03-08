@@ -1,18 +1,19 @@
 [package]
 name = "roc_types"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Various representations and utilities for dealing with types in the Roc compiler."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
 roc_collections = { path = "../collections" }
-roc_region = { path = "../region" }
+roc_debug_flags = { path = "../debug_flags" }
+roc_error_macros = { path = "../../error_macros" }
 roc_module = { path = "../module" }
-roc_error_macros = {path="../../error_macros"}
-roc_debug_flags = {path="../debug_flags"}
-roc_serialize = {path="../serialize"}
+roc_region = { path = "../region" }
+roc_serialize = { path = "../serialize" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 
