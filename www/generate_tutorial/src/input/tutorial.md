@@ -1415,9 +1415,27 @@ You can find documentation for the `Stdout.line` function in the [Stdout](https:
 
 ### [Package Modules](#interface-modules) {#interface-modules}
 
-\[This part of the tutorial has not been written yet. Coming soon!\]
+Package modules enable Roc code to be shared across multiple applications and platforms. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [] packages {}`. The modules that are listed in the `exposes` field are then exported and available for use by applications or packages. Other internal modules that are not listed will be unavailable for use outside of the package.
 
 See [Parser Package](https://github.com/roc-lang/roc/tree/main/examples/parser/package) for an example.
+
+Package documentation can be generated using the Roc cli with `roc docs /package/*.roc`.
+
+Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.  
+
+You can import a package that is available either locally, or from a URL into a Roc application or platform. This is achieved by specifying the package in the `packages` section of the application or platform file structure. For example, `packages { .., parser: "<package URL>" }` is an example that imports a parser module from a package URL.
+
+How does the Roc cli import and download a package from a URL? 
+
+1. First check to see whether the relevant folder already exists in the local filesystem and if not, create it. If there is a package already downloaded then there is no need to download or extract anything. Packages are cached in a temporary directory, typically `~/.cache/roc` on UNIX, and `%APPDATA%\\Roc` on Windows.
+2. Download the file at that URL into a tempdir and verify that the hash of the file matches the hash at the end of the URL.
+3. If the hash of the file matches the hash in the URL, then decompress and extract its contents into the cache folder so that it can be used.
+
+Why is a Roc URL package such a long URL? This solves a number of problems that some package systems which permit downloads from arbitrary URLs have. These are summarized as follows;
+
+1. Reliability - the contents of the URL can change at any time, so you might think you're getting one version today, but then the author might publish a new version tomorrow at the same URL - and now some of your teammates are working with different versions of the code, and you don't even realize it until you start getting bizarrely different results.
+2. Cacheability - because of #1, it's hard to know whether it's safe to cache the file or else go back to the server for a potentially fresh copy; at a minimum, you probably want to ping the server to check ETags etc. This hurts compile times, because you have to wait for all those server responses.
+3. Security - suppose the package author isn't malicious, but they host their package on a URL with a domain that they eventually forget about and let expire. A malicious actor realizes people are still out there using that URL (perhaps a popular tutorial links to it, so beginners are downloading it fresh all the time), so they register the expired domain and host a malicious version of the package that's API-compatible but does bad things. This is trivial if the package is a platform, since platforms can (necessarily) execute arbitrary C code.
 
 ### [Interface Modules](#interface-modules) {#interface-modules}
 
