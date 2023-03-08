@@ -2,6 +2,18 @@ use roc_parse::highlight::Token;
 use roc_region::all::Loc;
 
 pub fn highlight_roc_code(code: &str) -> String {
+    let buf = highlight(code);
+
+    format!("<pre><samp>{}</samp></pre>", buf.join(""))
+}
+
+pub fn highlight_roc_code_inline(code: &str) -> String {
+    let buf = highlight(code);
+
+    format!("<code>{}</code>", buf.join(""))
+}
+
+pub fn highlight(code: &str) -> Vec<String> {
     let locations: Vec<Loc<Token>> = roc_parse::highlight::highlight(code);
     let mut buf: Vec<String> = Vec::new();
     let mut offset = 0;
@@ -90,7 +102,7 @@ pub fn highlight_roc_code(code: &str) -> String {
         offset = location.byte_range().end;
     }
 
-    format!("<pre><samp>{}</samp></pre>", buf.join(""))
+    buf
 }
 
 fn push_html_span(mut buf: Vec<String>, curr: &str, class: &str) -> Vec<String> {

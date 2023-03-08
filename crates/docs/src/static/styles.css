@@ -145,9 +145,11 @@ a:hover code {
 
 body {
   display: grid;
-  grid-template-columns: [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(
-      calc(1280px - var(--sidebar-width))
-    ) [end] 1fr;
+  grid-template-columns:
+    [before-sidebar] 1fr [sidebar] var(
+      --sidebar-width
+    ) [main-content] fit-content(calc(1280px - var(--sidebar-width)))
+    [end] 1fr;
   grid-template-rows: [top-header] var(--top-header-height) [above-footer] auto [footer] auto;
   box-sizing: border-box;
   margin: 0;
@@ -514,7 +516,15 @@ pre {
   samp .backpass,
   samp .brace,
   samp .bracket,
-  samp .paren {
+  samp .paren,
+  code .kw,
+  code .pipe,
+  code .backslash,
+  code .arrow,
+  code .backpass,
+  code .brace,
+  code .bracket,
+  code .paren {
     /* language keywords, e.g. `if` */
     color: #00c3ff;
   }
@@ -523,16 +533,17 @@ pre {
   samp .comma,
   samp .qmark,
   samp .bar,
-  samp .colon {
+  samp .colon,
+  code .op,
+  code .comma,
+  code .qmark,
+  code .bar,
+  code .colon {
     /* operators, e.g. `+` */
     color: #ff3966;
   }
 
-  samp .str {
-    /* string literals */
-    color: var(--link-color);
-  }
-
+  samp .str,
   code .str {
     /* string literals */
     color: var(--link-color);
@@ -540,11 +551,14 @@ pre {
 
   /* autovar = automatic variable names in the repl, e.g. # val1 */
   samp .comment,
-  samp .autovar {
+  samp .autovar,
+  code .comment,
+  code .autovar {
     color: #4ed86c;
   }
 
-  samp .number {
+  samp .number,
+  code .number {
     color: #00c3ff;
   }
 }
@@ -659,11 +673,13 @@ pre {
   }
 }
 
-samp .ann {
+samp .ann,
+code .ann {
   /* type annotation - purple in the repl */
   color: #f384fd;
 }
 
+code .autovar,
 samp .autovar {
   /* automatic variable names in the repl, e.g. # val1 */
   color: #338545;
@@ -676,40 +692,64 @@ samp .arrow,
 samp .backpass,
 samp .brace,
 samp .bracket,
-samp .paren {
+samp .paren,
+code .kw,
+code .pipe,
+code .backslash,
+code .arrow,
+code .backpass,
+code .brace,
+code .bracket,
+code .paren {
   /* language keywords, e.g. `if`*/
   color: #004cc2;
+}
+
+samp .upperident,
+code .upperident {
+  /* Upper identifiers e.g. Types */
+  color: var(--purple-5);
 }
 
 samp .op,
 samp .comma,
 samp .qmark,
 samp .bar,
-samp .colon {
+samp .colon,
+code .op,
+code .comma,
+code .qmark,
+code .bar,
+code .colon {
   /* operators, e.g. `+` */
   color: #c20000;
 }
 
-samp .number {
+samp .number,
+code .number {
   /* number literals */
   color: #158086;
 }
 
-samp .str {
+samp .str,
+code .str {
   /* string literals */
   color: #158086;
 }
 
 samp .str-esc,
-samp .str-interp {
+samp .str-interp,
+code .str-esc,
+code .str-interp {
   /* escapes inside string literals, e.g. \t */
   color: #3474db;
 }
 
-samp .dim {
+samp .dim,
+code .dim {
   opacity: 0.55;
 }
 
-samp .comment {
+samp .comment code .comment {
   color: #338545;
 }

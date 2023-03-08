@@ -677,7 +677,7 @@ fn doc_url<'a>(
                 module_name = symbol.module_string(interns);
             }
             Err(_) => {
-                dbg!(scope);
+                
                 // TODO return Err here
                 panic!(
                     "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
@@ -806,65 +806,24 @@ fn markdown_to_html(
 
     let markdown_options = pulldown_cmark::Options::ENABLE_TABLES;
 
-    let mut in_code_block = false;
+    let mut in_code_block: Option<CowStr> = None;
     let mut to_highlight = String::new();
 
     let mut docs_parser = vec![];
-    let (_, _) = pulldown_cmark::Parser::new_with_broken_link_callback(
+    let parser = pulldown_cmark::Parser::new_with_broken_link_callback(
         markdown,
         markdown_options,
         Some(&mut broken_link_callback),
-    )
-    .fold((0, 0), |(start_quote_count, end_quote_count), event| {
-        match &event {
-            // Replace this sequence (`>>>` syntax):
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(Paragraph)
-            // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::Start(BlockQuote) => {
-                docs_parser.push(event);
-                (start_quote_count + 1, 0)
+    );
+
+    for event in parser {
+        match event {
+            Event::Code(cow_str) => {
+                let highlighted_html =
+                    roc_highlight::highlight_roc_code_inline(cow_str.to_string().as_str());
+                docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
             }
-            Event::Start(Paragraph) => {
-                if start_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                } else {
-                    docs_parser.push(event);
-                }
-                (0, 0)
-            }
-            // Replace this sequence (`>>>` syntax):
-            //     End(Paragraph)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::End(Paragraph) => {
-                docs_parser.push(event);
-                (0, 1)
-            }
-            Event::End(BlockQuote) => {
-                if end_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                    (0, 0)
-                } else {
-                    docs_parser.push(event);
-                    (0, end_quote_count + 1)
-                }
-            }
-            Event::End(Link(LinkType::ShortcutUnknown, _url, _title)) => {
+            Event::End(Link(LinkType::ShortcutUnknown, ref _url, ref _title)) => {
                 // Replace the preceding Text node with a Code node, so it
                 // renders as the equivalent of [`List.len`] instead of [List.len]
                 match docs_parser.pop() {
@@ -878,39 +837,61 @@ fn markdown_to_html(
                 }
 
                 docs_parser.push(event);
-
-                (start_quote_count, end_quote_count)
             }
-            Event::Start(CodeBlock(_)) => {
-                in_code_block = true;
-                (0, 0)
+            Event::Start(CodeBlock(CodeBlockKind::Fenced(cow_str))) => {
+                in_code_block = Some(cow_str);
             }
             Event::End(CodeBlock(_)) => {
-                if in_code_block {
-                    let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
-                    docs_parser.push(pulldown_cmark::Event::Html(pulldown_cmark::CowStr::from(
-                        highlighted_html,
-                    )));
-                    to_highlight = String::new();
-                    in_code_block = false;
+                match in_code_block {
+                    Some(cow_str) => {
+                        if cow_str.contains("unchecked") {
+                            // TODO HANDLE UNCHECKED
+
+                            let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                            docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+                        } else if cow_str.contains("repl") {
+                            // TODO HANDLE REPL
+
+                            let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                            docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+                        } else {
+                            // TODO HANDLE CHECKING BY DEFAULT
+
+                            let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                            docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+                        }
+                    }
+                    None => {
+                        // Indented code block
+
+                        let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                        docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+                    }
                 }
-                (0, 0)
+
+                // Reset codeblock buffer
+                to_highlight = String::new();
+                in_code_block = None;
+
+                // Push Event::End(CodeBlock)
+                docs_parser.push(event);
             }
             Event::Text(t) => {
-                if in_code_block {
-                    // If we're in a code block, build up the string of text
-                    to_highlight.push_str(t);
-                } else {
-                    docs_parser.push(event);
+                match in_code_block {
+                    Some(_) => {
+                        // If we're in a code block, build up the string of text
+                        to_highlight.push_str(&t);
+                    }
+                    None => {
+                        docs_parser.push(Event::Text(t));
+                    }
                 }
-                (0, 0)
             }
-            _ => {
-                docs_parser.push(event);
-                (0, 0)
+            e => {
+                docs_parser.push(e);
             }
         }
-    });
+    }
 
     pulldown_cmark::html::push_html(buf, docs_parser.into_iter());
 }
