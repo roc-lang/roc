@@ -6,12 +6,15 @@ app "effects"
 main : Effect.Effect {}
 main =
     Effect.after
-        (Effect.getLine)
-        \line ->
+        (Effect.putLine "type a thing:")
+        \{} ->
             Effect.after
-                (Effect.putLine "You entered: \(line)")
-                \{} ->
+                (Effect.getLine)
+                \line ->
                     Effect.after
-                        (Effect.putLine "It is known")
+                        (Effect.putLine "You entered: \(line)")
                         \{} ->
-                            Effect.always {}
+                            Effect.after
+                                (Effect.putLine "It is known")
+                                \{} ->
+                                    Effect.always {}
