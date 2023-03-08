@@ -444,7 +444,7 @@ type JoinPointConsumption = MutSet<Symbol>;
 The environment for the reference counting pass.
 Contains the variable rc types and the ownership.
 */
-struct Environment<'v> {
+struct RefcountEnvironment<'v> {
     // Keep track which variables are reference counted and which are not.
     variables_rc_types: &'v VariableRcTypes,
     // The Koka implementation assumes everything that is not owned to be borrowed.
@@ -452,9 +452,9 @@ struct Environment<'v> {
     jointpoint_closures: MutMap<JoinPointId, JoinPointConsumption>,
 }
 
-impl<'v, 'a> Clone for Environment<'v> {
+impl<'v, 'a> Clone for RefcountEnvironment<'v> {
     fn clone(&self) -> Self {
-        Environment {
+        RefcountEnvironment {
             variables_rc_types: self.variables_rc_types,
             variables_ownership: self.variables_ownership.clone(),
             jointpoint_closures: self.jointpoint_closures.clone(),
@@ -462,11 +462,11 @@ impl<'v, 'a> Clone for Environment<'v> {
     }
 }
 
-impl<'v> Environment<'v> {
+impl<'v> RefcountEnvironment<'v> {
     /**
     Retrieve the rc type of a variable.
     */
-    fn get_variable_rc_type(self: &mut Environment<'v>, variable: &Symbol) -> &VarRcType {
+    fn get_variable_rc_type(self: &mut RefcountEnvironment<'v>, variable: &Symbol) -> &VarRcType {
         self.variables_rc_types
             .get(variable)
             .expect("variable should have rc type")
@@ -477,7 +477,10 @@ impl<'v> Environment<'v> {
     If it was owned, set it to borrowed (as it is consumed/the variable can be used as owned only once without incrementing).
     If the variable is not reference counted, do nothing and return None.
     */
-    fn consume_variable(self: &mut Environment<'v>, variable: &Symbol) -> Option<Ownership> {
+    fn consume_variable(
+        self: &mut RefcountEnvironment<'v>,
+        variable: &Symbol,
+    ) -> Option<Ownership> {
         if !self.variables_ownership.contains_key(variable) {
             return None;
         }
@@ -490,7 +493,7 @@ impl<'v> Environment<'v> {
     Retrieve whether the variable is owned or borrowed.
     If it was owned, set it to borrowed (as it is consumed/the variable can be used as owned only once without incrementing).
     */
-    fn consume_rc_variable(self: &mut Environment<'v>, variable: &Symbol) -> Ownership {
+    fn consume_rc_variable(self: &mut RefcountEnvironment<'v>, variable: &Symbol) -> Ownership {
         // Consume the variable by setting it to borrowed (if it was owned before), and return the previous ownership.
         self.variables_ownership
             .insert(*variable, Ownership::Borrowed)
@@ -501,7 +504,10 @@ impl<'v> Environment<'v> {
        Retrieve the ownership of a variable.
        If the variable is not reference counted, it will None.
     */
-    fn get_variable_ownership(self: &Environment<'v>, variable: &Symbol) -> Option<&Ownership> {
+    fn get_variable_ownership(
+        self: &RefcountEnvironment<'v>,
+        variable: &Symbol,
+    ) -> Option<&Ownership> {
         self.variables_ownership.get(variable)
     }
 
@@ -510,7 +516,7 @@ impl<'v> Environment<'v> {
     Usefull when we want to insert reference count operations for symbols that might not be rc.
     */
     fn filter_rc_variables<'a>(
-        self: &Environment<'v>,
+        self: &RefcountEnvironment<'v>,
         variables: impl Iterator<Item = &'a Symbol>,
     ) -> std::vec::Vec<&'a Symbol> {
         variables
@@ -521,7 +527,10 @@ impl<'v> Environment<'v> {
     /**
     Add a variables to the environment if they are reference counted.
     */
-    fn add_variables(self: &mut Environment<'v>, variables: impl IntoIterator<Item = Symbol>) {
+    fn add_variables(
+        self: &mut RefcountEnvironment<'v>,
+        variables: impl IntoIterator<Item = Symbol>,
+    ) {
         variables
             .into_iter()
             .for_each(|variable| self.add_variable(variable))
@@ -530,7 +539,7 @@ impl<'v> Environment<'v> {
     /**
     Add a variable to the environment if it is reference counted.
     */
-    fn add_variable(self: &mut Environment<'v>, variable: Symbol) {
+    fn add_variable(self: &mut RefcountEnvironment<'v>, variable: Symbol) {
         match self.get_variable_rc_type(&variable) {
             VarRcType::ReferenceCounted => {
                 self.variables_ownership.insert(variable, Ownership::Owned);
@@ -545,7 +554,10 @@ impl<'v> Environment<'v> {
     Remove variables from the environment.
     Is used when a variable is no longer in scope (after checking a join point).
      */
-    fn remove_variables(self: &mut Environment<'v>, variables: impl Iterator<Item = Symbol>) {
+    fn remove_variables(
+        self: &mut RefcountEnvironment<'v>,
+        variables: impl Iterator<Item = Symbol>,
+    ) {
         variables.for_each(|variable| self.remove_variable(variable))
     }
 
@@ -553,7 +565,7 @@ impl<'v> Environment<'v> {
     Remove a variable from the environment.
     Is used when a variable is no longer in scope (before a let binding).
      */
-    fn remove_variable(self: &mut Environment<'v>, variable: Symbol) {
+    fn remove_variable(self: &mut RefcountEnvironment<'v>, variable: Symbol) {
         self.variables_ownership.remove(&variable);
     }
 
@@ -562,7 +574,7 @@ impl<'v> Environment<'v> {
     Used when analyzing a join point. So that a jump can update the environment on call.
     */
     fn add_joinpoint_consumption(
-        self: &mut Environment<'v>,
+        self: &mut RefcountEnvironment<'v>,
         joinpoint_id: JoinPointId,
         consumption: JoinPointConsumption,
     ) {
@@ -573,7 +585,7 @@ impl<'v> Environment<'v> {
     Get the consumed closure from a join point id.
     */
     fn get_joinpoint_consumption(
-        self: &Environment<'v>,
+        self: &RefcountEnvironment<'v>,
         joinpoint_id: JoinPointId,
     ) -> JoinPointConsumption {
         self.jointpoint_closures
@@ -586,7 +598,7 @@ impl<'v> Environment<'v> {
     Remove a joinpoint id and the consumed closure from the environment.
     Used after analyzing the continuation of a join point.
     */
-    fn remove_joinpoint_consumption(self: &mut Environment<'v>, joinpoint_id: JoinPointId) {
+    fn remove_joinpoint_consumption(self: &mut RefcountEnvironment<'v>, joinpoint_id: JoinPointId) {
         let closure = self.jointpoint_closures.remove(&joinpoint_id);
         debug_assert!(
             matches!(closure, Some(_)),
@@ -607,7 +619,7 @@ fn insert_refcount_operations_proc<'a, 'i>(
     // As the variables should be limited in scope for the current proc.
     variable_rc_types_env.insert_variables_rc_type_proc(&proc);
 
-    let mut environment = Environment {
+    let mut environment = RefcountEnvironment {
         variables_rc_types: &variable_rc_types_env.variables_rc_type,
         variables_ownership: MutMap::default(),
         jointpoint_closures: MutMap::default(),
@@ -654,7 +666,7 @@ Assuming that a symbol can only be defined once (no binding to the same variable
 */
 fn insert_refcount_operations_stmt<'v, 'a>(
     arena: &'a Bump,
-    environment: &mut Environment<'v>,
+    environment: &mut RefcountEnvironment<'v>,
     stmt: &Stmt<'a>,
 ) -> &'a Stmt<'a> {
     // TODO: Deal with potentially stack overflowing let chains with an explicit loop.
@@ -1026,7 +1038,7 @@ Insert increment statements for the given symbols compensating for the ownership
 */
 fn consume_and_insert_inc_stmts<'a>(
     arena: &'a Bump,
-    environment: &mut Environment,
+    environment: &mut RefcountEnvironment,
     usage: impl IntoIterator<Item = (Symbol, u64)>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -1042,7 +1054,7 @@ Insert an increment statement for the given symbol compensating for the ownershi
 */
 fn consume_and_insert_inc_stmt<'a>(
     arena: &'a Bump,
-    environment: &mut Environment,
+    environment: &mut RefcountEnvironment,
     symbol: &Symbol,
     usage_count: u64,
     continuation: &'a Stmt<'a>,
@@ -1068,7 +1080,7 @@ Insert decrement statements for the given symbols if they are owned.
 */
 fn consume_and_insert_dec_stmts<'a>(
     arena: &'a Bump,
-    environment: &mut Environment,
+    environment: &mut RefcountEnvironment,
     symbols: impl IntoIterator<Item = Symbol>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -1084,7 +1096,7 @@ Insert a decrement statement for the given symbol if it is owned.
 */
 fn consume_and_insert_dec_stmt<'a>(
     arena: &'a Bump,
-    environment: &mut Environment,
+    environment: &mut RefcountEnvironment,
     symbol: &Symbol,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {

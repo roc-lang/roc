@@ -30,6 +30,7 @@ use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
 };
+use roc_mono::fl_reuse;
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
     UpdateModeIds,
@@ -3127,6 +3128,17 @@ fn update<'a>(
                     );
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
+
+                    fl_reuse::insert_reset_reuse_operations(
+                        arena,
+                        &mut layout_interner,
+                        module_id,
+                        ident_ids,
+                        &mut update_mode_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                     // This is not safe with the new non-recursive RC updates that we do for tag unions
                     //
