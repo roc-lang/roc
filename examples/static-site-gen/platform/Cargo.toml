@@ -1,9 +1,9 @@
 [package]
 name = "host"
-version = "0.0.1"
 authors = ["The Roc Contributors"]
-license = "UPL-1.0"
 edition = "2021"
+license = "UPL-1.0"
+version = "0.0.1"
 
 links = "app"
 
@@ -17,9 +17,10 @@ name = "host"
 path = "src/main.rs"
 
 [dependencies]
-roc_std = { path = "../../../crates/roc_std" }
-roc_highlight = { path = "../../../crates/highlight" }
 libc = "0.2"
+roc_highlight = { path = "../../../crates/highlight" }
+roc_std = { path = "../../../crates/roc_std" }
+
 
 # Default features include building a binary that we don't need
 pulldown-cmark = { version = "0.9.2", default-features = false }

@@ -1,12 +1,14 @@
 [package]
 name = "roc_highlight"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
-description = "For syntax highlighting Roc code such as the generated documentation."
+description = "For syntax highlighting, starts with a string and returns our markup nodes."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
-roc_region = { path = "../compiler/region" }
-roc_parse = { path = "../compiler/parse" }
 html-escape = "0.2"
+roc_parse = { path = "../compiler/parse" }
+roc_region = { path = "../compiler/region" }
+
