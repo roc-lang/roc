@@ -120,9 +120,9 @@ interface List
 ## Let's turn this example into a function.
 ## ```
 ## getRatings = \first ->
-## ratings = [first, 4, 3]
+##     ratings = [first, 4, 3]
 ##
-## { foo: ratings, bar: ratings }
+##     { foo: ratings, bar: ratings }
 ##
 ## getRatings 5
 ## ```
