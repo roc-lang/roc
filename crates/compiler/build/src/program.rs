@@ -1083,7 +1083,10 @@ fn build_and_preprocess_host_lowlevel(
     preprocessed_host_path: &Path,
     stub_dll_symbols: &[String],
 ) {
-    let stub_lib = roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc);
+    let stub_lib =
+        roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc, stub_dll_symbols);
+
+    debug_assert!(stub_lib.exists());
 
     rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 

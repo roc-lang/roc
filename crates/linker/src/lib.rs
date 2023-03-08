@@ -150,12 +150,20 @@ pub fn generate_stub_lib(
     Ok(0)
 }
 
-pub fn generate_stub_lib_from_loaded(target: &Triple, platform_main_roc: &Path) -> PathBuf {
-    if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+pub fn generate_stub_lib_from_loaded(
+    target: &Triple,
+    platform_main_roc: &Path,
+    stub_dll_symbols: &[String],
+) -> PathBuf {
+    let stub_lib_path = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
         platform_main_roc.with_file_name("libapp.dll")
     } else {
         platform_main_roc.with_file_name("libapp.so")
-    }
+    };
+
+    generate_dynamic_lib(target, stub_dll_symbols, &stub_lib_path);
+
+    stub_lib_path
 }
 
 pub struct ExposedSymbols {
