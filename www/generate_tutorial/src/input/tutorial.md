@@ -446,10 +446,10 @@ Here's the type of `table`:
 ```roc
 table :
     {
-        height: Pixels,
-        width: Pixels,
-        title? Str,
-        description? Str,
+        height : Pixels,
+        width : Pixels,
+        title ? Str,
+        description ? Str,
     }
     -> Table
 ```
