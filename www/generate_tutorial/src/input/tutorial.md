@@ -20,7 +20,7 @@ Try typing this in the REPL and pressing Enter:
 
 The REPL should cheerfully display the following:
 
-<pre><samp><span class="str">"Hello, World!" </span><span class="colon">:</span> Str <span class="autovar">               # val1</span></samp></pre>
+<pre><samp><span class="literal">"Hello, World!" </span><span class="colon">:</span> Str <span class="comment">               # val1</span></samp></pre>
 
 Congratulations! You've just written your first Roc code.
 
@@ -38,8 +38,8 @@ You should see the same `"Hello, World!"` line as before.
 
 You can also assign specific names to expressions. Try entering these lines:
 
-<pre><samp class="repl-prompt">greeting = <span class="str">"Hi"</span></samp></pre>
-<pre><samp class="repl-prompt">audience = <span class="str">"World"</span></samp></pre>
+<pre><samp class="repl-prompt">greeting = <span class="literal">"Hi"</span></samp></pre>
+<pre><samp class="repl-prompt">audience = <span class="literal">"World"</span></samp></pre>
 
 From now until you exit the REPL, you can refer to either `greeting` or `audience` by those names!
 
@@ -47,11 +47,11 @@ From now until you exit the REPL, you can refer to either `greeting` or `audienc
 
 You can combine named strings together using _string interpolation_, like so:
 
-<pre><samp class="repl-prompt"><span class="str">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
 
 If you put this into the REPL, you should see this output:
 
-<pre><samp><span class="str">"Hi there, World!" </span><span class="colon">:</span> Str <span class="autovar">               # val2</span></samp></pre>
+<pre><samp><span class="literal">"Hi there, World!" </span><span class="colon">:</span> Str <span class="comment">               # val2</span></samp></pre>
 
 Notice that the REPL printed `# val2` here. This works just like `# val1` did before, but it chose the name `val2` for this expression because `val1` was already taken. As we continue entering more expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.
 
@@ -83,7 +83,7 @@ Remember back in the [string interpolation](#string-interpolation) section when 
 
 <pre><samp><span class="repl-prompt">Str.concat "Hi " "there!"</span>
 
-<span class="str">"Hi there!"</span> <span class="colon">:</span> Str
+<span class="literal">"Hi there!"</span> <span class="colon">:</span> Str
 </samp></pre>
 
 Here we're calling the `Str.concat` function and passing two arguments: the string `"Hi "` and the string `"there!"`. This _concatenates_ the two strings together (that is, it puts one after the other) and returns the resulting combined string of `"Hi there!"`.
@@ -94,7 +94,7 @@ That said, just like in the arithmetic example above, we can use parentheses to 
 
 <pre><samp><span class="repl-prompt">Str.concat "Birds: " (Num.toStr 42)</span>
 
-<span class="str">"Birds: 42"</span> <span class="colon">:</span> Str
+<span class="literal">"Birds: 42"</span> <span class="colon">:</span> Str
 </samp></pre>
 
 This calls `Num.toStr` on the number `42`, which converts it into the string `"42"`, and then passes that string as the second argument to `Str.concat`.
@@ -161,7 +161,7 @@ main =
     Stdout.line "There are \(total) animals."
 ```
 
-Now run `roc dev` again. This time the "Downloading …" message won't appear; the file has been cached from last time, and won't need to be downloaded again.
+Now run `roc dev` again. This time the "Downloading ..." message won't appear; the file has been cached from last time, and won't need to be downloaded again.
 
 You should see this:
 
@@ -518,7 +518,7 @@ This results in the same value for `stoplightStr`. In both the `when` version an
 Besides being more concise, there are other advantages to using `when` here.
 
 1.  We don't have to specify an `else` branch, so the code can be more self-documenting about exactly what all the options are.
-2.  We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if …` definition.
+2.  We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if ...` definition.
 
 We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing `else`, we write `\_ ->` like so:
 
@@ -862,7 +862,7 @@ In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to
 
 1. A list. (`[1, 2, 3, 4, 5]`)
 2. An initial `state` value. (`{ evens: [], odds: [] }`)
-3. A function which takes the current `state` and element, and returns a new `state`. (`\state, elem -> …`)
+3. A function which takes the current `state` and element, and returns a new `state`. (`\state, elem -> ...`)
 
 It then proceeds to walk over each element in the list and call that function. Each time, the state that function returns becomes the argument to the next function call. Here are the arguments the function will receive, and what it will return, as `List.walk` walks over the list `[1, 2, 3, 4, 5]`:
 
@@ -884,7 +884,7 @@ Note that the state doesn't have to be a record; it can be anything you want. Fo
 
 A helpful way to remember the argument order for `List.walk` is that that its arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is in the middle!
 
-> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for…in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
+> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for...in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
 
 ### [The pipe operator](#the-pipe-operator) {#the-pipe-operator}
 
@@ -1092,7 +1092,7 @@ Tag union types can accumulate more tags based on how they're used. Consider thi
 
 Here, Roc sees that the first branch has the type `[Ok Str]` and that the `else` branch has the type `[Err (List Str)]`, so it concludes that the whole `if` expression evaluates to the combination of those two tag unions: `[Ok Str, Err (List Str)]`.
 
-This means this entire `\str -> …` function has the type `Str -> [Ok Str, Err (List Str)]`. However, it would be most common to annotate it as `Result Str (List Str)` instead, because the `Result` type (for operations like `Result.withDefault`, which we saw earlier) is a type alias for a tag union with `Ok` and `Err` tags that each have one payload:
+This means this entire `\str -> ...` function has the type `Str -> [Ok Str, Err (List Str)]`. However, it would be most common to annotate it as `Result Str (List Str)` instead, because the `Result` type (for operations like `Result.withDefault`, which we saw earlier) is a type alias for a tag union with `Ok` and `Err` tags that each have one payload:
 
 ```roc
 Result ok err : [Ok ok, Err err]
@@ -1387,9 +1387,9 @@ packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8t
     provides [main] to pf
 ```
 
-The `packages { pf: "https://…tar.br" }` part says three things:
+The `packages { pf: "https://...tar.br" }` part says three things:
 
-- We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://…tar.br"`
+- We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
 - That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
 
@@ -1403,7 +1403,7 @@ main = Stdout.line "I'm a Roc application!"
 
 Here, `main` is calling a function called `Stdout.line`. More specifically, it's calling a function named `line` which is exposed by a module named `Stdout`.
 
-When we write `imports [pf.Stdout]`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: … }` section.
+When we write `imports [pf.Stdout]`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: ... }` section.
 
 If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:
 
@@ -1517,7 +1517,7 @@ The type of `Task.await` is:
 Task.await : Task a err, (a -> Task b err) -> Task b err
 ```
 
-The second argument to `Task.await` is a "callback function" which runs after the first task completes. This callback function receives the output of that first task, and then returns the second task. This means the second task can make use of output from the first task, like we did in our `\text -> …` callback function here:
+The second argument to `Task.await` is a "callback function" which runs after the first task completes. This callback function receives the output of that first task, and then returns the second task. This means the second task can make use of output from the first task, like we did in our `\text -> ...` callback function here:
 
 ```roc
 \text ->
@@ -1563,7 +1563,7 @@ task =
     Stdout.line "You just entered: \(text)"
 ```
 
-This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymous function, just like `\ … ->` is.
+This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymous function, just like `\ ... ->` is.
 
 Here, we're using backpassing to define two anonymous functions. Here's one of them:
 
@@ -1776,13 +1776,13 @@ Using `User a` type alias, I can still write the same three functions, but now t
 isValid : User * -> Bool
 ```
 
-Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
+Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email : Str, ... }a` to `{ email : Str, ... }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
 
 ```roc
 userFromEmail : Str -> User {}
 ```
 
-Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
+Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email : Str, ... }a` to `{ email : Str, ... }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
 
 > **Aside:** This works because you can form new record types by replacing the type variable with other record types. For example, `{ a : Str, b : Str }` can also be written `{ a : Str }{ b : Str }`. You can chain these more than once, e.g. `{ a : Str }{ b : Str }{ c : Str, d : Str }`. This is more useful when used with type annotations; for example, `{ a : Str, b : Str }User` describes a closed record consisting of all the fields in the closed record `User`, plus `a : Str` and `b : Str`.
 

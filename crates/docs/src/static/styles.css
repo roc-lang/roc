@@ -1,4 +1,30 @@
 :root {
+  --base00: #202746;
+  --base01: #293256;
+  --base02: #5e6687;
+  --base03: #6b7394;
+  --base04: #898ea4;
+  --base05: #979db4;
+  --base06: #dfe2f1;
+  --base07: #f5f7ff;
+  --base08: #c94922;
+  --base09: #c76b29;
+  --base0A: #ba862e;
+  --base0B: #349e99;
+  --base0C: #219bc1;
+  --base0D: #3d8fd1;
+  --base0E: #6679cc;
+  --base0F: #9c637a;
+
+  --red: var(--base08);
+  --orange: var(--base09);
+  --yellow: var(--base0A);
+  --green: var(--base0B);
+  --cyan: var(--base0C);
+  --blue: var(--base0D);
+  --violet: var(--base0E);
+  --magenta: var(--base0F);
+
   --purple-1: #f2f1f9;
   --purple-2: #d9d2ef;
   --purple-3: #a17ef1;
@@ -16,13 +42,15 @@
   --link-color: var(--purple-5);
   --code-link-color: #5721d4;
   --text-color: var(--gray-5);
-  --code-color: #222222;
-  --code-bg-color: var(--gray-2);
+  /* --code-color: var(--base00); */
+  --code-bg-color: var(--base07);
   --body-bg-color: #ffffff;
   --border-color: #e9e9e9;
   --faded-color: #4c4c4c;
-  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial,
+    sans-serif;
+  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
+    monospace;
   --top-header-height: 67px;
   --sidebar-width: 280px;
   --top-bar-bg: #8257e5;
@@ -37,7 +65,8 @@ a {
   color: #972395;
 }
 
-table tr th, table tr td {
+table tr th,
+table tr td {
   padding: 6px 13px;
 }
 
@@ -104,7 +133,8 @@ a {
   text-decoration: none;
 }
 
-a:hover, a:hover code {
+a:hover,
+a:hover code {
   text-decoration: underline;
 }
 
@@ -116,7 +146,8 @@ a:hover, a:hover code {
   background-color: var(--top-bar-bg);
 }
 
-.pkg-and-logo a, .pkg-and-logo a:visited {
+.pkg-and-logo a,
+.pkg-and-logo a:visited {
   color: var(--top-bar-fg);
 }
 
@@ -140,7 +171,10 @@ a:hover, a:hover code {
 
 body {
   display: grid;
-  grid-template-columns: [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr;
+  grid-template-columns:
+    [before-sidebar] 1fr [sidebar] var(--sidebar-width)
+    [main-content] fit-content(calc(1280px - var(--sidebar-width)))
+    [end] 1fr;
   grid-template-rows: [top-header] var(--top-header-height) [above-footer] auto [footer] auto;
   box-sizing: border-box;
   margin: 0;
@@ -226,8 +260,8 @@ section > *:last-child {
 }
 
 p {
-    overflow-wrap: break-word;
-    margin: 24px 0;
+  overflow-wrap: break-word;
+  margin: 24px 0;
 }
 
 footer {
@@ -290,7 +324,8 @@ footer p {
   margin-bottom: 48px;
 }
 
-.module-name a, .module-name a:visited {
+.module-name a,
+.module-name a:visited {
   color: inherit;
 }
 
@@ -311,7 +346,8 @@ footer p {
   font-weight: bold;
 }
 
-a, a:visited {
+a,
+a:visited {
   color: var(--link-color);
 }
 
@@ -350,14 +386,16 @@ p code {
   border-radius: 4px;
 }
 
-code a, a code {
+code a,
+a code {
   text-decoration: none;
   color: var(--code-link-color);
   background: none;
   padding: 0;
 }
 
-code a:visited, a:visited code {
+code a:visited,
+a:visited code {
   color: var(--code-link-color);
 }
 
@@ -376,23 +414,22 @@ pre {
 }
 
 .syntax-number {
-    color: #60B7BF;
+  color: #60b7bf;
 }
 .syntax-string {
-  color:#F7577C;
+  color: #f7577c;
 }
 
 .syntax-bracket {
-  color:#FF335F;
+  color: #ff335f;
 }
 .syntax-closure-dash,
 .syntax-closure-arrow,
-.syntax-operator
-{
-    color: #ffffff;
+.syntax-operator {
+  color: #ffffff;
 }
 .syntax-comma {
-  color: #9573E6;
+  color: #9573e6;
 }
 .syntax-comment {
   color: #ff0000;
@@ -404,7 +441,8 @@ pre {
   height: 0;
 }
 
-#module-search, #module-search:focus {
+#module-search,
+#module-search:focus {
   opacity: 1;
   padding: 12px 16px;
   height: 48px;
@@ -477,7 +515,7 @@ pre {
 @media (prefers-color-scheme: dark) {
   :root {
     --body-bg-color: var(--purple-8);
-    --code-bg-color: var(--purple-7);
+    --code-bg-color: #222947;
     --border-color: #555555;
     --code-color: #eeeeee;
     --text-color: var(--gray-1);
@@ -582,7 +620,7 @@ pre {
   body {
     grid-template-columns: auto;
     grid-template-rows: [top-header] var(--top-header-height) [before-sidebar] auto [sidebar] auto [above-footer] auto [footer] auto;
-/* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
+    /* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
 
     margin: 0;
     min-width: 320px;
@@ -605,4 +643,48 @@ pre {
     padding-top: 24px;
     padding-bottom: 12px;
   }
+}
+
+/* Comments `#` and Documentation comments `##` */
+samp .comment,
+code .comment {
+  color: #338545;
+}
+/* Number, String, Tag, Type literals */
+samp .literal,
+code .literal {
+  color: var(--cyan);
+}
+/* Keywords and punctuation */
+samp .kw,
+code .kw {
+  color: var(--magenta);
+}
+/* Operators */
+samp .op,
+code .op {
+  color: var(--orange);
+}
+
+/* Delimieters */
+samp .delimeter,
+code .delimeter {
+  color: var(--base05);
+}
+
+/* Variables modules and field names */
+samp .lowerident,
+code .lowerident {
+  color: var(--violet);
+}
+
+/* Types, Tags, and Modules */
+samp .upperident,
+code .upperident {
+  color: var(--green);
+}
+
+samp .dim,
+code .dim {
+  opacity: 0.55;
 }
