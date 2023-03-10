@@ -172,7 +172,6 @@ wyhash = "0.5.0"
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]
 codegen-units = 1
-lto = "thin"
 
 # debug = true # enable when profiling
 [profile.bench]
@@ -181,4 +180,8 @@ lto = "thin"
 
 [profile.release-with-debug]
 debug = true
+inherits = "release"
+
+[profile.release-with-lto]
+lto = "thin" # TODO: We could consider full here since this is only used for packaged release on github.
 inherits = "release"
