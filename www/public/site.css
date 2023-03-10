@@ -9,9 +9,9 @@
     --base07: #f5f7ff;
     --base08: #c94922;
     --base09: #c76b29;
-    --base0A: #c08b30;
-    --base0B: #39aca6;
-    --base0C: #22a2c9;
+    --base0A: #ba862e;
+    --base0B: #349e99;
+    --base0C: #219bc1;
     --base0D: #3d8fd1;
     --base0E: #6679cc;
     --base0F: #9c637a;
@@ -43,7 +43,7 @@
     --toc-border: #ddd;
     --toc-search-bg: #fcfcfc;
     --toc-search-border: #bbb;
-    --font-mono: 'Source Code Pro', monospace;;
+    --font-mono: "Source Code Pro", monospace;
 }
 
 html {
@@ -132,14 +132,19 @@ main {
     padding: 0 12px;
 }
 
-code, samp {
+code,
+samp {
     font-family: var(--font-mono);
     color: var(--code-color);
     background-color: var(--code-bg-color);
     display: inline-block;
 }
 
-p code, td code, li code, th code, samp {
+p code,
+td code,
+li code,
+th code,
+samp {
     padding: 0 8px;
     border-radius: 4px;
 }
@@ -247,8 +252,8 @@ td:last-child {
 
 #tutorial-toc {
     margin-top: 18px;
-    background: var(--toc-background);
-    border: 1px solid var(--toc-border);
+    background: var(--code-bg-color);
+    border-radius: 8px;
     padding: 12px 24px;
     margin-left: 64px;
 }
@@ -616,8 +621,7 @@ h4 {
         --link-color: #1bc6bd;
         --repl-prompt: var(--link-color);
         --body-bg: #0e0e0f;
-        --code-bg: #303030;
-        --code-bg-color: var(--base01);
+        --code-bg-color: #222947;
         --code-snippet-border: #444;
         --code-color: #cdcdcd;
         --toc-background: var(--code-bg-color);

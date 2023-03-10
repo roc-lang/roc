@@ -9,9 +9,9 @@
   --base07: #f5f7ff;
   --base08: #c94922;
   --base09: #c76b29;
-  --base0A: #c08b30;
-  --base0B: #39aca6;
-  --base0C: #22a2c9;
+  --base0A: #ba862e;
+  --base0B: #349e99;
+  --base0C: #219bc1;
   --base0D: #3d8fd1;
   --base0E: #6679cc;
   --base0F: #9c637a;
@@ -515,7 +515,7 @@ pre {
 @media (prefers-color-scheme: dark) {
   :root {
     --body-bg-color: var(--purple-8);
-    --code-bg-color: var(--purple-7);
+    --code-bg-color: #222947;
     --border-color: #555555;
     --code-color: #eeeeee;
     --text-color: var(--gray-1);
