@@ -4,9 +4,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
-use roc_utils::cargo;
-use roc_utils::pretty_command_string;
-use roc_utils::root_dir;
+use roc_command_utils::{cargo, pretty_command_string, root_dir};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;

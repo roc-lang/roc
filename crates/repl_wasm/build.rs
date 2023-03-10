@@ -2,7 +2,6 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-use roc_builtins::bitcode;
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
 const PLATFORM_FILENAME: &str = "repl_platform";

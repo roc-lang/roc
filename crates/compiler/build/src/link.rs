@@ -1,9 +1,8 @@
 use crate::target::{arch_str, target_zig_str};
 use libloading::{Error, Library};
+use roc_command_utils::{cargo, clang, get_lib_path, rustup, zig};
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
-use roc_utils::{cargo, clang, zig};
-use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
 use std::fs::DirEntry;
 use std::io;

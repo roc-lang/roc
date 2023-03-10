@@ -8,6 +8,7 @@ license.workspace = true
 version.workspace = true
 
 [build-dependencies]
+roc_command_utils = { path = "../../../../utils/command" }
 # dunce can be removed once ziglang/zig#5109 is fixed
 dunce = "1.0.3"
 

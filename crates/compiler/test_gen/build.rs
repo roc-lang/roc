@@ -1,5 +1,4 @@
-use roc_builtins::bitcode;
-use roc_utils::zig;
+use roc_command_utils::zig;
 use std::env;
 use std::fs;
 use std::path::Path;

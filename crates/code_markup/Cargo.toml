@@ -10,7 +10,7 @@ version.workspace = true
 [dependencies]
 roc_ast = { path = "../ast" }
 roc_module = { path = "../compiler/module" }
-roc_utils = { path = "../utils" }
+roc_error_utils = { path = "../utils/error" }
 
 palette.workspace = true
 

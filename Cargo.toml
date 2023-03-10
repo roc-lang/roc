@@ -21,7 +21,7 @@ members = [
   "crates/test_utils",
   "crates/valgrind",
   "crates/tracing",
-  "crates/utils",
+  "crates/utils/*",
   "crates/docs",
   "crates/docs_cli",
   "crates/linker",

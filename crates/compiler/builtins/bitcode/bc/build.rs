@@ -1,12 +1,9 @@
+use roc_command_utils::{pretty_command_string, zig};
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::str;
-use std::{
-    env::{self, VarError},
-    path::PathBuf,
-    process::Command,
-};
+use std::{env, path::PathBuf, process::Command};
 
 #[cfg(target_os = "macos")]
 use tempfile::tempdir;
@@ -154,64 +151,4 @@ fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-/// Gives a friendly error if zig is not installed.
-/// Also makes it easy to track where we use zig in the codebase.
-pub fn zig() -> Command {
-    let command_str = match std::env::var("ROC_ZIG") {
-        Ok(path) => path,
-        Err(_) => "zig".into(),
-    };
-
-    if check_command_available(&command_str) {
-        Command::new(command_str)
-    } else {
-        panic!("I could not find the zig command.\nPlease install zig, see instructions at https://ziglang.org/learn/getting-started/.",)
-    }
-}
-
-fn check_command_available(command_name: &str) -> bool {
-    if cfg!(target_family = "unix") {
-        let unparsed_path = match std::env::var("PATH") {
-            Ok(var) => var,
-            Err(VarError::NotPresent) => return false,
-            Err(VarError::NotUnicode(_)) => {
-                panic!("found PATH, but it included invalid unicode data!")
-            }
-        };
-
-        std::env::split_paths(&unparsed_path).any(|dir| dir.join(command_name).exists())
-    } else if cfg!(target = "windows") {
-        let mut cmd = Command::new("Get-Command");
-
-        cmd.args([command_name]);
-
-        let cmd_str = format!("{:?}", cmd);
-
-        let cmd_out = cmd.output().unwrap_or_else(|err| {
-            panic!(
-                "Failed to execute `{}` to check if {} is available:\n    {}",
-                cmd_str, command_name, err
-            )
-        });
-
-        cmd_out.status.success()
-    } else {
-        // We're in uncharted waters, best not to panic if
-        // things may end up working out down the line.
-        true
-    }
-}
-
-pub fn pretty_command_string(command: &Command) -> std::ffi::OsString {
-    let mut command_string = std::ffi::OsString::new();
-    command_string.push(command.get_program());
-
-    for arg in command.get_args() {
-        command_string.push(" ");
-        command_string.push(arg);
-    }
-
-    command_string
 }

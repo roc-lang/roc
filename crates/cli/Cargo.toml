@@ -85,7 +85,7 @@ roc_repl_expect = { path = "../repl_expect" }
 [dev-dependencies]
 cli_utils = { path = "../cli_utils" }
 roc_test_utils = { path = "../test_utils" }
-roc_utils = { path = "../utils" }
+roc_command_utils = { path = "../utils/command" }
 
 criterion.workspace = true
 indoc.workspace = true
