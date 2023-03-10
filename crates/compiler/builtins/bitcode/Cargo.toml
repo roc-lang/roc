@@ -1,0 +1,18 @@
+[package]
+name = "roc_bitcode"
+description = "Compiles the zig bitcode to `.o` for builtins"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+# dunce can be removed once ziglang/zig#5109 is fixed
+dunce = "1.0.3"
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+tempfile.workspace = true

@@ -100,8 +100,8 @@ fn build_wasm_test_host() {
     let mut outfile = PathBuf::from(&out_dir).join(PLATFORM_FILENAME);
     outfile.set_extension("wasm");
 
-    let builtins_host_tempfile =
-        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
+        .expect("failed to write host builtins object to tempfile");
 
     run_zig(&[
         "wasm-ld",

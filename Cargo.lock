@@ -3033,6 +3033,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_bitcode"
+version = "0.0.1"
+dependencies = [
+ "dunce",
+ "tempfile",
+]
+
+[[package]]
+name = "roc_bitcode_bc"
+version = "0.0.1"
+dependencies = [
+ "dunce",
+ "tempfile",
+]
+
+[[package]]
 name = "roc_build"
 version = "0.0.1"
 dependencies = [
@@ -3040,7 +3056,7 @@ dependencies = [
  "indoc",
  "inkwell",
  "libloading",
- "roc_builtins",
+ "roc_bitcode",
  "roc_can",
  "roc_collections",
  "roc_constrain",
@@ -3073,7 +3089,6 @@ dependencies = [
 name = "roc_builtins"
 version = "0.0.1"
 dependencies = [
- "dunce",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -3366,6 +3381,7 @@ dependencies = [
  "inkwell",
  "morphic_lib",
  "roc_alias_analysis",
+ "roc_bitcode_bc",
  "roc_builtins",
  "roc_collections",
  "roc_debug_flags",
@@ -3715,6 +3731,7 @@ dependencies = [
  "futures",
  "getrandom",
  "js-sys",
+ "roc_bitcode",
  "roc_builtins",
  "roc_collections",
  "roc_gen_wasm",
@@ -4525,6 +4542,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "libloading",
+ "roc_bitcode",
  "roc_build",
  "roc_builtins",
  "roc_can",

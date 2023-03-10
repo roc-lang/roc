@@ -1,0 +1,15 @@
+[package]
+name = "roc_bitcode_bc"
+description = "Compiles the zig bitcode to `.bc` for llvm"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[build-dependencies]
+# dunce can be removed once ziglang/zig#5109 is fixed
+dunce = "1.0.3"
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+tempfile.workspace = true

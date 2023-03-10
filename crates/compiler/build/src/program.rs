@@ -3,7 +3,6 @@ use crate::link::{
 };
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
-use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
@@ -938,8 +937,8 @@ fn build_loaded_file<'a>(
 
             std::fs::write(app_o_file, &*roc_app_bytes).unwrap();
 
-            let builtins_host_tempfile =
-                bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+            let builtins_host_tempfile = roc_bitcode::host_tempfile()
+                .expect("failed to write host builtins object to tempfile");
 
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 

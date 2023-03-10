@@ -29,8 +29,8 @@ fn main() {
     pre_linked_binary_path.extend(["pre_linked_binary"]);
     pre_linked_binary_path.set_extension(OBJECT_EXTENSION);
 
-    let builtins_host_tempfile =
-        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
+        .expect("failed to write host builtins object to tempfile");
 
     let output = Command::new(&zig_executable())
         .args([

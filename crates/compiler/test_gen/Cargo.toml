@@ -19,6 +19,7 @@ wasi_libc_sys = { path = "../../wasi-libc-sys" }
 tempfile.workspace = true
 
 [dev-dependencies]
+roc_bitcode = { path = "../builtins/bitcode" }
 roc_build = { path = "../build", features = ["target-aarch64", "target-x86_64", "target-wasm32"] }
 roc_builtins = { path = "../builtins" }
 roc_can = { path = "../can" }

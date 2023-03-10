@@ -1,11 +1,12 @@
-use roc_utils::zig;
-use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
 use std::str;
+use std::{
+    env::{self, VarError},
+    path::PathBuf,
+    process::Command,
+};
 
 #[cfg(target_os = "macos")]
 use tempfile::tempdir;
@@ -18,8 +19,7 @@ fn main() {
 
     // "." is relative to where "build.rs" is
     // dunce can be removed once ziglang/zig#5109 is fixed
-    let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
-    let bitcode_path = build_script_dir_path.join("bitcode");
+    let bitcode_path = dunce::canonicalize(Path::new(".")).unwrap().join("..");
 
     // workaround for github.com/ziglang/zig/issues/9711
     #[cfg(target_os = "macos")]
@@ -43,25 +43,6 @@ fn main() {
         "builtins-windows-x86_64",
     );
 
-    // OBJECT FILES
-    #[cfg(windows)]
-    const BUILTINS_HOST_FILE: &str = "builtins-host.obj";
-
-    #[cfg(not(windows))]
-    const BUILTINS_HOST_FILE: &str = "builtins-host.o";
-
-    generate_object_file(&bitcode_path, "object", BUILTINS_HOST_FILE);
-
-    generate_object_file(
-        &bitcode_path,
-        "windows-x86_64-object",
-        "builtins-windows-x86_64.obj",
-    );
-
-    generate_object_file(&bitcode_path, "wasm32-object", "builtins-wasm32.o");
-
-    copy_zig_builtins_to_target_dir(&bitcode_path);
-
     get_zig_files(bitcode_path.as_path(), &|path| {
         let path: &Path = path;
         println!(
@@ -75,36 +56,6 @@ fn main() {
     zig_cache_dir
         .close()
         .expect("Failed to delete temp dir zig_cache_dir.");
-}
-
-fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name: &str) {
-    let dest_obj_path = get_lib_dir().join(object_file_name);
-    let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
-
-    let src_obj_path = bitcode_path.join(object_file_name);
-    let src_obj = src_obj_path.to_str().expect("Invalid src object path");
-
-    println!("Compiling zig object `{}` to: {}", zig_object, src_obj);
-
-    if !DEBUG {
-        let mut zig_cmd = zig();
-
-        zig_cmd
-            .current_dir(bitcode_path)
-            .args(["build", zig_object, "-Drelease=true"]);
-
-        run_command(zig_cmd, 0);
-
-        println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
-
-        // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
-        fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
-            panic!(
-                "Failed to copy object file {} to {}: {:?}",
-                src_obj, dest_obj, err
-            );
-        });
-    }
 }
 
 fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
@@ -121,7 +72,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
 
     // workaround for github.com/ziglang/zig/issues/9711
     #[cfg(target_os = "macos")]
-    let _ = fs::remove_dir_all("./bitcode/zig-cache");
+    let _ = fs::remove_dir_all("./zig-cache");
 
     let mut zig_cmd = zig();
 
@@ -135,64 +86,16 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
 pub fn get_lib_dir() -> PathBuf {
     // Currently we have the OUT_DIR variable which points to `/target/debug/build/roc_builtins-*/out/`.
     // So we just need to add "/bitcode" to that.
-    let dir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("bitcode");
+    let dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     // create dir if it does not exist
-    fs::create_dir_all(&dir).expect("Failed to make $OUT_DIR/bitcode dir.");
+    fs::create_dir_all(&dir).expect("Failed to make $OUT_DIR/ dir.");
 
     dir
 }
 
-fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
-    // To enable roc to find the zig builtins, we want them to be moved to a folder next to the roc executable.
-    // So if <roc_folder>/roc is the executable. The zig files will be in <roc_folder>/lib/*.zig
-    let target_profile_dir = get_lib_dir();
-
-    let zig_src_dir = bitcode_path.join("src");
-
-    cp_unless_zig_cache(&zig_src_dir, &target_profile_dir).unwrap_or_else(|err| {
-        panic!(
-            "Failed to copy zig bitcode files {:?} to {:?}: {:?}",
-            zig_src_dir, target_profile_dir, err
-        );
-    });
-}
-
-// recursively copy all the .zig files from this directory, but do *not* recurse into zig-cache/
-fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
-    // Make sure the destination directory exists before we try to copy anything into it.
-    std::fs::create_dir_all(target_dir).unwrap_or_else(|err| {
-        panic!(
-            "Failed to create output library directory for zig bitcode {:?}: {:?}",
-            target_dir, err
-        );
-    });
-
-    for entry in fs::read_dir(src_dir)? {
-        let src_path = entry?.path();
-        let src_filename = src_path.file_name().unwrap();
-
-        // Only copy individual files if they have the .zig extension
-        if src_path.extension().unwrap_or_default() == "zig" {
-            let dest = target_dir.join(src_filename);
-
-            fs::copy(&src_path, &dest).unwrap_or_else(|err| {
-                panic!(
-                    "Failed to copy zig bitcode file {:?} to {:?}: {:?}",
-                    src_path, dest, err
-                );
-            });
-        } else if src_path.is_dir() && src_filename != "zig-cache" {
-            // Recursively copy all directories except zig-cache
-            cp_unless_zig_cache(&src_path, &target_dir.join(src_filename))?;
-        }
-    }
-
-    Ok(())
-}
-
 fn run_command(mut command: Command, flaky_fail_counter: usize) {
-    let command_str = roc_utils::pretty_command_string(&command);
+    let command_str = pretty_command_string(&command);
     let command_str = command_str.to_string_lossy();
 
     let output_result = command.output();
@@ -251,4 +154,64 @@ fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Gives a friendly error if zig is not installed.
+/// Also makes it easy to track where we use zig in the codebase.
+pub fn zig() -> Command {
+    let command_str = match std::env::var("ROC_ZIG") {
+        Ok(path) => path,
+        Err(_) => "zig".into(),
+    };
+
+    if check_command_available(&command_str) {
+        Command::new(command_str)
+    } else {
+        panic!("I could not find the zig command.\nPlease install zig, see instructions at https://ziglang.org/learn/getting-started/.",)
+    }
+}
+
+fn check_command_available(command_name: &str) -> bool {
+    if cfg!(target_family = "unix") {
+        let unparsed_path = match std::env::var("PATH") {
+            Ok(var) => var,
+            Err(VarError::NotPresent) => return false,
+            Err(VarError::NotUnicode(_)) => {
+                panic!("found PATH, but it included invalid unicode data!")
+            }
+        };
+
+        std::env::split_paths(&unparsed_path).any(|dir| dir.join(command_name).exists())
+    } else if cfg!(target = "windows") {
+        let mut cmd = Command::new("Get-Command");
+
+        cmd.args([command_name]);
+
+        let cmd_str = format!("{:?}", cmd);
+
+        let cmd_out = cmd.output().unwrap_or_else(|err| {
+            panic!(
+                "Failed to execute `{}` to check if {} is available:\n    {}",
+                cmd_str, command_name, err
+            )
+        });
+
+        cmd_out.status.success()
+    } else {
+        // We're in uncharted waters, best not to panic if
+        // things may end up working out down the line.
+        true
+    }
+}
+
+pub fn pretty_command_string(command: &Command) -> std::ffi::OsString {
+    let mut command_string = std::ffi::OsString::new();
+    command_string.push(command.get_program());
+
+    for arg in command.get_args() {
+        command_string.push(" ");
+        command_string.push(arg);
+    }
+
+    command_string
 }
