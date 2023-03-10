@@ -22,43 +22,32 @@ pub fn highlight(code: &str) -> Vec<String> {
         let current_text = &code[offset..location.byte_range().end];
 
         match location.value {
+            // Comments `#` and Documentation comments `##`
             Token::LineComment | Token::DocComment => {
                 buf = push_html_span(buf, current_text, "comment");
             }
+            // Number, String, Tag, Type literals
             Token::SingleQuote
             | Token::String
             | Token::UnicodeEscape
             | Token::EscapedChar
-            | Token::Interpolated => {
-                buf = push_html_span(buf, current_text, "str");
+            | Token::Interpolated
+            | Token::Number => {
+                buf = push_html_span(buf, current_text, "literal");
             }
-            Token::Keyword => {
+            // Keywords and punctuation
+            Token::Keyword
+            | Token::Equals
+            | Token::Backslash
+            | Token::Pizza
+            | Token::Arrow
+            | Token::Backpass
+            | Token::ColonEquals
+            | Token::Colon
+            | Token::QuestionMark => {
                 buf = push_html_span(buf, current_text, "kw");
             }
-            Token::Number => {
-                buf = push_html_span(buf, current_text, "number");
-            }
-            Token::Pizza => {
-                buf = push_html_span(buf, current_text, "pipe");
-            }
-            Token::Arrow | Token::Backpass => {
-                buf = push_html_span(buf, current_text, "arrow");
-            }
-            Token::Bar => {
-                buf = push_html_span(buf, current_text, "bar");
-            }
-            Token::Backslash => {
-                buf = push_html_span(buf, current_text, "backslash");
-            }
-            Token::Comma => {
-                buf = push_html_span(buf, current_text, "comma");
-            }
-            Token::QuestionMark => {
-                buf = push_html_span(buf, current_text, "qmark");
-            }
-            Token::ColonEquals | Token::Colon => {
-                buf = push_html_span(buf, current_text, "colon");
-            }
+            // Operators
             Token::Percent
             | Token::Caret
             | Token::Bang
@@ -75,25 +64,27 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::DoubleBar
             | Token::Plus
             | Token::And
-            | Token::DoubleAnd
-            | Token::Equals => {
+            | Token::DoubleAnd => {
                 buf = push_html_span(buf, current_text, "op");
             }
-            Token::Paren => {
-                buf = push_html_span(buf, current_text, "paren");
+            // Delimieters
+            Token::Paren
+            | Token::Bracket
+            | Token::Brace
+            | Token::Comma
+            | Token::Bar
+            | Token::Decimal => {
+                buf = push_html_span(buf, current_text, "delimeter");
             }
-            Token::Bracket => {
-                buf = push_html_span(buf, current_text, "bracket");
-            }
-            Token::Brace => {
-                buf = push_html_span(buf, current_text, "brace");
-            }
+            // Types, Tags, and Modules
             Token::UpperIdent => {
                 buf = push_html_span(buf, current_text, "upperident");
             }
+            // Variables modules and field names
             Token::LowerIdent => {
                 buf = push_html_span(buf, current_text, "lowerident");
             }
+            // Anyting else that wasn't tokenised
             Token::Error | Token::Other => {
                 buf = push_html(buf, current_text);
             }

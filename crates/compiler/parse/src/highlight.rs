@@ -59,6 +59,7 @@ pub enum Token {
     Arrow,
     Pipe,
     Backpass,
+    Decimal,
 }
 
 pub fn highlight(text: &str) -> Vec<Loc<Token>> {
@@ -164,6 +165,10 @@ fn highlight_inner<'a>(
                             },
                         ));
                     }
+                }
+                '.' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Decimal));
                 }
                 '0'..='9' => {
                     if let Ok((_, _item, new_state)) =
