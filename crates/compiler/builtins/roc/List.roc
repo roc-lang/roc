@@ -1029,7 +1029,9 @@ sublist = \list, config ->
 sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
+## ```
 ## List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
+## ```
 intersperse : List elem, elem -> List elem
 intersperse = \list, sep ->
     capacity = 2 * List.len list
