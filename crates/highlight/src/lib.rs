@@ -44,6 +44,7 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::Backpass
             | Token::ColonEquals
             | Token::Colon
+            | Token::And
             | Token::QuestionMark => {
                 buf = push_html_span(buf, current_text, "kw");
             }
@@ -63,7 +64,6 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::DoubleEquals
             | Token::DoubleBar
             | Token::Plus
-            | Token::And
             | Token::DoubleAnd => {
                 buf = push_html_span(buf, current_text, "op");
             }
