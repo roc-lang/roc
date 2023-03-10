@@ -108,7 +108,7 @@ This is the general procedure I follow with some helpful links:
 - [x86 and amd64 instruction reference](https://web.archive.org/web/20230221053750/https://www.felixcloutier.com/x86/) -
   Great for looking up x86_64 instructions and there bytes.
   Definitely missing information if you aren't used to reading it.
-- [Intel 64 ISA Reference](https://software.intel.com/content/dam/develop/public/us/en/documents/325383-sdm-vol-2abcd.pdf) -
+- [Intel 64 ISA Reference](https://community.intel.com/legacyfs/online/drupal_files/managed/a4/60/325383-sdm-vol-2abcd.pdf) -
   Super dense manual.
   Contains everything you would need to know for x86_64.
   Also is like 2000 pages.
