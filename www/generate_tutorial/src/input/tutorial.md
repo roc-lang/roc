@@ -195,7 +195,7 @@ birds = 3
 
 iguanas = 2
 
-total = Num.toStr (birds + iguanas)
+total = addAndStringify birds iguanas
 
 main =
     Stdout.line "There are \(total) animals."
