@@ -10,6 +10,3 @@ main = \num ->
     else
         str = Num.toStr num
         "The number was \(str), OH YEAH!!! 🤘🤘"
-
-# main : Str -> Str
-# main = \name -> "Hello from roc \(name)!!!"

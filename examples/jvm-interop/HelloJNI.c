@@ -213,8 +213,6 @@ extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocB
 JNIEXPORT jstring JNICALL Java_HelloJNI_sayHello
    (JNIEnv *env, jobject thisObj, jint num)
 {
-
-
     char native_string[256] = {0};
     sprintf(native_string, "%d", num);
 
@@ -224,19 +222,6 @@ JNIEXPORT jstring JNICALL Java_HelloJNI_sayHello
     // Call the Roc function to populate `ret`'s bytes.
     roc__mainForHost_1_exposed_generic(&ret, &arg);
 
-    /* struct json_value_s* root = json_parse((char *)ret.bytes, ret.len); */
-    /* if (root == NULL) { */
-    /*     printf("Failed to parse JSON\n"); */
-    /*     exit(1); */
-    /* } */
-
-    /* struct json_string_s * json_string = json_value_as_string(root); */
-    /* if (json_string == NULL) { */
-    /*     printf("JSON value is not a string\n"); */
-    /*     exit(1); */
-    /* } */
-
-    /* free(root); */
     decref((void *)&ret, alignof(uint8_t *));
 
 
@@ -266,5 +251,4 @@ JNIEXPORT jstring JNICALL Java_HelloJNI_sayHello
     (*env)->DeleteLocalRef(env, byteArray);
 
     return result;
-
 }
