@@ -1,8 +1,8 @@
 package javaSource;
 
-public class HelloJNI {
+public class Greeter {
    static {
-      System.loadLibrary("demo");
+      System.loadLibrary("interop");
    }
    public static native String sayHello(int num);
 

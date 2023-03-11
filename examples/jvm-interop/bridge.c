@@ -209,7 +209,7 @@ size_t roc_str_len(struct RocStr str)
 
 extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
 
-JNIEXPORT jstring JNICALL Java_javaSource_HelloJNI_sayHello
+JNIEXPORT jstring JNICALL Java_javaSource_Greeter_sayHello
    (JNIEnv *env, jobject thisObj, jint num)
 {
     char native_string[256] = {0};
