@@ -32,4 +32,4 @@ clang \
 clang -shared -o libdemo.so demo.o -L. -lhello
 
 # then run
-java -Djava.library.path=. javaSource.HelloJNI
+java javaSource.HelloJNI

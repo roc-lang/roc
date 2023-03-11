@@ -4,9 +4,9 @@ public class HelloJNI {
    static {
       System.loadLibrary("demo");
    }
-   public native String sayHello(int num);
+   public static native String sayHello(int num);
 
    public static void main(String[] args) {
-      System.out.println(new HelloJNI().sayHello(420));
+      System.out.println(sayHello(420));
    }
 }
