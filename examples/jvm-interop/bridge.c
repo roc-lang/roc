@@ -240,11 +240,6 @@ JNIEXPORT jstring JNICALL Java_javaSource_Greeter_sayHello
 
     jstring result = (*env)->NewObject(env, stringClass, stringConstructor, byteArray, charsetName);
 
-    // probably unnecessary cause stuff created with env should just be dead when env is dead
-    // also they're stored on the stack so truly not required but ig couldn't hurt..
-    (*env)->DeleteLocalRef(env, (jobject)stringConstructor);
-    (*env)->DeleteLocalRef(env, (jobject)stringClass);
-
     (*env)->DeleteLocalRef(env, charsetName);
     (*env)->ReleaseByteArrayElements(env, byteArray, bytes, 0);
     (*env)->DeleteLocalRef(env, byteArray);
