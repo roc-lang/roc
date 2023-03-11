@@ -15,15 +15,15 @@ We will be using C to bridge between Java and Roc.
 ## Structure
 As the time of writing this post, the following is the current bare bones tree of a jvm-interop:
 
-``` sh
- .
-├──  bridge.c
-├──  javaSource
-│  └──  Greeter.java
-├──  main.roc          # application main
-└──  platform
-   ├──  host.c
-   └──  main.roc       # main for host
+``` console
+.
+├── bridge.c
+├── javaSource
+│   └── Greeter.java
+├── main.roc          # application main
+└── platform
+    ├── host.c
+    └── main.roc      # main for host
 ```
 
 bridge.c is the JNI bridge. The interesting part of it is the function `Java_javaSource_Greeter_sayHello`, this function will accept a `jint` and return a `jstring`.
