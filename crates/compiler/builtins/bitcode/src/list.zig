@@ -75,8 +75,8 @@ pub const RocList = extern struct {
         return list;
     }
 
-    pub fn deinit(self: RocList, alignment: u32) void {
-        utils.decref(self.bytes, self.capacity, alignment);
+    pub fn decref(self: RocList, alignment: u32) void {
+        utils.decref(self.bytes, self.capacity(), alignment);
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -128,7 +128,7 @@ pub const RocList = extern struct {
         @memcpy(new_bytes, old_bytes, number_of_bytes);
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input list.
-        self.deinit(alignment);
+        self.decref(alignment);
 
         return new_list;
     }
@@ -192,7 +192,7 @@ pub const RocList = extern struct {
             @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
 
-        self.deinit(alignment);
+        self.decref(alignment);
 
         return result;
     }
@@ -573,7 +573,7 @@ pub fn listSublist(
 
             @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
 
-            list.deinit(alignment);
+            list.decref(alignment);
 
             return output;
         }
@@ -606,7 +606,7 @@ pub fn listDropAt(
         // because we rely on the pointer field being null if the list is empty
         // which also requires duplicating the utils.decref call to spend the RC token
         if (size < 2) {
-            list.deinit(alignment);
+            list.decref(alignment);
             return RocList.empty();
         }
 
@@ -636,7 +636,7 @@ pub fn listDropAt(
         const tail_size = (size - drop_index - 1) * element_width;
         @memcpy(tail_target, tail_source, tail_size);
 
-        list.deinit(alignment);
+        list.decref(alignment);
 
         return output;
     } else {
@@ -750,7 +750,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
             return list_b;
         } else {
             // we must consume this list. Even though it has no elements, it could still have capacity
-            list_b.deinit(alignment);
+            list_b.decref(alignment);
 
             return list_a;
         }
@@ -765,7 +765,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         @memcpy(source_a + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
         // decrement list b.
-        list_b.deinit(alignment);
+        list_b.decref(alignment);
 
         return resized_list_a;
     } else if (list_b.isUnique()) {
@@ -786,7 +786,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         @memcpy(source_b, source_a, byte_count_a);
 
         // decrement list a.
-        list_a.deinit(alignment);
+        list_a.decref(alignment);
 
         return resized_list_b;
     }
@@ -803,8 +803,8 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     @memcpy(target + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
     // decrement list a and b.
-    list_a.deinit(alignment);
-    list_b.deinit(alignment);
+    list_a.decref(alignment);
+    list_b.decref(alignment);
 
     return output;
 }
@@ -873,14 +873,14 @@ test "listConcat: non-unique with unique overlapping" {
     const ptr_width = @sizeOf(usize);
     const refcount_ptr = @ptrCast([*]isize, @alignCast(ptr_width, bytes) - ptr_width);
     utils.increfC(&refcount_ptr[0], 1);
-    defer nonUnique.deinit(@sizeOf(u8)); // listConcat will dec the other refcount
+    defer nonUnique.decref(@sizeOf(u8)); // listConcat will dec the other refcount
 
     var unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..]);
-    defer unique.deinit(@sizeOf(u8));
+    defer unique.decref(@sizeOf(u8));
 
     var concatted = listConcat(nonUnique, unique, 1, 1);
     var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3, 4 })[0..]);
-    defer wanted.deinit(@sizeOf(u8));
+    defer wanted.decref(@sizeOf(u8));
 
     try expect(concatted.eql(wanted));
 }
