@@ -1784,60 +1784,6 @@ const CountAndStart = extern struct {
     start: usize,
 };
 
-pub fn fromUtf8C(output: *FromUtf8Result, arg: RocList, update_mode: UpdateMode) callconv(.C) void {
-    output.* = fromUtf8(arg, update_mode);
-}
-
-inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
-    const bytes = @ptrCast([*]const u8, arg.bytes)[0..arg.length];
-
-    if (unicode.utf8ValidateSlice(bytes)) {
-        // the output will be correct. Now we need to take ownership of the input
-        if (arg.len() <= SMALL_STR_MAX_LENGTH) {
-            // turn the bytes into a small string
-            const string = RocStr.init(@ptrCast([*]u8, arg.bytes), arg.len());
-
-            // then decrement the input list
-            arg.decref(RocStr.alignment);
-
-            return FromUtf8Result{
-                .is_ok = true,
-                .string = string,
-                .byte_index = 0,
-                .problem_code = Utf8ByteProblem.InvalidStartByte,
-            };
-        } else {
-            const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
-
-            // TODO: hangle seamless slice conversion
-            const string = RocStr{
-                .str_bytes = byte_list.bytes,
-                .str_len = byte_list.length,
-                .str_capacity = byte_list.capacityOrRefPtr,
-            };
-
-            return FromUtf8Result{
-                .is_ok = true,
-                .string = string,
-                .byte_index = 0,
-                .problem_code = Utf8ByteProblem.InvalidStartByte,
-            };
-        }
-    } else {
-        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
-
-        // consume the input list
-        arg.decref(RocStr.alignment);
-
-        return FromUtf8Result{
-            .is_ok = false,
-            .string = RocStr.empty(),
-            .byte_index = temp.index,
-            .problem_code = temp.problem,
-        };
-    }
-}
-
 pub fn fromUtf8RangeC(
     output: *FromUtf8Result,
     list: RocList,
@@ -1960,11 +1906,11 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacityOrRefPtr = length }, .Immutable);
+    return fromUtf8Range(RocList{ .bytes = bytes, .length = length, .capacityOrRefPtr = length }, 0, length, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
-    return fromUtf8(str, .Immutable);
+    return fromUtf8Range(str, 0, str.len(), .Immutable);
 }
 
 fn expectOk(result: FromUtf8Result) !void {
