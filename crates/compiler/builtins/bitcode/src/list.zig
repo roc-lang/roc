@@ -615,9 +615,17 @@ pub fn listDropAt(
     drop_index: usize,
     dec: Dec,
 ) callconv(.C) RocList {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
+    const size = list.len();
+    // If droping the first or last element, return a seamless slice.
+    // For simplicity, do this by calling listSublist.
+    // In the future, we can test if it is faster to manually inline the important parts here.
+    if (drop_index == 0) {
+        return listSublist(list, alignment, element_width, 1, size - 1, dec);
+    } else if (drop_index == size - 1) {
+        return listSublist(list, alignment, element_width, 0, size - 1, dec);
+    }
 
+    if (list.bytes) |source_ptr| {
         if (drop_index >= size) {
             return list;
         }
