@@ -1665,7 +1665,7 @@ test "RocStr.concat: small concat small" {
 pub const RocListStr = extern struct {
     list_elements: ?[*]RocStr,
     list_length: usize,
-    list_capacity: usize,
+    list_capacityOrRefPtr: usize,
 };
 
 // Str.joinWith
@@ -1673,7 +1673,7 @@ pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
     const roc_list_str = RocListStr{
         .list_elements = @ptrCast(?[*]RocStr, @alignCast(@alignOf(usize), list.bytes)),
         .list_length = list.length,
-        .list_capacity = list.capacity,
+        .list_capacityOrRefPtr = list.capacityOrRefPtr,
     };
 
     return @call(.{ .modifier = always_inline }, strJoinWith, .{ roc_list_str, separator });
@@ -1735,7 +1735,7 @@ test "RocStr.joinWith: result is big" {
     var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
     const list = RocListStr{
         .list_length = 3,
-        .list_capacity = 3,
+        .list_capacityOrRefPtr = 3,
         .list_elements = @ptrCast([*]RocStr, &elements),
     };
 
@@ -1766,9 +1766,9 @@ inline fn strToBytes(arg: RocStr) RocList {
 
         @memcpy(ptr, arg.asU8ptr(), length);
 
-        return RocList{ .length = length, .bytes = ptr, .capacity = length };
+        return RocList{ .length = length, .bytes = ptr, .capacityOrRefPtr = length };
     } else {
-        return RocList{ .length = length, .bytes = arg.str_bytes, .capacity = arg.str_capacity };
+        return RocList{ .length = length, .bytes = arg.str_bytes, .capacityOrRefPtr = arg.str_capacity };
     }
 }
 
@@ -1809,10 +1809,11 @@ inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
         } else {
             const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
 
+            // TODO: hangle seamless slice conversion
             const string = RocStr{
                 .str_bytes = byte_list.bytes,
                 .str_len = byte_list.length,
-                .str_capacity = byte_list.capacity,
+                .str_capacity = byte_list.capacityOrRefPtr,
             };
 
             return FromUtf8Result{
@@ -1856,10 +1857,11 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
         if (count == arg.len() and count > SMALL_STR_MAX_LENGTH) {
             const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
 
+            // TODO: hangle seamless slice conversion
             const string = RocStr{
                 .str_bytes = byte_list.bytes,
                 .str_len = byte_list.length,
-                .str_capacity = byte_list.capacity,
+                .str_capacity = byte_list.capacityOrRefPtr,
             };
 
             return FromUtf8Result{
@@ -1958,7 +1960,7 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity = length }, .Immutable);
+    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacityOrRefPtr = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {

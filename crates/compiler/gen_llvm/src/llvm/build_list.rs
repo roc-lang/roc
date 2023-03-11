@@ -398,6 +398,7 @@ pub(crate) fn list_capacity<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
+    // TODO: This won't work on seemless slices. Needs to return the len if the capacity is negative.
     builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "list_capacity")
         .unwrap()
@@ -801,6 +802,7 @@ pub(crate) fn decref<'a, 'ctx, 'env>(
     wrapper_struct: StructValue<'ctx>,
     alignment: u32,
 ) {
+    // TODO: This definitely needs to handle seamless slices
     let (_, pointer) = load_list(
         env.builder,
         wrapper_struct,

@@ -18,10 +18,21 @@ const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, da
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
-    capacity: usize,
+    capacityOrRefPtr: usize,
 
     pub inline fn len(self: RocList) usize {
         return self.length;
+    }
+
+    pub fn getCapacity(self: RocList) usize {
+        if (!self.isSeamlessSlice()) {
+            return self.capacityOrRefPtr;
+        }
+        return self.length;
+    }
+
+    pub fn isSeamlessSlice(self: RocList) bool {
+        return @bitCast(isize, self.capacityOrRefPtr) < 0;
     }
 
     pub fn isEmpty(self: RocList) bool {
@@ -29,7 +40,7 @@ pub const RocList = extern struct {
     }
 
     pub fn empty() RocList {
-        return RocList{ .bytes = null, .length = 0, .capacity = 0 };
+        return RocList{ .bytes = null, .length = 0, .capacityOrRefPtr = 0 };
     }
 
     pub fn eql(self: RocList, other: RocList) bool {
@@ -76,7 +87,12 @@ pub const RocList = extern struct {
     }
 
     pub fn decref(self: RocList, alignment: u32) void {
-        utils.decref(self.bytes, self.capacity(), alignment);
+        if (self.isSeamlessSlice()) {
+            const ref_ptr = @intToPtr([*]isize, self.capacityOrRefPtr << 1);
+            utils.decref_ptr_to_refcount(ref_ptr, alignment);
+        } else {
+            utils.decref(self.bytes, self.getCapacity(), alignment);
+        }
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -88,7 +104,7 @@ pub const RocList = extern struct {
     }
 
     fn refcountMachine(self: RocList) usize {
-        if (self.capacity == 0) {
+        if (self.getCapacity() == 0) {
             // the zero-capacity is Clone, copying it will not leak memory
             return utils.REFCOUNT_ONE;
         }
@@ -147,7 +163,7 @@ pub const RocList = extern struct {
         return RocList{
             .bytes = utils.allocateWithRefcount(data_bytes, alignment),
             .length = length,
-            .capacity = capacity,
+            .capacityOrRefPtr = capacity,
         };
     }
 
@@ -158,13 +174,14 @@ pub const RocList = extern struct {
         element_width: usize,
     ) RocList {
         if (self.bytes) |source_ptr| {
-            if (self.isUnique()) {
-                if (self.capacity >= new_length) {
-                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity = self.capacity };
+            if (self.isUnique() and !self.isSeamlessSlice()) {
+                const capacity = self.getCapacity();
+                if (capacity >= new_length) {
+                    return RocList{ .bytes = self.bytes, .length = new_length, .capacityOrRefPtr = capacity };
                 } else {
-                    const new_capacity = utils.calculateCapacity(self.capacity, new_length, element_width);
-                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.capacity, new_capacity, element_width);
-                    return RocList{ .bytes = new_source, .length = new_length, .capacity = new_capacity };
+                    const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width);
+                    return RocList{ .bytes = new_source, .length = new_length, .capacityOrRefPtr = new_capacity };
                 }
             }
             return self.reallocateFresh(alignment, new_length, element_width);
@@ -427,7 +444,7 @@ pub fn listReserve(
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
     const old_length = list.len();
-    if ((update_mode == .InPlace or list.isUnique()) and list.capacity >= list.len() + spare) {
+    if ((update_mode == .InPlace or list.isUnique()) and list.getCapacity() >= list.len() + spare) {
         return list;
     } else {
         var output = list.reallocate(alignment, old_length + spare, element_width);
@@ -461,10 +478,12 @@ fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usi
 
 pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width: usize) callconv(.C) RocList {
     const old_length = list.len();
-    var output = list.reallocate(alignment, old_length + 1, element_width);
+    // TODO: properly wire in update mode.
+    var with_capacity = listReserve(list, alignment, 1, element_width, .Immutable);
+    with_capacity.length += 1;
 
     // can't use one memcpy here because source and target overlap
-    if (output.bytes) |target| {
+    if (with_capacity.bytes) |target| {
         var i: usize = old_length;
 
         while (i > 0) {
@@ -480,7 +499,7 @@ pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width
         }
     }
 
-    return output;
+    return with_capacity;
 }
 
 pub fn listSwap(
@@ -519,6 +538,11 @@ pub fn listSublist(
     len: usize,
     dec: Dec,
 ) callconv(.C) RocList {
+    // Alignment is no longer used.
+    // This will never free the original list.
+    // It will either return a seamless slice or an empty list with capacity.
+    _ = alignment;
+
     const size = list.len();
     if (len == 0 or start >= size) {
         if (list.isUnique()) {
@@ -556,26 +580,28 @@ pub fn listSublist(
             dec(element);
         }
 
-        if (list.isUnique()) {
+        if (list.isUnique() and start == 0) {
             var output = list;
             output.length = keep_len;
-            if (start == 0) {
-                return output;
-            } else {
-                // We want memmove due to aliasing. Zig does not expose it directly.
-                // Instead use copy which can write to aliases as long as the dest is before the source.
-                mem.copy(u8, source_ptr[0 .. keep_len * element_width], source_ptr[start * element_width .. (start + keep_len) * element_width]);
-                return output;
-            }
-        } else {
-            const output = RocList.allocate(alignment, keep_len, element_width);
-            const target_ptr = output.bytes orelse unreachable;
-
-            @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
-
-            list.decref(alignment);
-
             return output;
+        } else {
+            if (list.isSeamlessSlice()) {
+                return RocList{
+                    .bytes = source_ptr + start * element_width,
+                    .length = keep_len,
+                    .capacityOrRefPtr = list.capacityOrRefPtr,
+                };
+            }
+
+            const ref_ptr = @ptrCast([*]isize, @alignCast(@alignOf(isize), source_ptr)) - 1;
+            // This should be a usize with only the highest bit set.
+            const seamless_slice_bit =
+                @bitCast(usize, @as(isize, std.math.minInt(isize)));
+            return RocList{
+                .bytes = source_ptr + start * element_width,
+                .length = keep_len,
+                .capacityOrRefPtr = (@ptrToInt(ref_ptr) >> 1) | seamless_slice_bit,
+            };
         }
     }
 
@@ -746,7 +772,7 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
 pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
     // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
     if (list_b.isEmpty()) {
-        if (list_a.capacity == 0) {
+        if (list_a.getCapacity() == 0) {
             return list_b;
         } else {
             // we must consume this list. Even though it has no elements, it could still have capacity

@@ -204,7 +204,7 @@ pub fn decref(
     decref_ptr_to_refcount(isizes - 1, alignment);
 }
 
-inline fn decref_ptr_to_refcount(
+pub inline fn decref_ptr_to_refcount(
     refcount_ptr: [*]isize,
     alignment: u32,
 ) void {
