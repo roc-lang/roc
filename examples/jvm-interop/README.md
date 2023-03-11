@@ -62,9 +62,9 @@ public class Greeter {
 
 
 ## See it in action
-#### For brevity's sake we'll run the build script and ommit some of its (intentionally) verbose output:
+##### For brevity's sake we'll run the build script and ommit some of its (intentionally) verbose output:
 
-``` sh
+```console
 [dankey@computer:~/dev/roc/examples/jvm-interop]$ ./build.sh && java javaSource.Greeter
 The number was 420, OH YEAH!!! 🤘🤘
 ```
@@ -76,13 +76,13 @@ So in the following examples, we'll make sure that our working directory is in L
 I generally speaking, you'd paobably add your dynamic library to a spot that's already on your path, for convenience sake.\
 So first, we run:
 
-``` sh
+```console
 [nix-shell:~/dev/roc/examples/jvm-interop]$ export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
 ```
 
 Now, let's try Kotlin!
-``` kotlin
-[nix-shell:~/dev/roc/examples/jvm-interop]$ LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH kotlin
+```console
+[nix-shell:~/dev/roc/examples/jvm-interop]$ kotlin
 Welcome to Kotlin version 1.7.20 (JRE 17.0.5+8-nixos)
 Type :help for help, :quit for quit
 >>> import javaSource.Greeter
@@ -93,7 +93,7 @@ And it just works, out of the box!
 
 Now let's do Scala
 
-``` scala
+```console
 [nix-shell:~/dev/roc/examples/jvm-interop]$ scala
 Welcome to Scala 2.13.10 (OpenJDK 64-Bit Server VM, Java 17.0.5).
 Type in expressions for evaluation. Or try :help.
@@ -107,7 +107,7 @@ val res0: String = The number was 1337, OH YEAH!!! 🤘🤘
 ```
 And it also works beautifully.
 
-Test it out in your favorite JVM lang!\
+Test it out on your favorite JVM lang!\
 And again, if anything goes not according to plan, tell me in the link above and we'll figure it out.
 
 ## Notes on building
