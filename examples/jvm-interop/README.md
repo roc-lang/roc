@@ -4,11 +4,11 @@ This is a demo for calling Roc code from Java, and some other JVM languages.
 
 ## Prerequisites
 
-The following was tested on NixOS, with `openjdk 17.0.5` and`clang 13.0.1` but should work with most recent versions of those (jdk>=10) on most modern Linux and MacOS.\
+The following was tested on NixOS, with `openjdk 17.0.5` and `clang 13.0.1` but should work with most recent versions of those (jdk>=10) on most modern Linux and MacOS.\
 You're welcome to test on your machine and tell me (via [Zulip](https://roc.zulipchat.com/#narrow/pm-with/583319-dank)) if you ran into any issues or limitations.
 
 ## Goal
-Our goal here is quite simple- have java take in a number -> pass it to Roc -> Roc formats a string with the number -> pass the string back to java.
+Our goal here is quite simple - have Java take in a number -> pass it to Roc -> Roc formats a string with the number -> pass the string back to Java.
 This will be done with the help of [Java Native Interface](https://docs.oracle.com/javase/8/docs/technotes/guides/jni/).
 We will be using C to bridge between Java and Roc.
 
@@ -29,7 +29,8 @@ As the time of writing this post, the following is the current bare bones tree o
 bridge.c is the JNI bridge. The interesting part of it is the function `Java_javaSource_Greeter_sayHello`, this function will accept a `jint` and return a `jstring`.
 
 In this function, the number, encoded as bytes, will be passed to the platform.\
-The platform will then pass the number to the application which in turn will create our newly formatted string. Just so you know what to expect, the formatting function looks like this:
+The platform will then pass the number to the application which in turn will create our newly formatted string.\
+Just so you know what to expect, the formatting function looks like this:
 ``` coffee
 main : U64 -> Str
 main = \num ->
@@ -62,7 +63,7 @@ public class Greeter {
 
 
 ## See it in action
-##### For brevity's sake we'll run the build script and ommit some of its (intentionally) verbose output:
+##### For brevity's sake we'll run the build script and omit some of its (intentionally) verbose output:
 
 ```console
 [dankey@computer:~/dev/roc/examples/jvm-interop]$ ./build.sh && java javaSource.Greeter
@@ -73,7 +74,7 @@ Since we're talking JVM Bytecode, we can pretty much call our native function fr
 
 Note: The JNI code depends on a dynamic lib, containing our native implementation, that now resides in our working directory.\
 So in the following examples, we'll make sure that our working directory is in LD_LIBRARY_PATH.\
-I generally speaking, you'd paobably add your dynamic library to a spot that's already on your path, for convenience sake.\
+Generally speaking, you'd paobably add your dynamic library to a spot that's already on your path, for convenience sake.\
 So first, we run:
 
 ```console
@@ -114,7 +115,7 @@ And again, if anything goes not according to plan, tell me in the link above and
 I suggest reading the build script and uncommenting according to your setup.\
 But one note on something that may not be obvious:\
 As of the time of writing this document, `roc build --lib` generates a shared object with the suffix `.so.1.0`.\
-This `.0` suffix is unneeded in any part of the build, so we can simply rename it.
+This `.0` suffix is unneeded in any part of the build, so we can simply rename it.\
 But one does depend on `libhello.so` (without `.1`), so we symlink into it.
 
 
