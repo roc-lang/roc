@@ -108,6 +108,17 @@ val res0: String = The number was 1337, OH YEAH!!! 🤘🤘
 ```
 And it also works beautifully.
 
+Last one - Clojure\
+``` console
+[nix-shell:~/dev/roc/examples/jvm-interop]$ clj -Sdeps '{:paths ["."]}'
+Clojure 1.11.1
+user=> (import 'javaSource.Greeter)
+javaSource.Greeter
+user=> (Greeter/sayHello 21)
+"The number was 21, OH YEAH!!! 🤘🤘"
+```
+Do note that in Clojure you need to add a `-Sdeps '{:paths ["."]}'` flag to add the working directory to paths.
+
 Test it out on your favorite JVM lang!\
 And again, if anything goes not according to plan, tell me in the link above and we'll figure it out.
 
