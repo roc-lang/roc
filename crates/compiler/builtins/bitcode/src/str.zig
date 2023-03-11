@@ -623,7 +623,7 @@ test "strToScalars: empty string" {
 
     const expected = RocList.empty();
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -634,10 +634,10 @@ test "strToScalars: One ASCII char" {
 
     const expected_array = [_]u32{82};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.deinit(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -648,10 +648,10 @@ test "strToScalars: Multiple ASCII chars" {
 
     const expected_array = [_]u32{ 82, 111, 99, 33 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.deinit(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -662,10 +662,10 @@ test "strToScalars: One 2-byte UTF-8 character" {
 
     const expected_array = [_]u32{233};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.deinit(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -676,10 +676,10 @@ test "strToScalars: Multiple 2-byte UTF-8 characters" {
 
     const expected_array = [_]u32{ 67, 228, 102, 233, 115 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.deinit(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -690,10 +690,10 @@ test "strToScalars: One 3-byte UTF-8 character" {
 
     const expected_array = [_]u32{40527};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.deinit(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -704,10 +704,10 @@ test "strToScalars: Multiple 3-byte UTF-8 characters" {
 
     const expected_array = [_]u32{ 40527, 24456, 26377, 36259 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.deinit(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -719,10 +719,10 @@ test "strToScalars: One 4-byte UTF-8 character" {
 
     const expected_array = [_]u32{73728};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.deinit(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -734,10 +734,10 @@ test "strToScalars: Multiple 4-byte UTF-8 characters" {
 
     const expected_array = [_]u32{ 73728, 73729 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.deinit(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.deinit(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -1377,7 +1377,7 @@ fn graphemesTest(input: []const u8, expected: []const []const u8) !void {
     try expectEqual(expected.len, count);
 
     const graphemes = strGraphemes(rocstr);
-    defer graphemes.deinit(u8);
+    defer graphemes.deinit(@sizeOf(u8));
     if (input.len == 0) return; // empty string
     const elems = graphemes.elements(RocStr) orelse unreachable;
     for (expected) |g, i| {
@@ -1802,8 +1802,7 @@ inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
             const string = RocStr.init(@ptrCast([*]u8, arg.bytes), arg.len());
 
             // then decrement the input list
-            const data_bytes = arg.len();
-            utils.decref(arg.bytes, data_bytes, RocStr.alignment);
+            arg.deinit(RocStr.alignment);
 
             return FromUtf8Result{
                 .is_ok = true,
@@ -1831,8 +1830,7 @@ inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
 
         // consume the input list
-        const data_bytes = arg.len();
-        utils.decref(arg.bytes, data_bytes, RocStr.alignment);
+        arg.deinit(RocStr.alignment);
 
         return FromUtf8Result{
             .is_ok = false,
@@ -1879,7 +1877,7 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             const string = RocStr.init(@ptrCast([*]const u8, bytes), count);
 
             // decref the list
-            utils.decref(arg.bytes, arg.len(), 1);
+            arg.deinit(RocStr.alignment);
 
             return FromUtf8Result{
                 .is_ok = true,
@@ -1892,7 +1890,7 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
 
         // decref the list
-        utils.decref(arg.bytes, arg.len(), 1);
+        arg.deinit(RocStr.alignment);
 
         return FromUtf8Result{
             .is_ok = false,
