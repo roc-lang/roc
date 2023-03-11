@@ -73,11 +73,11 @@ interface List
 
 ## Types
 ## A sequential list of values.
-##
-## >>> [1, 2, 3] # a list of numbers
-## >>> ["a", "b", "c"] # a list of strings
-## >>> [[1.1], [], [2.2, 3.3]] # a list of lists of numbers
-##
+## ```
+## [1, 2, 3] # a list of numbers
+## ["a", "b", "c"] # a list of strings
+## [[1.1], [], [2.2, 3.3]] # a list of lists of numbers
+## ```
 ## The maximum size of a [List] is limited by the amount of heap memory available
 ## to the current process. If there is not enough memory available, attempting to
 ## create the list could crash. (On Linux, where [overcommit](https://www.etalabs.net/overcommit.html)
@@ -105,11 +105,11 @@ interface List
 ## will be immediately freed.
 ##
 ## Let's look at an example.
+## ```
+## ratings = [5, 4, 3]
 ##
-##     ratings = [5, 4, 3]
-##
-##     { foo: ratings, bar: ratings }
-##
+## { foo: ratings, bar: ratings }
+## ```
 ## The first line binds the name `ratings` to the list `[5, 4, 3]`. The list
 ## begins with a refcount of 1, because so far only `ratings` is referencing it.
 ##
@@ -118,14 +118,14 @@ interface List
 ## refcount getting incremented from 1 to 3.
 ##
 ## Let's turn this example into a function.
+## ```
+## getRatings = \first ->
+##     ratings = [first, 4, 3]
 ##
-##     getRatings = \first ->
-##         ratings = [first, 4, 3]
+##     { foo: ratings, bar: ratings }
 ##
-##         { foo: ratings, bar: ratings }
-##
-##     getRatings 5
-##
+## getRatings 5
+## ```
 ## At the end of the `getRatings` function, when the record gets returned,
 ## the original `ratings =` binding has gone out of scope and is no longer
 ## accessible. (Trying to reference `ratings` outside the scope of the
@@ -140,23 +140,23 @@ interface List
 ## list, and that list has a refcount of 2.
 ##
 ## Let's change the last line to be `(getRatings 5).bar` instead of `getRatings 5`:
+## ```
+## getRatings = \first ->
+##     ratings = [first, 4, 3]
 ##
-##     getRatings = \first ->
-##         ratings = [first, 4, 3]
+##     { foo: ratings, bar: ratings }
 ##
-##         { foo: ratings, bar: ratings }
-##
-##     (getRatings 5).bar
-##
+## (getRatings 5).bar
+## ```
 ## Now, when this expression returns, only the `bar` field of the record will
 ## be returned. This will mean that the `foo` field becomes inaccessible, causing
 ## the list's refcount to get decremented from 2 to 1. At this point, the list is back
 ## where it started: there is only 1 reference to it.
 ##
 ## Finally let's suppose the final line were changed to this:
-##
-##     List.first (getRatings 5).bar
-##
+## ```
+## List.first (getRatings 5).bar
+## ```
 ## This call to [List.first] means that even the list in the `bar` field has become
 ## inaccessible. As such, this line will cause the list's refcount to get
 ## decremented all the way to 0. At that point, nothing is referencing the list
@@ -167,25 +167,25 @@ interface List
 ## and then with a list of lists, to see how they differ.
 ##
 ## Here's the example using a list of numbers.
+## ```
+## nums = [1, 2, 3, 4, 5, 6, 7]
 ##
-##     nums = [1, 2, 3, 4, 5, 6, 7]
+## first = List.first nums
+## last = List.last nums
 ##
-##     first = List.first nums
-##     last = List.last nums
-##
-##     first
-##
+## first
+## ```
 ## It makes a list, calls [List.first] and [List.last] on it, and then returns `first`.
 ##
 ## Here's the equivalent code with a list of lists:
+## ```
+## lists = [[1], [2, 3], [], [4, 5, 6, 7]]
 ##
-##     lists = [[1], [2, 3], [], [4, 5, 6, 7]]
+## first = List.first lists
+## last = List.last lists
 ##
-##     first = List.first lists
-##     last = List.last lists
-##
-##     first
-##
+## first
+## ```
 ## TODO explain how in the former example, when we go to free `nums` at the end,
 ## we can free it immediately because there are no other refcounts. However,
 ## in the case of `lists`, we have to iterate through the list and decrement
@@ -206,10 +206,11 @@ interface List
 ## * Roc's compiler optimizes many list operations into in-place mutations behind the scenes, depending on how the list is being used. For example, [List.map], [List.keepIf], and [List.set] can all be optimized to perform in-place mutations.
 ## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way [List] worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using [List] under the hood!
 ##  Check if the list is empty.
+## ```
+## List.isEmpty [1, 2, 3]
 ##
-## >>> List.isEmpty [1, 2, 3]
-##
-## >>> List.isEmpty []
+## List.isEmpty []
+## ```
 isEmpty : List a -> Bool
 isEmpty = \list ->
     List.len list == 0
@@ -237,9 +238,9 @@ replace = \list, index, newValue ->
         { list, value: newValue }
 
 ## Replaces the element at the given index with a replacement.
-##
-## >>> List.set ["a", "b", "c"] 1 "B"
-##
+## ```
+## List.set ["a", "b", "c"] 1 "B"
+## ```
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
 ##
@@ -249,11 +250,12 @@ set = \list, index, value ->
     (List.replace list index value).list
 
 ## Add a single element to the end of a list.
+## ```
+## List.append [1, 2, 3] 4
 ##
-## >>> List.append [1, 2, 3] 4
-##
-## >>> [0, 1, 2]
-## >>>     |> List.append 3
+## [0, 1, 2]
+##     |> List.append 3
+## ```
 append : List a, a -> List a
 append = \list, element ->
     list
@@ -268,11 +270,12 @@ append = \list, element ->
 appendUnsafe : List a, a -> List a
 
 ## Add a single element to the beginning of a list.
+## ```
+## List.prepend [1, 2, 3] 0
 ##
-## >>> List.prepend [1, 2, 3] 0
-##
-## >>> [2, 3, 4]
-## >>>     |> List.prepend 1
+## [2, 3, 4]
+##     |> List.prepend 1
+## ```
 prepend : List a, a -> List a
 
 ## Returns the length of the list - the number of elements it contains.
@@ -289,11 +292,12 @@ withCapacity : Nat -> List a
 reserve : List a, Nat -> List a
 
 ## Put two lists together.
+## ```
+## List.concat [1, 2, 3] [4, 5]
 ##
-## >>> List.concat [1, 2, 3] [4, 5]
-##
-## >>> [0, 1, 2]
-## >>>     |> List.concat [3, 4]
+## [0, 1, 2]
+##     |> List.concat [3, 4]
+## ```
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
@@ -306,17 +310,15 @@ last = \list ->
 ## A list with a single element in it.
 ##
 ## This is useful in pipelines, like so:
-##
-##     websites =
-##         Str.concat domain ".com"
-##             |> List.single
-##
+## ```
+## websites =
+##     Str.concat domain ".com"
+##         |> List.single
+## ```
 single : a -> List a
 single = \x -> [x]
 
 ## Returns a list with the given length, where every element is the given value.
-##
-##
 repeat : a, Nat -> List a
 repeat = \value, count ->
     repeatHelp value count (List.withCapacity count)
@@ -329,8 +331,9 @@ repeatHelp = \value, count, accum ->
         accum
 
 ## Returns the list with its elements reversed.
-##
-## >>> List.reverse [1, 2, 3]
+## ```
+## List.reverse [1, 2, 3]
+## ```
 reverse : List a -> List a
 reverse = \list ->
     reverseHelp list 0 (Num.subSaturated (List.len list) 1)
@@ -342,12 +345,11 @@ reverseHelp = \list, left, right ->
         list
 
 ## Join the given lists together into one list.
-##
-## >>> List.join [[1, 2, 3], [4, 5], [], [6, 7]]
-##
-## >>> List.join [[], []]
-##
-## >>> List.join []
+## ```
+## List.join [[1, 2, 3], [4, 5], [], [6, 7]]
+## List.join [[], []]
+## List.join []
+## ```
 join : List (List a) -> List a
 join = \lists ->
     totalLength =
@@ -366,10 +368,10 @@ contains = \list, needle ->
 ## which updates the `state`. It returns the final `state` at the end.
 ##
 ## You can use it in a pipeline:
-##
-##     [2, 4, 8]
-##         |> List.walk 0 Num.add
-##
+## ```
+## [2, 4, 8]
+##     |> List.walk 0 Num.add
+## ```
 ## This returns 14 because:
 ## * `state` starts at 0
 ## * Each `step` runs `Num.add state elem`, and the return value becomes the new `state`.
@@ -385,10 +387,10 @@ contains = \list, needle ->
 ## 6     | 8     | 14
 ##
 ## The following returns -6:
-##
-##     [1, 2, 3]
-##         |> List.walk 0 Num.sub
-##
+## ```
+## [1, 2, 3]
+##     |> List.walk 0 Num.sub
+## ```
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
@@ -494,9 +496,9 @@ all = \list, predicate ->
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.true`.
-##
-## >>> List.keepIf [1, 2, 3, 4] (\num -> num > 2)
-##
+## ```
+## List.keepIf [1, 2, 3, 4] (\num -> num > 2)
+## ```
 ## ## Performance Details
 ##
 ## [List.keepIf] always returns a list that takes up exactly the same amount
@@ -531,9 +533,9 @@ keepIfHelp = \list, predicate, kept, index, length ->
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.false`.
-##
-## >>> List.dropIf [1, 2, 3, 4] (\num -> num > 2)
-##
+## ```
+## List.dropIf [1, 2, 3, 4] (\num -> num > 2)
+## ```
 ## ## Performance Details
 ##
 ## `List.dropIf` has the same performance characteristics as [List.keepIf].
@@ -556,12 +558,13 @@ countIf = \list, predicate ->
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
+## ```
+## List.keepOks [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
-## >>> List.keepOks [["a", "b"], [], [], ["c", "d", "e"]] List.last
+## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
 ##
-## >>> fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
-## >>>
-## >>> List.keepOks ["", "a", "bc", "", "d", "ef", ""]
+## List.keepOks ["", "a", "bc", "", "d", "ef", ""]
+## ```
 keepOks : List before, (before -> Result after *) -> List after
 keepOks = \list, toResult ->
     walker = \accum, element ->
@@ -573,12 +576,13 @@ keepOks = \list, toResult ->
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Err` are kept. Any that are wrapped in `Ok` are dropped.
+## ```
+## List.keepErrs [["a", "b"], [], [], ["c", "d", "e"]] List.last
 ##
-## >>> List.keepErrs [["a", "b"], [], [], ["c", "d", "e"]] List.last
+## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
 ##
-## >>> fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
-## >>>
-## >>> List.keepErrs ["", "a", "bc", "", "d", "ef", ""]
+## List.keepErrs ["", "a", "bc", "", "d", "ef", ""]
+## ```
 keepErrs : List before, (before -> Result * after) -> List after
 keepErrs = \list, toResult ->
     walker = \accum, element ->
@@ -590,10 +594,11 @@ keepErrs = \list, toResult ->
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
+## ```
+## List.map [1, 2, 3] (\num -> num + 1)
 ##
-## > List.map [1, 2, 3] (\num -> num + 1)
-##
-## > List.map ["", "a", "bc"] Str.isEmpty
+## List.map ["", "a", "bc"] Str.isEmpty
+## ```
 map : List a, (a -> b) -> List b
 
 ## Run a transformation function on the first element of each list,
@@ -602,8 +607,9 @@ map : List a, (a -> b) -> List b
 ##
 ## Some languages have a function named `zip`, which does something similar to
 ## calling [List.map2] passing two lists and `Pair`:
-##
-## >>> zipped = List.map2 ["a", "b", "c"] [1, 2, 3] Pair
+## ```
+## zipped = List.map2 ["a", "b", "c"] [1, 2, 3] Pair
+## ```
 map2 : List a, List b, (a, b -> c) -> List c
 
 ## Run a transformation function on the first element of each list,
@@ -640,92 +646,110 @@ mapWithIndexHelp = \src, dest, func, index, length ->
 ## Returns a list of all the integers between `start` and `end`.
 ##
 ## To include the `start` and `end` integers themselves, use `At` like so:
-##
-##     List.range { start: At 2, end: At 5 } # returns [2, 3, 4, 5]
-##
+## ```
+## List.range { start: At 2, end: At 5 } # returns [2, 3, 4, 5]
+## ```
 ## To exclude them, use `After` and `Before`, like so:
-##
-##     List.range { start: After 2, end: Before 5 } # returns [3, 4]
-##
+## ```
+## List.range { start: After 2, end: Before 5 } # returns [3, 4]
+## ```
 ## You can have the list end at a certain length rather than a certain integer:
-##
-##     List.range { start: At 6, end: Length 4 } # returns [6, 7, 8, 9]
-##
+## ```
+## List.range { start: At 6, end: Length 4 } # returns [6, 7, 8, 9]
+## ```
 ## If `step` is specified, each integer increases by that much. (`step: 1` is the default.)
-##
-##     List.range { start: After 0, end: Before 9, step: 3 } # returns [3, 6]
-##
+## ```
+## List.range { start: After 0, end: Before 9, step: 3 } # returns [3, 6]
+## ```
+## List.range will also generate a reversed list if step is negative or end comes before start:
+## ```
+## List.range { start: At 5, end: At 2 } # returns [5, 4, 3, 2]
+## ```
 ## All of these options are compatible with the others. For example, you can use `At` or `After`
 ## with `start` regardless of what `end` and `step` are set to.
 range : _
 range = \{ start, end, step ? 0 } ->
-    { incByStep, stepIsPositive } =
+    { calcNext, stepIsPositive } =
         if step == 0 then
             when T start end is
                 T (At x) (At y) | T (At x) (Before y) | T (After x) (At y) | T (After x) (Before y) ->
                     if x < y then
                         {
-                            incByStep: \i -> i + 1,
+                            calcNext: \i -> Num.addChecked i 1,
                             stepIsPositive: Bool.true,
                         }
                     else
                         {
-                            incByStep: \i -> i - 1,
+                            calcNext: \i -> Num.subChecked i 1,
                             stepIsPositive: Bool.false,
                         }
 
                 T (At _) (Length _) | T (After _) (Length _) ->
                     {
-                        incByStep: \i -> i + 1,
+                        calcNext: \i -> Num.addChecked i 1,
                         stepIsPositive: Bool.true,
                     }
         else
             {
-                incByStep: \i -> i + step,
+                calcNext: \i -> Num.addChecked i step,
                 stepIsPositive: step > 0,
             }
 
     inclusiveStart =
         when start is
-            At x -> x
-            After x -> incByStep x
+            At x -> Ok x
+            After x -> calcNext x
 
     when end is
         At at ->
-            isComplete =
+            isValid =
                 if stepIsPositive then
-                    \i -> i > at
+                    \i -> i <= at
                 else
-                    \i -> i < at
+                    \i -> i >= at
 
             # TODO: switch to List.withCapacity
-            rangeHelp [] inclusiveStart incByStep isComplete
+            rangeHelp [] inclusiveStart calcNext isValid
 
         Before before ->
-            isComplete =
+            isValid =
                 if stepIsPositive then
-                    \i -> i >= before
+                    \i -> i < before
                 else
-                    \i -> i <= before
+                    \i -> i > before
 
             # TODO: switch to List.withCapacity
-            rangeHelp [] inclusiveStart incByStep isComplete
+            rangeHelp [] inclusiveStart calcNext isValid
 
         Length l ->
-            rangeLengthHelp (List.withCapacity l) inclusiveStart l incByStep
+            rangeLengthHelp (List.withCapacity l) inclusiveStart l calcNext
 
-rangeHelp = \accum, i, incByStep, isComplete ->
-    if isComplete i then
-        accum
-    else
-        # TODO: change this to List.appendUnsafe once capacity is set correctly
-        rangeHelp (List.append accum i) (incByStep i) incByStep isComplete
+rangeHelp = \accum, i, calcNext, isValid ->
+    when i is
+        Ok val ->
+            if isValid val then
+                # TODO: change this to List.appendUnsafe once capacity is set correctly
+                rangeHelp (List.append accum val) (calcNext val) calcNext isValid
+            else
+                accum
 
-rangeLengthHelp = \accum, i, remaining, incByStep ->
+        Err _ ->
+            # We went past the end of the numeric range and there is no next.
+            # return the generated list.
+            accum
+
+rangeLengthHelp = \accum, i, remaining, calcNext ->
     if remaining == 0 then
         accum
     else
-        rangeLengthHelp (List.appendUnsafe accum i) (incByStep i) (remaining - 1) incByStep
+        when i is
+            Ok val ->
+                rangeLengthHelp (List.appendUnsafe accum val) (calcNext val) (remaining - 1) calcNext
+
+            Err _ ->
+                # We went past the end of the numeric range and there is no next.
+                # The list is not the correct length yet, so we must crash.
+                crash "List.range: failed to generate enough elements to fill the range before overflowing the numeric type"
 
 expect
     List.range { start: At 0, end: At 4 } == [0, 1, 2, 3, 4]
@@ -753,6 +777,18 @@ expect
 
 expect
     List.range { start: At 4, end: Length 5, step: -3 } == [4, 1, -2, -5, -8]
+
+expect
+    List.range { start: After 250u8, end: At 255 } == [251, 252, 253, 254, 255]
+
+expect
+    List.range { start: After 250u8, end: At 255, step: 10 } == []
+
+expect
+    List.range { start: After 250u8, end: At 245, step: 10 } == []
+
+expect
+    List.range { start: At 4, end: At 0 } == [4, 3, 2, 1, 0]
 
 ## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
@@ -795,14 +831,14 @@ dropLast = \list ->
     List.dropAt list (Num.subSaturated (List.len list) 1)
 
 ## Returns the given number of elements from the beginning of the list.
-##
-## >>> List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
-##
+## ```
+## List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
+## ```
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
-##
-## >>> List.takeFirst [1, 2] 5
-##
+## ```
+## List.takeFirst [1, 2] 5
+## ```
 ## To *remove* elements from the beginning of the list, use `List.takeLast`.
 ##
 ## To remove elements from both the beginning and end of the list,
@@ -824,14 +860,14 @@ takeFirst = \list, outputLength ->
     List.sublist list { start: 0, len: outputLength }
 
 ## Returns the given number of elements from the end of the list.
-##
-## >>> List.takeLast [1, 2, 3, 4, 5, 6, 7, 8] 4
-##
+## ```
+## List.takeLast [1, 2, 3, 4, 5, 6, 7, 8] 4
+## ```
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
-##
-## >>> List.takeLast [1, 2] 5
-##
+## ```
+## List.takeLast [1, 2] 5
+## ```
 ## To *remove* elements from the end of the list, use `List.takeFirst`.
 ##
 ## To remove elements from both the beginning and end of the list,
@@ -971,13 +1007,13 @@ findLastIndex = \list, matches ->
 ## including a total of `len` elements.
 ##
 ## If `start` is outside the bounds of the given list, returns the empty list.
-##
-## >>> List.sublist [1, 2, 3] { start: 4, len: 0 }
-##
+## ```
+## List.sublist [1, 2, 3] { start: 4, len: 0 }
+## ```
 ## If more elements are requested than exist in the list, returns as many as it can.
-##
-## >>> List.sublist [1, 2, 3, 4, 5] { start: 2, len: 10 }
-##
+## ```
+## List.sublist [1, 2, 3, 4, 5] { start: 2, len: 10 }
+## ```
 ## > If you want a sublist which goes all the way to the end of the list, no
 ## > matter how long the list is, `List.takeLast` can do that more efficiently.
 ##
@@ -993,7 +1029,9 @@ sublist = \list, config ->
 sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
-## >>> List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
+## ```
+## List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
+## ```
 intersperse : List elem, elem -> List elem
 intersperse = \list, sep ->
     capacity = 2 * List.len list
@@ -1051,8 +1089,9 @@ split = \elements, userSplitIndex ->
 
 ## Returns the elements before the first occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
-##
-##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
+## ```
+## List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Z, Baz] }
+## ```
 splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] | elem has Eq
 splitFirst = \list, delimiter ->
     when List.findFirstIndex list (\elem -> elem == delimiter) is
@@ -1066,8 +1105,9 @@ splitFirst = \list, delimiter ->
 
 ## Returns the elements before the last occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
-##
-##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
+## ```
+## List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Z, Bar], after: [Baz] }
+## ```
 splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] | elem has Eq
 splitLast = \list, delimiter ->
     when List.findLastIndex list (\elem -> elem == delimiter) is

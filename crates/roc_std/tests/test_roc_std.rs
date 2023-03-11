@@ -1,7 +1,7 @@
+#![allow(clippy::missing_safety_doc)]
+
 #[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
 extern crate quickcheck;
 extern crate roc_std;
 

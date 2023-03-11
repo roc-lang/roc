@@ -39,8 +39,8 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, CrashTag, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc,
-    OptLevel, ProcLayout, SingleEntryPoint,
+    BranchInfo, CallType, CrashTag, EntryPoint, HostExposedLambdaSet, JoinPointId,
+    ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
     Builtin, InLayout, LambdaName, LambdaSet, Layout, LayoutIds, LayoutInterner, Niche,
@@ -3977,7 +3977,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
             // In C, this is modelled as a function returning void
             (
                 &params[..],
-                &param_types[..param_types.len().saturating_sub(1)],
+                // &param_types[..param_types.len().saturating_sub(1)],
+                &param_types[..],
             )
         }
         _ => (&params[..], &param_types[..]),
@@ -4938,26 +4939,24 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
     mod_solutions: &'a ModSolutions,
     proc_name: LambdaName,
     alias_symbol: Symbol,
-    exposed_function_symbol: Symbol,
-    top_level: ProcLayout<'a>,
-    layout: RawFunctionLayout<'a>,
+    hels: &HostExposedLambdaSet<'a>,
 ) {
     let ident_string = proc_name.name().as_str(&env.interns);
     let fn_name: String = format!("{}_1", ident_string);
 
-    match layout {
+    match hels.raw_function_layout {
         RawFunctionLayout::Function(arguments, closure, result) => {
             // define closure size and return value size, e.g.
             //
             // * roc__mainForHost_1_Update_size() -> i64
             // * roc__mainForHost_1_Update_result_size() -> i64
 
-            let it = top_level.arguments.iter().copied();
+            let it = hels.proc_layout.arguments.iter().copied();
             let bytes = roc_alias_analysis::func_name_bytes_help(
-                exposed_function_symbol,
+                hels.symbol,
                 it,
                 Niche::NONE,
-                top_level.result,
+                hels.proc_layout.result,
             );
             let func_name = FuncName(&bytes);
             let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
@@ -4973,17 +4972,17 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
                     function_value_by_func_spec(
                         env,
                         *func_spec,
-                        exposed_function_symbol,
-                        top_level.arguments,
+                        hels.symbol,
+                        hels.proc_layout.arguments,
                         Niche::NONE,
-                        top_level.result,
+                        hels.proc_layout.result,
                     )
                 }
                 None => {
                     // morphic did not generate a specialization for this function,
                     // therefore it must actually be unused.
                     // An example is our closure callers
-                    panic!("morphic did not specialize {:?}", exposed_function_symbol);
+                    panic!("morphic did not specialize {:?}", hels.symbol);
                 }
             };
 
@@ -5237,16 +5236,14 @@ pub fn build_proc<'a, 'ctx, 'env>(
                     /* no host, or exposing types is not supported */
                 }
                 Binary | BinaryDev => {
-                    for (alias_name, (generated_function, top_level, layout)) in aliases.iter() {
+                    for (alias_name, hels) in aliases.iter() {
                         expose_alias_to_host(
                             env,
                             layout_interner,
                             mod_solutions,
                             proc.name,
                             *alias_name,
-                            *generated_function,
-                            *top_level,
-                            *layout,
+                            hels,
                         )
                     }
                 }

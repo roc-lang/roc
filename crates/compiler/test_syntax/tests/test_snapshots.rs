@@ -304,6 +304,7 @@ mod test_snapshots {
         pass/empty_package_header.header,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
+        pass/empty_record_update.expr,
         pass/empty_string.expr,
         pass/equals.expr,
         pass/equals_with_spaces.expr,
@@ -311,6 +312,7 @@ mod test_snapshots {
         pass/expect_fx.moduledefs,
         pass/extra_newline_in_parens.expr,
         pass/float_with_underscores.expr,
+        pass/fn_with_record_arg.expr,
         pass/full_app_header.header,
         pass/full_app_header_trailing_commas.header,
         pass/function_effect_types.header,
@@ -326,6 +328,7 @@ mod test_snapshots {
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
+        pass/list_minus_newlines.expr,
         pass/list_pattern_weird_indent.expr,
         pass/list_patterns.expr,
         pass/lowest_float.expr,
@@ -388,6 +391,7 @@ mod test_snapshots {
         pass/opaque_reference_pattern.expr,
         pass/opaque_reference_pattern_with_arguments.expr,
         pass/opaque_simple.moduledefs,
+        pass/opaque_type_def_with_newline.expr,
         pass/opaque_with_type_arguments.moduledefs,
         pass/ops_with_newlines.expr,
         pass/outdented_app_with_record.expr,
@@ -563,6 +567,15 @@ mod test_snapshots {
             }
             Err(err) => Err(format!("{:?}", err)),
         };
+
+        if expect == TestExpectation::Pass {
+            let tokens = roc_parse::highlight::highlight(&source);
+            for token in tokens {
+                if token.value == roc_parse::highlight::Token::Error {
+                    panic!("Found an error highlight token in the input: {:?}", token);
+                }
+            }
+        }
 
         let actual_result =
             if expect == TestExpectation::Pass || expect == TestExpectation::Malformed {

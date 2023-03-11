@@ -44,24 +44,92 @@ ingeniis in pugna quadripedis glandes superos. Tanta quam, illo es prole est
 telis **unus verba** quisquis iuvenci annis. Nec velox sed sacra gaudia vacuos,
 Herculei undae calcata inmeriti quercus ignes parabant iam.
 
-    digitize(undoDhcp(card_record, cad_flash_dot));
-    supercomputer(2 - load_type, yobibyteTraceroute - installHibernate, 1);
-    burnPci.pop_wrap.usbEmulation(hostESmm, processor_impression(4, lanNntp),
-            -5);
-    map_camera -= 73;
-    if (53) {
-        dacRootkitDrive(publicActivex.bmpNumWhite.wins_pci_firmware(scroll_cell,
-                4, tShortcut));
-        horse_algorithm_eide -= 51;
-        flatbed_blob(flat);
-    } else {
-        surge.pci -= open_flash_dv(4, 4, usbStation);
-        led.memory_fsb.matrixBinaryUrl(umlEngineOsd.agp_thick_thin.t(58));
-        kindle_cookie(formulaLedVpn, digital_meme);
-    }
+### Example Table
 
-Foret inpendere, haec ipse ossa, dolentes das Caystro miscuit iunctoque
-spoliantis illae, ex! Bello istis nunc Aegides? Animo caelestia melior,
-furoribus optat maior invecta quid harenis [est](http://example.org) sollemnia modo
-Phineu. Suarum pectora. Relinquam in labore Medusae sororem Herculis [simillima
-corpora](http://example.org) plus regi ignibus, totum domus!
+| Tables        |      Are      |  Cool |
+| :------------ | :-----------: | ----: |
+| col 3 is      | right-aligned | $1600 |
+| col 2 is      |   centered    |   $12 |
+| zebra stripes |   are neat    |    $1 |
+
+### Example Code Blocks
+
+```sh
+# This isn't fenced roc code so its not formatted
+# Use a fence like ```roc to format code blocks
+```
+
+```roc
+## This is a documentation comment
+
+# This is a comment
+app "static-site"
+    packages { pf: "platform/main.roc" }
+    imports [
+        pf.Html.{ html, head, body, div, text, a, ul, li, link, meta },
+        pf.Html.Attributes.{ httpEquiv, content, href, rel, lang, class, title },
+    ]
+    provides [transformFileContent] to pf
+
+NavLink : {
+    # this is another comment
+    url : Str,
+    title : Str,
+    text : Str,
+}
+
+navLinks : List NavLink
+navLinks = [
+    { url: "apple.html", title: "Exempli Gratia Pagina Pomi", text: "Apple" },
+    { url: "banana.html", title: "Exempli Gratia Pagina Musa", text: "Banana" },
+    { url: "cherry.html", title: "Exempli Pagina Cerasus", text: "Cherry" },
+]
+
+transformFileContent : Str, Str -> Str
+transformFileContent = \currentUrl, htmlContent ->
+    List.findFirst navLinks (\{ url } -> url == currentUrl)
+    |> Result.map (\currentNavLink -> view currentNavLink htmlContent)
+    |> Result.map Html.render
+    |> Result.withDefault ""
+
+view : NavLink, Str -> Html.Node
+view = \currentNavLink, htmlContent ->
+    html [lang "en"] [
+        head [] [
+            meta [httpEquiv "content-type", content "text/html; charset=utf-8"] [],
+            Html.title [] [text currentNavLink.title],
+            link [rel "stylesheet", href "style.css"] [],
+        ],
+        body [] [
+            div [class "main"] [
+                div [class "navbar"] [
+                    viewNavbar currentNavLink,
+                ],
+                div [class "article"] [
+                    # For now `text` is not escaped so we can use it to insert HTML
+                    # We'll probably want something more explicit in the long term though!
+                    text htmlContent,
+                ],
+            ],
+        ],
+    ]
+
+viewNavbar : NavLink -> Html.Node
+viewNavbar = \currentNavLink ->
+    ul
+        []
+        (List.map navLinks \nl -> viewNavLink (nl == currentNavLink) nl)
+
+viewNavLink : Bool, NavLink -> Html.Node
+viewNavLink = \isCurrent, navlink ->
+    if isCurrent then
+        li [class "nav-link nav-link--current"] [
+            text navlink.text,
+        ]
+    else
+        li [class "nav-link"] [
+            a
+                [href navlink.url, title navlink.title]
+                [text navlink.text],
+        ]
+```

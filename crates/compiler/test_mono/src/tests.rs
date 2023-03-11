@@ -2571,3 +2571,200 @@ fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
         "#
     )
 }
+
+#[mono_test]
+fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification() {
+    // This is a regression test for the ambient lambda set specialization algorithm.
+    //
+    // In the program below, monomorphization of `toEncoderQ` with the `Q` in `main` induces the
+    // resolution of `t.a` and `t.b`, and the unification of their pending unspecialization lambda
+    // sets, when `t.a` and `t.b` have been resolved to concrete types, but before the
+    // specialization procedure steps in to resolve the lambda sets concretely. That's because
+    // monomorphization unifies the general type of `toEncoderQ` with the concrete type, forcing
+    // concretization of `t`, but the specialization procedure runs only after the unification is
+    // complete.
+    //
+    // In this case, it's imperative that the unspecialized lambda sets of `toEncoder t.a` and
+    // `toEncoder t.b` wind up in the same lambda set, that is in
+    //
+    // tag : @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder+1] -> Bytes)
+    //       -[lTag]->
+    //       @MEncoder (Bytes, Linear -[[Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder:1] -> Bytes) }]] -> Bytes)
+    //
+    // rather than forcing the lambda set inside to `tag` to become disjoint, as e.g.
+    //
+    // tag : @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder+1] -> Bytes)
+    //       -[lTag]->
+    //       @MEncoder (Bytes, Linear -[[
+    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1] -> Bytes) },
+    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MStr:toEncoder:1] -> Bytes) },
+    //                  ]] -> Bytes)
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+        MEncoding has
+          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+
+        Format has
+          u8 : {} -> MEncoder fmt | fmt has Format
+          str : {} -> MEncoder fmt | fmt has Format
+          tag : MEncoder fmt -> MEncoder fmt | fmt has Format
+
+        Linear := {} has [Format {u8: lU8, str: lStr, tag: lTag}]
+
+        MU8 := U8 has [MEncoding {toEncoder: toEncoderU8}]
+        MStr := Str has [MEncoding {toEncoder: toEncoderStr}]
+
+        Q a b := { a: a, b: b }
+
+        lU8 = \{} -> @MEncoder (\lst, @Linear {} -> lst)
+        lStr = \{} -> @MEncoder (\lst, @Linear {} -> lst)
+
+        lTag = \@MEncoder doFormat -> @MEncoder (\lst, @Linear {} ->
+            doFormat lst (@Linear {})
+        )
+
+        toEncoderU8 = \@MU8 _ -> u8 {}
+
+        toEncoderStr = \@MStr _ -> str {}
+
+        toEncoderQ =
+            \@Q t -> \fmt ->
+                @MEncoder doit = if Bool.true
+                    then tag (toEncoder t.a)
+                    else tag (toEncoder t.b)
+
+                doit [] fmt
+
+        main =
+            fmt = toEncoderQ (@Q {a : @MStr "", b: @MU8 7})
+            fmt (@Linear {})
+        "#
+    )
+}
+
+#[mono_test]
+fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification_of_unifiable()
+{
+    // This is a regression test for the ambient lambda set specialization algorithm.
+    //
+    // The principle of the test is equivalent to that of `unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification`.
+    //
+    // However, this test requires a larger reproduction because it is negative behavior is only
+    // visible in the presence of builtin ability usage (in this case, `Encoding` and
+    // `EncoderFormatting`).
+    //
+    // In this test, the payload types `[A]*` and `[B]*` of the encoded type `Q` are unifiable in
+    // their unspecialized lambda set representations under `toEncoderQ`; however, they must not
+    // be, because they in fact represent to different specializations of needed encoders. In
+    // particular, the lambda set `[[] + [A]:toEncoder:1 + [B]:toEncoder:1]` must be preserved,
+    // rather than collapsing to `[[] + [A, B]:toEncoder:1]`.
+    indoc!(
+        r#"
+        app "test" imports [Json] provides [main] to "./platform"
+
+        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+
+        toEncoderQ =
+            \@Q t -> Encode.custom \bytes, fmt ->
+                f = if Bool.true
+                    then Encode.tag "A" [Encode.toEncoder t.a]
+                    else Encode.tag "B" [Encode.toEncoder t.b]
+
+                Encode.appendWith bytes f fmt
+
+        accessor = @Q {a : A, b: B}
+
+        main =
+            Encode.toBytes accessor Json.toUtf8
+        "#
+    )
+}
+
+#[mono_test]
+fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_types() {
+    // This is a regression test for the ambient lambda set specialization algorithm.
+    //
+    // The principle of the test is equivalent to that of `unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification`.
+    //
+    // However, this test requires a larger reproduction because it is negative behavior is only
+    // visible in the presence of builtin ability usage (in this case, `Encoding` and
+    // `EncoderFormatting`).
+    //
+    // In this test, the payload types `Str` and `Str` of the encoded type `Q` are unifiable in
+    // their unspecialized lambda set representations under `toEncoderQ`, and moreoever they are
+    // equivalent specializations, since they both come from the same root variable `x`. In as
+    // such, the lambda set `[[] + Str:toEncoder:1]` should be produced during compaction, rather
+    // than staying as the expanded `[[] + Str:toEncoder:1 + Str:toEncoder:1]` after the types of
+    // `t.a` and `t.b` are filled in.
+    indoc!(
+        r#"
+        app "test" imports [Json] provides [main] to "./platform"
+
+        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+
+        toEncoderQ =
+            \@Q t -> Encode.custom \bytes, fmt ->
+                f = if Bool.true
+                    then Encode.tag "A" [Encode.toEncoder t.a]
+                    else Encode.tag "B" [Encode.toEncoder t.b]
+
+                Encode.appendWith bytes f fmt
+
+        accessor =
+            x = ""
+            @Q {a : x, b: x}
+
+        main =
+            Encode.toBytes accessor Json.toUtf8
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_bool_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = if Bool.false then f else \n -> n
+            caller (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_enum_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n
+                C -> \n -> n + 1
+                D -> \n -> n + 2
+            (caller A) (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_union_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n + x
+            (caller A) (x + 1)
+        "#
+    )
+}

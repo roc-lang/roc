@@ -360,7 +360,7 @@ fn i64_record1_literal() {
 //     );
 // }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bool_literal() {
     assert_evals_to!(
         indoc!(
@@ -1109,5 +1109,24 @@ fn toplevel_accessor_fn_thunk() {
         ),
         15u8,
         u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pass_record_of_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            ra = \_ -> 1u8
+
+            main =
+                ra { a: 1u8, b: 0u8 }
+            "#
+        ),
+        true,
+        bool
     )
 }

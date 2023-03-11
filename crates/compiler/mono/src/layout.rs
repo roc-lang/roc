@@ -1313,6 +1313,14 @@ impl<'a> Niche<'a> {
             ]),
         }
     }
+
+    pub fn dbg_deep<'r, I: LayoutInterner<'a>>(
+        &'r self,
+        interner: &'r I,
+    ) -> crate::layout::intern::dbg::DbgFields<'a, 'r, I> {
+        let NichePriv::Captures(caps) = &self.0;
+        interner.dbg_deep_iter(caps)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -2715,6 +2723,60 @@ impl<'a> Layout<'a> {
             RecursivePointer(_) => true,
             Boxed(_) => true,
         }
+    }
+
+    pub fn has_varying_stack_size<I>(self, interner: &I, arena: &bumpalo::Bump) -> bool
+    where
+        I: LayoutInterner<'a>,
+    {
+        let mut stack: Vec<Layout> = bumpalo::collections::Vec::new_in(arena);
+
+        stack.push(self);
+
+        while let Some(layout) = stack.pop() {
+            match layout {
+                Layout::Builtin(builtin) => match builtin {
+                    Builtin::Int(_)
+                    | Builtin::Float(_)
+                    | Builtin::Bool
+                    | Builtin::Decimal
+                    | Builtin::Str
+                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                    | Builtin::List(_) => { /* do nothing */ }
+                },
+                // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                Layout::Struct { field_layouts, .. } => {
+                    stack.extend(field_layouts.iter().map(|interned| interner.get(*interned)))
+                }
+                Layout::Union(tag_union) => match tag_union {
+                    UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                        for tag in tags {
+                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                        }
+                    }
+                    UnionLayout::NonNullableUnwrapped(fields) => {
+                        stack.extend(fields.iter().map(|interned| interner.get(*interned)));
+                    }
+                    UnionLayout::NullableWrapped { other_tags, .. } => {
+                        for tag in other_tags {
+                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                        }
+                    }
+                    UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                        stack.extend(other_fields.iter().map(|interned| interner.get(*interned)));
+                    }
+                },
+                Layout::LambdaSet(_) => return true,
+                Layout::Boxed(_) => {
+                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                }
+                Layout::RecursivePointer(_) => {
+                    /* do nothing, we've already generated for this type through the Union(_) */
+                }
+            }
+        }
+
+        false
     }
 
     /// Used to build a `Layout::Struct` where the field name order is irrelevant.

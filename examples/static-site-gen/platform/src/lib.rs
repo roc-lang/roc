@@ -202,7 +202,61 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     options.remove(Options::ENABLE_SMART_PUNCTUATION);
 
     let parser = Parser::new_ext(&content_md, options);
-    html::push_html(&mut content_html, parser);
+
+    // We'll build a new vector of events since we can only consume the parser once
+    let mut parser_with_highlighting = Vec::new();
+    // As we go along, we'll want to highlight code in bundles, not lines
+    let mut to_highlight = String::new();
+    // And track a little bit of state
+    let mut in_code_block = false;
+    let mut is_roc_code = false;
+
+    for event in parser {
+        match event {
+            pulldown_cmark::Event::Code(cow_str) => {
+                let highlighted_html =
+                    roc_highlight::highlight_roc_code_inline(cow_str.to_string().as_str());
+                parser_with_highlighting.push(pulldown_cmark::Event::Html(
+                    pulldown_cmark::CowStr::from(highlighted_html),
+                ));
+            }
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(cbk)) => {
+                in_code_block = true;
+                is_roc_code = is_roc_code_block(&cbk);
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(_)) => {
+                if in_code_block {
+                    // Format the whole multi-line code block as HTML all at once
+                    let highlighted_html: String;
+                    if is_roc_code {
+                        highlighted_html = roc_highlight::highlight_roc_code(&to_highlight)
+                    } else {
+                        highlighted_html = format!("<pre><samp>{}</pre></samp>", &to_highlight)
+                    }
+
+                    // And put it into the vector
+                    parser_with_highlighting.push(pulldown_cmark::Event::Html(
+                        pulldown_cmark::CowStr::from(highlighted_html),
+                    ));
+                    to_highlight = String::new();
+                    in_code_block = false;
+                }
+            }
+            pulldown_cmark::Event::Text(t) => {
+                if in_code_block {
+                    // If we're in a code block, build up the string of text
+                    to_highlight.push_str(&t);
+                } else {
+                    parser_with_highlighting.push(pulldown_cmark::Event::Text(t))
+                }
+            }
+            e => {
+                parser_with_highlighting.push(e);
+            }
+        }
+    }
+
+    html::push_html(&mut content_html, parser_with_highlighting.into_iter());
 
     let roc_relpath = RocStr::from(output_relpath.to_str().unwrap());
     let roc_content_html = RocStr::from(content_html.as_str());
@@ -239,4 +293,17 @@ pub fn strip_windows_prefix(path_buf: PathBuf) -> std::path::PathBuf {
     let path_str = path_buf.display().to_string();
 
     std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
+}
+
+fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
+    match cbk {
+        pulldown_cmark::CodeBlockKind::Indented => false,
+        pulldown_cmark::CodeBlockKind::Fenced(cow_str) => {
+            if cow_str.contains("roc") {
+                true
+            } else {
+                false
+            }
+        }
+    }
 }
