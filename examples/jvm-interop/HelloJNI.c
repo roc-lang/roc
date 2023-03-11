@@ -213,33 +213,58 @@ extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocB
 JNIEXPORT jstring JNICALL Java_HelloJNI_sayHello
    (JNIEnv *env, jobject thisObj, jint num)
 {
+
+
     char native_string[256] = {0};
     sprintf(native_string, "%d", num);
-    /* const char *native_string = (*env)->GetStringUTFChars(env, num, 0); */
 
     struct RocBytes arg = init_rocbytes((uint8_t *)native_string, strlen(native_string));
     struct RocBytes ret = {0};
 
     // Call the Roc function to populate `ret`'s bytes.
     roc__mainForHost_1_exposed_generic(&ret, &arg);
-    printf("%s", (char *)ret.bytes);
 
-    struct json_value_s* root = json_parse((char *)ret.bytes, ret.len);
-    if (root == NULL) {
-        printf("Failed to parse JSON\n");
-        exit(1);
-    }
+    /* struct json_value_s* root = json_parse((char *)ret.bytes, ret.len); */
+    /* if (root == NULL) { */
+    /*     printf("Failed to parse JSON\n"); */
+    /*     exit(1); */
+    /* } */
 
-    struct json_string_s * json_string = json_value_as_string(root);
-    if (json_string == NULL) {
-        printf("JSON value is not a string\n");
-        exit(1);
-    }
+    /* struct json_string_s * json_string = json_value_as_string(root); */
+    /* if (json_string == NULL) { */
+    /*     printf("JSON value is not a string\n"); */
+    /*     exit(1); */
+    /* } */
 
-    free(root);
+    /* free(root); */
     decref((void *)&ret, alignof(uint8_t *));
 
-    // new jstring assembled from the Roc string in ret
-    return (*env)->NewStringUTF(env, json_string->string);
+
+    // java being java making this a lot harder than it needs to be
+    // https://stackoverflow.com/questions/32205446/getting-true-utf-8-characters-in-java-jni
+    // https://docs.oracle.com/javase/1.5.0/docs/guide/jni/spec/types.html#wp16542
+    // but as i refuse converting those manually to their correct form, we just let the jvm handle the conversion
+    // by first making a java byte array then converting the byte array to our final jstring
+    jbyteArray byteArray = (*env)->NewByteArray(env, ret.len);
+    (*env)->SetByteArrayRegion(env, byteArray, 0, ret.len, ret.bytes);
+    jbyte* bytes = (*env)->GetByteArrayElements(env, byteArray, 0);
+
+    jstring charsetName = (*env)->NewStringUTF(env, "UTF-8");
+    jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+    // https://docs.oracle.com/javase/7/docs/jdk/api/jpda/jdi/com/sun/jdi/doc-files/signature.html
+    jmethodID stringConstructor = (*env)->GetMethodID(env, stringClass, "<init>", "([BLjava/lang/String;)V");
+
+    jstring result = (*env)->NewObject(env, stringClass, stringConstructor, byteArray, charsetName);
+
+    // probably unnecessary cause stuff created with env should just be dead when env is dead
+    // also they're stored on the stack so truly not required but ig couldn't hurt..
+    (*env)->DeleteLocalRef(env, (jobject)stringConstructor);
+    (*env)->DeleteLocalRef(env, (jobject)stringClass);
+
+    (*env)->DeleteLocalRef(env, charsetName);
+    (*env)->ReleaseByteArrayElements(env, byteArray, bytes, 0);
+    (*env)->DeleteLocalRef(env, byteArray);
+
+    return result;
 
 }
