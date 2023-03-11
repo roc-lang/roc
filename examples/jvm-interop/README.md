@@ -108,7 +108,7 @@ val res0: String = The number was 1337, OH YEAH!!! 🤘🤘
 ```
 And it also works beautifully.
 
-Last one - Clojure\
+Last one - Clojure
 ``` console
 [nix-shell:~/dev/roc/examples/jvm-interop]$ clj -Sdeps '{:paths ["."]}'
 Clojure 1.11.1
