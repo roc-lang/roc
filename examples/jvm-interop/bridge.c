@@ -221,9 +221,6 @@ JNIEXPORT jstring JNICALL Java_javaSource_Greeter_sayHello
     // Call the Roc function to populate `ret`'s bytes.
     roc__mainForHost_1_exposed_generic(&ret, &arg);
 
-    decref((void *)&ret, alignof(uint8_t *));
-
-
     // java being java making this a lot harder than it needs to be
     // https://stackoverflow.com/questions/32205446/getting-true-utf-8-characters-in-java-jni
     // https://docs.oracle.com/javase/1.5.0/docs/guide/jni/spec/types.html#wp16542
@@ -240,6 +237,8 @@ JNIEXPORT jstring JNICALL Java_javaSource_Greeter_sayHello
 
     jstring result = (*env)->NewObject(env, stringClass, stringConstructor, byteArray, charsetName);
 
+    // cleanup
+    decref((void *)&ret, alignof(uint8_t *));
     (*env)->DeleteLocalRef(env, charsetName);
     (*env)->ReleaseByteArrayElements(env, byteArray, bytes, 0);
     (*env)->DeleteLocalRef(env, byteArray);
