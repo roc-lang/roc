@@ -30,7 +30,8 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 
 __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
 {
-   // TODO
+
+   // TODO throw a RuntimeException from JNI
    exit(0);
 }
 
