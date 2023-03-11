@@ -209,7 +209,7 @@ size_t roc_str_len(struct RocStr str)
 
 extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
 
-JNIEXPORT jstring JNICALL Java_HelloJNI_sayHello
+JNIEXPORT jstring JNICALL Java_javaSource_HelloJNI_sayHello
    (JNIEnv *env, jobject thisObj, jint num)
 {
     char native_string[256] = {0};
@@ -230,7 +230,7 @@ JNIEXPORT jstring JNICALL Java_HelloJNI_sayHello
     // but as i refuse converting those manually to their correct form, we just let the jvm handle the conversion
     // by first making a java byte array then converting the byte array to our final jstring
     jbyteArray byteArray = (*env)->NewByteArray(env, ret.len);
-    (*env)->SetByteArrayRegion(env, byteArray, 0, ret.len, ret.bytes);
+    (*env)->SetByteArrayRegion(env, byteArray, 0, ret.len, (jbyte*)ret.bytes);
     jbyte* bytes = (*env)->GetByteArrayElements(env, byteArray, 0);
 
     jstring charsetName = (*env)->NewStringUTF(env, "UTF-8");

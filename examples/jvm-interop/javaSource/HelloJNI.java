@@ -1,3 +1,5 @@
+package javaSource;
+
 public class HelloJNI {
    static {
       System.loadLibrary("demo");

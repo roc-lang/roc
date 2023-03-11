@@ -16,15 +16,20 @@ ln -sf libhello.so.1 libhello.so
 export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
 
 # needs jdk10 +
-javac -h . HelloJNI.java
+# "-h ." is for placing the jni.h header in the cwd.
+# the "javaSource" directory may seem redundant (why not just a plain java file),
+# but this is the way of java packaging
+# we could go without it with an "implicit" package, but that would ache later on,
+# especially with other jvm langs
+javac -h . javaSource/HelloJNI.java
 
-gcc \
+clang \
     -c -fPIC \
     -I"$JAVA_HOME/include" \
     -I"$JAVA_HOME/include/linux" \
     -o demo.o HelloJNI.c
 
-gcc -shared -o libdemo.so demo.o -L. -lhello
+clang -shared -o libdemo.so demo.o -L. -lhello
 
 # then run
-# java -Djava.library.path=. HelloJNI
+java -Djava.library.path=. javaSource.HelloJNI

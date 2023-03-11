@@ -4,4 +4,4 @@
 *.so
 *.jar
 libhello*
-HelloJNI.h
+*.h
