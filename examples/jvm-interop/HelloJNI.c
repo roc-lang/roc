@@ -9,7 +9,6 @@
 #include <stdint.h>
 
 #include <jni.h>
-#include "json.h"
 #include "HelloJNI.h"
 
 
