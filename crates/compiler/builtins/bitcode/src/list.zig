@@ -538,11 +538,6 @@ pub fn listSublist(
     len: usize,
     dec: Dec,
 ) callconv(.C) RocList {
-    // Alignment is no longer used.
-    // This will never free the original list.
-    // It will either return a seamless slice or an empty list with capacity.
-    _ = alignment;
-
     const size = list.len();
     if (len == 0 or start >= size) {
         if (list.isUnique()) {
@@ -558,6 +553,7 @@ pub fn listSublist(
                 return output;
             }
         }
+        list.decref(alignment);
         return RocList.empty();
     }
 
@@ -620,9 +616,9 @@ pub fn listDropAt(
     // For simplicity, do this by calling listSublist.
     // In the future, we can test if it is faster to manually inline the important parts here.
     if (drop_index == 0) {
-        return listSublist(list, alignment, element_width, 1, size - 1, dec);
-    } else if (drop_index == size - 1) {
-        return listSublist(list, alignment, element_width, 0, size - 1, dec);
+        return listSublist(list, alignment, element_width, 1, size -| 1, dec);
+    } else if (drop_index == size -| 1) {
+        return listSublist(list, alignment, element_width, 0, size -| 1, dec);
     }
 
     if (list.bytes) |source_ptr| {

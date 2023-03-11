@@ -57,6 +57,19 @@ pub const RocStr = extern struct {
         return result;
     }
 
+    pub fn fromByteList(list: RocList) RocStr {
+        if (list.isSeamlessSlice()) {
+            // Str doesn't have seamless slices yet.
+            // Need to copy.
+            return RocStr.init(@ptrCast([*]const u8, list.bytes), list.length);
+        }
+        return RocStr{
+            .str_bytes = list.bytes,
+            .str_len = list.length,
+            .str_capacity = list.capacityOrRefPtr, // This is guaranteed to be a proper capcity.
+        };
+    }
+
     pub fn fromSlice(slice: []const u8) RocStr {
         return RocStr.init(slice.ptr, slice.len);
     }
@@ -1800,15 +1813,11 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
     if (unicode.utf8ValidateSlice(bytes)) {
         // the output will be correct. Now we need to clone the input
 
+        // TODO: rework this to properly take advantage fo seamless slices.
         if (count == arg.len() and count > SMALL_STR_MAX_LENGTH) {
             const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
 
-            // TODO: hangle seamless slice conversion
-            const string = RocStr{
-                .str_bytes = byte_list.bytes,
-                .str_len = byte_list.length,
-                .str_capacity = byte_list.capacityOrRefPtr,
-            };
+            const string = RocStr.fromByteList(byte_list);
 
             return FromUtf8Result{
                 .is_ok = true,

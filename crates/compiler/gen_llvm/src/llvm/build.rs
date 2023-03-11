@@ -2784,12 +2784,13 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     match layout_interner.get(layout) {
                         Layout::Builtin(Builtin::Str) => todo!(),
                         Layout::Builtin(Builtin::List(element_layout)) => {
-                            debug_assert!(value.is_struct_value());
-                            let element_layout = layout_interner.get(element_layout);
-                            let alignment =
-                                element_layout.alignment_bytes(layout_interner, env.target_info);
+                            // debug_assert!(value.is_struct_value());
+                            // let element_layout = layout_interner.get(element_layout);
+                            // let alignment =
+                            //     element_layout.alignment_bytes(layout_interner, env.target_info);
 
-                            build_list::decref(env, value.into_struct_value(), alignment);
+                            // build_list::decref(env, value.into_struct_value(), alignment);
+                            todo!()
                         }
 
                         lay if lay.is_refcounted() => {
