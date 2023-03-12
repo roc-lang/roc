@@ -983,7 +983,6 @@ countLeadingZeroBits : Int a -> Nat
 ## ```
 countTrailingZeroBits : Int a -> Nat
 
-
 ## Counts the number of set bits in an integer.
 ##
 ## ```
