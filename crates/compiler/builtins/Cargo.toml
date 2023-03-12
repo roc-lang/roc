@@ -12,15 +12,6 @@ roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_region = { path = "../region" }
 roc_target = { path = "../roc_target" }
-roc_utils = { path = "../../utils" }
 
 tempfile.workspace = true
 
-[build-dependencies]
-roc_utils = { path = "../../utils" }
-
-# dunce can be removed once ziglang/zig#5109 is fixed
-dunce = "1.0.3"
-
-[target.'cfg(target_os = "macos")'.build-dependencies]
-tempfile.workspace = true

@@ -10,6 +10,7 @@ version.workspace = true
 [dependencies]
 morphic_lib = { path = "../../vendor/morphic_lib" }
 roc_alias_analysis = { path = "../alias_analysis" }
+roc_bitcode_bc = { path = "../builtins/bitcode/bc" }
 roc_builtins = { path = "../builtins" }
 roc_collections = { path = "../collections" }
 roc_debug_flags = { path = "../debug_flags" }

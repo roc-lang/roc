@@ -1,6 +1,6 @@
 [package]
-name = "roc_utils"
-description = "Utility functions used all over the code base."
+name = "roc_command_utils"
+description = "Utility functions used all over the code base to call eternal apps like zig."
 
 authors.workspace = true
 edition.workspace = true
@@ -8,6 +8,5 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-snafu.workspace = true
 
 [dev-dependencies]

@@ -10,7 +10,7 @@ mod editor_launch_test {
 
     use cli_utils::helpers::build_roc_bin_cached;
     use roc_cli::CMD_EDIT;
-    use roc_utils::root_dir;
+    use roc_command_utils::root_dir;
     use std::io::Read;
 
     // ignored because we don't want to bring up the editor window during regular tests, only on specific CI machines

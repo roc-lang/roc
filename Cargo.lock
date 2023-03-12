@@ -457,10 +457,10 @@ dependencies = [
  "criterion",
  "rlimit",
  "roc_collections",
+ "roc_command_utils",
  "roc_load",
  "roc_module",
  "roc_reporting",
- "roc_utils",
  "serde",
  "serde-xml-rs",
  "tempfile",
@@ -3033,6 +3033,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_bitcode"
+version = "0.0.1"
+dependencies = [
+ "dunce",
+ "roc_command_utils",
+ "tempfile",
+]
+
+[[package]]
+name = "roc_bitcode_bc"
+version = "0.0.1"
+dependencies = [
+ "dunce",
+ "roc_command_utils",
+ "tempfile",
+]
+
+[[package]]
 name = "roc_build"
 version = "0.0.1"
 dependencies = [
@@ -3040,9 +3058,10 @@ dependencies = [
  "indoc",
  "inkwell",
  "libloading",
- "roc_builtins",
+ "roc_bitcode",
  "roc_can",
  "roc_collections",
+ "roc_command_utils",
  "roc_constrain",
  "roc_error_macros",
  "roc_gen_dev",
@@ -3062,7 +3081,6 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
- "roc_utils",
  "serde_json",
  "target-lexicon",
  "tempfile",
@@ -3073,12 +3091,10 @@ dependencies = [
 name = "roc_builtins"
 version = "0.0.1"
 dependencies = [
- "dunce",
  "roc_collections",
  "roc_module",
  "roc_region",
  "roc_target",
- "roc_utils",
  "tempfile",
 ]
 
@@ -3124,6 +3140,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_command_utils",
  "roc_docs",
  "roc_editor",
  "roc_error_macros",
@@ -3143,7 +3160,6 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_tracing",
- "roc_utils",
  "roc_wasm_interp",
  "serial_test",
  "signal-hook",
@@ -3160,8 +3176,8 @@ dependencies = [
  "bumpalo",
  "palette",
  "roc_ast",
+ "roc_error_utils",
  "roc_module",
- "roc_utils",
  "serde",
  "snafu",
 ]
@@ -3178,6 +3194,10 @@ dependencies = [
  "im-rc",
  "wyhash",
 ]
+
+[[package]]
+name = "roc_command_utils"
+version = "0.0.1"
 
 [[package]]
 name = "roc_constrain"
@@ -3285,6 +3305,7 @@ dependencies = [
  "roc_can",
  "roc_code_markup",
  "roc_collections",
+ "roc_command_utils",
  "roc_load",
  "roc_module",
  "roc_packaging",
@@ -3295,7 +3316,6 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
- "roc_utils",
  "serde",
  "snafu",
  "tempfile",
@@ -3310,6 +3330,13 @@ dependencies = [
 [[package]]
 name = "roc_error_macros"
 version = "0.0.1"
+
+[[package]]
+name = "roc_error_utils"
+version = "0.0.1"
+dependencies = [
+ "snafu",
+]
 
 [[package]]
 name = "roc_exhaustive"
@@ -3366,6 +3393,7 @@ dependencies = [
  "inkwell",
  "morphic_lib",
  "roc_alias_analysis",
+ "roc_bitcode_bc",
  "roc_builtins",
  "roc_collections",
  "roc_debug_flags",
@@ -3715,6 +3743,7 @@ dependencies = [
  "futures",
  "getrandom",
  "js-sys",
+ "roc_bitcode",
  "roc_builtins",
  "roc_collections",
  "roc_gen_wasm",
@@ -3882,13 +3911,6 @@ dependencies = [
  "roc_module",
  "roc_tracing",
  "roc_types",
-]
-
-[[package]]
-name = "roc_utils"
-version = "0.0.1"
-dependencies = [
- "snafu",
 ]
 
 [[package]]
@@ -4525,10 +4547,12 @@ dependencies = [
  "lazy_static",
  "libc",
  "libloading",
+ "roc_bitcode",
  "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_command_utils",
  "roc_constrain",
  "roc_debug_flags",
  "roc_error_macros",
@@ -4548,7 +4572,6 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_unify",
- "roc_utils",
  "roc_wasm_interp",
  "roc_wasm_module",
  "target-lexicon",
@@ -5092,7 +5115,7 @@ checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 name = "wasi_libc_sys"
 version = "0.0.1"
 dependencies = [
- "roc_utils",
+ "roc_command_utils",
 ]
 
 [[package]]
