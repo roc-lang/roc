@@ -18,7 +18,7 @@ const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, da
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
-    capacityOrRefPtr: usize,
+    capacity_or_ref_ptr: usize,
 
     pub inline fn len(self: RocList) usize {
         return self.length;
@@ -26,13 +26,13 @@ pub const RocList = extern struct {
 
     pub fn getCapacity(self: RocList) usize {
         if (!self.isSeamlessSlice()) {
-            return self.capacityOrRefPtr;
+            return self.capacity_or_ref_ptr;
         }
         return self.length;
     }
 
     pub fn isSeamlessSlice(self: RocList) bool {
-        return @bitCast(isize, self.capacityOrRefPtr) < 0;
+        return @bitCast(isize, self.capacity_or_ref_ptr) < 0;
     }
 
     pub fn isEmpty(self: RocList) bool {
@@ -40,7 +40,7 @@ pub const RocList = extern struct {
     }
 
     pub fn empty() RocList {
-        return RocList{ .bytes = null, .length = 0, .capacityOrRefPtr = 0 };
+        return RocList{ .bytes = null, .length = 0, .capacity_or_ref_ptr = 0 };
     }
 
     pub fn eql(self: RocList, other: RocList) bool {
@@ -88,7 +88,7 @@ pub const RocList = extern struct {
 
     pub fn decref(self: RocList, alignment: u32) void {
         if (self.isSeamlessSlice()) {
-            const ref_ptr = @intToPtr([*]isize, self.capacityOrRefPtr << 1);
+            const ref_ptr = @intToPtr([*]isize, self.capacity_or_ref_ptr << 1);
             utils.decref_ptr_to_refcount(ref_ptr, alignment);
         } else {
             utils.decref(self.bytes, self.getCapacity(), alignment);
@@ -163,7 +163,7 @@ pub const RocList = extern struct {
         return RocList{
             .bytes = utils.allocateWithRefcount(data_bytes, alignment),
             .length = length,
-            .capacityOrRefPtr = capacity,
+            .capacity_or_ref_ptr = capacity,
         };
     }
 
@@ -177,11 +177,11 @@ pub const RocList = extern struct {
             if (self.isUnique() and !self.isSeamlessSlice()) {
                 const capacity = self.getCapacity();
                 if (capacity >= new_length) {
-                    return RocList{ .bytes = self.bytes, .length = new_length, .capacityOrRefPtr = capacity };
+                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_ref_ptr = capacity };
                 } else {
                     const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
                     const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width);
-                    return RocList{ .bytes = new_source, .length = new_length, .capacityOrRefPtr = new_capacity };
+                    return RocList{ .bytes = new_source, .length = new_length, .capacity_or_ref_ptr = new_capacity };
                 }
             }
             return self.reallocateFresh(alignment, new_length, element_width);
@@ -585,7 +585,7 @@ pub fn listSublist(
                 return RocList{
                     .bytes = source_ptr + start * element_width,
                     .length = keep_len,
-                    .capacityOrRefPtr = list.capacityOrRefPtr,
+                    .capacity_or_ref_ptr = list.capacity_or_ref_ptr,
                 };
             }
 
@@ -596,7 +596,7 @@ pub fn listSublist(
             return RocList{
                 .bytes = source_ptr + start * element_width,
                 .length = keep_len,
-                .capacityOrRefPtr = (@ptrToInt(ref_ptr) >> 1) | seamless_slice_bit,
+                .capacity_or_ref_ptr = (@ptrToInt(ref_ptr) >> 1) | seamless_slice_bit,
             };
         }
     }

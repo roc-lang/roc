@@ -66,7 +66,7 @@ pub const RocStr = extern struct {
         return RocStr{
             .str_bytes = list.bytes,
             .str_len = list.length,
-            .str_capacity = list.capacityOrRefPtr, // This is guaranteed to be a proper capcity.
+            .str_capacity = list.capacity_or_ref_ptr, // This is guaranteed to be a proper capcity.
         };
     }
 
@@ -1678,7 +1678,7 @@ test "RocStr.concat: small concat small" {
 pub const RocListStr = extern struct {
     list_elements: ?[*]RocStr,
     list_length: usize,
-    list_capacityOrRefPtr: usize,
+    list_capacity_or_ref_ptr: usize,
 };
 
 // Str.joinWith
@@ -1686,7 +1686,7 @@ pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
     const roc_list_str = RocListStr{
         .list_elements = @ptrCast(?[*]RocStr, @alignCast(@alignOf(usize), list.bytes)),
         .list_length = list.length,
-        .list_capacityOrRefPtr = list.capacityOrRefPtr,
+        .list_capacity_or_ref_ptr = list.capacity_or_ref_ptr,
     };
 
     return @call(.{ .modifier = always_inline }, strJoinWith, .{ roc_list_str, separator });
@@ -1748,7 +1748,7 @@ test "RocStr.joinWith: result is big" {
     var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
     const list = RocListStr{
         .list_length = 3,
-        .list_capacityOrRefPtr = 3,
+        .list_capacity_or_ref_ptr = 3,
         .list_elements = @ptrCast([*]RocStr, &elements),
     };
 
@@ -1779,9 +1779,9 @@ inline fn strToBytes(arg: RocStr) RocList {
 
         @memcpy(ptr, arg.asU8ptr(), length);
 
-        return RocList{ .length = length, .bytes = ptr, .capacityOrRefPtr = length };
+        return RocList{ .length = length, .bytes = ptr, .capacity_or_ref_ptr = length };
     } else {
-        return RocList{ .length = length, .bytes = arg.str_bytes, .capacityOrRefPtr = arg.str_capacity };
+        return RocList{ .length = length, .bytes = arg.str_bytes, .capacity_or_ref_ptr = arg.str_capacity };
     }
 }
 
@@ -1915,7 +1915,7 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8Range(RocList{ .bytes = bytes, .length = length, .capacityOrRefPtr = length }, 0, length, .Immutable);
+    return fromUtf8Range(RocList{ .bytes = bytes, .length = length, .capacity_or_ref_ptr = length }, 0, length, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
