@@ -45,6 +45,7 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::ColonEquals
             | Token::Colon
             | Token::And
+            | Token::AtSign
             | Token::QuestionMark => {
                 buf = push_html_span(buf, current_text, "kw");
             }
@@ -63,6 +64,7 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::LessThanEquals
             | Token::DoubleEquals
             | Token::DoubleBar
+            | Token::Multiply
             | Token::Plus
             | Token::DoubleAnd => {
                 buf = push_html_span(buf, current_text, "op");
@@ -81,7 +83,7 @@ pub fn highlight(code: &str) -> Vec<String> {
                 buf = push_html_span(buf, current_text, "upperident");
             }
             // Variables modules and field names
-            Token::LowerIdent => {
+            Token::LowerIdent | Token::Underscore => {
                 buf = push_html_span(buf, current_text, "lowerident");
             }
             // Anyting else that wasn't tokenised

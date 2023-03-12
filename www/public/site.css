@@ -1,48 +1,30 @@
 :root {
-    --base00: #202746;
-    --base01: #293256;
-    --base02: #5e6687;
-    --base03: #6b7394;
-    --base04: #898ea4;
-    --base05: #979db4;
-    --base06: #dfe2f1;
-    --base07: #f5f7ff;
-    --base08: #c94922;
-    --base09: #c76b29;
-    --base0A: #ba862e;
-    --base0B: #349e99;
-    --base0C: #219bc1;
-    --base0D: #3d8fd1;
-    --base0E: #6679cc;
-    --base0F: #9c637a;
-
-    --red: var(--base08);
-    --orange: var(--base09);
-    --yellow: var(--base0A);
-    --green: var(--base0B);
-    --cyan: var(--base0C);
-    --blue: var(--base0D);
-    --violet: var(--base0E);
-    --magenta: var(--base0F);
+    /* WCAG AAA Compliant colors */
+    --code-bg: #f4f8f9;
+    --gray: #717171;
+    --orange: #BF5000;
+    --green: #0B8400;
+    --cyan: #067C94;
+    --blue: #05006d;
+    --magenta: #a20031;
 
     --body-max-width: 900px;
     --text-color: #121212;
     --top-bar-bg: #222;
     --top-bar-fg: #eee;
-    --top-bar-logo-hover: hsl(258, 73%, 70%);
-    --header-link-color: #17b9b0;
+    --top-bar-logo-hover: #8055E4;
+    --header-link-color: #107F79;
     --header-link-hover: #222;
-    --link-color: hsl(258, 73%, 58%);
-    --h1-color: hsl(258, 73%, 70%);
+    --link-color: #7546e2;
+    --h1-color: #8055E4;
     --repl-prompt: #0064ff;
     --body-bg: #fff;
-    --code-bg: #e7e7e7;
-    --code-bg-color: var(--base07);
+
     --code-color: #303030;
-    --toc-background: #f3f3f3;
-    --toc-border: #ddd;
+    --toc-background: var(--code-bg);
+    --toc-border: var(--gray);
     --toc-search-bg: #fcfcfc;
-    --toc-search-border: #bbb;
+    --toc-search-border: var(--gray);
     --font-mono: "Source Code Pro", monospace;
 }
 
@@ -136,7 +118,7 @@ code,
 samp {
     font-family: var(--font-mono);
     color: var(--code-color);
-    background-color: var(--code-bg-color);
+    background-color: var(--code-bg);
     display: inline-block;
 }
 
@@ -167,7 +149,7 @@ pre {
     padding: 8px 16px;
     box-sizing: border-box;
     border-radius: 8px;
-    background-color: var(--code-bg-color);
+    background-color: var(--code-bg);
     overflow-x: auto;
     font-size: 1.2rem;
     line-height: 1.76em;
@@ -181,7 +163,7 @@ pre {
 }
 
 .repl-err {
-    color: #c20000;
+    color: var(--magenta);
 }
 
 /* Tables */
@@ -230,15 +212,6 @@ td:last-child {
     text-align: left;
 }
 
-@media (prefers-color-scheme: dark) {
-    table,
-    tr,
-    th,
-    td {
-        border-color: #3b3f47;
-    }
-}
-
 /* Tutorial Specific */
 
 #tutorial-start {
@@ -252,7 +225,7 @@ td:last-child {
 
 #tutorial-toc {
     margin-top: 18px;
-    background: var(--code-bg-color);
+    background: var(--code-bg);
     border-radius: 8px;
     padding: 12px 24px;
     margin-left: 64px;
@@ -274,7 +247,6 @@ td:last-child {
 }
 
 #tutorial-toc h2 {
-    color: #686868;
     font-family: inherit;
     font-size: 2em;
     text-shadow: none;
@@ -613,21 +585,29 @@ h4 {
 
 @media (prefers-color-scheme: dark) {
     :root {
+        /* WCAG AAA Compliant colors */
+        --code-bg: #202746;
+        --gray: #b6b6b6;
+        --orange: #fd6e08;
+        --green: #8ecc88;
+        --cyan: #12c9be;
+        --blue: #b1afdf;
+        --magenta: #f39bac;
+
         --text-color: #cdcdcd;
         --top-bar-bg: #2a2a2a;
-        --header-link-color: hsl(258, 73%, 70%);
+        --header-link-color: #9C7CEA;
         --header-link-hover: #ddd;
         --h1-color: #1bc6bd;
         --link-color: #1bc6bd;
-        --repl-prompt: var(--link-color);
+        --repl-prompt: #1bc6bd;
         --body-bg: #0e0e0f;
-        --code-bg-color: #222947;
         --code-snippet-border: #444;
         --code-color: #cdcdcd;
-        --toc-background: var(--code-bg-color);
+        --toc-background: var(--code-bg);
         --toc-border: var(--code-snippet-border);
         --toc-search-bg: #333;
-        --toc-search-border: #555;
+        --toc-search-border: var(--gray);
     }
 
     h1,
@@ -641,12 +621,19 @@ h4 {
     html {
         scrollbar-color: #444444 #2f2f2f;
     }
+
+    table,
+    tr,
+    th,
+    td {
+        border-color: var(--gray);
+    }
 }
 
 /* Comments `#` and Documentation comments `##` */
 samp .comment,
 code .comment {
-    color: #338545;
+    color: var(--green);
 }
 /* Number, String, Tag, Type literals */
 samp .literal,
@@ -667,13 +654,13 @@ code .op {
 /* Delimieters */
 samp .delimeter,
 code .delimeter {
-    color: var(--base05);
+    color: var(--gray);
 }
 
 /* Variables modules and field names */
 samp .lowerident,
 code .lowerident {
-    color: var(--violet);
+    color: var(--blue);
 }
 
 /* Types, Tags, and Modules */
