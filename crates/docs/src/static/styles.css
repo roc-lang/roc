@@ -175,7 +175,7 @@ section {
   border: 2px solid var(--border-color);
   border-radius: 8px;
   padding: 0px 0px 16px 0px;
-  margin: 32px 16px;
+  margin: 72px 16px;
 }
 
 section > *:last-child {
