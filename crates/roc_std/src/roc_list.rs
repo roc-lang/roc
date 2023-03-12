@@ -28,7 +28,7 @@ use serde::{
 pub struct RocList<T> {
     elements: Option<NonNull<ManuallyDrop<T>>>,
     length: usize,
-    capacity: usize,
+    capacity_or_ref_ptr: usize,
 }
 
 impl<T> RocList<T> {
@@ -41,7 +41,7 @@ impl<T> RocList<T> {
         Self {
             elements: None,
             length: 0,
-            capacity: 0,
+            capacity_or_ref_ptr: 0,
         }
     }
 
@@ -51,7 +51,7 @@ impl<T> RocList<T> {
         Self {
             elements: Some(Self::elems_with_capacity(num_elems)),
             length: 0,
-            capacity: num_elems,
+            capacity_or_ref_ptr: num_elems,
         }
     }
 
@@ -95,8 +95,16 @@ impl<T> RocList<T> {
         self.length
     }
 
+    pub fn is_seamless_slice(&self) -> bool {
+        (self.capacity_or_ref_ptr as isize) < 0
+    }
+
     pub fn capacity(&self) -> usize {
-        self.capacity
+        if !self.is_seamless_slice() {
+            self.capacity_or_ref_ptr
+        } else {
+            self.length
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -173,10 +181,14 @@ impl<T> RocList<T> {
 
     /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
     pub(crate) unsafe fn ptr_to_allocation(&self) -> *mut c_void {
-        unsafe {
-            self.ptr_to_first_elem()
-                .cast::<u8>()
-                .sub(Self::alloc_alignment() as usize) as *mut _
+        if self.is_seamless_slice() {
+            (self.capacity_or_ref_ptr << 1) as *mut _
+        } else {
+            unsafe {
+                self.ptr_to_first_elem()
+                    .cast::<u8>()
+                    .sub(Self::alloc_alignment() as usize) as *mut _
+            }
         }
     }
 
@@ -223,12 +235,12 @@ where
                         roc_realloc(
                             storage.as_ptr().cast(),
                             Self::alloc_bytes(new_len),
-                            Self::alloc_bytes(self.capacity),
+                            Self::alloc_bytes(self.capacity()),
                             Self::alloc_alignment(),
                         )
                     };
 
-                    self.capacity = new_len;
+                    self.capacity_or_ref_ptr = new_len;
 
                     Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
                         todo!("Reallocation failed");
@@ -241,7 +253,7 @@ where
                 }
 
                 // Allocate new memory.
-                self.capacity = slice.len();
+                self.capacity_or_ref_ptr = slice.len();
                 let new_elements = Self::elems_with_capacity(slice.len());
 
                 // Copy the old elements to the new allocation.
@@ -252,7 +264,7 @@ where
                 new_elements
             }
         } else {
-            self.capacity = slice.len();
+            self.capacity_or_ref_ptr = slice.len();
             Self::elems_with_capacity(slice.len())
         };
 
@@ -298,7 +310,7 @@ impl<T> RocList<T> {
                         let new_alloc = roc_realloc(
                             old_alloc,
                             Self::alloc_bytes(new_len),
-                            Self::alloc_bytes(self.capacity),
+                            Self::alloc_bytes(self.capacity()),
                             Self::alloc_alignment(),
                         );
 
@@ -361,7 +373,7 @@ impl<T> RocList<T> {
         self.update_to(Self {
             elements: Some(new_elems),
             length: self.length,
-            capacity: new_len,
+            capacity_or_ref_ptr: new_len,
         });
     }
 
@@ -479,7 +491,7 @@ impl<T> Clone for RocList<T> {
         Self {
             elements: self.elements,
             length: self.length,
-            capacity: self.capacity,
+            capacity_or_ref_ptr: self.capacity_or_ref_ptr,
         }
     }
 }
@@ -564,7 +576,7 @@ impl<T> FromIterator<T> for RocList<T> {
             return Self {
                 elements: Some(Self::elems_with_capacity(count)),
                 length: count,
-                capacity: count,
+                capacity_or_ref_ptr: count,
             };
         }
 
@@ -578,8 +590,8 @@ impl<T> FromIterator<T> for RocList<T> {
         for new_elem in iter {
             // If the size_hint didn't give us a max, we may need to grow. 1.5x seems to be good, based on:
             // https://archive.ph/Z2R8w and https://github.com/facebook/folly/blob/1f2706/folly/docs/FBVector.md
-            if list.length == list.capacity {
-                list.reserve(list.capacity / 2);
+            if list.length == list.capacity() {
+                list.reserve(list.capacity() / 2);
                 elements = list.elements.unwrap().as_ptr();
             }
 
