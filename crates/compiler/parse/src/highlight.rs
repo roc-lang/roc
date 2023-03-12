@@ -279,7 +279,10 @@ fn highlight_inner<'a>(
                 }
                 '_' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Underscore));
+                    tokens.push(Loc::at(
+                        Region::between(start, state.pos()),
+                        Token::Underscore,
+                    ));
                 }
                 '?' => {
                     state.advance_mut(1);
@@ -294,7 +297,10 @@ fn highlight_inner<'a>(
                 }
                 '*' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Multiply));
+                    tokens.push(Loc::at(
+                        Region::between(start, state.pos()),
+                        Token::Multiply,
+                    ));
                 }
                 '^' => {
                     state.advance_mut(1);
@@ -319,10 +325,7 @@ fn highlight_inner<'a>(
                 }
                 '@' => {
                     state.advance_mut(1);
-                    tokens.push(Loc::at(
-                        Region::between(start, state.pos()),
-                        Token::AtSign,
-                    ));
+                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::AtSign));
                 }
                 '{' | '}' => {
                     state.advance_mut(1);

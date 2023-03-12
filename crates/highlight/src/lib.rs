@@ -83,8 +83,7 @@ pub fn highlight(code: &str) -> Vec<String> {
                 buf = push_html_span(buf, current_text, "upperident");
             }
             // Variables modules and field names
-            Token::LowerIdent
-            | Token::Underscore => {
+            Token::LowerIdent | Token::Underscore => {
                 buf = push_html_span(buf, current_text, "lowerident");
             }
             // Anyting else that wasn't tokenised
