@@ -55,11 +55,14 @@ pub enum Token {
     Pizza,
     Brace,
     Bracket,
+    AtSign,
     Paren,
     Arrow,
     Pipe,
     Backpass,
     Decimal,
+    Multiply,
+    Underscore,
 }
 
 pub fn highlight(text: &str) -> Vec<Loc<Token>> {
@@ -274,6 +277,10 @@ fn highlight_inner<'a>(
                     state.advance_mut(1);
                     tokens.push(Loc::at(Region::between(start, state.pos()), Token::Comma));
                 }
+                '_' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Underscore));
+                }
                 '?' => {
                     state.advance_mut(1);
                     tokens.push(Loc::at(
@@ -284,6 +291,10 @@ fn highlight_inner<'a>(
                 '%' => {
                     state.advance_mut(1);
                     tokens.push(Loc::at(Region::between(start, state.pos()), Token::Percent));
+                }
+                '*' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(Region::between(start, state.pos()), Token::Multiply));
                 }
                 '^' => {
                     state.advance_mut(1);
@@ -305,6 +316,13 @@ fn highlight_inner<'a>(
                         Token::Slash
                     };
                     tokens.push(Loc::at(Region::between(start, state.pos()), tok));
+                }
+                '@' => {
+                    state.advance_mut(1);
+                    tokens.push(Loc::at(
+                        Region::between(start, state.pos()),
+                        Token::AtSign,
+                    ));
                 }
                 '{' | '}' => {
                     state.advance_mut(1);
