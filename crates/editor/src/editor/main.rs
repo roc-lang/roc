@@ -32,7 +32,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
 use std::env;
-use std::fs::{self, File, metadata};
+use std::fs::{self, metadata, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::{error::Error, io, path::Path};
@@ -492,18 +492,26 @@ fn read_main_roc_file(project_path_opt: Option<&Path>) -> (PathBuf, String) {
         let path_metadata = metadata(project_path).unwrap_or_else(|err| panic!("You provided the path {:?}, but I could not read the metadata for the provided path; error: {:?}", &project_path, err));
 
         if path_metadata.is_file() {
-            let file_content_as_str = std::fs::read_to_string(project_path)
-                .unwrap_or_else(|err| panic!("You provided the file {:?}, but I could not read it; error: {}", &project_path, err));
+            let file_content_as_str = std::fs::read_to_string(project_path).unwrap_or_else(|err| {
+                panic!(
+                    "You provided the file {:?}, but I could not read it; error: {}",
+                    &project_path, err
+                )
+            });
 
-            return (project_path.to_path_buf(), file_content_as_str)
+            return (project_path.to_path_buf(), file_content_as_str);
         }
-
 
         let mut ls_config = HashSet::new();
         ls_config.insert(DirEntryAttr::FullName);
 
         let dir_items = ls(project_path, &ls_config)
-            .unwrap_or_else(|err| panic!("Failed to list items in project directory; error: {:?}", err))
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Failed to list items in project directory; error: {:?}",
+                    err
+                )
+            })
             .items;
 
         let file_names = dir_items.iter().flat_map(|info_hash_map| {
