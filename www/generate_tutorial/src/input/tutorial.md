@@ -867,7 +867,7 @@ In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to
 It then proceeds to walk over each element in the list and call that function. Each time, the state that function returns becomes the argument to the next function call. Here are the arguments the function will receive, and what it will return, as `List.walk` walks over the list `[1, 2, 3, 4, 5]`:
 
 |               State               | Element |             Return Value             |
-| :-------------------------------: | :-----: | :----------------------------------: |
+| --------------------------------- | ------- | ------------------------------------ |
 |     `{ evens: [], odds: [] }`     |   `1`   |      `{ evens: [], odds: [1] }`      |
 |     `{ evens: [], odds: [1] }`    |   `2`   |      `{ evens: [2], odds: [1] }`     |
 |    `{ evens: [2], odds: [1] }`    |   `3`   |    `{ evens: [2], odds: [1, 3] }`    |
@@ -1163,7 +1163,7 @@ Choosing a size depends on your performance needs and the range of numbers you w
 Here are the different fixed-size integer types that Roc supports:
 
 | Range                                                                                                             | Type   |
-|--:----------------------------------------------------------------------------------------------------------------|-:-:----|
+|-------------------------------------------------------------------------------------------------------------------|--------|
 | `-128`  <br> `127`                                                                                                | `I8`   |
 | `0`     <br> `255`                                                                                                | `U8`   |
 | `-32_768`  <br> `32_767`                                                                                          | `I16`  |
@@ -1876,7 +1876,7 @@ Earlier we saw how a function which accepts an open union must account for more 
 So if I have an `[Ok Str]*` value, I can pass it to functions with any of these types (among others):
 
 |              Function Type              | Can it receive `[Ok Str]*`? |
-| :-------------------------------------- | :-------------------------: |
+| --------------------------------------- | --------------------------- |
 |           `[Ok Str]* -> Bool`           |             Yes             |
 |           `[Ok Str] -> Bool`            |             Yes             |
 |      `[Ok Str, Err Bool]* -> Bool`      |             Yes             |
@@ -1959,7 +1959,7 @@ For this reason, any time you see a function that only runs a `when` on its only
 Here are various Roc expressions involving operators, and what they desugar to.
 
 | Expression                    |    Desugars To     |
-| :---------------------------: | :----------------: | 
+| ----------------------------- | ------------------ | 
 | `a + b`                       |   `Num.add a b`    |
 | `a - b`                       |   `Num.sub a b`    |
 | `a * b`                       |   `Num.mul a b`    |
