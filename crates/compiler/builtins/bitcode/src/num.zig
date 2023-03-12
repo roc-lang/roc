@@ -236,6 +236,24 @@ fn bytesToU32(arg: RocList, position: usize) u32 {
     return @bitCast(u32, [_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3] });
 }
 
+pub fn bytesToU64C(arg: RocList, position: usize) callconv(.C) u64 {
+    return @call(.{ .modifier = always_inline }, bytesToU64, .{ arg, position });
+}
+
+fn bytesToU64(arg: RocList, position: usize) u64 {
+    const bytes = @ptrCast([*]const u8, arg.bytes);
+    return @bitCast(u64, [_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3], bytes[position + 4], bytes[position + 5], bytes[position + 6], bytes[position + 7] });
+}
+
+pub fn bytesToU128C(arg: RocList, position: usize) callconv(.C) u128 {
+    return @call(.{ .modifier = always_inline }, bytesToU128, .{ arg, position });
+}
+
+fn bytesToU128(arg: RocList, position: usize) u128 {
+    const bytes = @ptrCast([*]const u8, arg.bytes);
+    return @bitCast(u128, [_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3], bytes[position + 4], bytes[position + 5], bytes[position + 6], bytes[position + 7], bytes[position + 8], bytes[position + 9], bytes[position + 10], bytes[position + 11], bytes[position + 12], bytes[position + 13], bytes[position + 14], bytes[position + 15] });
+}
+
 fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .Int => {

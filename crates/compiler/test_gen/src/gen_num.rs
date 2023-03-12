@@ -2808,6 +2808,74 @@ fn bytes_to_u32_subtly_out_of_bounds() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_clearly_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU64 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        1,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_subtly_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bytes = Str.toUtf8 "hello world"
+                when Num.bytesToU64 bytes 4 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        1,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_clearly_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU128 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        1,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_subtly_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bytes = Str.toUtf8 "hello world!!!!!!"
+                when Num.bytesToU128 bytes 2 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        1,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_max_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2899,6 +2967,102 @@ fn bytes_to_u32_random_u8s() {
         ),
         2_038_463_740,
         u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_min_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU64 [0, 0, 0, 0, 0, 0, 0, 0] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        0,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_max_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU64 [255, 255, 255, 255, 255, 255, 255, 255] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        18_446_744_073_709_551_615,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_random_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU64 [252, 124, 128, 121, 1, 32, 177, 211] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        15_254_008_603_586_100_476,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_min_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU128 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        0,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_max_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU128 [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        340_282_366_920_938_463_463_374_607_431_768_211_455,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_random_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU128 [252, 124, 128, 121, 1, 32, 177, 211, 3, 57, 203, 122, 95, 164, 23, 145] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        192_860_816_096_412_392_720_639_456_393_488_792_828,
+        u128
     );
 }
 

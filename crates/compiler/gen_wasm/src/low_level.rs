@@ -1611,6 +1611,8 @@ impl<'a> LowLevelCall<'a> {
             },
             NumBytesToU16 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U16),
             NumBytesToU32 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U32),
+            NumBytesToU64 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U64),
+            NumBytesToU128 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U128),
             NumBitwiseAnd => {
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {

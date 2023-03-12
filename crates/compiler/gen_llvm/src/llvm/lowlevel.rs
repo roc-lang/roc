@@ -929,6 +929,28 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::NUM_BYTES_TO_U32,
             )
         }
+        NumBytesToU64 => {
+            arguments!(list, position);
+
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[position],
+                BitcodeReturns::Basic,
+                bitcode::NUM_BYTES_TO_U64,
+            )
+        }
+        NumBytesToU128 => {
+            arguments!(list, position);
+
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[position],
+                BitcodeReturns::Basic,
+                bitcode::NUM_BYTES_TO_U128,
+            )
+        }
         NumCompare => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 

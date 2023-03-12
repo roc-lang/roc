@@ -67,6 +67,8 @@ const NUMBERS = INTEGERS ++ FLOATS;
 comptime {
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
+    exportNumFn(num.bytesToU64C, "bytes_to_u64");
+    exportNumFn(num.bytesToU128C, "bytes_to_u128");
 
     inline for (INTEGERS) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");

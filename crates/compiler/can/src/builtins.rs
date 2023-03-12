@@ -187,6 +187,8 @@ map_symbol_to_lowlevel_and_arity! {
     NumAsin; NUM_ASIN; 1,
     NumBytesToU16; NUM_BYTES_TO_U16_LOWLEVEL; 2,
     NumBytesToU32; NUM_BYTES_TO_U32_LOWLEVEL; 2,
+    NumBytesToU64; NUM_BYTES_TO_U64_LOWLEVEL; 2,
+    NumBytesToU128; NUM_BYTES_TO_U128_LOWLEVEL; 2,
     NumBitwiseAnd; NUM_BITWISE_AND; 2,
     NumBitwiseXor; NUM_BITWISE_XOR; 2,
     NumBitwiseOr; NUM_BITWISE_OR; 2,
