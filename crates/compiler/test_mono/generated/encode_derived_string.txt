@@ -21,12 +21,12 @@ procedure Json.18 (Json.98):
 
 procedure Json.99 (Json.100, Json.428, Json.98):
     let Json.437 : I64 = 34i64;
-    let Json.436 : U8 = CallByName Num.125 Json.437;
+    let Json.436 : U8 = CallByName Num.127 Json.437;
     let Json.434 : List U8 = CallByName List.4 Json.100 Json.436;
     let Json.435 : List U8 = CallByName Str.12 Json.98;
     let Json.431 : List U8 = CallByName List.8 Json.434 Json.435;
     let Json.433 : I64 = 34i64;
-    let Json.432 : U8 = CallByName Num.125 Json.433;
+    let Json.432 : U8 = CallByName Num.127 Json.433;
     let Json.430 : List U8 = CallByName List.4 Json.431 Json.432;
     ret Json.430;
 
@@ -52,9 +52,9 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.503 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.503;
 
-procedure Num.125 (#Attr.2):
-    let Num.257 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.257;
+procedure Num.127 (#Attr.2):
+    let Num.276 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.276;
 
 procedure Str.12 (#Attr.2):
     let Str.279 : List U8 = lowlevel StrToUtf8 #Attr.2;
