@@ -331,9 +331,28 @@ impl<'a> LowLevelCall<'a> {
                     // (which is 2 as of the writing of this comment). If the field order
                     // ever changes, WRAPPER_CAPACITY should be updated and this logic should
                     // continue to work even though this comment may become inaccurate.
-                    backend
-                        .code_builder
-                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
+
+                    // On top of this, if the capacity is less than zero, the list is a seamless slice.
+                    // We need to return the length in that case.
+                    let code_builder = &mut backend.code_builder;
+                    let tmp = backend.storage.create_anonymous_local(ValueType::I32);
+                    code_builder.i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
+                    code_builder.i64_const(0);
+                    code_builder.i32_lt_s(); // capacity < 0
+
+                    code_builder.if_();
+                    {
+                        code_builder.i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
+                        code_builder.set_local(tmp);
+                    }
+                    code_builder.else_();
+                    {
+                        code_builder
+                            .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
+                        code_builder.set_local(tmp);
+                    }
+                    code_builder.end();
+                    code_builder.get_local(tmp);
                 }
                 _ => internal_error!("invalid storage for List"),
             },
