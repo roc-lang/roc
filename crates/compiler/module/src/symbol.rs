@@ -1246,6 +1246,9 @@ define_builtins! {
         145 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
         146 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
         147 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
+        148 NUM_COUNT_LEADING_ZERO_BITS: "countLeadingZeroBits"
+        149 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
+        150 NUM_COUNT_ONE_BITS: "countOneBits"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias

@@ -289,6 +289,12 @@ pub const NUM_MUL_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.
 pub const NUM_MUL_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.mul_with_overflow");
 
+pub const NUM_COUNT_LEADING_ZERO_BITS: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.count_leading_zero_bits");
+pub const NUM_COUNT_TRAILING_ZERO_BITS: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.count_trailing_zero_bits");
+pub const NUM_COUNT_ONE_BITS: IntrinsicName = int_intrinsic!("roc_builtins.num.count_one_bits");
+
 pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
 pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
 

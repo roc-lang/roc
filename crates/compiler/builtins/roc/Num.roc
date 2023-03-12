@@ -68,6 +68,9 @@ interface Num
         compare,
         pow,
         powInt,
+        countLeadingZeroBits,
+        countTrailingZeroBits,
+        countOneBits,
         addWrap,
         addChecked,
         addSaturated,
@@ -929,6 +932,46 @@ pow : Frac a, Frac a -> Frac a
 ## Be careful! It is very easy for this function to produce an answer
 ## so large it causes an overflow.
 powInt : Int a, Int a -> Int a
+
+## Counts the number of most-significant (leading in a big-Endian sense) zeroes in an integer.
+##
+## ```
+## Num.countLeadingZeroBits 0b0001_1100u8
+##
+## 3
+##
+## Num.countLeadingZeroBits 0b0000_0000u8
+##
+## 8
+## ```
+countLeadingZeroBits : Int a -> Nat
+
+## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
+##
+## ```
+## Num.countTrailingZeroBits 0b0001_1100u8
+##
+## 2
+##
+## Num.countTrailingZeroBits 0b0000_0000u8
+##
+## 8
+## ```
+countTrailingZeroBits : Int a -> Nat
+
+
+## Counts the number of set bits in an integer.
+##
+## ```
+## Num.countOneBits 0b0001_1100u8
+##
+## 3
+##
+## Num.countOneBits 0b0000_0000u8
+##
+## 0
+## ```
+countOneBits : Int a -> Nat
 
 addWrap : Int range, Int range -> Int range
 

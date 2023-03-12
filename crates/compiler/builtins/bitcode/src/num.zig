@@ -460,3 +460,30 @@ pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []con
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
+
+pub fn exportCountLeadingZeroBits(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T) callconv(.C) usize {
+            return @as(usize, @clz(T, self));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportCountTrailingZeroBits(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T) callconv(.C) usize {
+            return @as(usize, @ctz(T, self));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T) callconv(.C) usize {
+            return @as(usize, @popCount(T, self));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}

@@ -3807,3 +3807,30 @@ fn condition_polymorphic_num_becomes_float() {
         f32
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_count_leading_zero_bits() {
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u8"#, 2, usize);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u16"#, 10, usize);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u32"#, 26, usize);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u64"#, 58, usize);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_count_trailing_zero_bits() {
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1000u8"#, 3, usize);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_0000u16"#, 5, usize);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0u32"#, 32, usize);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1111u64"#, 0, usize);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_count_one_bits() {
+    assert_evals_to!(r#"Num.countOneBits 0b0010_1000u8"#, 2, usize);
+    assert_evals_to!(r#"Num.countOneBits 0b0010_0000u16"#, 1, usize);
+    assert_evals_to!(r#"Num.countOneBits 0u32"#, 0, usize);
+    assert_evals_to!(r#"Num.countOneBits 0b0010_1111u64"#, 5, usize);
+}

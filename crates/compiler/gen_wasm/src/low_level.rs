@@ -1489,6 +1489,40 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
+
+            NumCountLeadingZeroBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_COUNT_LEADING_ZERO_BITS[width],
+                    );
+                }
+                _ => panic_ret_type(),
+            },
+            NumCountTrailingZeroBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_COUNT_TRAILING_ZERO_BITS[width],
+                    );
+                }
+                _ => panic_ret_type(),
+            },
+            NumCountOneBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_COUNT_ONE_BITS[width]);
+                }
+                _ => panic_ret_type(),
+            },
             NumRound => {
                 self.load_args(backend);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
