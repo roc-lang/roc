@@ -87,6 +87,9 @@ pub const RocList = extern struct {
     }
 
     pub fn decref(self: RocList, alignment: u32) void {
+        // TODO: I am pretty sure there is a way to do this without a branch.
+        // Bit manipulation should be able to conditionally select the correct pointer.
+        // If this is updated, we should also update decref in build_list.rs and modify_refcount_list from refcounting.rs
         if (self.isSeamlessSlice()) {
             const ref_ptr = @intToPtr([*]isize, self.capacity_or_ref_ptr << 1);
             utils.decref_ptr_to_refcount(ref_ptr, alignment);
