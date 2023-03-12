@@ -66,7 +66,7 @@ pub const RocStr = extern struct {
         return RocStr{
             .str_bytes = list.bytes,
             .str_len = list.length,
-            .str_capacity = list.capacity_or_ref_ptr, // This is guaranteed to be a proper capcity.
+            .str_capacity = list.capacity_or_ref_ptr, // This is guaranteed to be a proper capacity.
         };
     }
 
