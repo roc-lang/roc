@@ -120,6 +120,8 @@ enum FirstOrder {
     NumShiftRightBy,
     NumBytesToU16,
     NumBytesToU32,
+    NumBytesToU64,
+    NumBytesToU128,
     NumShiftRightZfBy,
     NumIntCast,
     NumFloatCast,

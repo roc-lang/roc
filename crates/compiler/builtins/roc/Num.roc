@@ -68,6 +68,9 @@ interface Num
         compare,
         pow,
         powInt,
+        countLeadingZeroBits,
+        countTrailingZeroBits,
+        countOneBits,
         addWrap,
         addChecked,
         addSaturated,
@@ -86,6 +89,8 @@ interface Num
         intCast,
         bytesToU16,
         bytesToU32,
+        bytesToU64,
+        bytesToU128,
         divCeil,
         divCeilChecked,
         divTrunc,
@@ -505,6 +510,8 @@ intCast : Int a -> Int b
 
 bytesToU16Lowlevel : List U8, Nat -> U16
 bytesToU32Lowlevel : List U8, Nat -> U32
+bytesToU64Lowlevel : List U8, Nat -> U64
+bytesToU128Lowlevel : List U8, Nat -> U128
 
 bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
 bytesToU16 = \bytes, index ->
@@ -523,6 +530,26 @@ bytesToU32 = \bytes, index ->
 
     if index + offset < List.len bytes then
         Ok (bytesToU32Lowlevel bytes index)
+    else
+        Err OutOfBounds
+
+bytesToU64 : List U8, Nat -> Result U64 [OutOfBounds]
+bytesToU64 = \bytes, index ->
+    # we need at least 7 more bytes
+    offset = 7
+
+    if index + offset < List.len bytes then
+        Ok (bytesToU64Lowlevel bytes index)
+    else
+        Err OutOfBounds
+
+bytesToU128 : List U8, Nat -> Result U128 [OutOfBounds]
+bytesToU128 = \bytes, index ->
+    # we need at least 15 more bytes
+    offset = 15
+
+    if index + offset < List.len bytes then
+        Ok (bytesToU128Lowlevel bytes index)
     else
         Err OutOfBounds
 
@@ -929,6 +956,45 @@ pow : Frac a, Frac a -> Frac a
 ## Be careful! It is very easy for this function to produce an answer
 ## so large it causes an overflow.
 powInt : Int a, Int a -> Int a
+
+## Counts the number of most-significant (leading in a big-Endian sense) zeroes in an integer.
+##
+## ```
+## Num.countLeadingZeroBits 0b0001_1100u8
+##
+## 3
+##
+## Num.countLeadingZeroBits 0b0000_0000u8
+##
+## 8
+## ```
+countLeadingZeroBits : Int a -> Nat
+
+## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
+##
+## ```
+## Num.countTrailingZeroBits 0b0001_1100u8
+##
+## 2
+##
+## Num.countTrailingZeroBits 0b0000_0000u8
+##
+## 8
+## ```
+countTrailingZeroBits : Int a -> Nat
+
+## Counts the number of set bits in an integer.
+##
+## ```
+## Num.countOneBits 0b0001_1100u8
+##
+## 3
+##
+## Num.countOneBits 0b0000_0000u8
+##
+## 0
+## ```
+countOneBits : Int a -> Nat
 
 addWrap : Int range, Int range -> Int range
 

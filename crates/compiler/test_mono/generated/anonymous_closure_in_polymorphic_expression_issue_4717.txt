@@ -84,16 +84,16 @@ procedure List.91 (List.429, List.430, List.431):
     ret List.514;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.258 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.258;
+    let Num.277 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.277;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.259 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.259;
+    let Num.278 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.278;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.257 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.257;
+    let Num.276 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.276;
 
 procedure Test.1 (Test.2):
     let Test.13 : U64 = 0i64;

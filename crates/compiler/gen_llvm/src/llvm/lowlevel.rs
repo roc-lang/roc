@@ -848,9 +848,24 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!(),
             }
         }
-        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
-        | NumCeiling | NumFloor | NumToFrac | NumIsFinite | NumAtan | NumAcos | NumAsin
-        | NumToIntChecked => {
+        NumAbs
+        | NumNeg
+        | NumRound
+        | NumSqrtUnchecked
+        | NumLogUnchecked
+        | NumSin
+        | NumCos
+        | NumCeiling
+        | NumFloor
+        | NumToFrac
+        | NumIsFinite
+        | NumAtan
+        | NumAcos
+        | NumAsin
+        | NumToIntChecked
+        | NumCountLeadingZeroBits
+        | NumCountTrailingZeroBits
+        | NumCountOneBits => {
             arguments_with_layouts!((arg, arg_layout));
 
             match layout_interner.get(arg_layout) {
@@ -912,6 +927,28 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 &[position],
                 BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U32,
+            )
+        }
+        NumBytesToU64 => {
+            arguments!(list, position);
+
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[position],
+                BitcodeReturns::Basic,
+                bitcode::NUM_BYTES_TO_U64,
+            )
+        }
+        NumBytesToU128 => {
+            arguments!(list, position);
+
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[position],
+                BitcodeReturns::Basic,
+                bitcode::NUM_BYTES_TO_U128,
             )
         }
         NumCompare => {
@@ -2044,6 +2081,19 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 
                 complex_bitcast_check_size(env, result, return_type.into(), "cast_bitpacked")
             }
+        }
+        NumCountLeadingZeroBits => call_bitcode_fn(
+            env,
+            &[arg.into()],
+            &bitcode::NUM_COUNT_LEADING_ZERO_BITS[arg_width],
+        ),
+        NumCountTrailingZeroBits => call_bitcode_fn(
+            env,
+            &[arg.into()],
+            &bitcode::NUM_COUNT_TRAILING_ZERO_BITS[arg_width],
+        ),
+        NumCountOneBits => {
+            call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_COUNT_ONE_BITS[arg_width])
         }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);

@@ -51,21 +51,21 @@ procedure Json.129 (Json.130, Json.428, #Attr.12):
     inc Json.127;
     dec #Attr.12;
     let Json.466 : I64 = 123i64;
-    let Json.465 : U8 = CallByName Num.125 Json.466;
+    let Json.465 : U8 = CallByName Num.127 Json.466;
     let Json.462 : List U8 = CallByName List.4 Json.130 Json.465;
     let Json.464 : I64 = 34i64;
-    let Json.463 : U8 = CallByName Num.125 Json.464;
+    let Json.463 : U8 = CallByName Num.127 Json.464;
     let Json.460 : List U8 = CallByName List.4 Json.462 Json.463;
     let Json.461 : List U8 = CallByName Str.12 Json.127;
     let Json.457 : List U8 = CallByName List.8 Json.460 Json.461;
     let Json.459 : I64 = 34i64;
-    let Json.458 : U8 = CallByName Num.125 Json.459;
+    let Json.458 : U8 = CallByName Num.127 Json.459;
     let Json.454 : List U8 = CallByName List.4 Json.457 Json.458;
     let Json.456 : I64 = 58i64;
-    let Json.455 : U8 = CallByName Num.125 Json.456;
+    let Json.455 : U8 = CallByName Num.127 Json.456;
     let Json.451 : List U8 = CallByName List.4 Json.454 Json.455;
     let Json.453 : I64 = 91i64;
-    let Json.452 : U8 = CallByName Num.125 Json.453;
+    let Json.452 : U8 = CallByName Num.127 Json.453;
     let Json.132 : List U8 = CallByName List.4 Json.451 Json.452;
     let Json.450 : U64 = CallByName List.6 Json.128;
     let Json.438 : {List U8, U64} = Struct {Json.132, Json.450};
@@ -76,10 +76,10 @@ procedure Json.129 (Json.130, Json.428, #Attr.12):
     inc Json.134;
     dec Json.437;
     let Json.436 : I64 = 93i64;
-    let Json.435 : U8 = CallByName Num.125 Json.436;
+    let Json.435 : U8 = CallByName Num.127 Json.436;
     let Json.432 : List U8 = CallByName List.4 Json.134 Json.435;
     let Json.434 : I64 = 125i64;
-    let Json.433 : U8 = CallByName Num.125 Json.434;
+    let Json.433 : U8 = CallByName Num.127 Json.434;
     let Json.431 : List U8 = CallByName List.4 Json.432 Json.433;
     ret Json.431;
 
@@ -100,7 +100,7 @@ procedure Json.131 (Json.430, Json.137):
     let Json.445 : Int1 = CallByName Num.24 Json.136 Json.448;
     if Json.445 then
         let Json.447 : I64 = 44i64;
-        let Json.446 : U8 = CallByName Num.125 Json.447;
+        let Json.446 : U8 = CallByName Num.127 Json.447;
         let Json.443 : List U8 = CallByName List.4 Json.138 Json.446;
         jump Json.444 Json.443;
     else
@@ -117,12 +117,12 @@ procedure Json.21 (Json.127, Json.128):
 
 procedure Json.99 (Json.100, Json.469, Json.98):
     let Json.478 : I64 = 34i64;
-    let Json.477 : U8 = CallByName Num.125 Json.478;
+    let Json.477 : U8 = CallByName Num.127 Json.478;
     let Json.475 : List U8 = CallByName List.4 Json.100 Json.477;
     let Json.476 : List U8 = CallByName Str.12 Json.98;
     let Json.472 : List U8 = CallByName List.8 Json.475 Json.476;
     let Json.474 : I64 = 34i64;
-    let Json.473 : U8 = CallByName Num.125 Json.474;
+    let Json.473 : U8 = CallByName Num.127 Json.474;
     let Json.471 : List U8 = CallByName List.4 Json.472 Json.473;
     ret Json.471;
 
@@ -184,25 +184,25 @@ procedure List.91 (List.429, List.430, List.431):
     let List.530 : {List U8, U64} = CallByName List.80 List.429 List.430 List.431 List.531 List.532;
     ret List.530;
 
-procedure Num.125 (#Attr.2):
-    let Num.265 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.265;
+procedure Num.127 (#Attr.2):
+    let Num.284 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.284;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.268 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.268;
+    let Num.287 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.287;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.266 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.266;
+    let Num.285 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.285;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.269 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.269;
+    let Num.288 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.288;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.267 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.267;
+    let Num.286 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.286;
 
 procedure Str.12 (#Attr.2):
     let Str.280 : List U8 = lowlevel StrToUtf8 #Attr.2;
