@@ -741,7 +741,7 @@ List.map ["a", "b", "c"] Foo
 
 These two versions compile to the same thing. As a convenience, Roc lets you specify a tag name where a function is expected; when you do this, the compiler infers that you want a function which uses all of its arguments as the payload to the given tag.
 
-### [`List.any` and `List.all`](#list-any-and-list-all) {#list-any-and-list-all}
+### [List.any and List.all](#list-any-and-list-all) {#list-any-and-list-all}
 
 There are several functions that work like `List.map`, they walk through each element of a list and do something with it. Another is `List.any`, which returns `Bool.true` if calling the given function on any element in the list returns `Bool.true`:
 
