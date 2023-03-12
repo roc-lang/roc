@@ -6,7 +6,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{
-    incrementing_elem_loop, list_capacity, list_refcount_ptr, load_list,
+    incrementing_elem_loop, list_capacity_or_ref_ptr, list_refcount_ptr, load_list,
 };
 use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use bumpalo::collections::Vec;
@@ -693,7 +693,8 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
 
-    let capacity = list_capacity(env, original_wrapper);
+    // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
+    let capacity = list_capacity_or_ref_ptr(builder, original_wrapper);
 
     let is_non_empty = builder.build_int_compare(
         IntPredicate::UGT,

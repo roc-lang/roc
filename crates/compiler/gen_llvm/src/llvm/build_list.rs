@@ -393,19 +393,18 @@ pub(crate) fn list_len<'ctx>(
         .into_int_value()
 }
 
-/// List.capacity : List * -> Nat
-pub(crate) fn list_capacity<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_capacity_or_ref_ptr<'ctx>(
+    builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
-    call_list_bitcode_fn(
-        env,
-        &[wrapper_struct],
-        &[],
-        BitcodeReturns::Basic,
-        bitcode::LIST_CAPACITY,
-    )
-    .into_int_value()
+    builder
+        .build_extract_value(
+            wrapper_struct,
+            Builtin::WRAPPER_CAPACITY,
+            "list_capacity_or_ref_ptr",
+        )
+        .unwrap()
+        .into_int_value()
 }
 
 // Gets a pointer to just after the refcount for a list or seamless slice.

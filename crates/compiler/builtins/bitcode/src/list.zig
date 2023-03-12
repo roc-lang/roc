@@ -112,7 +112,8 @@ pub const RocList = extern struct {
     }
 
     pub fn decref(self: RocList, alignment: u32) void {
-        utils.decref(self.getRefcountPtr(), self.getCapacity(), alignment);
+        // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
+        utils.decref(self.getRefcountPtr(), self.capacity_or_ref_ptr, alignment);
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
