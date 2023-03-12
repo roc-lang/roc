@@ -14,6 +14,12 @@ rustflags = ["-Copt-level=s", "-Clto=fat"]
 # Sets the avx, avx2, sse2 and sse4.2 target-features correctly based on your CPU.
 rustflags = ["-Ctarget-cpu=native"]
 
+# TODO: there is probably a more proper solution to this.
+# We are pulling in roc_alloc and friends due to using roc_std.
+# They ared defined in roc_glue, but windows linking breaks before we get there.
+[target.'cfg(target_os = "windows")']
+rustflags = ["-Clink-args=/FORCE:UNRESOLVED"]
+
 [env]
 # Gives us the path of the workspace root for use in cargo tests without having
 # to compute it per-package.
