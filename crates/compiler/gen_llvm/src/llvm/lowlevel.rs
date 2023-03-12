@@ -28,8 +28,8 @@ use crate::llvm::{
         load_roc_value, roc_function_call, BuilderExt, RocReturn,
     },
     build_list::{
-        list_append_unsafe, list_capacity, list_concat, list_drop_at, list_get_unsafe, list_len,
-        list_map, list_map2, list_map3, list_map4, list_prepend, list_replace_unsafe, list_reserve,
+        list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
+        list_map2, list_map3, list_map4, list_prepend, list_replace_unsafe, list_reserve,
         list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity,
         pass_update_mode,
     },
@@ -632,10 +632,16 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             list_len(env.builder, list.into_struct_value()).into()
         }
         ListGetCapacity => {
-            // List.capacity : List * -> Nat
+            // List.capacity: List a -> Nat
             arguments!(list);
 
-            list_capacity(env.builder, list.into_struct_value()).into()
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::LIST_CAPACITY,
+            )
         }
         ListWithCapacity => {
             // List.withCapacity : Nat -> List a

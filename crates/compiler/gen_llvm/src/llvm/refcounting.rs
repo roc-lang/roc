@@ -5,7 +5,9 @@ use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
     FAST_CALL_CONV,
 };
-use crate::llvm::build_list::{incrementing_elem_loop, list_capacity, load_list};
+use crate::llvm::build_list::{
+    incrementing_elem_loop, list_capacity, list_refcount_ptr, load_list,
+};
 use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
@@ -41,21 +43,6 @@ impl<'ctx> PointerToRefcount<'ctx> {
             refcount_type.ptr_type(AddressSpace::default()),
             "to_refcount_ptr",
         );
-
-        Self { value }
-    }
-
-    /// # Safety
-    ///
-    /// the invariant is that the given pointer really points to the refcount,
-    /// not the data, and only is the start of the allocated buffer if the
-    /// alignment works out that way.
-    pub unsafe fn from_ptr_int<'a, 'env>(env: &Env<'a, 'ctx, 'env>, int: IntValue<'ctx>) -> Self {
-        let refcount_type = env.ptr_int();
-        let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::default());
-        let value = env
-            .builder
-            .build_int_to_ptr(int, refcount_ptr_type, "to_refcount_ptr");
 
         Self { value }
     }
@@ -706,10 +693,10 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
 
-    let capacity = list_capacity(builder, original_wrapper);
+    let capacity = list_capacity(env, original_wrapper);
 
     let is_non_empty = builder.build_int_compare(
-        IntPredicate::SGT,
+        IntPredicate::UGT,
         capacity,
         env.ptr_int().const_zero(),
         "cap > 0",
@@ -717,11 +704,9 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     // build blocks
     let modification_list_block = ctx.append_basic_block(parent, "modification_list_block");
-    let check_slice_block = ctx.append_basic_block(parent, "check_slice_block");
-    let modification_slice_block = ctx.append_basic_block(parent, "modification_slice_block");
     let cont_block = ctx.append_basic_block(parent, "modify_rc_list_cont");
 
-    builder.build_conditional_branch(is_non_empty, modification_list_block, check_slice_block);
+    builder.build_conditional_branch(is_non_empty, modification_list_block, cont_block);
 
     builder.position_at_end(modification_list_block);
 
@@ -754,60 +739,8 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
         );
     }
 
-    let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
-    let call_mode = mode_to_call_mode(fn_val, mode);
-    refcount_ptr.modify(call_mode, layout, env, layout_interner);
-
-    builder.build_unconditional_branch(cont_block);
-
-    builder.position_at_end(check_slice_block);
-
-    let is_seamless_slice = builder.build_int_compare(
-        IntPredicate::SLT,
-        capacity,
-        env.ptr_int().const_zero(),
-        "cap < 0",
-    );
-    builder.build_conditional_branch(is_seamless_slice, modification_slice_block, cont_block);
-
-    builder.position_at_end(modification_slice_block);
-
-    if layout_interner.contains_refcounted(element_layout) {
-        let ptr_type = basic_type_from_layout(env, layout_interner, element_layout)
-            .ptr_type(AddressSpace::default());
-
-        let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
-
-        let loop_fn = |layout_interner, _index, element| {
-            modify_refcount_layout_help(
-                env,
-                layout_interner,
-                layout_ids,
-                mode.to_call_mode(fn_val),
-                element,
-                element_layout,
-            );
-        };
-
-        incrementing_elem_loop(
-            env,
-            layout_interner,
-            parent,
-            element_layout,
-            ptr,
-            len,
-            "modify_rc_index",
-            loop_fn,
-        );
-    }
-
-    // a slices refcount is `capacity << 1`
-    let refcount_ptr_int = builder.build_left_shift(
-        capacity,
-        env.ptr_int().const_int(1, false),
-        "extract_refcount_from_capacity",
-    );
-    let refcount_ptr = unsafe { PointerToRefcount::from_ptr_int(env, refcount_ptr_int) };
+    let refcount_ptr =
+        PointerToRefcount::from_ptr_to_data(env, list_refcount_ptr(env, original_wrapper));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env, layout_interner);
 

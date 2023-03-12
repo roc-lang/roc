@@ -54,6 +54,8 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
+    exportListFn(list.listCapacity, "capacity");
+    exportListFn(list.listRefcountPtr, "refcount_ptr");
 }
 
 // Num Module

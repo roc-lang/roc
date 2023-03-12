@@ -28,6 +28,8 @@ use serde::{
 pub struct RocList<T> {
     elements: Option<NonNull<ManuallyDrop<T>>>,
     length: usize,
+    // This technically points to directly after the refcount.
+    // This is an optimization that enables use one code path for regular lists and slices for geting the refcount ptr.
     capacity_or_ref_ptr: usize,
 }
 
@@ -181,14 +183,11 @@ impl<T> RocList<T> {
 
     /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
     pub(crate) unsafe fn ptr_to_allocation(&self) -> *mut c_void {
+        let alignment = Self::alloc_alignment() as usize;
         if self.is_seamless_slice() {
-            (self.capacity_or_ref_ptr << 1) as *mut _
+            ((self.capacity_or_ref_ptr << 1) - alignment) as *mut _
         } else {
-            unsafe {
-                self.ptr_to_first_elem()
-                    .cast::<u8>()
-                    .sub(Self::alloc_alignment() as usize) as *mut _
-            }
+            unsafe { self.ptr_to_first_elem().cast::<u8>().sub(alignment) as *mut _ }
         }
     }
 

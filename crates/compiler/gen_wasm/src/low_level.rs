@@ -318,44 +318,7 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
-            ListGetCapacity => match backend.storage.get(&self.arguments[0]) {
-                StoredValue::StackMemory { location, .. } => {
-                    let (local_id, offset) =
-                        location.local_and_offset(backend.storage.stack_frame_pointer);
-                    backend.code_builder.get_local(local_id);
-                    // List is stored as (pointer, length, capacity),
-                    // with each of those fields being 4 bytes on wasm.
-                    // So the capacity is 8 bytes after the start of the struct.
-                    //
-                    // WRAPPER_CAPACITY represents the index of the capacity field
-                    // (which is 2 as of the writing of this comment). If the field order
-                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
-                    // continue to work even though this comment may become inaccurate.
-
-                    // On top of this, if the capacity is less than zero, the list is a seamless slice.
-                    // We need to return the length in that case.
-                    let code_builder = &mut backend.code_builder;
-                    let tmp = backend.storage.create_anonymous_local(ValueType::I32);
-                    code_builder.i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
-                    code_builder.i64_const(0);
-                    code_builder.i32_lt_s(); // capacity < 0
-
-                    code_builder.if_();
-                    {
-                        code_builder.i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
-                        code_builder.set_local(tmp);
-                    }
-                    code_builder.else_();
-                    {
-                        code_builder
-                            .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
-                        code_builder.set_local(tmp);
-                    }
-                    code_builder.end();
-                    code_builder.get_local(tmp);
-                }
-                _ => internal_error!("invalid storage for List"),
-            },
+            ListGetCapacity => self.load_args_and_call_zig(backend, bitcode::LIST_CAPACITY),
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 

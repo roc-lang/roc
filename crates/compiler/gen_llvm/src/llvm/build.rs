@@ -2789,7 +2789,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             let alignment =
                                 element_layout.alignment_bytes(layout_interner, env.target_info);
 
-                            build_list::decref(env, value.into_struct_value(), alignment, parent);
+                            build_list::decref(env, value.into_struct_value(), alignment);
                         }
 
                         lay if lay.is_refcounted() => {

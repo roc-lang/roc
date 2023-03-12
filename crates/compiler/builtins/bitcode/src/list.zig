@@ -15,9 +15,14 @@ const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
 const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
+const SEAMLESS_SLICE_BIT: usize =
+    @bitCast(usize, @as(isize, std.math.minInt(isize)));
+
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
+    // This technically points to directly after the refcount.
+    // This is an optimization that enables use one code path for regular lists and slices for geting the refcount ptr.
     capacity_or_ref_ptr: usize,
 
     pub inline fn len(self: RocList) usize {
@@ -25,14 +30,22 @@ pub const RocList = extern struct {
     }
 
     pub fn getCapacity(self: RocList) usize {
-        if (!self.isSeamlessSlice()) {
-            return self.capacity_or_ref_ptr;
-        }
-        return self.length;
+        const list_capacity = self.capacity_or_ref_ptr;
+        const slice_capacity = self.length;
+        const slice_mask = self.seamlessSliceMask();
+        const capacity = (list_capacity & ~slice_mask) | (slice_capacity & slice_mask);
+        return capacity;
     }
 
     pub fn isSeamlessSlice(self: RocList) bool {
         return @bitCast(isize, self.capacity_or_ref_ptr) < 0;
+    }
+
+    // This returns all ones if the list is a seamless slice.
+    // Otherwise, it returns all zeros.
+    // This is done without branching for optimization purposes.
+    pub fn seamlessSliceMask(self: RocList) usize {
+        return @bitCast(usize, @bitCast(isize, self.capacity_or_ref_ptr) >> (@bitSizeOf(isize) - 1));
     }
 
     pub fn isEmpty(self: RocList) bool {
@@ -86,16 +99,20 @@ pub const RocList = extern struct {
         return list;
     }
 
+    // returns a pointer to just after the refcount.
+    // It is just after the refcount as an optimization for other shared code paths.
+    // For regular list, it just returns their bytes pointer.
+    // For seamless slices, it returns the pointer stored in capacity_or_ref_ptr.
+    pub fn getRefcountPtr(self: RocList) ?[*]u8 {
+        const list_ref_ptr = @ptrToInt(self.bytes);
+        const slice_ref_ptr = self.capacity_or_ref_ptr << 1;
+        const slice_mask = self.seamlessSliceMask();
+        const ref_ptr = (list_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
+        return @intToPtr(?[*]u8, ref_ptr);
+    }
+
     pub fn decref(self: RocList, alignment: u32) void {
-        // TODO: I am pretty sure there is a way to do this without a branch.
-        // Bit manipulation should be able to conditionally select the correct pointer.
-        // If this is updated, we should also update decref in build_list.rs and modify_refcount_list from refcounting.rs
-        if (self.isSeamlessSlice()) {
-            const ref_ptr = @intToPtr([*]isize, self.capacity_or_ref_ptr << 1);
-            utils.decref_ptr_to_refcount(ref_ptr, alignment);
-        } else {
-            utils.decref(self.bytes, self.getCapacity(), alignment);
-        }
+        utils.decref(self.getRefcountPtr(), self.getCapacity(), alignment);
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -178,7 +195,7 @@ pub const RocList = extern struct {
     ) RocList {
         if (self.bytes) |source_ptr| {
             if (self.isUnique() and !self.isSeamlessSlice()) {
-                const capacity = self.getCapacity();
+                const capacity = self.capacity_or_ref_ptr;
                 if (capacity >= new_length) {
                     return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_ref_ptr = capacity };
                 } else {
@@ -579,27 +596,19 @@ pub fn listSublist(
             dec(element);
         }
 
-        if (list.isUnique() and start == 0) {
+        if (start == 0 and list.isUnique()) {
             var output = list;
             output.length = keep_len;
             return output;
         } else {
-            if (list.isSeamlessSlice()) {
-                return RocList{
-                    .bytes = source_ptr + start * element_width,
-                    .length = keep_len,
-                    .capacity_or_ref_ptr = list.capacity_or_ref_ptr,
-                };
-            }
-
-            const ref_ptr = @ptrCast([*]isize, @alignCast(@alignOf(isize), source_ptr)) - 1;
-            // This should be a usize with only the highest bit set.
-            const seamless_slice_bit =
-                @bitCast(usize, @as(isize, std.math.minInt(isize)));
+            const list_ref_ptr = (@ptrToInt(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
+            const slice_ref_ptr = list.capacity_or_ref_ptr;
+            const slice_mask = list.seamlessSliceMask();
+            const ref_ptr = (list_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
             return RocList{
                 .bytes = source_ptr + start * element_width,
                 .length = keep_len,
-                .capacity_or_ref_ptr = (@ptrToInt(ref_ptr) >> 1) | seamless_slice_bit,
+                .capacity_or_ref_ptr = ref_ptr,
             };
         }
     }
@@ -898,6 +907,18 @@ pub fn listIsUnique(
     list: RocList,
 ) callconv(.C) bool {
     return list.isEmpty() or list.isUnique();
+}
+
+pub fn listCapacity(
+    list: RocList,
+) callconv(.C) usize {
+    return list.getCapacity();
+}
+
+pub fn listRefcountPtr(
+    list: RocList,
+) callconv(.C) ?[*]u8 {
+    return list.getRefcountPtr();
 }
 
 test "listConcat: non-unique with unique overlapping" {

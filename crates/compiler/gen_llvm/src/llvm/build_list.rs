@@ -394,15 +394,34 @@ pub(crate) fn list_len<'ctx>(
 }
 
 /// List.capacity : List * -> Nat
-pub(crate) fn list_capacity<'ctx>(
-    builder: &Builder<'ctx>,
+pub(crate) fn list_capacity<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
-    // TODO: This won't work on seemless slices. Needs to return the len if the capacity is negative.
-    builder
-        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "list_capacity")
-        .unwrap()
-        .into_int_value()
+    call_list_bitcode_fn(
+        env,
+        &[wrapper_struct],
+        &[],
+        BitcodeReturns::Basic,
+        bitcode::LIST_CAPACITY,
+    )
+    .into_int_value()
+}
+
+// Gets a pointer to just after the refcount for a list or seamless slice.
+// The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
+pub(crate) fn list_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    wrapper_struct: StructValue<'ctx>,
+) -> PointerValue<'ctx> {
+    call_list_bitcode_fn(
+        env,
+        &[wrapper_struct],
+        &[],
+        BitcodeReturns::Basic,
+        bitcode::LIST_REFCOUNT_PTR,
+    )
+    .into_pointer_value()
 }
 
 pub(crate) fn destructure<'ctx>(
@@ -801,56 +820,8 @@ pub(crate) fn decref<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     wrapper_struct: StructValue<'ctx>,
     alignment: u32,
-    parent: FunctionValue<'ctx>,
 ) {
-    let builder = env.builder;
-    let ctx = env.context;
+    let refcount_ptr = list_refcount_ptr(env, wrapper_struct);
 
-    let capacity = list_capacity(builder, wrapper_struct);
-    let is_regular_list = builder.build_int_compare(
-        IntPredicate::SGE,
-        capacity,
-        env.ptr_int().const_zero(),
-        "cap >= 0",
-    );
-
-    let get_list_ptr_block = ctx.append_basic_block(parent, "get_list_ptr");
-    let get_slice_ptr_block = ctx.append_basic_block(parent, "get_slice_ptr");
-    let decref_block = ctx.append_basic_block(parent, "decref");
-    builder.build_conditional_branch(is_regular_list, get_list_ptr_block, get_slice_ptr_block);
-
-    builder.position_at_end(get_list_ptr_block);
-    let ptr_type = env.context.i8_type().ptr_type(AddressSpace::default());
-    let (_, list_ptr) = load_list(builder, wrapper_struct, ptr_type);
-    builder.build_unconditional_branch(decref_block);
-
-    builder.position_at_end(get_slice_ptr_block);
-    let refcount_ptr_int = builder.build_left_shift(
-        capacity,
-        env.ptr_int().const_int(1, false),
-        "extract_refcount_from_capacity",
-    );
-    // TODO: adding one here feels silly.
-    // We should probably expose a zig builtin to directly deal with the refcount pointer.
-    // Instead we add one and then zig subtracts one.
-    let slice_ptr_int = builder.build_int_add(
-        refcount_ptr_int,
-        env.ptr_int().const_int(1, false),
-        "inc_refcount_ptr",
-    );
-    let slice_ptr = builder.build_int_to_ptr(slice_ptr_int, ptr_type, "to_slice_ptr");
-    builder.build_unconditional_branch(decref_block);
-
-    builder.position_at_end(decref_block);
-    let result = builder.build_phi(ptr_type, "branch");
-    result.add_incoming(&[
-        (&list_ptr, get_list_ptr_block),
-        (&slice_ptr, get_slice_ptr_block),
-    ]);
-
-    crate::llvm::refcounting::decref_pointer_check_null(
-        env,
-        result.as_basic_value().into_pointer_value(),
-        alignment,
-    );
+    crate::llvm::refcounting::decref_pointer_check_null(env, refcount_ptr, alignment);
 }

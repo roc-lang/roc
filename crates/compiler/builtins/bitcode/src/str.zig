@@ -58,6 +58,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn fromByteList(list: RocList) RocStr {
+        // TODO: upon adding string seamless slices, I believe this branch can be changed to bit manipulation.
         if (list.isSeamlessSlice()) {
             // Str doesn't have seamless slices yet.
             // Need to copy.
