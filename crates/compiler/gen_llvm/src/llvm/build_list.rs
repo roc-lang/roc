@@ -393,15 +393,34 @@ pub(crate) fn list_len<'ctx>(
         .into_int_value()
 }
 
-/// List.capacity : List * -> Nat
-pub(crate) fn list_capacity<'ctx>(
+pub(crate) fn list_capacity_or_ref_ptr<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
     builder
-        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "list_capacity")
+        .build_extract_value(
+            wrapper_struct,
+            Builtin::WRAPPER_CAPACITY,
+            "list_capacity_or_ref_ptr",
+        )
         .unwrap()
         .into_int_value()
+}
+
+// Gets a pointer to just after the refcount for a list or seamless slice.
+// The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
+pub(crate) fn list_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    wrapper_struct: StructValue<'ctx>,
+) -> PointerValue<'ctx> {
+    call_list_bitcode_fn(
+        env,
+        &[wrapper_struct],
+        &[],
+        BitcodeReturns::Basic,
+        bitcode::LIST_REFCOUNT_PTR,
+    )
+    .into_pointer_value()
 }
 
 pub(crate) fn destructure<'ctx>(
@@ -801,11 +820,7 @@ pub(crate) fn decref<'a, 'ctx, 'env>(
     wrapper_struct: StructValue<'ctx>,
     alignment: u32,
 ) {
-    let (_, pointer) = load_list(
-        env.builder,
-        wrapper_struct,
-        env.context.i8_type().ptr_type(AddressSpace::default()),
-    );
+    let refcount_ptr = list_refcount_ptr(env, wrapper_struct);
 
-    crate::llvm::refcounting::decref_pointer_check_null(env, pointer, alignment);
+    crate::llvm::refcounting::decref_pointer_check_null(env, refcount_ptr, alignment);
 }

@@ -57,6 +57,20 @@ pub const RocStr = extern struct {
         return result;
     }
 
+    pub fn fromByteList(list: RocList) RocStr {
+        // TODO: upon adding string seamless slices, I believe this branch can be changed to bit manipulation.
+        if (list.isSeamlessSlice()) {
+            // Str doesn't have seamless slices yet.
+            // Need to copy.
+            return RocStr.init(@ptrCast([*]const u8, list.bytes), list.length);
+        }
+        return RocStr{
+            .str_bytes = list.bytes,
+            .str_len = list.length,
+            .str_capacity = list.capacity_or_ref_ptr, // This is guaranteed to be a proper capacity.
+        };
+    }
+
     pub fn fromSlice(slice: []const u8) RocStr {
         return RocStr.init(slice.ptr, slice.len);
     }
@@ -89,11 +103,7 @@ pub const RocStr = extern struct {
         }
     }
 
-    pub fn deinit(self: RocStr) void {
-        self.decref();
-    }
-
-    fn decref(self: RocStr) void {
+    pub fn decref(self: RocStr) void {
         if (!self.isSmallStr()) {
             utils.decref(self.str_bytes, self.str_capacity, RocStr.alignment);
         }
@@ -388,8 +398,8 @@ pub const RocStr = extern struct {
 
         try expect(roc_str1.eq(roc_str2));
 
-        roc_str1.deinit();
-        roc_str2.deinit();
+        roc_str1.decref();
+        roc_str2.decref();
     }
 
     test "RocStr.eq: small, not equal, different length" {
@@ -404,8 +414,8 @@ pub const RocStr = extern struct {
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
         defer {
-            roc_str1.deinit();
-            roc_str2.deinit();
+            roc_str1.decref();
+            roc_str2.decref();
         }
 
         try expect(!roc_str1.eq(roc_str2));
@@ -423,8 +433,8 @@ pub const RocStr = extern struct {
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
         defer {
-            roc_str1.deinit();
-            roc_str2.deinit();
+            roc_str1.decref();
+            roc_str2.decref();
         }
 
         try expect(!roc_str1.eq(roc_str2));
@@ -436,8 +446,8 @@ pub const RocStr = extern struct {
         const roc_str2 = RocStr.init(content, content.len);
 
         defer {
-            roc_str1.deinit();
-            roc_str2.deinit();
+            roc_str1.decref();
+            roc_str2.decref();
         }
 
         try expect(roc_str1.eq(roc_str2));
@@ -450,8 +460,8 @@ pub const RocStr = extern struct {
         const roc_str2 = RocStr.init(content2, content2.len);
 
         defer {
-            roc_str1.deinit();
-            roc_str2.deinit();
+            roc_str1.decref();
+            roc_str2.decref();
         }
 
         try expect(!roc_str1.eq(roc_str2));
@@ -464,8 +474,8 @@ pub const RocStr = extern struct {
         const roc_str2 = RocStr.init(content2, content2.len);
 
         defer {
-            roc_str1.deinit();
-            roc_str2.deinit();
+            roc_str1.decref();
+            roc_str2.decref();
         }
 
         try expect(!roc_str1.eq(roc_str2));
@@ -484,8 +494,8 @@ pub const RocStr = extern struct {
         roc_str2.str_bytes.?[31] = '-';
 
         defer {
-            roc_str1.deinit();
-            roc_str2.deinit();
+            roc_str1.decref();
+            roc_str2.decref();
         }
 
         try expect(roc_str1.eq(roc_str2));
@@ -619,95 +629,95 @@ inline fn writeNextScalar(non_empty_string: RocStr, src_index: usize, dest: [*]u
 
 test "strToScalars: empty string" {
     const str = RocStr.fromSlice("");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected = RocList.empty();
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
 
 test "strToScalars: One ASCII char" {
     const str = RocStr.fromSlice("R");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected_array = [_]u32{82};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.decref(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
 
 test "strToScalars: Multiple ASCII chars" {
     const str = RocStr.fromSlice("Roc!");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected_array = [_]u32{ 82, 111, 99, 33 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.decref(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
 
 test "strToScalars: One 2-byte UTF-8 character" {
     const str = RocStr.fromSlice("é");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected_array = [_]u32{233};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.decref(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
 
 test "strToScalars: Multiple 2-byte UTF-8 characters" {
     const str = RocStr.fromSlice("Cäfés");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected_array = [_]u32{ 67, 228, 102, 233, 115 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.decref(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
 
 test "strToScalars: One 3-byte UTF-8 character" {
     const str = RocStr.fromSlice("鹏");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected_array = [_]u32{40527};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.decref(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
 
 test "strToScalars: Multiple 3-byte UTF-8 characters" {
     const str = RocStr.fromSlice("鹏很有趣");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected_array = [_]u32{ 40527, 24456, 26377, 36259 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.decref(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -715,14 +725,14 @@ test "strToScalars: Multiple 3-byte UTF-8 characters" {
 test "strToScalars: One 4-byte UTF-8 character" {
     // from https://design215.com/toolbox/utf8-4byte-characters.php
     const str = RocStr.fromSlice("𒀀");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected_array = [_]u32{73728};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.decref(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -730,14 +740,14 @@ test "strToScalars: One 4-byte UTF-8 character" {
 test "strToScalars: Multiple 4-byte UTF-8 characters" {
     // from https://design215.com/toolbox/utf8-4byte-characters.php
     const str = RocStr.fromSlice("𒀀𒀁");
-    defer RocStr.deinit(str);
+    defer RocStr.decref(str);
 
     const expected_array = [_]u32{ 73728, 73729 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer RocList.deinit(expected, u32);
+    defer expected.decref(@sizeOf(u32));
 
     const actual = strToScalars(str);
-    defer RocList.deinit(actual, u32);
+    defer actual.decref(@sizeOf(u32));
 
     try expect(RocList.eql(actual, expected));
 }
@@ -871,15 +881,15 @@ test "strSplitHelp: empty delimiter" {
 
     defer {
         for (array) |roc_str| {
-            roc_str.deinit();
+            roc_str.decref();
         }
 
         for (expected) |roc_str| {
-            roc_str.deinit();
+            roc_str.decref();
         }
 
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     try expectEqual(array.len, expected.len);
@@ -905,15 +915,15 @@ test "strSplitHelp: no delimiter" {
 
     defer {
         for (array) |roc_str| {
-            roc_str.deinit();
+            roc_str.decref();
         }
 
         for (expected) |roc_str| {
-            roc_str.deinit();
+            roc_str.decref();
         }
 
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     try expectEqual(array.len, expected.len);
@@ -944,15 +954,15 @@ test "strSplitHelp: empty start" {
 
     defer {
         for (array) |rocStr| {
-            rocStr.deinit();
+            rocStr.decref();
         }
 
         for (expected) |rocStr| {
-            rocStr.deinit();
+            rocStr.decref();
         }
 
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     try expectEqual(array.len, expected.len);
@@ -986,15 +996,15 @@ test "strSplitHelp: empty end" {
 
     defer {
         for (array) |rocStr| {
-            rocStr.deinit();
+            rocStr.decref();
         }
 
         for (expected) |rocStr| {
-            rocStr.deinit();
+            rocStr.decref();
         }
 
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     try expectEqual(array.len, expected.len);
@@ -1020,14 +1030,14 @@ test "strSplitHelp: string equals delimiter" {
 
     defer {
         for (array) |rocStr| {
-            rocStr.deinit();
+            rocStr.decref();
         }
 
         for (expected) |rocStr| {
-            rocStr.deinit();
+            rocStr.decref();
         }
 
-        str_delimiter.deinit();
+        str_delimiter.decref();
     }
 
     try expectEqual(array.len, expected.len);
@@ -1060,15 +1070,15 @@ test "strSplitHelp: delimiter on sides" {
 
     defer {
         for (array) |rocStr| {
-            rocStr.deinit();
+            rocStr.decref();
         }
 
         for (expected) |rocStr| {
-            rocStr.deinit();
+            rocStr.decref();
         }
 
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     try expectEqual(array.len, expected.len);
@@ -1101,15 +1111,15 @@ test "strSplitHelp: three pieces" {
 
     defer {
         for (array) |roc_str| {
-            roc_str.deinit();
+            roc_str.decref();
         }
 
         for (expected_array) |roc_str| {
-            roc_str.deinit();
+            roc_str.decref();
         }
 
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     try expectEqual(expected_array.len, array.len);
@@ -1226,8 +1236,8 @@ test "countSegments: long delimiter" {
     const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
 
     defer {
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     const segments_count = countSegments(str, delimiter);
@@ -1244,8 +1254,8 @@ test "countSegments: delimiter at start" {
     const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
 
     defer {
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     const segments_count = countSegments(str, delimiter);
@@ -1263,8 +1273,8 @@ test "countSegments: delimiter interspered" {
     const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
 
     defer {
-        str.deinit();
-        delimiter.deinit();
+        str.decref();
+        delimiter.decref();
     }
 
     const segments_count = countSegments(str, delimiter);
@@ -1279,7 +1289,7 @@ test "countSegments: string equals delimiter" {
     const str_delimiter = RocStr.init(str_delimiter_arr, str_delimiter_arr.len);
 
     defer {
-        str_delimiter.deinit();
+        str_delimiter.decref();
     }
 
     const segments_count = countSegments(str_delimiter, str_delimiter);
@@ -1372,12 +1382,12 @@ pub fn strGraphemes(roc_str: RocStr) callconv(.C) RocList {
 // these test both countGraphemeClusters() and strGraphemes()
 fn graphemesTest(input: []const u8, expected: []const []const u8) !void {
     const rocstr = RocStr.fromSlice(input);
-    defer rocstr.deinit();
+    defer rocstr.decref();
     const count = countGraphemeClusters(rocstr);
     try expectEqual(expected.len, count);
 
     const graphemes = strGraphemes(rocstr);
-    defer graphemes.deinit(u8);
+    defer graphemes.decref(@sizeOf(u8));
     if (input.len == 0) return; // empty string
     const elems = graphemes.elements(RocStr) orelse unreachable;
     for (expected) |g, i| {
@@ -1428,10 +1438,10 @@ pub fn getUnsafe(string: RocStr, index: usize) callconv(.C) u8 {
 
 test "substringUnsafe: start" {
     const str = RocStr.fromSlice("abcdef");
-    defer str.deinit();
+    defer str.decref();
 
     const expected = RocStr.fromSlice("abc");
-    defer expected.deinit();
+    defer expected.decref();
 
     const actual = substringUnsafe(str, 0, 3);
 
@@ -1440,10 +1450,10 @@ test "substringUnsafe: start" {
 
 test "substringUnsafe: middle" {
     const str = RocStr.fromSlice("abcdef");
-    defer str.deinit();
+    defer str.decref();
 
     const expected = RocStr.fromSlice("bcd");
-    defer expected.deinit();
+    defer expected.decref();
 
     const actual = substringUnsafe(str, 1, 3);
 
@@ -1452,10 +1462,10 @@ test "substringUnsafe: middle" {
 
 test "substringUnsafe: end" {
     const str = RocStr.fromSlice("a string so long it is heap-allocated");
-    defer str.deinit();
+    defer str.decref();
 
     const expected = RocStr.fromSlice("heap-allocated");
-    defer expected.deinit();
+    defer expected.decref();
 
     const actual = substringUnsafe(str, 23, 37 - 23);
 
@@ -1547,15 +1557,15 @@ test "startsWith: foo starts with fo" {
 
 test "startsWith: 123456789123456789 starts with 123456789123456789" {
     const str = RocStr.fromSlice("123456789123456789");
-    defer str.deinit();
+    defer str.decref();
     try expect(startsWith(str, str));
 }
 
 test "startsWith: 12345678912345678910 starts with 123456789123456789" {
     const str = RocStr.fromSlice("12345678912345678910");
-    defer str.deinit();
+    defer str.decref();
     const prefix = RocStr.fromSlice("123456789123456789");
-    defer prefix.deinit();
+    defer prefix.decref();
 
     try expect(startsWith(str, prefix));
 }
@@ -1586,23 +1596,23 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.C) bool {
 test "endsWith: foo ends with oo" {
     const foo = RocStr.init("foo", 3);
     const oo = RocStr.init("oo", 2);
-    defer foo.deinit();
-    defer oo.deinit();
+    defer foo.decref();
+    defer oo.decref();
 
     try expect(endsWith(foo, oo));
 }
 
 test "endsWith: 123456789123456789 ends with 123456789123456789" {
     const str = RocStr.init("123456789123456789", 18);
-    defer str.deinit();
+    defer str.decref();
     try expect(endsWith(str, str));
 }
 
 test "endsWith: 12345678912345678910 ends with 345678912345678910" {
     const str = RocStr.init("12345678912345678910", 20);
     const suffix = RocStr.init("345678912345678910", 18);
-    defer str.deinit();
-    defer suffix.deinit();
+    defer str.decref();
+    defer suffix.decref();
 
     try expect(endsWith(str, suffix));
 }
@@ -1610,8 +1620,8 @@ test "endsWith: 12345678912345678910 ends with 345678912345678910" {
 test "endsWith: hello world ends with world" {
     const str = RocStr.init("hello world", 11);
     const suffix = RocStr.init("world", 5);
-    defer str.deinit();
-    defer suffix.deinit();
+    defer str.decref();
+    defer suffix.decref();
 
     try expect(endsWith(str, suffix));
 }
@@ -1654,14 +1664,14 @@ test "RocStr.concat: small concat small" {
     var roc_str3 = RocStr.init(str3_ptr, str3_len);
 
     defer {
-        roc_str1.deinit();
-        roc_str2.deinit();
-        roc_str3.deinit();
+        roc_str1.decref();
+        roc_str2.decref();
+        roc_str3.decref();
     }
 
     const result = strConcat(roc_str1, roc_str2);
 
-    defer result.deinit();
+    defer result.decref();
 
     try expect(roc_str3.eq(result));
 }
@@ -1669,7 +1679,7 @@ test "RocStr.concat: small concat small" {
 pub const RocListStr = extern struct {
     list_elements: ?[*]RocStr,
     list_length: usize,
-    list_capacity: usize,
+    list_capacity_or_ref_ptr: usize,
 };
 
 // Str.joinWith
@@ -1677,7 +1687,7 @@ pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
     const roc_list_str = RocListStr{
         .list_elements = @ptrCast(?[*]RocStr, @alignCast(@alignOf(usize), list.bytes)),
         .list_length = list.length,
-        .list_capacity = list.capacity,
+        .list_capacity_or_ref_ptr = list.capacity_or_ref_ptr,
     };
 
     return @call(.{ .modifier = always_inline }, strJoinWith, .{ roc_list_str, separator });
@@ -1739,19 +1749,19 @@ test "RocStr.joinWith: result is big" {
     var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
     const list = RocListStr{
         .list_length = 3,
-        .list_capacity = 3,
+        .list_capacity_or_ref_ptr = 3,
         .list_elements = @ptrCast([*]RocStr, &elements),
     };
 
     defer {
-        roc_sep.deinit();
-        roc_elem.deinit();
-        roc_result.deinit();
+        roc_sep.decref();
+        roc_elem.decref();
+        roc_result.decref();
     }
 
     const result = strJoinWith(list, roc_sep);
 
-    defer result.deinit();
+    defer result.decref();
 
     try expect(roc_result.eq(result));
 }
@@ -1770,9 +1780,9 @@ inline fn strToBytes(arg: RocStr) RocList {
 
         @memcpy(ptr, arg.asU8ptr(), length);
 
-        return RocList{ .length = length, .bytes = ptr, .capacity = length };
+        return RocList{ .length = length, .bytes = ptr, .capacity_or_ref_ptr = length };
     } else {
-        return RocList{ .length = length, .bytes = arg.str_bytes, .capacity = arg.str_capacity };
+        return RocList{ .length = length, .bytes = arg.str_bytes, .capacity_or_ref_ptr = arg.str_capacity };
     }
 }
 
@@ -1787,61 +1797,6 @@ const CountAndStart = extern struct {
     count: usize,
     start: usize,
 };
-
-pub fn fromUtf8C(output: *FromUtf8Result, arg: RocList, update_mode: UpdateMode) callconv(.C) void {
-    output.* = fromUtf8(arg, update_mode);
-}
-
-inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
-    const bytes = @ptrCast([*]const u8, arg.bytes)[0..arg.length];
-
-    if (unicode.utf8ValidateSlice(bytes)) {
-        // the output will be correct. Now we need to take ownership of the input
-        if (arg.len() <= SMALL_STR_MAX_LENGTH) {
-            // turn the bytes into a small string
-            const string = RocStr.init(@ptrCast([*]u8, arg.bytes), arg.len());
-
-            // then decrement the input list
-            const data_bytes = arg.len();
-            utils.decref(arg.bytes, data_bytes, RocStr.alignment);
-
-            return FromUtf8Result{
-                .is_ok = true,
-                .string = string,
-                .byte_index = 0,
-                .problem_code = Utf8ByteProblem.InvalidStartByte,
-            };
-        } else {
-            const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
-
-            const string = RocStr{
-                .str_bytes = byte_list.bytes,
-                .str_len = byte_list.length,
-                .str_capacity = byte_list.capacity,
-            };
-
-            return FromUtf8Result{
-                .is_ok = true,
-                .string = string,
-                .byte_index = 0,
-                .problem_code = Utf8ByteProblem.InvalidStartByte,
-            };
-        }
-    } else {
-        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
-
-        // consume the input list
-        const data_bytes = arg.len();
-        utils.decref(arg.bytes, data_bytes, RocStr.alignment);
-
-        return FromUtf8Result{
-            .is_ok = false,
-            .string = RocStr.empty(),
-            .byte_index = temp.index,
-            .problem_code = temp.problem,
-        };
-    }
-}
 
 pub fn fromUtf8RangeC(
     output: *FromUtf8Result,
@@ -1859,14 +1814,11 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
     if (unicode.utf8ValidateSlice(bytes)) {
         // the output will be correct. Now we need to clone the input
 
+        // TODO: rework this to properly take advantage fo seamless slices.
         if (count == arg.len() and count > SMALL_STR_MAX_LENGTH) {
             const byte_list = arg.makeUniqueExtra(RocStr.alignment, @sizeOf(u8), update_mode);
 
-            const string = RocStr{
-                .str_bytes = byte_list.bytes,
-                .str_len = byte_list.length,
-                .str_capacity = byte_list.capacity,
-            };
+            const string = RocStr.fromByteList(byte_list);
 
             return FromUtf8Result{
                 .is_ok = true,
@@ -1879,7 +1831,7 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             const string = RocStr.init(@ptrCast([*]const u8, bytes), count);
 
             // decref the list
-            utils.decref(arg.bytes, arg.len(), 1);
+            arg.decref(RocStr.alignment);
 
             return FromUtf8Result{
                 .is_ok = true,
@@ -1892,7 +1844,7 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
 
         // decref the list
-        utils.decref(arg.bytes, arg.len(), 1);
+        arg.decref(RocStr.alignment);
 
         return FromUtf8Result{
             .is_ok = false,
@@ -1964,11 +1916,11 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity = length }, .Immutable);
+    return fromUtf8Range(RocList{ .bytes = bytes, .length = length, .capacity_or_ref_ptr = length }, 0, length, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
-    return fromUtf8(str, .Immutable);
+    return fromUtf8Range(str, 0, str.len(), .Immutable);
 }
 
 fn expectOk(result: FromUtf8Result) !void {
@@ -2160,7 +2112,7 @@ pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
-        string.deinit();
+        string.decref();
         return RocStr.empty();
     }
 
@@ -2170,7 +2122,7 @@ pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
     const original_len = string.len();
 
     if (original_len == leading_bytes) {
-        string.deinit();
+        string.decref();
         return RocStr.empty();
     }
 
@@ -2211,7 +2163,7 @@ pub fn strTrimLeft(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
-        string.deinit();
+        string.decref();
         return RocStr.empty();
     }
 
@@ -2221,7 +2173,7 @@ pub fn strTrimLeft(input_string: RocStr) callconv(.C) RocStr {
     const original_len = string.len();
 
     if (original_len == leading_bytes) {
-        string.deinit();
+        string.decref();
         return RocStr.empty();
     }
 
@@ -2261,7 +2213,7 @@ pub fn strTrimRight(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
-        string.deinit();
+        string.decref();
         return RocStr.empty();
     }
 
@@ -2271,7 +2223,7 @@ pub fn strTrimRight(input_string: RocStr) callconv(.C) RocStr {
     const original_len = string.len();
 
     if (original_len == trailing_bytes) {
-        string.deinit();
+        string.decref();
         return RocStr.empty();
     }
 
@@ -2407,13 +2359,13 @@ test "strTrim: null byte" {
     try expectEqual(@as(usize, SMALL_STR_MAX_LENGTH), original.getCapacity());
 
     const original_with_capacity = reserve(original, 40);
-    defer original_with_capacity.deinit();
+    defer original_with_capacity.decref();
 
     try expectEqual(@as(usize, 1), original_with_capacity.len());
     try expectEqual(@as(usize, 64), original_with_capacity.getCapacity());
 
     const trimmed = strTrim(original.clone());
-    defer trimmed.deinit();
+    defer trimmed.decref();
 
     try expect(original.eq(trimmed));
 }
@@ -2421,7 +2373,7 @@ test "strTrim: null byte" {
 test "strTrim: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     const trimmed = strTrim(original);
 
@@ -2431,13 +2383,13 @@ test "strTrim: blank" {
 test "strTrim: large to large" {
     const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     try expect(!original.isSmallStr());
 
     const expected_bytes = "hello even more giant world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(!expected.isSmallStr());
 
@@ -2449,13 +2401,13 @@ test "strTrim: large to large" {
 test "strTrim: large to small" {
     const original_bytes = "             hello         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     try expect(!original.isSmallStr());
 
     const expected_bytes = "hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(expected.isSmallStr());
 
@@ -2471,13 +2423,13 @@ test "strTrim: large to small" {
 test "strTrim: small to small" {
     const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     try expect(original.isSmallStr());
 
     const expected_bytes = "hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(expected.isSmallStr());
 
@@ -2495,7 +2447,7 @@ test "strTrimLeft: empty" {
 test "strTrimLeft: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     const trimmed = strTrimLeft(original);
 
@@ -2505,13 +2457,13 @@ test "strTrimLeft: blank" {
 test "strTrimLeft: large to large" {
     const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     try expect(!original.isSmallStr());
 
     const expected_bytes = "hello even more giant world ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(!expected.isSmallStr());
 
@@ -2529,12 +2481,12 @@ test "strTrimLeft: large to small" {
 
     const expected_bytes = "hello ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(expected.isSmallStr());
 
     const trimmed = strTrimLeft(original);
-    defer trimmed.deinit();
+    defer trimmed.decref();
 
     try expect(trimmed.eq(expected));
     try expect(!trimmed.isSmallStr());
@@ -2543,13 +2495,13 @@ test "strTrimLeft: large to small" {
 test "strTrimLeft: small to small" {
     const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     try expect(original.isSmallStr());
 
     const expected_bytes = "hello ";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(expected.isSmallStr());
 
@@ -2567,7 +2519,7 @@ test "strTrimRight: empty" {
 test "strTrimRight: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     const trimmed = strTrimRight(original);
 
@@ -2577,13 +2529,13 @@ test "strTrimRight: blank" {
 test "strTrimRight: large to large" {
     const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     try expect(!original.isSmallStr());
 
     const expected_bytes = " hello even more giant world";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(!expected.isSmallStr());
 
@@ -2601,12 +2553,12 @@ test "strTrimRight: large to small" {
 
     const expected_bytes = " hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(expected.isSmallStr());
 
     const trimmed = strTrimRight(original);
-    defer trimmed.deinit();
+    defer trimmed.decref();
 
     try expect(trimmed.eq(expected));
     try expect(!trimmed.isSmallStr());
@@ -2615,13 +2567,13 @@ test "strTrimRight: large to small" {
 test "strTrimRight: small to small" {
     const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
+    defer original.decref();
 
     try expect(original.isSmallStr());
 
     const expected_bytes = " hello";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(expected.isSmallStr());
 
@@ -2655,7 +2607,7 @@ test "ReverseUtf8View: empty" {
 test "capacity: small string" {
     const data_bytes = "foobar";
     var data = RocStr.init(data_bytes, data_bytes.len);
-    defer data.deinit();
+    defer data.decref();
 
     try expectEqual(data.getCapacity(), SMALL_STR_MAX_LENGTH);
 }
@@ -2663,7 +2615,7 @@ test "capacity: small string" {
 test "capacity: big string" {
     const data_bytes = "a string so large that it must be heap-allocated";
     var data = RocStr.init(data_bytes, data_bytes.len);
-    defer data.deinit();
+    defer data.decref();
 
     try expect(data.getCapacity() >= data_bytes.len);
 }
@@ -2687,11 +2639,11 @@ test "appendScalar: small A" {
     var data = RocStr.init(data_bytes, data_bytes.len);
 
     const actual = appendScalar(data, A[0]);
-    defer actual.deinit();
+    defer actual.decref();
 
     const expected_bytes = "helloA";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(actual.eq(expected));
 }
@@ -2701,11 +2653,11 @@ test "appendScalar: small 😀" {
     var data = RocStr.init(data_bytes, data_bytes.len);
 
     const actual = appendScalar(data, 0x1F600);
-    defer actual.deinit();
+    defer actual.decref();
 
     const expected_bytes = "hello😀";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(actual.eq(expected));
 }
@@ -2717,11 +2669,11 @@ test "appendScalar: big A" {
     var data = RocStr.init(data_bytes, data_bytes.len);
 
     const actual = appendScalar(data, A[0]);
-    defer actual.deinit();
+    defer actual.decref();
 
     const expected_bytes = "a string so large that it must be heap-allocatedA";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(actual.eq(expected));
 }
@@ -2731,11 +2683,11 @@ test "appendScalar: big 😀" {
     var data = RocStr.init(data_bytes, data_bytes.len);
 
     const actual = appendScalar(data, 0x1F600);
-    defer actual.deinit();
+    defer actual.decref();
 
     const expected_bytes = "a string so large that it must be heap-allocated😀";
     const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.deinit();
+    defer expected.decref();
 
     try expect(actual.eq(expected));
 }

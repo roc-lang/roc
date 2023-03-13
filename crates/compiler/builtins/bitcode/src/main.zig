@@ -54,6 +54,8 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
+    exportListFn(list.listCapacity, "capacity");
+    exportListFn(list.listRefcountPtr, "refcount_ptr");
 }
 
 // Num Module
@@ -144,7 +146,6 @@ comptime {
     exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
     exportStrFn(str.appendScalar, "append_scalar");
     exportStrFn(str.strToUtf8C, "to_utf8");
-    exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
     exportStrFn(str.strTrim, "trim");

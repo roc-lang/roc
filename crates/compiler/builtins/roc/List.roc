@@ -846,15 +846,6 @@ dropLast = \list ->
 ##
 ## To split the list into two lists, use `List.split`.
 ##
-## ## Performance Details
-##
-## When given a Unique list, this runs extremely fast. It sets the list's length
-## to the given length value, and frees the leftover elements. This runs very
-## slightly faster than `List.takeLast`.
-##
-## In fact, `List.takeFirst list 1` runs faster than `List.first list` when given
-## a Unique list, because [List.first] returns the first element as well -
-## which introduces a conditional bounds check as well as a memory load.
 takeFirst : List elem, Nat -> List elem
 takeFirst = \list, outputLength ->
     List.sublist list { start: 0, len: outputLength }
@@ -875,16 +866,6 @@ takeFirst = \list, outputLength ->
 ##
 ## To split the list into two lists, use `List.split`.
 ##
-## ## Performance Details
-##
-## When given a Unique list, this runs extremely fast. It moves the list's
-## pointer to the index at the given length value, updates its length,
-## and frees the leftover elements. This runs very nearly as fast as
-## `List.takeFirst` on a Unique list.
-##
-## In fact, `List.takeLast list 1` runs faster than `List.first list` when given
-## a Unique list, because [List.first] returns the first element as well -
-## which introduces a conditional bounds check as well as a memory load.
 takeLast : List elem, Nat -> List elem
 takeLast = \list, outputLength ->
     List.sublist list { start: Num.subSaturated (List.len list) outputLength, len: outputLength }
