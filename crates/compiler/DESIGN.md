@@ -74,9 +74,44 @@ of the scope an expression should be parsed in. Generally, failing to reach
 
 ## Canonicalization
 
+After parsing a Roc program into an AST, the AST is transformed into a [canonical
+form](./can/src/expr.rs) AST. This may seem a bit redundant - why build another
+tree, when we already have the AST? Canonicalization performs a few analyses
+to catch user errors, and sets up the state necessary to solve the types in a
+program. Among other things, canonicalization
 
+- Uniquely identifies names (think variable and function names). Along the way,
+    canonicalization builds a graph of all variables' references, and catches
+    unused definitions, undefined definitions, and shadowed definitions.
+- Resolves type signatures, including aliases, into a form suitable for type
+    solving.
+- Determines the order definitions are used in, if they are defined
+    out-of-order.
+- Eliminates syntax sugar (for example, renaming `+` to the function call `add`
+    and converting backpassing to function calls).
+- Collects declared abilities, and ability implementations defined for opaque
+    types. Derived abilities for opaque types are elaborated during
+    canonicalization.
 
 ### Symbol Resolution
+
+Identifiers, like variable names, are resolved to [Symbol](./module/src/symbol.rs)s.
+
+Currently, a symbol is a 64-bit value with
+- the bottom 32 bits defining the [ModuleId](./module/src/ident.rs) the symbol
+    is defined in
+- the top 32 bits defining the [IdentId](./module/src/ident.rs) of the symbol
+    in the module
+
+A symbol is unique per identifier name and the scope
+that the identifier has been declared in. Symbols are how the rest of the
+compiler refers to value definitions - since the unique scope and identifier
+name is disambiguated when symbols are created, referencing symbols requires no
+further name resolution.
+
+As symbols are constructed, canonicalization also keeps track of all references
+to a given symbol. This simplifies catching unused definitions, undefined
+definitions, and shadowing, to an index into an array.
 
 ### Type-alias normalization
 
