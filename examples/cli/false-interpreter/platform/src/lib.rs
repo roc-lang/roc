@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 
-use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
@@ -109,11 +108,9 @@ pub extern "C" fn rust_main() -> i32 {
     let arg = RocStr::from(arg.as_str());
 
     let size = unsafe { roc_main_size() } as usize;
-    let layout = Layout::array::<u8>(size).unwrap();
 
     unsafe {
-        // TODO allocate on the stack if it's under a certain size
-        let buffer = std::alloc::alloc(layout);
+        let buffer = roc_alloc(size, 1) as *mut u8;
 
         roc_main(buffer, &arg);
 
@@ -123,7 +120,7 @@ pub extern "C" fn rust_main() -> i32 {
 
         let result = call_the_closure(buffer);
 
-        std::alloc::dealloc(buffer, layout);
+        roc_dealloc(buffer as _, 1);
 
         result
     };
@@ -134,26 +131,16 @@ pub extern "C" fn rust_main() -> i32 {
 
 unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
     let size = size_Fx_result() as usize;
-    if size == 0 {
-        call_Fx(
-            // This flags pointer will never get dereferenced
-            MaybeUninit::uninit().as_ptr(),
-            closure_data_ptr as *const u8,
-            std::ptr::null_mut(),
-        );
-    } else {
-        let layout = Layout::array::<u8>(size).unwrap();
-        let buffer = std::alloc::alloc(layout) as *mut u8;
+    let buffer = roc_alloc(size, 1) as *mut u8;
 
-        call_Fx(
-            // This flags pointer will never get dereferenced
-            MaybeUninit::uninit().as_ptr(),
-            closure_data_ptr as *const u8,
-            buffer as *mut u8,
-        );
+    call_Fx(
+        // This flags pointer will never get dereferenced
+        MaybeUninit::uninit().as_ptr(),
+        closure_data_ptr as *const u8,
+        buffer as *mut u8,
+    );
 
-        std::alloc::dealloc(buffer, layout);
-    }
+    roc_dealloc(buffer as _, 1);
     0
 }
 
