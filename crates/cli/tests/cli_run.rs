@@ -861,6 +861,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(parser_package)]
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
@@ -873,6 +874,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(parser_package)]
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
