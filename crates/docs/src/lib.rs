@@ -130,13 +130,13 @@ fn render_module_documentation(
 ) -> String {
     let mut buf = String::new();
 
-    push_html(&mut buf, "h2", vec![("class", "module-name")], {
+    push_html(&mut buf, "h2", &[("class", "module-name")], {
         let mut link_buf = String::new();
 
         push_html(
             &mut link_buf,
             "a",
-            vec![("href", "/#")],
+            &[("href", "/#")],
             module.name.as_str(),
         );
 
@@ -154,7 +154,7 @@ fn render_module_documentation(
                     let href = format!("#{name}");
                     let mut content = String::new();
 
-                    push_html(&mut content, "a", vec![("href", href.as_str())], name);
+                    push_html(&mut content, "a", &[("href", href.as_str())], name);
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
@@ -171,7 +171,7 @@ fn render_module_documentation(
                     push_html(
                         &mut buf,
                         "h3",
-                        vec![("id", name), ("class", "entry-name")],
+                        &[("id", name), ("class", "entry-name")],
                         content.as_str(),
                     );
 
@@ -203,7 +203,7 @@ fn render_module_documentation(
     buf
 }
 
-fn push_html(buf: &mut String, tag_name: &str, attrs: Vec<(&str, &str)>, content: impl AsRef<str>) {
+fn push_html(buf: &mut String, tag_name: &str, attrs: &[(&str, &str)], content: impl AsRef<str>) {
     buf.push('<');
     buf.push_str(tag_name);
 
@@ -264,10 +264,10 @@ fn render_name_and_version(name: &str, version: &str) -> String {
 
     url_str.push_str(name);
 
-    push_html(&mut buf, "h1", vec![("class", "pkg-full-name")], {
+    push_html(&mut buf, "h1", &[("class", "pkg-full-name")], {
         let mut link_buf = String::new();
 
-        push_html(&mut link_buf, "a", vec![("href", url_str.as_str())], name);
+        push_html(&mut link_buf, "a", &[("href", url_str.as_str())], name);
 
         link_buf
     });
@@ -282,7 +282,7 @@ fn render_name_and_version(name: &str, version: &str) -> String {
     push_html(
         &mut buf,
         "a",
-        vec![("class", "version"), ("href", versions_url_str.as_str())],
+        &[("class", "version"), ("href", versions_url_str.as_str())],
         version,
     );
 
@@ -299,7 +299,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
         push_html(
             &mut sidebar_entry_content,
             "a",
-            vec![("class", "sidebar-module-link"), ("href", &href)],
+            &[("class", "sidebar-module-link"), ("href", &href)],
             module.name.as_str(),
         );
 
@@ -318,7 +318,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
                         push_html(
                             &mut entries_buf,
                             "a",
-                            vec![("href", entry_href.as_str())],
+                            &[("href", entry_href.as_str())],
                             doc_def.name.as_str(),
                         );
                     }
@@ -331,14 +331,14 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
         push_html(
             &mut sidebar_entry_content,
             "div",
-            vec![("class", "sidebar-sub-entries")],
+            &[("class", "sidebar-sub-entries")],
             entries.as_str(),
         );
 
         push_html(
             &mut buf,
             "div",
-            vec![("class", "sidebar-entry")],
+            &[("class", "sidebar-entry")],
             sidebar_entry_content.as_str(),
         );
     }
