@@ -146,7 +146,7 @@ fn render_module_documentation(
     for entry in &module.entries {
         match entry {
             DocEntry::DocDef(doc_def) => {
-                // Only redner entries that are exposed
+                // Only render entries that are exposed
                 if all_exposed_symbols.contains(&doc_def.symbol) {
                     buf.push_str("<section>");
 
@@ -154,7 +154,8 @@ fn render_module_documentation(
                     let href = format!("#{name}");
                     let mut content = String::new();
 
-                    push_html(&mut content, "a", vec![("href", href.as_str())], name);
+                    push_html(&mut content, "a", vec![("href", href.as_str())], "🔗");
+                    push_html(&mut content, "strong", vec![], name);
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
