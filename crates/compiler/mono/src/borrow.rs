@@ -100,8 +100,14 @@ pub fn infer_borrow<'a>(
                 // host-exposed functions must always own their arguments.
                 let is_host_exposed = host_exposed_procs.contains(&key.0);
 
-                let param_offset = param_map.get_param_offset(key.0, key.1);
-                env.collect_proc(&mut param_map, proc, param_offset, is_host_exposed);
+                let param_offset = param_map.get_param_offset(interner, key.0, key.1);
+                env.collect_proc(
+                    interner,
+                    &mut param_map,
+                    proc,
+                    param_offset,
+                    is_host_exposed,
+                );
             }
 
             if !env.modified {
@@ -167,6 +173,7 @@ impl<'a> DeclarationToIndex<'a> {
 
     fn get_param_offset(
         &self,
+        interner: &STLayoutInterner<'a>,
         needle_symbol: Symbol,
         needle_layout: ProcLayout<'a>,
     ) -> ParamOffset {
@@ -181,12 +188,14 @@ impl<'a> DeclarationToIndex<'a> {
             .elements
             .iter()
             .filter_map(|(Declaration { symbol, layout }, _)| {
-                (*symbol == needle_symbol).then_some(layout)
+                (*symbol == needle_symbol)
+                    .then_some(layout)
+                    .map(|l| l.dbg_deep(interner))
             })
             .collect::<std::vec::Vec<_>>();
         unreachable!(
             "symbol/layout {:?} {:#?} combo must be in DeclarationToIndex\nHowever {} similar layouts were found:\n{:#?}",
-            needle_symbol, needle_layout, similar.len(), similar
+            needle_symbol, needle_layout.dbg_deep(interner), similar.len(), similar,
         )
     }
 }
@@ -206,13 +215,24 @@ pub struct ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
-    pub fn get_param_offset(&self, symbol: Symbol, layout: ProcLayout<'a>) -> ParamOffset {
-        self.declaration_to_index.get_param_offset(symbol, layout)
+    pub fn get_param_offset(
+        &self,
+        interner: &STLayoutInterner<'a>,
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+    ) -> ParamOffset {
+        self.declaration_to_index
+            .get_param_offset(interner, symbol, layout)
     }
 
-    pub fn get_symbol(&self, symbol: Symbol, layout: ProcLayout<'a>) -> Option<&[Param<'a>]> {
+    pub fn get_symbol(
+        &self,
+        interner: &STLayoutInterner<'a>,
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+    ) -> Option<&[Param<'a>]> {
         // let index: usize = self.declaration_to_index[&(symbol, layout)].into();
-        let index: usize = self.get_param_offset(symbol, layout).into();
+        let index: usize = self.get_param_offset(interner, symbol, layout).into();
 
         self.declarations.get(index..index + layout.arguments.len())
     }
@@ -292,7 +312,7 @@ impl<'a> ParamMap<'a> {
             return;
         }
 
-        let index: usize = self.get_param_offset(key.0, key.1).into();
+        let index: usize = self.get_param_offset(interner, key.0, key.1).into();
 
         for (i, param) in Self::init_borrow_args(arena, interner, proc.args)
             .iter()
@@ -312,7 +332,7 @@ impl<'a> ParamMap<'a> {
         proc: &Proc<'a>,
         key: (Symbol, ProcLayout<'a>),
     ) {
-        let index: usize = self.get_param_offset(key.0, key.1).into();
+        let index: usize = self.get_param_offset(interner, key.0, key.1).into();
 
         for (i, param) in Self::init_borrow_args_always_owned(arena, proc.args)
             .iter()
@@ -534,7 +554,13 @@ impl<'a> BorrowInfState<'a> {
     ///
     /// and determines whether z and which of the symbols used in e
     /// must be taken as owned parameters
-    fn collect_call(&mut self, param_map: &mut ParamMap<'a>, z: Symbol, e: &crate::ir::Call<'a>) {
+    fn collect_call(
+        &mut self,
+        interner: &STLayoutInterner<'a>,
+        param_map: &mut ParamMap<'a>,
+        z: Symbol,
+        e: &crate::ir::Call<'a>,
+    ) {
         use crate::ir::CallType::*;
 
         let crate::ir::Call {
@@ -553,7 +579,7 @@ impl<'a> BorrowInfState<'a> {
 
                 // get the borrow signature of the applied function
                 let ps = param_map
-                    .get_symbol(name.name(), top_level)
+                    .get_symbol(interner, name.name(), top_level)
                     .expect("function is defined");
 
                 // the return value will be owned
@@ -595,11 +621,14 @@ impl<'a> BorrowInfState<'a> {
                     niche: passed_function.name.niche(),
                 };
 
-                let function_ps =
-                    match param_map.get_symbol(passed_function.name.name(), closure_layout) {
-                        Some(function_ps) => function_ps,
-                        None => unreachable!(),
-                    };
+                let function_ps = match param_map.get_symbol(
+                    interner,
+                    passed_function.name.name(),
+                    closure_layout,
+                ) {
+                    Some(function_ps) => function_ps,
+                    None => unreachable!(),
+                };
 
                 match op {
                     ListMap { xs } => {
@@ -671,7 +700,13 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn collect_expr(&mut self, param_map: &mut ParamMap<'a>, z: Symbol, e: &Expr<'a>) {
+    fn collect_expr(
+        &mut self,
+        interner: &STLayoutInterner<'a>,
+        param_map: &mut ParamMap<'a>,
+        z: Symbol,
+        e: &Expr<'a>,
+    ) {
         use Expr::*;
 
         match e {
@@ -724,7 +759,7 @@ impl<'a> BorrowInfState<'a> {
                 self.own_var(z);
             }
 
-            Call(call) => self.collect_call(param_map, z, call),
+            Call(call) => self.collect_call(interner, param_map, z, call),
 
             Literal(_) | RuntimeErrorFunction(_) => {}
 
@@ -757,6 +792,7 @@ impl<'a> BorrowInfState<'a> {
     #[allow(clippy::many_single_char_names)]
     fn preserve_tail_call(
         &mut self,
+        interner: &STLayoutInterner<'a>,
         param_map: &mut ParamMap<'a>,
         x: Symbol,
         v: &Expr<'a>,
@@ -782,7 +818,7 @@ impl<'a> BorrowInfState<'a> {
             if self.current_proc == g.name() && x == *z {
                 // anonymous functions (for which the ps may not be known)
                 // can never be tail-recursive, so this is fine
-                if let Some(ps) = param_map.get_symbol(g.name(), top_level) {
+                if let Some(ps) = param_map.get_symbol(interner, g.name(), top_level) {
                     self.own_params_using_args(ys, ps)
                 }
             }
@@ -801,7 +837,12 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn collect_stmt(&mut self, param_map: &mut ParamMap<'a>, stmt: &Stmt<'a>) {
+    fn collect_stmt(
+        &mut self,
+        interner: &STLayoutInterner<'a>,
+        param_map: &mut ParamMap<'a>,
+        stmt: &Stmt<'a>,
+    ) {
         use Stmt::*;
 
         match stmt {
@@ -813,11 +854,11 @@ impl<'a> BorrowInfState<'a> {
             } => {
                 let old = self.param_set.clone();
                 self.update_param_set(ys);
-                self.collect_stmt(param_map, v);
+                self.collect_stmt(interner, param_map, v);
                 self.param_set = old;
                 self.update_param_map_join_point(param_map, *j);
 
-                self.collect_stmt(param_map, b);
+                self.collect_stmt(interner, param_map, b);
             }
 
             Let(x, v, _, mut b) => {
@@ -830,17 +871,17 @@ impl<'a> BorrowInfState<'a> {
                     stack.push((*symbol, expr));
                 }
 
-                self.collect_stmt(param_map, b);
+                self.collect_stmt(interner, param_map, b);
 
                 let mut it = stack.into_iter().rev();
 
                 // collect the final expr, and see if we need to preserve a tail call
                 let (x, v) = it.next().unwrap();
-                self.collect_expr(param_map, x, v);
-                self.preserve_tail_call(param_map, x, v, b);
+                self.collect_expr(interner, param_map, x, v);
+                self.preserve_tail_call(interner, param_map, x, v, b);
 
                 for (x, v) in it {
-                    self.collect_expr(param_map, x, v);
+                    self.collect_expr(interner, param_map, x, v);
                 }
             }
 
@@ -859,21 +900,21 @@ impl<'a> BorrowInfState<'a> {
                 ..
             } => {
                 for (_, _, b) in branches.iter() {
-                    self.collect_stmt(param_map, b);
+                    self.collect_stmt(interner, param_map, b);
                 }
-                self.collect_stmt(param_map, default_branch.1);
+                self.collect_stmt(interner, param_map, default_branch.1);
             }
 
             Dbg { remainder, .. } => {
-                self.collect_stmt(param_map, remainder);
+                self.collect_stmt(interner, param_map, remainder);
             }
 
             Expect { remainder, .. } => {
-                self.collect_stmt(param_map, remainder);
+                self.collect_stmt(interner, param_map, remainder);
             }
 
             ExpectFx { remainder, .. } => {
-                self.collect_stmt(param_map, remainder);
+                self.collect_stmt(interner, param_map, remainder);
             }
 
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
@@ -891,6 +932,7 @@ impl<'a> BorrowInfState<'a> {
 
     fn collect_proc(
         &mut self,
+        interner: &STLayoutInterner<'a>,
         param_map: &mut ParamMap<'a>,
         proc: &Proc<'a>,
         param_offset: ParamOffset,
@@ -912,7 +954,7 @@ impl<'a> BorrowInfState<'a> {
             owned_entry.extend(params.iter().map(|p| p.symbol));
         }
 
-        self.collect_stmt(param_map, &proc.body);
+        self.collect_stmt(interner, param_map, &proc.body);
         self.update_param_map_declaration(param_map, param_offset, proc.args.len());
 
         self.param_set = old;
@@ -984,13 +1026,33 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         | NumPow | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
         | NumShiftRightBy | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
 
-        NumToStr | NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked
-        | NumRound | NumCeiling | NumFloor | NumToFrac | Not | NumIsFinite | NumAtan | NumAcos
-        | NumAsin | NumIntCast | NumToIntChecked | NumToFloatCast | NumToFloatChecked => {
-            arena.alloc_slice_copy(&[irrelevant])
-        }
+        NumToStr
+        | NumAbs
+        | NumNeg
+        | NumSin
+        | NumCos
+        | NumSqrtUnchecked
+        | NumLogUnchecked
+        | NumRound
+        | NumCeiling
+        | NumFloor
+        | NumToFrac
+        | Not
+        | NumIsFinite
+        | NumAtan
+        | NumAcos
+        | NumAsin
+        | NumIntCast
+        | NumToIntChecked
+        | NumToFloatCast
+        | NumToFloatChecked
+        | NumCountLeadingZeroBits
+        | NumCountTrailingZeroBits
+        | NumCountOneBits => arena.alloc_slice_copy(&[irrelevant]),
         NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        NumBytesToU64 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        NumBytesToU128 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
         StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromUtf8Range => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),

@@ -16,8 +16,8 @@ jobs:
       - name: create version.txt
         run: ./ci/write_version.sh
 
-      - name: build release
-        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release --locked
+      - name: build release with lto
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
 
       - name: get commit SHA
@@ -41,6 +41,10 @@ jobs:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=roc_nightly-linux_x86_64-$DATE-$SHA" >> $GITHUB_ENV
+
+      # this makes the roc binary a lot smaller
+      - name: strip debug info
+        run: strip ./target/release-with-lto/roc
        
       - name: Make nightly release tar archive
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}

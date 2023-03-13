@@ -95,7 +95,7 @@ tutorialIntro =
                 label [id "tutorial-toc-toggle-label", for "tutorial-toc-toggle"] [text "contents"],
             ],
             p [] [text "Welcome to Roc!"],
-            p [] [text "This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and much more!"],
+            p [] [text "This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and more!"],
         ],
         section [] [
             h2 [ id "installation" ] [

@@ -36,7 +36,11 @@ jobs:
         run: ./ci/write_version.sh
 
       - name: build nightly release
-        run: cargo build --locked --release
+        run: cargo build --locked --profile=release-with-lto
+
+      # this makes the roc binary a lot smaller
+      - name: strip debug info
+        run: strip ./target/release-with-lto/roc
 
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}

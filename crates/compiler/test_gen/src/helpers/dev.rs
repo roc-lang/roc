@@ -208,7 +208,7 @@ pub fn helper(
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
     let builtins_host_tempfile =
-        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+        roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     if false {
         std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();

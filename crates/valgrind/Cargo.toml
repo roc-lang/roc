@@ -1,20 +1,24 @@
 [package]
 name = "valgrind"
-version = "0.1.0"
-edition = "2021"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dev-dependencies]
-roc_cli = { path = "../cli" }
 cli_utils = { path = "../cli_utils" }
 roc_build = { path = "../compiler/build" }
-roc_mono = { path = "../compiler/mono" }
-roc_load = { path = "../compiler/load" }
-roc_reporting = { path = "../reporting" }
 roc_linker = { path = "../linker" }
+roc_load = { path = "../compiler/load" }
+roc_mono = { path = "../compiler/mono" }
 roc_packaging = { path = "../packaging" }
+roc_reporting = { path = "../reporting" }
+
 bumpalo.workspace = true
+indoc.workspace = true
 target-lexicon.workspace = true
 tempfile.workspace = true
-indoc.workspace = true
+
+[package.metadata.cargo-udeps.ignore]
+development = ["roc_build", "roc_linker"]

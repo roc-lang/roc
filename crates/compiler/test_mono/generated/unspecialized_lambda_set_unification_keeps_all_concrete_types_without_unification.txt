@@ -1,0 +1,79 @@
+procedure Bool.2 ():
+    let Bool.23 : Int1 = true;
+    ret Bool.23;
+
+procedure Test.12 (Test.52):
+    let Test.72 : Int1 = false;
+    ret Test.72;
+
+procedure Test.13 (Test.51):
+    let Test.80 : Int1 = true;
+    ret Test.80;
+
+procedure Test.14 (Test.50):
+    ret Test.50;
+
+procedure Test.15 (Test.49):
+    let Test.71 : {} = Struct {};
+    let Test.70 : Int1 = CallByName Test.12 Test.71;
+    ret Test.70;
+
+procedure Test.16 (Test.48):
+    let Test.79 : {} = Struct {};
+    let Test.78 : Int1 = CallByName Test.13 Test.79;
+    ret Test.78;
+
+procedure Test.17 (Test.47):
+    ret Test.47;
+
+procedure Test.35 (Test.36, Test.73):
+    inc Test.36;
+    ret Test.36;
+
+procedure Test.37 (Test.38, Test.81):
+    inc Test.38;
+    ret Test.38;
+
+procedure Test.40 (Test.41, Test.65, Test.39):
+    let Test.68 : {} = Struct {};
+    switch Test.39:
+        case 0:
+            let Test.67 : List U8 = CallByName Test.35 Test.41 Test.68;
+            ret Test.67;
+    
+        default:
+            let Test.67 : List U8 = CallByName Test.37 Test.41 Test.68;
+            ret Test.67;
+    
+
+procedure Test.43 (Test.44, Test.42):
+    joinpoint Test.62 Test.60:
+        let Test.59 : List U8 = Array [];
+        let Test.58 : List U8 = CallByName Test.40 Test.59 Test.44 Test.60;
+        dec Test.59;
+        ret Test.58;
+    in
+    let Test.75 : Int1 = CallByName Bool.2;
+    if Test.75 then
+        let Test.77 : Str = StructAtIndex 0 Test.42;
+        inc Test.77;
+        dec Test.42;
+        let Test.76 : Int1 = CallByName Test.16 Test.77;
+        dec Test.77;
+        let Test.61 : Int1 = CallByName Test.14 Test.76;
+        jump Test.62 Test.61;
+    else
+        let Test.69 : U8 = StructAtIndex 1 Test.42;
+        dec Test.42;
+        let Test.63 : Int1 = CallByName Test.15 Test.69;
+        let Test.61 : Int1 = CallByName Test.14 Test.63;
+        jump Test.62 Test.61;
+
+procedure Test.0 ():
+    let Test.83 : Str = "";
+    let Test.84 : U8 = 7i64;
+    let Test.55 : {Str, U8} = Struct {Test.83, Test.84};
+    let Test.46 : {Str, U8} = CallByName Test.17 Test.55;
+    let Test.54 : {} = Struct {};
+    let Test.53 : List U8 = CallByName Test.43 Test.54 Test.46;
+    ret Test.53;

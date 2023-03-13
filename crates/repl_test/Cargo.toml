@@ -1,37 +1,35 @@
 [package]
-edition = "2021"
 name = "repl_test"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
 description = "Tests the roc REPL."
 
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
 [build-dependencies]
-roc_cli = {path = "../cli"}
+roc_cli = { path = "../cli" }
 
 [dev-dependencies]
-indoc = "1.0.7"
-strip-ansi-escapes = "0.1.1"
-bumpalo.workspace = true
-
 roc_build = { path = "../compiler/build" }
-roc_repl_cli = {path = "../repl_cli"}
-roc_test_utils = {path = "../test_utils"}
-roc_wasm_interp = {path = "../wasm_interp"}
+roc_repl_cli = { path = "../repl_cli" }
+roc_test_utils = { path = "../test_utils" }
+roc_wasm_interp = { path = "../wasm_interp" }
+
+bumpalo.workspace = true
+indoc.workspace = true
+strip-ansi-escapes.workspace = true
 
 [features]
 default = ["target-aarch64", "target-x86_64", "target-wasm32"]
-wasm = ["target-wasm32"]
-target-arm = ["roc_build/target-arm", "roc_repl_cli/target-arm"]
 target-aarch64 = ["roc_build/target-aarch64", "roc_repl_cli/target-aarch64"]
+target-arm = ["roc_build/target-arm", "roc_repl_cli/target-arm"]
+target-wasm32 = ["roc_build/target-wasm32", "roc_repl_cli/target-wasm32"]
 target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
-target-wasm32 = ["roc_build/target-wasm32", "roc_repl_cli/target-wasm32"]
+wasm = ["target-wasm32"]
 
-target-all = [
-    "target-aarch64",
-    "target-arm",
-    "target-x86",
-    "target-x86_64",
-    "target-wasm32"
-]
+target-all = ["target-aarch64", "target-arm", "target-x86", "target-x86_64", "target-wasm32"]
+
+[package.metadata.cargo-udeps.ignore]
+development = ["roc_wasm_interp"]
