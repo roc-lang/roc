@@ -7,6 +7,7 @@ interface Json
     imports [
         List,
         Str,
+        Result.{ Result },
         Encode,
         Encode.{
             Encoder,
@@ -398,12 +399,18 @@ decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
         when bytes is
             ['[', ']'] -> { result: Ok [], rest: List.drop bytes 2 }
             ['[', ..] ->
-                when decodeElems (eatWhitespace (List.dropFirst bytes)) [] is
-                    Errored e rest -> { result: Err e, rest }
-                    Done vals rest ->
-                        when rest is
-                            [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }
-                            _ -> { result: Err TooShort, rest }
+                bytesWithoutWhitespace = eatWhitespace (List.dropFirst bytes)
+                when bytesWithoutWhitespace is 
+                    [']', ..] -> 
+                        { result: Ok [], rest: List.dropFirst bytesWithoutWhitespace }
+                    _ -> 
+                        when decodeElems bytesWithoutWhitespace [] is
+                            Errored e rest -> 
+                                { result: Err e, rest }
+                            Done vals rest ->
+                                when rest is
+                                    [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }
+                                    _ -> { result: Err TooShort, rest }
 
             _ ->
                 { result: Err TooShort, rest: bytes }
@@ -510,10 +517,11 @@ expect
 # Test json array decode empty list
 expect
     input = Str.toUtf8 "[ ]"
-    expected = []
 
-    actual : List U8
-    actual = Decode.fromBytes input fromUtf8 |> Result.withDefault []
+    actual : Result (List U8) _
+    actual = Decode.fromBytes input fromUtf8
+
+    expected = Ok []
 
     actual == expected
 
