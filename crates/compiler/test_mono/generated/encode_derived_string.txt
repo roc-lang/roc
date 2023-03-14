@@ -2,7 +2,7 @@ procedure Encode.22 (Encode.93):
     ret Encode.93;
 
 procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.106 : List U8 = CallByName Json.96 Encode.94 Encode.96 Encode.102;
+    let Encode.106 : List U8 = CallByName Json.99 Encode.94 Encode.96 Encode.102;
     ret Encode.106;
 
 procedure Encode.25 (Encode.100, Encode.101):
@@ -12,23 +12,23 @@ procedure Encode.25 (Encode.100, Encode.101):
     ret Encode.103;
 
 procedure Json.1 ():
-    let Json.396 : {} = Struct {};
-    ret Json.396;
+    let Json.425 : {} = Struct {};
+    ret Json.425;
 
-procedure Json.18 (Json.95):
-    let Json.397 : Str = CallByName Encode.22 Json.95;
-    ret Json.397;
+procedure Json.18 (Json.98):
+    let Json.426 : Str = CallByName Encode.22 Json.98;
+    ret Json.426;
 
-procedure Json.96 (Json.97, Json.399, Json.95):
-    let Json.408 : I64 = 34i64;
-    let Json.407 : U8 = CallByName Num.125 Json.408;
-    let Json.405 : List U8 = CallByName List.4 Json.97 Json.407;
-    let Json.406 : List U8 = CallByName Str.12 Json.95;
-    let Json.402 : List U8 = CallByName List.8 Json.405 Json.406;
-    let Json.404 : I64 = 34i64;
-    let Json.403 : U8 = CallByName Num.125 Json.404;
-    let Json.401 : List U8 = CallByName List.4 Json.402 Json.403;
-    ret Json.401;
+procedure Json.99 (Json.100, Json.428, Json.98):
+    let Json.437 : I64 = 34i64;
+    let Json.436 : U8 = CallByName Num.127 Json.437;
+    let Json.434 : List U8 = CallByName List.4 Json.100 Json.436;
+    let Json.435 : List U8 = CallByName Str.12 Json.98;
+    let Json.431 : List U8 = CallByName List.8 Json.434 Json.435;
+    let Json.433 : I64 = 34i64;
+    let Json.432 : U8 = CallByName Num.127 Json.433;
+    let Json.430 : List U8 = CallByName List.4 Json.431 Json.432;
+    ret Json.430;
 
 procedure List.4 (List.106, List.107):
     let List.502 : U64 = 1i64;
@@ -52,9 +52,9 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.503 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.503;
 
-procedure Num.125 (#Attr.2):
-    let Num.257 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.257;
+procedure Num.127 (#Attr.2):
+    let Num.276 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.276;
 
 procedure Str.12 (#Attr.2):
     let Str.279 : List U8 = lowlevel StrToUtf8 #Attr.2;

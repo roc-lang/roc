@@ -22,6 +22,7 @@ roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
 roc_code_markup = { path = "../code_markup" }
 roc_collections = { path = "../compiler/collections" }
+roc_command_utils = { path = "../utils/command" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
 roc_packaging = { path = "../packaging" }
@@ -32,7 +33,6 @@ roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify" }
-roc_utils = { path = "../utils" }
 ven_graph = { path = "../vendor/pathfinding" }
 
 arrayvec.workspace = true

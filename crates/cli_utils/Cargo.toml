@@ -13,7 +13,7 @@ roc_collections = { path = "../compiler/collections" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
 roc_reporting = { path = "../reporting" }
-roc_utils = { path = "../utils" }
+roc_command_utils = { path = "../utils/command" }
 
 bumpalo.workspace = true
 criterion.workspace = true

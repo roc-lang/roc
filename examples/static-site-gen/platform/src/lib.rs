@@ -8,8 +8,6 @@ use std::fs;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
-mod highlight;
-
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
     fn roc_transformFileContentForHost(relPath: &RocStr, content: &RocStr) -> RocStr;
@@ -118,7 +116,7 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
     let output_dir = {
         let dir = PathBuf::from(output_dirname);
         if !dir.exists() {
-            fs::create_dir(&dir).unwrap();
+            fs::create_dir_all(&dir).unwrap();
         }
         strip_windows_prefix(
             dir.canonicalize()
@@ -145,18 +143,23 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
     let mut num_errors = 0;
     let mut num_successes = 0;
     for input_file in input_files {
-        match process_file(&input_dir, &output_dir, &input_file) {
-            Ok(()) => {
-                num_successes += 1;
+        match input_file.extension() {
+            Some(s) if s.eq("md".into()) => {
+                match process_file(&input_dir, &output_dir, &input_file) {
+                    Ok(()) => {
+                        num_successes += 1;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to process file:\n\n  ({:?})with error:\n\n  {}",
+                            &input_file, e
+                        );
+                        num_errors += 1;
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!(
-                    "Failed to process file:\n\n  ({:?})with error:\n\n  {}",
-                    &input_file, e
-                );
-                num_errors += 1;
-            }
-        }
+            _ => {}
+        };
     }
 
     println!(
@@ -172,11 +175,6 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
 }
 
 fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Result<(), String> {
-    match input_file.extension() {
-        Some(s) if s.eq("md".into()) => {}
-        _ => return Err("Only .md files are supported".into()),
-    };
-
     let input_relpath = input_file
         .strip_prefix(input_dir)
         .map_err(|e| e.to_string())?
@@ -215,6 +213,13 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
 
     for event in parser {
         match event {
+            pulldown_cmark::Event::Code(cow_str) => {
+                let highlighted_html =
+                    roc_highlight::highlight_roc_code_inline(cow_str.to_string().as_str());
+                parser_with_highlighting.push(pulldown_cmark::Event::Html(
+                    pulldown_cmark::CowStr::from(highlighted_html),
+                ));
+            }
             pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(cbk)) => {
                 in_code_block = true;
                 is_roc_code = is_roc_code_block(&cbk);
@@ -224,7 +229,7 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                     // Format the whole multi-line code block as HTML all at once
                     let highlighted_html: String;
                     if is_roc_code {
-                        highlighted_html = crate::highlight::highlight_roc_code(&to_highlight)
+                        highlighted_html = roc_highlight::highlight_roc_code(&to_highlight)
                     } else {
                         highlighted_html = format!("<pre><samp>{}</pre></samp>", &to_highlight)
                     }
@@ -262,6 +267,12 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     let rust_output_str: &str = &roc_output_str;
 
     println!("{} -> {}", input_file.display(), output_file.display());
+
+    // Create parent directory if it doesn't exist
+    let parent_dir = output_file.parent().unwrap();
+    if !parent_dir.exists() {
+        fs::create_dir_all(&parent_dir).unwrap();
+    }
 
     fs::write(output_file, rust_output_str).map_err(|e| format!("{}", e))
 }

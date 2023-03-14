@@ -1,10 +1,8 @@
 use crate::target::{arch_str, target_zig_str};
 use libloading::{Error, Library};
-use roc_builtins::bitcode;
+use roc_command_utils::{cargo, clang, get_lib_path, rustup, zig};
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
-use roc_utils::{cargo, clang, zig};
-use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
 use std::fs::DirEntry;
 use std::io;
@@ -556,7 +554,7 @@ pub fn rebuild_host(
     let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
 
     let builtins_host_tempfile =
-        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+        roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     if zig_host_src.exists() {
         // Compile host.zig
@@ -1435,8 +1433,8 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
             (but seems to be an unofficial API)
     */
 
-    let builtins_host_tempfile =
-        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
+        .expect("failed to write host builtins object to tempfile");
 
     let mut zig_cmd = zig();
     let args = &[

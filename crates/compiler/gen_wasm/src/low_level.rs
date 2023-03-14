@@ -318,25 +318,7 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
-            ListGetCapacity => match backend.storage.get(&self.arguments[0]) {
-                StoredValue::StackMemory { location, .. } => {
-                    let (local_id, offset) =
-                        location.local_and_offset(backend.storage.stack_frame_pointer);
-                    backend.code_builder.get_local(local_id);
-                    // List is stored as (pointer, length, capacity),
-                    // with each of those fields being 4 bytes on wasm.
-                    // So the capacity is 8 bytes after the start of the struct.
-                    //
-                    // WRAPPER_CAPACITY represents the index of the capacity field
-                    // (which is 2 as of the writing of this comment). If the field order
-                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
-                    // continue to work even though this comment may become inaccurate.
-                    backend
-                        .code_builder
-                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
-                }
-                _ => internal_error!("invalid storage for List"),
-            },
+            ListGetCapacity => self.load_args_and_call_zig(backend, bitcode::LIST_CAPACITY),
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
@@ -1489,6 +1471,40 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
+
+            NumCountLeadingZeroBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_COUNT_LEADING_ZERO_BITS[width],
+                    );
+                }
+                _ => panic_ret_type(),
+            },
+            NumCountTrailingZeroBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_COUNT_TRAILING_ZERO_BITS[width],
+                    );
+                }
+                _ => panic_ret_type(),
+            },
+            NumCountOneBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_COUNT_ONE_BITS[width]);
+                }
+                _ => panic_ret_type(),
+            },
             NumRound => {
                 self.load_args(backend);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
@@ -1577,6 +1593,8 @@ impl<'a> LowLevelCall<'a> {
             },
             NumBytesToU16 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U16),
             NumBytesToU32 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U32),
+            NumBytesToU64 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U64),
+            NumBytesToU128 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U128),
             NumBitwiseAnd => {
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {

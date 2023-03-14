@@ -12,17 +12,19 @@ name = "test_gen"
 path = "src/tests.rs"
 
 [build-dependencies]
-roc_builtins = { path = "../builtins" }
-roc_utils = { path = "../../utils" }
+roc_bitcode = { path = "../builtins/bitcode" }
+roc_command_utils = { path = "../../utils/command" }
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
 tempfile.workspace = true
 
 [dev-dependencies]
+roc_bitcode = { path = "../builtins/bitcode" }
 roc_build = { path = "../build", features = ["target-aarch64", "target-x86_64", "target-wasm32"] }
 roc_builtins = { path = "../builtins" }
 roc_can = { path = "../can" }
 roc_collections = { path = "../collections" }
+roc_command_utils = { path = "../../utils/command" }
 roc_constrain = { path = "../constrain" }
 roc_debug_flags = { path = "../debug_flags" }
 roc_error_macros = { path = "../../error_macros" }
@@ -42,7 +44,6 @@ roc_std = { path = "../../roc_std" }
 roc_target = { path = "../roc_target" }
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
-roc_utils = { path = "../../utils" }
 roc_wasm_interp = { path = "../../wasm_interp" }
 roc_wasm_module = { path = "../../wasm_module" }
 

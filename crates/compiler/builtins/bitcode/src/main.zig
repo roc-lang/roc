@@ -54,6 +54,8 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
+    exportListFn(list.listCapacity, "capacity");
+    exportListFn(list.listRefcountPtr, "refcount_ptr");
 }
 
 // Num Module
@@ -67,6 +69,8 @@ const NUMBERS = INTEGERS ++ FLOATS;
 comptime {
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
+    exportNumFn(num.bytesToU64C, "bytes_to_u64");
+    exportNumFn(num.bytesToU128C, "bytes_to_u128");
 
     inline for (INTEGERS) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
@@ -86,6 +90,10 @@ comptime {
         num.exportMulWithOverflow(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_with_overflow.");
         num.exportMulOrPanic(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_or_panic.");
         num.exportMulSaturatedInt(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_saturated.");
+
+        num.exportCountLeadingZeroBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_leading_zero_bits.");
+        num.exportCountTrailingZeroBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_trailing_zero_bits.");
+        num.exportCountOneBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_one_bits.");
     }
 
     inline for (INTEGERS) |FROM| {
@@ -138,7 +146,6 @@ comptime {
     exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
     exportStrFn(str.appendScalar, "append_scalar");
     exportStrFn(str.strToUtf8C, "to_utf8");
-    exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
     exportStrFn(str.strTrim, "trim");
