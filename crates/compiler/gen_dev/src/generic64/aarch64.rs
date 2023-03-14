@@ -843,12 +843,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn sub_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers subtractions for AArch64");
+        sub_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     #[inline(always)]
@@ -1477,6 +1477,19 @@ fn sub_reg64_reg64_imm12(
     buf.extend(inst.bytes());
 }
 
+/// `SUB Xd, Xm, Xn` -> Subtract Xm and Xn and place the result into Xd.
+#[inline(always)]
+fn sub_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = ArithmeticShifted::new(true, false, ShiftType::LSL, 0, src2, src1, dst);
+
+    buf.extend(inst.bytes());
+}
+
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
@@ -1694,6 +1707,34 @@ mod tests {
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+
+    #[test]
+    fn test_sub_reg64_reg64_reg64() {
+        disassembler_test!(
+            sub_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| {
+                if reg2 == AArch64GeneralReg::ZRSP {
+                    // When the second register is ZR, it gets disassembled as neg,
+                    // which is an alias for sub.
+                    format!(
+                        "neg {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                } else {
+                    format!(
+                        "sub {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 

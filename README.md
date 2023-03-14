@@ -12,12 +12,24 @@ If you'd like to get involved in contributing to the language, the Zulip chat is
 
 ## Sponsors
 
-We are very grateful to our sponsors [NoRedInk](https://www.noredink.com/), [rwx](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en).
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [rwx](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en).
 
-[<img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>](https://www.noredink.com/)
+[<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://www.rwx.com/rwx_banner.svg" height="60" alt="rwx logo"/>](https://www.rwx.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
 
-If you or your employer would like to sponsor Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
+If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
+
+We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
+
+* [Christopher Dolan](https://github.com/cdolan)
+* [Nick Gravgaard](https://github.com/nickgravgaard)
+* [Aaron White](https://github.com/aaronwhite)
+* [Zeljko Nesic](https://github.com/popara)
+* [Shritesh Bhattarai](https://github.com/shritesh)
+* [Richard Feldman](https://github.com/rtfeldman)
+* [Ayaz Hafiz](https://github.com/ayazhafiz)
+
+Thank you all so much for helping Roc progress!

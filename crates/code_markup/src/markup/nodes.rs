@@ -16,7 +16,7 @@ use roc_ast::{
     lang::{core::ast::ASTNodeId, env::Env},
     mem_pool::pool_str::PoolStr,
 };
-use roc_utils::{index_of, slice_get};
+use roc_error_utils::{index_of, slice_get};
 use std::fmt;
 use std::fmt::Write;
 

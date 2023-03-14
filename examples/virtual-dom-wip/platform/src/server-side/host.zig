@@ -51,13 +51,13 @@ const hostJavaScriptBytes = @embedFile("../client-side/host.js");
 
 pub fn main() u8 {
     const json = RocStr.fromSlice("42");
-    defer json.deinit();
+    defer json.decref();
 
     const hostJavaScript = RocStr.fromSlice(hostJavaScriptBytes);
-    defer hostJavaScript.deinit();
+    defer hostJavaScript.decref();
 
     const result = roc__main_1_exposed(json, hostJavaScript);
-    defer result.payload.deinit();
+    defer result.payload.decref();
 
     const writer = if (result.isOk)
         std.io.getStdOut().writer()

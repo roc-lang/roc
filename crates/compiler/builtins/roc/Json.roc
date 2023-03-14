@@ -191,16 +191,42 @@ encodeTag = \name, payload ->
         List.append bytesWithPayload (Num.toU8 ']')
         |> List.append (Num.toU8 '}')
 
+isEscapeSequence : U8, U8 -> Bool
+isEscapeSequence = \a, b ->
+    when P a b is
+        P '\\' 'b' -> Bool.true # Backspace
+        P '\\' 'f' -> Bool.true # Form feed
+        P '\\' 'n' -> Bool.true # Newline
+        P '\\' 'r' -> Bool.true # Carriage return
+        P '\\' 't' -> Bool.true # Tab
+        P '\\' '"' -> Bool.true # Double quote
+        P '\\' '\\' -> Bool.true # Backslash
+        _ -> Bool.false
+
 takeWhile = \list, predicate ->
     helper = \{ taken, rest } ->
-        when List.first rest is
-            Ok elem ->
-                if predicate elem then
-                    helper { taken: List.append taken elem, rest: List.split rest 1 |> .others }
+        when rest is
+            [a, b, ..] ->
+                if isEscapeSequence a b then
+                    helper {
+                        taken: taken |> List.append a |> List.append b,
+                        rest: List.drop rest 2,
+                    }
+                else if predicate a then
+                    helper {
+                        taken: List.append taken a,
+                        rest: List.dropFirst rest,
+                    }
                 else
                     { taken, rest }
 
-            Err _ -> { taken, rest }
+            [a, ..] if predicate a ->
+                helper {
+                    taken: List.append taken a,
+                    rest: List.dropFirst rest,
+                }
+
+            _ -> { taken, rest }
 
     helper { taken: [], rest: list }
 
@@ -341,7 +367,6 @@ jsonString = \bytes ->
     if
         before == ['"']
     then
-        # TODO: handle escape sequences
         { taken: strSequence, rest } = takeWhile afterStartingQuote \n -> n != '"'
 
         when Str.fromUtf8 strSequence is
@@ -358,42 +383,30 @@ decodeString = Decode.custom \bytes, @Json {} ->
     jsonString bytes
 
 decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
+
         decodeElems = \chunk, accum ->
             when Decode.decodeWith chunk decodeElem (@Json {}) is
                 { result, rest } ->
                     when result is
-                        Ok val ->
-                            # TODO: handle spaces before ','
-                            { before: afterElem, others } = List.split rest 1
-
-                            if
-                                afterElem == [',']
-                            then
-                                decodeElems others (List.append accum val)
-                            else
-                                Done (List.append accum val) rest
-
                         Err e -> Errored e rest
+                        Ok val ->
+                            restWithoutWhitespace = eatWhitespace rest
+                            when restWithoutWhitespace is
+                                [',', ..] -> decodeElems (eatWhitespace (List.dropFirst restWithoutWhitespace)) (List.append accum val)
+                                _ -> Done (List.append accum val) restWithoutWhitespace
 
-        { before, others: afterStartingBrace } = List.split bytes 1
+        when bytes is
+            ['[', ']'] -> { result: Ok [], rest: List.drop bytes 2 }
+            ['[', ..] ->
+                when decodeElems (eatWhitespace (List.dropFirst bytes)) [] is
+                    Errored e rest -> { result: Err e, rest }
+                    Done vals rest ->
+                        when rest is
+                            [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }
+                            _ -> { result: Err TooShort, rest }
 
-        if
-            before == ['[']
-        then
-            # TODO: empty lists
-            when decodeElems afterStartingBrace [] is
-                Errored e rest -> { result: Err e, rest }
-                Done vals rest ->
-                    { before: maybeEndingBrace, others: afterEndingBrace } = List.split rest 1
-
-                    if
-                        maybeEndingBrace == [']']
-                    then
-                        { result: Ok vals, rest: afterEndingBrace }
-                    else
-                        { result: Err TooShort, rest }
-        else
-            { result: Err TooShort, rest: bytes }
+            _ ->
+                { result: Err TooShort, rest: bytes }
 
 parseExactChar : List U8, U8 -> DecodeResult {}
 parseExactChar = \bytes, char ->
@@ -463,3 +476,82 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
         when finalizer endStateResult is
             Ok val -> { result: Ok val, rest: afterRecordBytes }
             Err e -> { result: Err e, rest: afterRecordBytes }
+
+# Helper to eat leading Json whitespace characters
+eatWhitespace = \input ->
+    when input is
+        [' ', ..] -> eatWhitespace (List.dropFirst input)
+        ['\n', ..] -> eatWhitespace (List.dropFirst input)
+        ['\r', ..] -> eatWhitespace (List.dropFirst input)
+        ['\t', ..] -> eatWhitespace (List.dropFirst input)
+        _ -> input
+
+# Test eating Json whitespace
+expect
+    input = Str.toUtf8 " \n\r\tabc"
+    actual = eatWhitespace input
+    expected = Str.toUtf8 "abc"
+    actual == expected
+
+# Test json string decoding with escapes
+expect
+    input = Str.toUtf8 "\"a\r\nbc\\\"xz\""
+    expected = Ok "a\r\nbc\\\"xz"
+    actual = Decode.fromBytes input fromUtf8
+    actual == expected
+
+# Test json string encoding with escapes
+expect
+    input = "a\r\nbc\\\"xz"
+    expected = Str.toUtf8 "\"a\r\nbc\\\"xz\""
+    actual = Encode.toBytes input toUtf8
+    actual == expected
+
+# Test json array decode empty list
+expect
+    input = Str.toUtf8 "[ ]"
+    expected = []
+
+    actual : List U8
+    actual = Decode.fromBytes input fromUtf8 |> Result.withDefault []
+
+    actual == expected
+
+# Test json array decoding into integers
+expect
+    input = Str.toUtf8 "[ 1,\n2,\t3]"
+    expected = [1, 2, 3]
+
+    actual : List U8
+    actual = Decode.fromBytes input fromUtf8 |> Result.withDefault []
+
+    actual == expected
+
+# Test json array decoding into strings ignoring whitespace around values
+expect
+    input = Str.toUtf8 "[\r\"one\" ,\t\"two\"\n,\n\"3\"\t]"
+    expected = ["one", "two", "3"]
+
+    actual : List Str
+    actual =
+        Decode.fromBytes input fromUtf8
+        |> Result.onErr handleJsonDecodeError
+        |> Result.withDefault []
+
+    actual == expected
+
+# Helper for tests to handle Json decoding errors
+handleJsonDecodeError = \err ->
+    when err is
+        Leftover bytes ->
+            when Str.fromUtf8 bytes is
+                Ok bs -> crash "ERROR: bytes left \(bs)"
+                Err _ ->
+                    ls =
+                        bytes
+                        |> List.map Num.toStr
+                        |> Str.joinWith ","
+
+                    crash "ERROR: bytes left \(ls)"
+
+        TooShort -> crash "ERROR: input too short"

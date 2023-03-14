@@ -1,11 +1,9 @@
-use roc_utils::zig;
-use std::env;
+use roc_command_utils::{pretty_command_string, zig};
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
 use std::str;
+use std::{env, path::PathBuf, process::Command};
 
 #[cfg(target_os = "macos")]
 use tempfile::tempdir;
@@ -18,30 +16,13 @@ fn main() {
 
     // "." is relative to where "build.rs" is
     // dunce can be removed once ziglang/zig#5109 is fixed
-    let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
-    let bitcode_path = build_script_dir_path.join("bitcode");
+    let bitcode_path = dunce::canonicalize(Path::new(".")).unwrap();
 
     // workaround for github.com/ziglang/zig/issues/9711
     #[cfg(target_os = "macos")]
     let zig_cache_dir = tempdir().expect("Failed to create temp directory for zig cache");
     #[cfg(target_os = "macos")]
     std::env::set_var("ZIG_GLOBAL_CACHE_DIR", zig_cache_dir.path().as_os_str());
-
-    // LLVM .bc FILES
-
-    generate_bc_file(&bitcode_path, "ir", "builtins-host");
-
-    if !DEBUG {
-        generate_bc_file(&bitcode_path, "ir-wasm32", "builtins-wasm32");
-    }
-
-    generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
-    generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
-    generate_bc_file(
-        &bitcode_path,
-        "ir-windows-x86_64",
-        "builtins-windows-x86_64",
-    );
 
     // OBJECT FILES
     #[cfg(windows)]
@@ -107,38 +88,13 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
     }
 }
 
-fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
-    let mut ll_path = bitcode_path.join(file_name);
-    ll_path.set_extension("ll");
-    let dest_ir_host = ll_path.to_str().expect("Invalid dest ir path");
-
-    println!("Compiling host ir to: {}", dest_ir_host);
-
-    let mut bc_path = bitcode_path.join(file_name);
-    bc_path.set_extension("bc");
-    let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
-    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
-
-    // workaround for github.com/ziglang/zig/issues/9711
-    #[cfg(target_os = "macos")]
-    let _ = fs::remove_dir_all("./bitcode/zig-cache");
-
-    let mut zig_cmd = zig();
-
-    zig_cmd
-        .current_dir(bitcode_path)
-        .args(["build", zig_object, "-Drelease=true"]);
-
-    run_command(zig_cmd, 0);
-}
-
 pub fn get_lib_dir() -> PathBuf {
     // Currently we have the OUT_DIR variable which points to `/target/debug/build/roc_builtins-*/out/`.
     // So we just need to add "/bitcode" to that.
-    let dir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("bitcode");
+    let dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     // create dir if it does not exist
-    fs::create_dir_all(&dir).expect("Failed to make $OUT_DIR/bitcode dir.");
+    fs::create_dir_all(&dir).expect("Failed to make $OUT_DIR/ dir.");
 
     dir
 }
@@ -192,7 +148,7 @@ fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
 }
 
 fn run_command(mut command: Command, flaky_fail_counter: usize) {
-    let command_str = roc_utils::pretty_command_string(&command);
+    let command_str = pretty_command_string(&command);
     let command_str = command_str.to_string_lossy();
 
     let output_result = command.output();

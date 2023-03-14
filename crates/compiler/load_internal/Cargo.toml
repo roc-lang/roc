@@ -1,45 +1,46 @@
 [package]
 name = "roc_load_internal"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "The internal implementation of roc_load, separate from roc_load to support caching."
 
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_error_macros = { path = "../../error_macros" }
-roc_region = { path = "../region" }
-roc_module = { path = "../module" }
-roc_types = { path = "../types" }
-roc_can = { path = "../can" }
-roc_constrain = { path = "../constrain" }
-roc_derive_key = { path = "../derive_key" }
-roc_derive = { path = "../derive" }
 roc_builtins = { path = "../builtins" }
-roc_problem = { path = "../problem" }
-roc_unify = { path = "../unify" }
+roc_can = { path = "../can" }
+roc_collections = { path = "../collections" }
+roc_constrain = { path = "../constrain" }
+roc_debug_flags = { path = "../debug_flags" }
+roc_derive = { path = "../derive" }
+roc_derive_key = { path = "../derive_key" }
+roc_error_macros = { path = "../../error_macros" }
+roc_late_solve = { path = "../late_solve" }
+roc_module = { path = "../module" }
+roc_mono = { path = "../mono" }
+roc_packaging = { path = "../../packaging" }
 roc_parse = { path = "../parse" }
+roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
+roc_reporting = { path = "../../reporting" }
 roc_solve = { path = "../solve" }
 roc_solve_problem = { path = "../solve_problem" }
-roc_late_solve = { path = "../late_solve" }
-roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
 roc_tracing = { path = "../../tracing" }
-roc_packaging = { path = "../../packaging" }
-roc_reporting = { path = "../../reporting" }
-roc_debug_flags = { path = "../debug_flags" }
+roc_types = { path = "../types" }
+roc_unify = { path = "../unify" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 
 bumpalo.workspace = true
-parking_lot.workspace = true
 crossbeam.workspace = true
+parking_lot.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
 roc_test_utils = { path = "../../test_utils" }
 
-pretty_assertions.workspace = true
 indoc.workspace = true
 maplit.workspace = true
+pretty_assertions.workspace = true

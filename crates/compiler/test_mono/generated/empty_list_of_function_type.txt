@@ -2,29 +2,29 @@ procedure Bool.1 ():
     let Bool.23 : Int1 = false;
     ret Bool.23;
 
-procedure List.2 (List.95, List.96):
-    let List.499 : U64 = CallByName List.6 List.95;
-    let List.495 : Int1 = CallByName Num.22 List.96 List.499;
-    if List.495 then
-        let List.497 : {} = CallByName List.66 List.95 List.96;
-        let List.496 : [C {}, C {}] = TagId(1) List.497;
-        ret List.496;
+procedure List.2 (List.96, List.97):
+    let List.500 : U64 = CallByName List.6 List.96;
+    let List.496 : Int1 = CallByName Num.22 List.97 List.500;
+    if List.496 then
+        let List.498 : {} = CallByName List.66 List.96 List.97;
+        let List.497 : [C {}, C {}] = TagId(1) List.498;
+        ret List.497;
     else
-        let List.494 : {} = Struct {};
-        let List.493 : [C {}, C {}] = TagId(0) List.494;
-        ret List.493;
+        let List.495 : {} = Struct {};
+        let List.494 : [C {}, C {}] = TagId(0) List.495;
+        ret List.494;
 
 procedure List.6 (#Attr.2):
-    let List.500 : U64 = lowlevel ListLen #Attr.2;
-    ret List.500;
+    let List.501 : U64 = lowlevel ListLen #Attr.2;
+    ret List.501;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.498 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.498;
+    let List.499 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.499;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.256 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.256;
+    let Num.275 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.275;
 
 procedure Test.2 (Test.5):
     let Test.17 : Str = "bar";

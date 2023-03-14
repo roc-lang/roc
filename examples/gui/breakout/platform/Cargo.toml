@@ -1,9 +1,9 @@
 [package]
 name = "host"
-version = "0.0.1"
 authors = ["The Roc Contributors"]
-license = "UPL-1.0"
 edition = "2021"
+license = "UPL-1.0"
+version = "0.0.1"
 
 [lib]
 name = "host"
@@ -15,31 +15,28 @@ name = "host"
 path = "src/main.rs"
 
 [dependencies]
-roc_std = { path = "../../../../crates/roc_std" }
-libc = "0.2"
 arrayvec = "0.7.2"
+libc = "0.2"
 page_size = "0.4.2"
-# when changing winit version, check if copypasta can be updated simultaneously so they use the same versions for their dependencies. This will save build time.
-winit = "0.26.1"
-wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "0545e36" }
-wgpu_glyph = { git = "https://github.com/Anton-4/wgpu_glyph", rev = "257d109" }
+roc_std = { path = "../../../../crates/roc_std" }
+cgmath = "0.18.0"
+colored = "2.0.0"
+confy = { git = 'https://github.com/rust-cli/confy', features = ["yaml_conf"], default-features = false }
+copypasta = "0.7.1"
+fs_extra = "1.2.0"
+futures = "0.3.17"
 glyph_brush = "0.7.2"
 log = "0.4.14"
-futures = "0.3.17"
-cgmath = "0.18.0"
-snafu = { version = "0.6.10", features = ["backtraces"] }
-colored = "2.0.0"
+nonempty = "0.7.0"
+palette = "0.6.0"
 pest = "2.1.3"
 pest_derive = "2.1.0"
-copypasta = "0.7.1"
-palette = "0.6.0"
-confy = { git = 'https://github.com/rust-cli/confy', features = [
-  "yaml_conf"
-], default-features = false }
 serde = { version = "1.0.130", features = ["derive"] }
-nonempty = "0.7.0"
-fs_extra = "1.2.0"
+snafu = { version = "0.6.10", features = ["backtraces"] }
 threadpool = "1.8.1"
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "0545e36" }
+wgpu_glyph = { git = "https://github.com/Anton-4/wgpu_glyph", rev = "257d109" }
+winit = "0.26.1"
 
 [package.metadata.cargo-udeps.ignore]
 # confy is currently unused but should not be removed

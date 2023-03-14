@@ -6,13 +6,20 @@ test-gen-llvm-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --f
 
 [target.wasm32-unknown-unknown]
 # Rust compiler flags for minimum-sized .wasm binary in the web REPL
-# opt-level=s   Optimizations should focus more on size than speed
-# lto=fat       Spend extra effort on link-time optimization across crates
-rustflags = ["-Copt-level=s", "-Clto=fat"]
+# opt-level=s        Optimizations should focus more on size than speed
+# lto=fat            Spend extra effort on link-time optimization across crates
+# embed-bitcode=yes  Turn back on lto since it is no longer default
+rustflags = ["-Copt-level=s", "-Clto=fat", "-Cembed-bitcode=yes"]
 
 [target.'cfg(not(target = "wasm32-unknown-unknown"))']
 # Sets the avx, avx2, sse2 and sse4.2 target-features correctly based on your CPU.
 rustflags = ["-Ctarget-cpu=native"]
+
+# TODO: there is probably a more proper solution to this.
+# We are pulling in roc_alloc and friends due to using roc_std.
+# They ared defined in roc_glue, but windows linking breaks before we get there.
+[target.'cfg(target_os = "windows")']
+rustflags = ["-Clink-args=/FORCE:UNRESOLVED"]
 
 [env]
 # Gives us the path of the workspace root for use in cargo tests without having

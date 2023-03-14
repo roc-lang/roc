@@ -4,9 +4,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
-use roc_utils::cargo;
-use roc_utils::pretty_command_string;
-use roc_utils::root_dir;
+use roc_command_utils::{cargo, pretty_command_string, root_dir};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -387,7 +385,7 @@ pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
     // Descend into examples/{dir_name}
     path.push("crates");
     path.push("cli_testing_examples");
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }
@@ -396,7 +394,7 @@ pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
 pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }
@@ -419,7 +417,7 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     path.push("cli");
     path.push("tests");
     path.push("fixtures");
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }
