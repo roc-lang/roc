@@ -49,7 +49,7 @@ jobs:
           7z x roc_nightly-windows_x86_64-TESTING.zip
     
       - run: |
-          .\windows-roc\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windows_x86_64-TESTING\roc.exe build .\examples\platform-switching\rocLovesRust.roc
 
       - run: |
           .\examples\platform-switching\rocLovesRust.exe
@@ -61,10 +61,10 @@ jobs:
           .\examples\platform-switching\rocLovesRust.exe
 
       - run: |
-          .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          .\roc_nightly-windows_x86_64-TESTING\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
 
       - run: |
-          .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          .\roc_nightly-windows_x86_64-TESTING\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
 
       - run: |
-          .\windows-roc\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          .\roc_nightly-windows_x86_64-TESTING\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
