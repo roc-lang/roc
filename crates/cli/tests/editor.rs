@@ -32,7 +32,7 @@ mod editor_launch_test {
         env::set_current_dir(&root_dir)
             .unwrap_or_else(|_| panic!("Failed to set current dir to {:?}", root_dir));
 
-        let roc_binary_path = build_roc_bin(&vec!["--features", "editor"]);
+        let roc_binary_path = build_roc_bin(&["--features", "editor"]);
 
         let mut cmd_args = vec![CMD_EDIT];
 
