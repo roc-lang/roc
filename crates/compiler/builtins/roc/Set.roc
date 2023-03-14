@@ -26,8 +26,8 @@ interface Set
 # We should have this line above the next has.
 # It causes the formatter to fail currently.
 # | k has Hash & Eq
-## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type)) 
-## type which stores a collection of unique values, without any ordering 
+## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
+## type which stores a collection of unique values, without any ordering
 Set k := Dict.Dict k {}
      has [
          Eq {
@@ -50,7 +50,7 @@ isEq = \xs, ys ->
 ## ```
 ## emptySet = Set.empty {}
 ## countValues = Set.len emptySet
-## 
+##
 ## expect countValues == 0
 ## ```
 empty : {} -> Set k | k has Hash & Eq
@@ -60,7 +60,7 @@ empty = \{} -> @Set (Dict.empty {})
 ## ```
 ## singleItemSet = Set.single "One"
 ## countValues = Set.len singleItemSet
-## 
+##
 ## expect countValues == 1
 ## ```
 single : k -> Set k | k has Hash & Eq
@@ -69,14 +69,14 @@ single = \key ->
 
 ## Insert a value into a `Set`.
 ## ```
-## numbers = 
+## numbers =
 ##     Set.empty {}
 ##     |> Set.insert "One"
 ##     |> Set.insert "Two"
 ##     |> Set.insert "Three"
-## 
+##
 ## countValues = Set.len numbers
-## 
+##
 ## expect countValues == 3
 ## ```
 insert : Set k, k -> Set k | k has Hash & Eq
@@ -102,14 +102,14 @@ expect
 
 ## Counts the number of values in a given `Set`.
 ## ```
-## numbers = 
+## numbers =
 ##     Set.empty {}
 ##     |> Set.insert "One"
 ##     |> Set.insert "Two"
 ##     |> Set.insert "Three"
-## 
+##
 ## countValues = Set.len numbers
-## 
+##
 ## expect countValues == 3
 ## ```
 len : Set k -> Nat | k has Hash & Eq
@@ -130,15 +130,15 @@ expect
 
 ## Removes the value from the given `Set`.
 ## ```
-## numbers = 
+## numbers =
 ##     Set.empty {}
 ##     |> Set.insert 10
 ##     |> Set.insert 20
 ##     |> Set.remove 10
-## 
+##
 ## has10 = Set.contains numbers 10
 ## has20 = Set.contains numbers 20
-## 
+##
 ## expect has10 == Bool.false
 ## expect has20 == Bool.true
 ## ```
@@ -149,15 +149,15 @@ remove = \@Set dict, key ->
 ## Test if a value is in the `Set`.
 ## ```
 ## Fruit : [Apple, Pear, Banana]
-## 
+##
 ## fruit : Set Fruit
-## fruit = 
+## fruit =
 ##     Set.single Apple
 ##     |> Set.insert Pear
-## 
+##
 ## hasApple = Set.contains fruit Apple
 ## hasBanana = Set.contains fruit Banana
-## 
+##
 ## expect hasApple == Bool.true
 ## expect hasBanana == Bool.false
 ## ```
@@ -169,9 +169,9 @@ contains = \@Set dict, key ->
 ## ```
 ## numbers : Set U64
 ## numbers = Set.fromList [1,2,3,4,5]
-## 
+##
 ## values = [1,2,3,4,5]
-## 
+##
 ## expect Set.toList numbers == values
 ## ```
 toList : Set k -> List k | k has Hash & Eq
@@ -180,12 +180,12 @@ toList = \@Set dict ->
 
 ## Create a `Set` from a `List` of values.
 ## ```
-## values = 
+## values =
 ##     Set.empty {}
 ##     |> Set.insert Banana
 ##     |> Set.insert Apple
 ##     |> Set.insert Pear
-## 
+##
 ## expect Set.fromList [Pear, Apple, Banana] == values
 ## ```
 fromList : List k -> Set k | k has Hash & Eq
@@ -194,15 +194,15 @@ fromList = \list ->
 
     List.walk list initial insert
 
-## Combine two `Set` collection by keeping the 
+## Combine two `Set` collection by keeping the
 ## [union](https://en.wikipedia.org/wiki/Union_(set_theory))
-## of all the values pairs. This means that all of the values in both `Set`s 
+## of all the values pairs. This means that all of the values in both `Set`s
 ## will be combined.
 ## ```
 ## set1 = Set.single Left
 ## set2 = Set.single Right
 ## combined = Set.fromList [Left, Right]
-## 
+##
 ## expect Set.union set1 set2 == combined
 ## ```
 union : Set k, Set k -> Set k | k has Hash & Eq
@@ -210,14 +210,14 @@ union = \@Set dict1, @Set dict2 ->
     Dict.insertAll dict1 dict2 |> @Set
 
 ## Combine two `Set`s by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
-## of all the values pairs. This means that we keep only those values that are 
+## of all the values pairs. This means that we keep only those values that are
 ## in both `Set`s.
 ## ```
 ## set1 = Set.fromList [Left, Other]
 ## set2 = Set.fromList [Left, Right]
-## 
+##
 ## intersection = Set.single Left
-## 
+##
 ## expect Set.intersection set1 set2 == intersection
 ## ```
 intersection : Set k, Set k -> Set k | k has Hash & Eq
@@ -231,9 +231,9 @@ intersection = \@Set dict1, @Set dict2 ->
 ## ```
 ## first = Set.fromList [Left, Right, Up, Down]
 ## second = Set.fromList [Left, Right]
-## 
+##
 ## difference = Set.fromList [Up, Down]
-## 
+##
 ## expect Set.difference first second == difference
 ## ```
 difference : Set k, Set k -> Set k | k has Hash & Eq
@@ -243,39 +243,39 @@ difference = \@Set dict1, @Set dict2 ->
 ## Iterate through the values of a given `Set` and build a value.
 ## ```
 ## values = Set.fromList ["March", "April", "May"]
-## 
-## startsWithLetterM = \month -> 
-##     when Str.toUtf8 month is 
+##
+## startsWithLetterM = \month ->
+##     when Str.toUtf8 month is
 ##         ['M', ..] -> Bool.true
 ##         _ -> Bool.false
-## 
-## reduce = \state, k -> 
-##     if startsWithLetterM k then 
+##
+## reduce = \state, k ->
+##     if startsWithLetterM k then
 ##         state + 1
-##     else 
+##     else
 ##         state
-## 
+##
 ## result = Set.walk values 0 reduce
-## 
+##
 ## expect result == 2
 ## ```
 walk : Set k, state, (state, k -> state) -> state | k has Hash & Eq
 walk = \@Set dict, state, step ->
     Dict.walk dict state (\s, k, _ -> step s k)
 
-## Iterate through the values of a given `Set` and build a value, can stop 
+## Iterate through the values of a given `Set` and build a value, can stop
 ## iterating part way through the collection.
 ## ```
 ## numbers = Set.fromList [1,2,3,4,5,6,42,7,8,9,10]
-## 
-## find42 = \state, k -> 
-##     if k == 42 then 
+##
+## find42 = \state, k ->
+##     if k == 42 then
 ##         Break FoundTheAnswer
-##     else 
+##     else
 ##         Continue state
-## 
+##
 ## result = Set.walkUntil numbers NotFound find42
-## 
+##
 ## expect result == FoundTheAnswer
 ## ```
 walkUntil : Set k, state, (state, k -> [Continue state, Break state]) -> state | k has Hash & Eq
