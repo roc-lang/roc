@@ -39,16 +39,15 @@ withDefault = \result, default ->
         Err _ -> default
 
 ## If the result is `Ok`, transform the value it holds by running a conversion
-## function on it. Then return a new `Ok` holding the transformed value.
-##
-## (If the result is `Err`, this has no effect. Use [mapErr] to transform an `Err`.)
+## function on it. Then return a new `Ok` holding the transformed value. If the 
+## result is `Err`, this has no effect. Use [mapErr] to transform an `Err`.
 ## ```
 ## Result.map (Ok 12) Num.negate
 ## Result.map (Err "yipes!") Num.negate
 ## ```
 ##
-## `map` functions like this are common in Roc, and they all work similarly.
-## See for example [List.map], `Set.map`, and `Dict.map`.
+## Functions like `map` are common in Roc; see for example [List.map], 
+## `Set.map`, and `Dict.map`.
 map : Result a err, (a -> b) -> Result b err
 map = \result, transform ->
     when result is
@@ -56,9 +55,8 @@ map = \result, transform ->
         Err e -> Err e
 
 ## If the result is `Err`, transform the value it holds by running a conversion
-## function on it. Then return a new `Err` holding the transformed value.
-##
-## (If the result is `Ok`, this has no effect. Use [map] to transform an `Ok`.)
+## function on it. Then return a new `Err` holding the transformed value. If 
+## the result is `Ok`, this has no effect. Use [map] to transform an `Ok`.
 ## ```
 ## Result.mapErr (Err "yipes!") Str.isEmpty
 ## Result.mapErr (Ok 12) Str.isEmpty
@@ -70,9 +68,8 @@ mapErr = \result, transform ->
         Err e -> Err (transform e)
 
 ## If the result is `Ok`, transform the entire result by running a conversion
-## function on the value the `Ok` holds. Then return that new result.
-##
-## (If the result is `Err`, this has no effect. Use `onErr` to transform an `Err`.)
+## function on the value the `Ok` holds. Then return that new result. If the 
+## result is `Err`, this has no effect. Use `onErr` to transform an `Err`.
 ## ```
 ## Result.try (Ok -1) \num -> if num < 0 then Err "negative!" else Ok -num
 ## Result.try (Err "yipes!") \num -> if num < 0 then Err "negative!" else Ok -num
@@ -84,9 +81,8 @@ try = \result, transform ->
         Err e -> Err e
 
 ## If the result is `Err`, transform the entire result by running a conversion
-## function on the value the `Err` holds. Then return that new result.
-##
-## (If the result is `Ok`, this has no effect. Use `try` to transform an `Ok`.)
+## function on the value the `Err` holds. Then return that new result. If the 
+## result is `Ok`, this has no effect. Use `try` to transform an `Ok`.
 ## ```
 ## Result.onErr (Ok 10) \errorNum -> Str.toNat errorNum
 ## Result.onErr (Err "42") \errorNum -> Str.toNat errorNum

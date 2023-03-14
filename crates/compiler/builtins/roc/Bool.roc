@@ -32,6 +32,8 @@ Eq has
     ## cannot derive `isEq` for types that contain functions.
     isEq : a, a -> Bool | a has Eq
 
+## Represents the boolean truthy and falsy using an opaque type. 
+## `Bool` implements the `Eq` ability.
 Bool := [True, False] has [Eq { isEq: boolIsEq }]
 
 boolIsEq = \@Bool b1, @Bool b2 -> structuralEq b1 b2
@@ -57,7 +59,9 @@ false = @Bool False
 ## expect (Bool.false && Bool.false) == Bool.false
 ## ```
 ##
-## **Performance Note** that in Roc the `&&` and `||` work the same way as any
+## **Performance Details** 
+##
+## In Roc the `&&` and `||` work the same way as any
 ## other function. However, in some languages `&&` and `||` are special-cased.
 ## In these languages the compiler will skip evaluating the expression after the
 ## first operator under certain circumstances. For example an expression like

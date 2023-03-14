@@ -37,6 +37,10 @@ interface Json
         Result,
     ]
 
+## **Note:** This module is likely to be moved out of the builtins in future. 
+## It is currently located here to facilitate development of the Abilities 
+## langauge feature and testing. You are welcome to use this module, just note 
+## that it will be moved into a package in a future update.
 Json := {} has [
          EncoderFormatting {
              u8: encodeU8,

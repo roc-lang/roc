@@ -1,7 +1,6 @@
-## Working with Unicode strings in Roc.
 ##
-## ### Unicode
-##
+## **Working with Unicode strings in Roc.**
+## 
 ## Unicode can represent text values which span multiple languages, symbols, and emoji.
 ## Here are some valid Roc strings:
 ## ```
@@ -124,7 +123,6 @@ interface Str
         Num.{ Nat, Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
     ]
 
-## Test
 Utf8ByteProblem : [
     InvalidStartByte,
     UnexpectedEndOfSequence,
