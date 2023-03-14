@@ -62,6 +62,7 @@ interface List
         sortAsc,
         sortDesc,
         reserve,
+        releaseExcessCapacity,
         walkBackwardsUntil,
         countIf,
     ]
@@ -290,6 +291,10 @@ withCapacity : Nat -> List a
 
 ## Enlarge the list for at least capacity additional elements
 reserve : List a, Nat -> List a
+
+## Shrink the memory footprint of a list such that it's capacity and length are equal.
+## Note: This will also convert seamless slices to regular lists.
+releaseExcessCapacity : List a -> List a
 
 ## Put two lists together.
 ## ```
