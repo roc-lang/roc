@@ -31,7 +31,6 @@ pub fn insert_refcount_operations<'a, 'i>(
     // Create a VariableRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
     let mut variable_rc_types_env = VariableRcTypesEnv::from_layout_interner(layout_interner);
     variable_rc_types_env.insert_proc_symbols(procedures.keys().map(|(symbol, _layout)| *symbol));
-
     for (_, proc) in procedures.iter_mut() {
         // Clone the variable_rc_types_env and insert the variables in the current procedure.
         // As the variables should be limited in scope for the current proc.
@@ -297,18 +296,15 @@ impl VariableUsage {
                             variable_rc_types,
                             owned_arguments.iter().map(|(symbol, _)| symbol).copied(),
                         ),
-                        borrowed: borrowed_arguments
-                            .iter()
-                            .map(|(symbol, _)| symbol)
-                            .copied()
-                            .collect(),
+                        borrowed: Self::borrowed_usages(
+                            variable_rc_types,
+                            borrowed_arguments.iter().map(|(symbol, _)| symbol).copied(),
+                        ),
                     };
                 }
                 CallType::HigherOrder(HigherOrderLowLevel {
                     op: operator,
 
-                    /// TODO I _think_  we can get rid of this, perhaps only keeping track of
-                    /// the layout of the closure argument, if any
                     closure_env_layout,
 
                     /// update mode of the higher order lowlevel itself
@@ -319,7 +315,11 @@ impl VariableUsage {
                     // Functions always take their arguments as owned.
                     // (Except lowlevels, but those are wrapped in functions that take their arguments as owned and perform rc.)
 
+                    // TODO do something with these variables. I think there should be only one argument for the closure.
                     let closure_arguments = &arguments[operator.function_index()..];
+
+                    // This should always be true, not sure where this could be set to false.
+                    debug_assert!(passed_function.owns_captured_environment);
 
                     match operator {
                         crate::low_level::HigherOrder::ListMap { xs } => VariableUsage {
@@ -351,7 +351,9 @@ impl VariableUsage {
                         // But functions assume that they are called with owned arguments, this creates a problem.
                         // We need to treat them as owned by incrementing the reference count before calling the function,
                         {
+                            // TODO probably update the list sort implementation to assume the functions take their argument as owned.
                             todo!()
+                            // TODO sort will perform sort in place (if unique), take this into account.
                         }
                     }
                 }
@@ -373,11 +375,7 @@ impl VariableUsage {
                 // VariableUsage::Borrowed(*structure)
                 VariableUsage {
                     owned: MutMap::default(),
-                    borrowed: {
-                        let mut set = MutSet::with_capacity_and_hasher(1, default_hasher());
-                        set.insert(*structure);
-                        set
-                    },
+                    borrowed: Self::borrowed_usages(variable_rc_types, iter::once(*structure)),
                 }
             }
             Expr::Array {
@@ -432,6 +430,30 @@ impl VariableUsage {
             }
         }
         variable_usage
+    }
+
+    /**
+    Filter the given symbols to only contain reference counted symbols.
+    */
+    fn borrowed_usages(
+        variable_rc_types: &VariableRcTypes,
+        symbols: impl IntoIterator<Item = Symbol>,
+    ) -> MutSet<Symbol> {
+        symbols
+            .into_iter()
+            .filter_map(|symbol| {
+                match {
+                    variable_rc_types
+                        .get(&symbol)
+                        .expect("Expected variable to be in the map")
+                } {
+                    // If the variable is reference counted, we need to increment the usage count.
+                    VarRcType::ReferenceCounted => Some(symbol),
+                    // If the variable is not reference counted, we don't need to do anything.
+                    VarRcType::NotReferenceCounted => None,
+                }
+            })
+            .collect()
     }
 }
 
@@ -1134,7 +1156,7 @@ fn insert_dec_stmt<'a, 's>(
 /**
 Taken from the original inc_dec borrow implementation.
 */
-pub fn lowlevel_borrow_signature<'a>(arena: &'a Bump, op: &LowLevel) -> &'a [Ownership] {
+fn lowlevel_borrow_signature<'a>(arena: &'a Bump, op: &LowLevel) -> &'a [Ownership] {
     use LowLevel::*;
 
     let irrelevant = Ownership::Owned;
