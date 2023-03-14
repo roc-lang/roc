@@ -60,7 +60,7 @@ impl FromWasm32Memory for RocStr {
         let str_words: &[u32; 3] = unsafe { std::mem::transmute(&str_bytes) };
 
         let big_elem_ptr = str_words[Builtin::WRAPPER_PTR as usize] as usize;
-        let big_length = str_words[Builtin::WRAPPER_LEN as usize] as usize;
+        let big_length = str_words[Builtin::WRAPPER_LEN as usize] as usize & (i32::MAX as usize);
         let big_capacity = str_words[Builtin::WRAPPER_CAPACITY as usize] as usize;
 
         let last_byte = str_bytes[11];
