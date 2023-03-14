@@ -45,7 +45,7 @@ jobs:
           7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
 
       - run: |
-          curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/roc/releases/download/nightly/windows-roc-testing.zip
+          curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-windows_x86_64-TESTING.zip
           7z x roc_nightly-windows_x86_64-TESTING.zip
     
       - run: |
