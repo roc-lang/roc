@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 #include <jni.h>
-#include "HelloJNI.h"
+#include "javaSource_Greeter.h"
 
 
 void *roc_alloc(size_t size, unsigned int alignment)
@@ -207,19 +207,15 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
-extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
+extern void roc__stringInterpolation_1_exposed_generic(struct RocBytes *ret, int32_t arg);
 
 JNIEXPORT jstring JNICALL Java_javaSource_Greeter_sayHello
    (JNIEnv *env, jobject thisObj, jint num)
 {
-    char native_string[256] = {0};
-    sprintf(native_string, "%d", num);
-
-    struct RocBytes arg = init_rocbytes((uint8_t *)native_string, strlen(native_string));
     struct RocBytes ret = {0};
 
     // Call the Roc function to populate `ret`'s bytes.
-    roc__mainForHost_1_exposed_generic(&ret, &arg);
+    roc__stringInterpolation_1_exposed_generic(&ret, (int32_t) num);
 
     // java being java making this a lot harder than it needs to be
     // https://stackoverflow.com/questions/32205446/getting-true-utf-8-characters-in-java-jni

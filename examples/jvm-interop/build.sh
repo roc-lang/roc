@@ -41,4 +41,4 @@ clang \
 clang -shared -o libinterop.so bridge.o -L. -lhello
 
 # then run
-# java javaSource.Greeter
+java javaSource.Greeter

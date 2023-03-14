@@ -1,12 +1,12 @@
 app "libhello"
     packages { pf: "platform/main.roc" }
     imports []
-    provides [main] to pf
+    provides [interpolate] to pf
 
-main : U64 -> Str
-main = \num ->
+interpolate : I32 -> Str
+interpolate = \num ->
     if num == 0 then
-        "I need a positive number here!"
+        "I need a non-zero number here!"
     else
         str = Num.toStr num
         "The number was \(str), OH YEAH!!! 🤘🤘"
