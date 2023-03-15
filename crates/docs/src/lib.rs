@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 
 const BUILD_DIR: &str = "./generated-docs";
 
+const LINK_SVG: &str = include_str!("./static/link.svg");
+
 pub fn generate_docs_html(root_file: PathBuf) {
     let build_dir = Path::new(BUILD_DIR);
     let loaded_module = load_module_for_docs(root_file);
@@ -154,7 +156,7 @@ fn render_module_documentation(
                     let href = format!("#{name}");
                     let mut content = String::new();
 
-                    push_html(&mut content, "a", vec![("href", href.as_str())], "🔗");
+                    push_html(&mut content, "a", vec![("href", href.as_str())], LINK_SVG);
                     push_html(&mut content, "strong", vec![], name);
 
                     for type_var in &doc_def.type_vars {
