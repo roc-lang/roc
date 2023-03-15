@@ -156,6 +156,7 @@ comptime {
     exportStrFn(str.withCapacity, "with_capacity");
     exportStrFn(str.strGraphemes, "graphemes");
     exportStrFn(str.strRefcountPtr, "refcount_ptr");
+    exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
 
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");

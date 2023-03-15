@@ -559,6 +559,18 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::STR_RESERVE,
             )
         }
+        StrReleaseExcessCapacity => {
+            // Str.releaseExcessCapacity: Str -> Str
+            arguments!(string);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_RELEASE_EXCESS_CAPACITY,
+            )
+        }
         StrAppendScalar => {
             // Str.appendScalar : Str, U32 -> Str
             arguments!(string, capacity);

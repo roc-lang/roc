@@ -109,6 +109,7 @@ interface Str
         splitLast,
         walkUtf8WithIndex,
         reserve,
+        releaseExcessCapacity,
         appendScalar,
         walkScalars,
         walkScalarsUntil,
@@ -745,6 +746,10 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
 
 ## Enlarge a string for at least the given number additional bytes.
 reserve : Str, Nat -> Str
+
+## Shrink the memory footprint of a str such that it's capacity and length are equal.
+## Note: This will also convert seamless slices to regular lists.
+releaseExcessCapacity : Str -> Str
 
 ## is UB when the scalar is invalid
 appendScalarUnsafe : Str, U32 -> Str
