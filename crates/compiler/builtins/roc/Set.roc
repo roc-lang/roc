@@ -58,7 +58,7 @@ empty = \{} -> @Set (Dict.empty {})
 
 ## Creates a new `Set` with a single value.
 ## ```
-## singleItemSet = Set.single "One"
+## singleItemSet = Set.single "Apple"
 ## countValues = Set.len singleItemSet
 ##
 ## expect countValues == 1
@@ -69,13 +69,13 @@ single = \key ->
 
 ## Insert a value into a `Set`.
 ## ```
-## numbers =
+## fewItemSet =
 ##     Set.empty {}
-##     |> Set.insert "One"
-##     |> Set.insert "Two"
-##     |> Set.insert "Three"
+##     |> Set.insert "Apple"
+##     |> Set.insert "Pear"
+##     |> Set.insert "Banana"
 ##
-## countValues = Set.len numbers
+## countValues = Set.len fewItemSet
 ##
 ## expect countValues == 3
 ## ```
@@ -102,13 +102,13 @@ expect
 
 ## Counts the number of values in a given `Set`.
 ## ```
-## numbers =
+## fewItemSet =
 ##     Set.empty {}
-##     |> Set.insert "One"
-##     |> Set.insert "Two"
-##     |> Set.insert "Three"
+##     |> Set.insert "Apple"
+##     |> Set.insert "Pear"
+##     |> Set.insert "Banana"
 ##
-## countValues = Set.len numbers
+## countValues = Set.len fewItemSet
 ##
 ## expect countValues == 3
 ## ```
