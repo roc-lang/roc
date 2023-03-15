@@ -333,6 +333,7 @@ pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
 pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 pub const STR_WITH_CAPACITY: &str = "roc_builtins.str.with_capacity";
 pub const STR_GRAPHEMES: &str = "roc_builtins.str.graphemes";
+pub const STR_REFCOUNT_PTR: &str = "roc_builtins.str.refcount_ptr";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
