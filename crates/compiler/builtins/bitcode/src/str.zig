@@ -1811,7 +1811,7 @@ pub fn fromUtf8RangeC(
 pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
     const bytes = @ptrCast([*]const u8, arg.bytes)[start..count];
 
-    if (unicode.utf8ValidateSlice(bytes)) {
+    if (isValidUnicode(@ptrCast([*]const u8, bytes), bytes.len)) {
         // the output will be correct. Now we need to clone the input
 
         // TODO: rework this to properly take advantage fo seamless slices.
@@ -1877,8 +1877,8 @@ fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: U
     unreachable;
 }
 
-pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
-    const buf: []u8 = ptr[0..len];
+pub fn isValidUnicode(ptr: [*]const u8, len: usize) callconv(.C) bool {
+    const buf: []const u8 = ptr[0..len];
 
     const size = @sizeOf(u64);
     // TODO: we should test changing the step on other platforms.
@@ -1914,7 +1914,8 @@ pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
         }
     }
 
-    while (buf[i] < 0b1000_0000) : (i += 1) {
+    while (buf[i] < 0b1000_0000) {
+        i += 1;
         if (i == buf.len) return true;
     }
 
