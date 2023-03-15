@@ -8,12 +8,12 @@ mod editor_launch_test {
         thread,
     };
 
-    use cli_utils::helpers::build_roc_bin_cached;
+    use cli_utils::helpers::build_roc_bin;
     use roc_cli::CMD_EDIT;
     use roc_command_utils::root_dir;
     use std::io::Read;
 
-    #[ignore = "we don't want to bring up the editor window during regular tests, only on specific CI machines"]
+    #[ignore = "We don't want to bring up the editor window during regular tests, only on specific CI machines."]
     #[test]
     fn launch_test() {
         launch(None);
@@ -32,7 +32,7 @@ mod editor_launch_test {
         env::set_current_dir(&root_dir)
             .unwrap_or_else(|_| panic!("Failed to set current dir to {:?}", root_dir));
 
-        let roc_binary_path = build_roc_bin_cached();
+        let roc_binary_path = build_roc_bin(&["--features", "editor"]);
 
         let mut cmd_args = vec![CMD_EDIT];
 
