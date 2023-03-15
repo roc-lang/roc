@@ -2,8 +2,8 @@ use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::BuilderExt;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, create_entry_block_alloca, get_tag_id, tag_pointer_clear_tag_id,
-    use_roc_value, Env, FAST_CALL_CONV,
+    add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
+    FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{
     incrementing_elem_loop, list_capacity_or_ref_ptr, list_refcount_ptr, load_list,
@@ -807,7 +807,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     let parent = fn_val;
 
     let str_type = zig_str_type(env);
-    let arg_val =
+    let str_wrapper =
         if Layout::Builtin(Builtin::Str).is_passed_by_reference(layout_interner, env.target_info) {
             env.builder
                 .new_build_load(str_type, arg_val.into_pointer_value(), "load_str_to_stack")
@@ -816,7 +816,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
             debug_assert!(arg_val.is_struct_value());
             arg_val
         };
-    let str_wrapper = arg_val.into_struct_value();
+    let str_wrapper = str_wrapper.into_struct_value();
 
     let capacity = builder
         .build_extract_value(str_wrapper, Builtin::WRAPPER_CAPACITY, "read_str_capacity")
@@ -839,11 +839,8 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.build_conditional_branch(is_big_and_non_empty, modification_block, cont_block);
     builder.position_at_end(modification_block);
 
-    let str_alloca = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
-    env.builder.build_store(str_alloca, arg_val);
-
     let refcount_ptr =
-        PointerToRefcount::from_ptr_to_data(env, str_refcount_ptr(env, str_alloca.into()));
+        PointerToRefcount::from_ptr_to_data(env, str_refcount_ptr(env, arg_val.into()));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env, layout_interner);
 
