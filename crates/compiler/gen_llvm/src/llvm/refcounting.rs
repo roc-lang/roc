@@ -840,7 +840,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.position_at_end(modification_block);
 
     let refcount_ptr =
-        PointerToRefcount::from_ptr_to_data(env, str_refcount_ptr(env, arg_val.into()));
+        PointerToRefcount::from_ptr_to_data(env, str_refcount_ptr(env, arg_val));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env, layout_interner);
 
