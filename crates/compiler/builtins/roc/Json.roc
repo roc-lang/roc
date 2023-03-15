@@ -1,3 +1,40 @@
+## JSON is a data format that is easy for humans to read and write. It is
+## commonly used to exhange data between two systems such as a server and a 
+## client (e.g. web browser).
+##
+## This module implements functionality to serialise and de-serialise Roc types 
+## to and from JSON data. Using the `Encode` and `Decode` builtins this process
+## can be achieved without the need to write custom encoder and decoder functions
+## to parse UTF-8 strings.
+##    
+## Here is a basic example which shows how to parse a JSON record into a Roc 
+## type named `Language` which includes a `name` field. The JSON string is 
+## decoded and then the field is encoded back into a UTF-8 string.
+##
+## ```
+## Language : {
+##     name : Str,
+## }
+## 
+## jsonStr = Str.toUtf8 "{\"name\":\"Röc Lang\"}"
+## 
+## result : Result Language _
+## result =
+##     jsonStr
+##     |> Decode.fromBytes fromUtf8 # returns `Ok {name : "Röc Lang"}`
+## 
+## name =
+##     decodedValue <- Result.map result
+## 
+##     Encode.toBytes decodedValue.name toUtf8
+## 
+## expect name == Ok (Str.toUtf8 "\"Röc Lang\"")
+## ```
+##
+## **Note:** This module is likely to be moved out of the builtins in future.
+## It is currently located here to facilitate development of the Abilities
+## language feature and testing. You are welcome to use this module, just note
+## that it will be moved into a package in a future update.
 interface Json
     exposes [
         Json,
@@ -7,6 +44,7 @@ interface Json
     imports [
         List,
         Str,
+        Result.{ Result },
         Encode,
         Encode.{
             Encoder,
@@ -37,10 +75,8 @@ interface Json
         Result,
     ]
 
-## **Note:** This module is likely to be moved out of the builtins in future.
-## It is currently located here to facilitate development of the Abilities
-## language feature and testing. You are welcome to use this module, just note
-## that it will be moved into a package in a future update.
+## An opaque type with the `EncoderFormatting` and 
+## `DecoderFormatting` abilities.
 Json := {} has [
          EncoderFormatting {
              u8: encodeU8,
@@ -83,8 +119,10 @@ Json := {} has [
          },
      ]
 
+## Returns a JSON `Decoder`
 toUtf8 = @Json {}
 
+## Returns a JSON `Encoder`
 fromUtf8 = @Json {}
 
 numToBytes = \n ->
@@ -402,12 +440,18 @@ decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
         when bytes is
             ['[', ']'] -> { result: Ok [], rest: List.drop bytes 2 }
             ['[', ..] ->
-                when decodeElems (eatWhitespace (List.dropFirst bytes)) [] is
-                    Errored e rest -> { result: Err e, rest }
-                    Done vals rest ->
-                        when rest is
-                            [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }
-                            _ -> { result: Err TooShort, rest }
+                bytesWithoutWhitespace = eatWhitespace (List.dropFirst bytes)
+                when bytesWithoutWhitespace is 
+                    [']', ..] -> 
+                        { result: Ok [], rest: List.dropFirst bytesWithoutWhitespace }
+                    _ -> 
+                        when decodeElems bytesWithoutWhitespace [] is
+                            Errored e rest -> 
+                                { result: Err e, rest }
+                            Done vals rest ->
+                                when rest is
+                                    [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }
+                                    _ -> { result: Err TooShort, rest }
 
             _ ->
                 { result: Err TooShort, rest: bytes }
@@ -495,6 +539,7 @@ expect
     input = Str.toUtf8 " \n\r\tabc"
     actual = eatWhitespace input
     expected = Str.toUtf8 "abc"
+
     actual == expected
 
 # Test json string decoding with escapes
@@ -502,6 +547,7 @@ expect
     input = Str.toUtf8 "\"a\r\nbc\\\"xz\""
     expected = Ok "a\r\nbc\\\"xz"
     actual = Decode.fromBytes input fromUtf8
+
     actual == expected
 
 # Test json string encoding with escapes
@@ -509,53 +555,31 @@ expect
     input = "a\r\nbc\\\"xz"
     expected = Str.toUtf8 "\"a\r\nbc\\\"xz\""
     actual = Encode.toBytes input toUtf8
+
     actual == expected
 
 # Test json array decode empty list
 expect
     input = Str.toUtf8 "[ ]"
-    expected = []
-
-    actual : List U8
-    actual = Decode.fromBytes input fromUtf8 |> Result.withDefault []
+    actual : Result (List U8) _
+    actual = Decode.fromBytes input fromUtf8
+    expected = Ok []
 
     actual == expected
 
 # Test json array decoding into integers
 expect
     input = Str.toUtf8 "[ 1,\n2,\t3]"
-    expected = [1, 2, 3]
-
-    actual : List U8
-    actual = Decode.fromBytes input fromUtf8 |> Result.withDefault []
+    actual : Result (List U8) _
+    actual = Decode.fromBytes input fromUtf8
+    expected = Ok [1, 2, 3]
 
     actual == expected
 
 # Test json array decoding into strings ignoring whitespace around values
 expect
     input = Str.toUtf8 "[\r\"one\" ,\t\"two\"\n,\n\"3\"\t]"
-    expected = ["one", "two", "3"]
-
-    actual : List Str
-    actual =
-        Decode.fromBytes input fromUtf8
-        |> Result.onErr handleJsonDecodeError
-        |> Result.withDefault []
+    actual = Decode.fromBytes input fromUtf8
+    expected = Ok ["one", "two", "3"]
 
     actual == expected
-
-# Helper for tests to handle Json decoding errors
-handleJsonDecodeError = \err ->
-    when err is
-        Leftover bytes ->
-            when Str.fromUtf8 bytes is
-                Ok bs -> crash "ERROR: bytes left \(bs)"
-                Err _ ->
-                    ls =
-                        bytes
-                        |> List.map Num.toStr
-                        |> Str.joinWith ","
-
-                    crash "ERROR: bytes left \(ls)"
-
-        TooShort -> crash "ERROR: input too short"

@@ -3495,6 +3495,53 @@ fn reserve_unchanged() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.reserve [] 15
+            |> List.releaseExcessCapacity
+            "#
+        ),
+        (0, RocList::empty()),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity_with_len() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.reserve [1] 50
+            |> List.releaseExcessCapacity
+            "#
+        ),
+        (1, RocList::from_slice(&[1])),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.releaseExcessCapacity []
+            "#
+        ),
+        (0, RocList::empty()),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn call_function_in_empty_list() {
     assert_evals_to!(
         indoc!(

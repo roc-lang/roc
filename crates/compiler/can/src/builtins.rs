@@ -145,6 +145,7 @@ map_symbol_to_lowlevel_and_arity! {
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
     ListGetCapacity; LIST_CAPACITY; 1,
+    ListReleaseExcessCapacity; LIST_RELEASE_EXCESS_CAPACITY; 1,
 
     ListGetUnsafe; DICT_LIST_GET_UNSAFE; 2,
 

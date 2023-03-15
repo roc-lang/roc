@@ -188,6 +188,23 @@ pub const RocList = extern struct {
         };
     }
 
+    pub fn allocateExact(
+        alignment: u32,
+        length: usize,
+        element_width: usize,
+    ) RocList {
+        if (length == 0) {
+            return empty();
+        }
+
+        const data_bytes = length * element_width;
+        return RocList{
+            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
+            .length = length,
+            .capacity_or_ref_ptr = length,
+        };
+    }
+
     pub fn reallocate(
         self: RocList,
         alignment: u32,
@@ -470,6 +487,30 @@ pub fn listReserve(
     } else {
         var output = list.reallocate(alignment, old_length + spare, element_width);
         output.length = old_length;
+        return output;
+    }
+}
+
+pub fn listReleaseExcessCapacity(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    update_mode: UpdateMode,
+) callconv(.C) RocList {
+    const old_length = list.len();
+    // We use the direct list.capacity_or_ref_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
+    if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_ref_ptr == old_length) {
+        return list;
+    } else if (old_length == 0) {
+        list.decref(alignment);
+        return RocList.empty();
+    } else {
+        var output = RocList.allocateExact(alignment, old_length, element_width);
+        if (list.bytes) |source_ptr| {
+            const dest_ptr = output.bytes orelse unreachable;
+
+            @memcpy(dest_ptr, source_ptr, old_length * element_width);
+        }
         return output;
     }
 }

@@ -56,6 +56,7 @@ comptime {
     exportListFn(list.listIsUnique, "is_unique");
     exportListFn(list.listCapacity, "capacity");
     exportListFn(list.listRefcountPtr, "refcount_ptr");
+    exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
 }
 
 // Num Module

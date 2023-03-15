@@ -1016,6 +1016,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        ListReleaseExcessCapacity => arena.alloc_slice_copy(&[owned]),
 
         Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
 
