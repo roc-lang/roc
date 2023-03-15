@@ -220,7 +220,7 @@ pub const RocStr = extern struct {
         const element_width = 1;
         const old_capacity = self.getCapacity();
 
-        if (self.isSmallStr() or !self.isUnique()) {
+        if (self.isSmallStr() or self.isSeamlessSlice() or !self.isUnique()) {
             return self.reallocateFresh(new_length);
         }
 
@@ -1906,6 +1906,15 @@ pub fn fromUtf8RangeC(
 }
 
 pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
+    if (arg.len() == 0 or count == 0) {
+        arg.decref(RocStr.alignment);
+        return FromUtf8Result{
+            .is_ok = true,
+            .string = RocStr.empty(),
+            .byte_index = 0,
+            .problem_code = Utf8ByteProblem.InvalidStartByte,
+        };
+    }
     const bytes = @ptrCast([*]const u8, arg.bytes)[start..count];
 
     if (isValidUnicode(bytes)) {
