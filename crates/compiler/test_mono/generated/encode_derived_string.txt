@@ -2,7 +2,7 @@ procedure Encode.22 (Encode.93):
     ret Encode.93;
 
 procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.106 : List U8 = CallByName Json.99 Encode.94 Encode.96 Encode.102;
+    let Encode.106 : List U8 = CallByName Json.98 Encode.94 Encode.96 Encode.102;
     ret Encode.106;
 
 procedure Encode.25 (Encode.100, Encode.101):
@@ -15,15 +15,15 @@ procedure Json.1 ():
     let Json.425 : {} = Struct {};
     ret Json.425;
 
-procedure Json.18 (Json.98):
-    let Json.426 : Str = CallByName Encode.22 Json.98;
+procedure Json.18 (Json.97):
+    let Json.426 : Str = CallByName Encode.22 Json.97;
     ret Json.426;
 
-procedure Json.99 (Json.100, Json.428, Json.98):
+procedure Json.98 (Json.99, Json.428, Json.97):
     let Json.437 : I64 = 34i64;
     let Json.436 : U8 = CallByName Num.127 Json.437;
-    let Json.434 : List U8 = CallByName List.4 Json.100 Json.436;
-    let Json.435 : List U8 = CallByName Str.12 Json.98;
+    let Json.434 : List U8 = CallByName List.4 Json.99 Json.436;
+    let Json.435 : List U8 = CallByName Str.12 Json.97;
     let Json.431 : List U8 = CallByName List.8 Json.434 Json.435;
     let Json.433 : I64 = 34i64;
     let Json.432 : U8 = CallByName Num.127 Json.433;
