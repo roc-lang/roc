@@ -840,7 +840,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.position_at_end(modification_block);
 
     let str_alloca = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
-    env.builder.build_store(str_alloca, str_wrapper);
+    env.builder.build_store(str_alloca, arg_val);
 
     let refcount_ptr =
         PointerToRefcount::from_ptr_to_data(env, str_refcount_ptr(env, str_alloca.into()));
