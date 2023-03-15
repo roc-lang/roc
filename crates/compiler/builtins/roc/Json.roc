@@ -1,33 +1,33 @@
 ## JSON is a data format that is easy for humans to read and write. It is
-## commonly used to exhange data between two systems such as a server and a 
+## commonly used to exhange data between two systems such as a server and a
 ## client (e.g. web browser).
 ##
-## This module implements functionality to serialise and de-serialise Roc types 
+## This module implements functionality to serialise and de-serialise Roc types
 ## to and from JSON data. Using the `Encode` and `Decode` builtins this process
 ## can be achieved without the need to write custom encoder and decoder functions
 ## to parse UTF-8 strings.
-##    
-## Here is a basic example which shows how to parse a JSON record into a Roc 
-## type named `Language` which includes a `name` field. The JSON string is 
+##
+## Here is a basic example which shows how to parse a JSON record into a Roc
+## type named `Language` which includes a `name` field. The JSON string is
 ## decoded and then the field is encoded back into a UTF-8 string.
 ##
 ## ```
 ## Language : {
 ##     name : Str,
 ## }
-## 
+##
 ## jsonStr = Str.toUtf8 "{\"name\":\"Röc Lang\"}"
-## 
+##
 ## result : Result Language _
 ## result =
 ##     jsonStr
 ##     |> Decode.fromBytes fromUtf8 # returns `Ok {name : "Röc Lang"}`
-## 
+##
 ## name =
 ##     decodedValue <- Result.map result
-## 
+##
 ##     Encode.toBytes decodedValue.name toUtf8
-## 
+##
 ## expect name == Ok (Str.toUtf8 "\"Röc Lang\"")
 ## ```
 ##
@@ -75,7 +75,7 @@ interface Json
         Result,
     ]
 
-## An opaque type with the `EncoderFormatting` and 
+## An opaque type with the `EncoderFormatting` and
 ## `DecoderFormatting` abilities.
 Json := {} has [
          EncoderFormatting {
@@ -441,13 +441,15 @@ decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
             ['[', ']'] -> { result: Ok [], rest: List.drop bytes 2 }
             ['[', ..] ->
                 bytesWithoutWhitespace = eatWhitespace (List.dropFirst bytes)
-                when bytesWithoutWhitespace is 
-                    [']', ..] -> 
+                when bytesWithoutWhitespace is
+                    [']', ..] ->
                         { result: Ok [], rest: List.dropFirst bytesWithoutWhitespace }
-                    _ -> 
+
+                    _ ->
                         when decodeElems bytesWithoutWhitespace [] is
-                            Errored e rest -> 
+                            Errored e rest ->
                                 { result: Err e, rest }
+
                             Done vals rest ->
                                 when rest is
                                     [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }

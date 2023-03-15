@@ -951,8 +951,8 @@ pow : Frac a, Frac a -> Frac a
 ##
 ## Num.exp 5 6
 ## ```
-## ## Performance Details 
-## 
+## ## Performance Details
+##
 ## Be careful! It is very easy for this function to produce an answer
 ## so large it causes an overflow.
 powInt : Int a, Int a -> Int a
