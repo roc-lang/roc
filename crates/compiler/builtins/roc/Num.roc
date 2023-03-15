@@ -175,7 +175,7 @@ interface Num
 ## In this way, the [Num] type makes it possible to have `1 + 0x1` return
 ## `2 : Int *` and `1.5 + 1.5` return `3.0 : Frac`.
 ##
-## **Number Literals**
+## ## Number Literals
 ##
 ## Number literals without decimal points (like `0`, `4` or `360`)
 ## have the type `Num *` at first, but usually end up taking on
@@ -951,7 +951,9 @@ pow : Frac a, Frac a -> Frac a
 ##
 ## Num.exp 5 6
 ## ```
-## **Performance Note:** Be careful! It is very easy for this function to produce an answer
+## ## Performance Details 
+## 
+## Be careful! It is very easy for this function to produce an answer
 ## so large it causes an overflow.
 powInt : Int a, Int a -> Int a
 

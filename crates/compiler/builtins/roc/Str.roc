@@ -1,5 +1,5 @@
 ##
-## **Working with Unicode strings in Roc.**
+## ## Working with Unicode strings in Roc
 ##
 ## Unicode can represent text values which span multiple languages, symbols, and emoji.
 ## Here are some valid Roc strings:

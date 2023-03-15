@@ -95,7 +95,7 @@ interface List
 ## Under the hood, a list is a record containing a `len : Nat` field, a `capacity : Nat`
 ## field, and a pointer to a reference count and a flat array of bytes.
 ##
-## **Shared Lists**
+## ## Shared Lists
 ##
 ## Shared lists are [reference counted](https://en.wikipedia.org/wiki/Reference_counting).
 ##
