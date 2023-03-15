@@ -834,7 +834,7 @@ mod cli_run {
             &[],
             &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
             &[],
-            "Processed 3 files with 3 successes and 0 errors\n",
+            "Processed 4 files with 3 successes and 0 errors\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
