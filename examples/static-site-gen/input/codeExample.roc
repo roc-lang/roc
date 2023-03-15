@@ -1,5 +1,4 @@
 ## This is a documentation comment
-
 # This is a comment
 app "static-site"
     packages { pf: "platform/main.roc" }
