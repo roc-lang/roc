@@ -60,6 +60,9 @@ impl FromWasm32Memory for RocStr {
         let str_words: &[u32; 3] = unsafe { std::mem::transmute(&str_bytes) };
 
         let big_elem_ptr = str_words[Builtin::WRAPPER_PTR as usize] as usize;
+        // If the str is a seamless slice, it's highest bit will be set to 1.
+        // We need to remove that bit or we will get an incorrect negative length.
+        // Since wasm length is 32bits, and with i32::MAX (0 followed by all 1s in 32 bit).
         let big_length = str_words[Builtin::WRAPPER_LEN as usize] as usize & (i32::MAX as usize);
         let big_capacity = str_words[Builtin::WRAPPER_CAPACITY as usize] as usize;
 

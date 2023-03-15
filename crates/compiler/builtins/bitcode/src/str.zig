@@ -59,7 +59,8 @@ pub const RocStr = extern struct {
     }
 
     // This requires that the list is non-null.
-    pub fn fromSubList(list: RocList, start: usize, count: usize, update_mode: UpdateMode) RocStr {
+    // It also requires that start and count define a slice that does not go outside the bounds of the list.
+    pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: UpdateMode) RocStr {
         const start_byte = @ptrCast([*]u8, list.bytes) + start;
         if (list.isSeamlessSlice()) {
             return RocStr{
@@ -173,20 +174,10 @@ pub const RocStr = extern struct {
         // Now we have to look at the string contents
         const self_bytes = self.asU8ptr();
         const other_bytes = other.asU8ptr();
-
-        // It's faster to compare pointer-sized words rather than bytes, as far as possible
-        // The bytes are always pointer-size aligned due to the refcount
-        // const self_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), self_bytes));
-        // const other_words = @ptrCast([*]const usize, @alignCast(@alignOf(usize), other_bytes));
-        // var w: usize = 0;
-        // while (w < self_len / @sizeOf(usize)) : (w += 1) {
-        //     if (self_words[w] != other_words[w]) {
-        //         return false;
-        //     }
-        // }
-
-        // Compare the leftover bytes
-        // var b = w * @sizeOf(usize);
+        // TODO: we can make an optimization like memcmp does in glibc.
+        // We can check the min shared alignment 1, 2, 4, or 8.
+        // Then do a copy at that alignment before falling back on one byte at a time.
+        // Currently we have to be unaligned because slices can be at any alignment.
         var b: usize = 0;
         while (b < self_len) : (b += 1) {
             if (self_bytes[b] != other_bytes[b]) {
@@ -864,7 +855,6 @@ pub fn strSplit(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
     return list;
 }
 
-const Init = fn (slice_bytes: [*]u8, len: usize, ref_ptr: usize) RocStr;
 fn initFromSmallStr(slice_bytes: [*]u8, len: usize, _: usize) RocStr {
     return RocStr.init(slice_bytes, len);
 }
@@ -1919,7 +1909,7 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
 
     if (isValidUnicode(bytes)) {
         // Make a seamless slice of the input.
-        const string = RocStr.fromSubList(arg, start, count, update_mode);
+        const string = RocStr.fromSubListUnsafe(arg, start, count, update_mode);
         return FromUtf8Result{
             .is_ok = true,
             .string = string,
