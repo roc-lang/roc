@@ -32,7 +32,7 @@ Eq has
     ## cannot derive `isEq` for types that contain functions.
     isEq : a, a -> Bool | a has Eq
 
-## Represents the boolean truthy and falsy using an opaque type.
+## Represents the boolean true and false using an opaque type.
 ## `Bool` implements the `Eq` ability.
 Bool := [True, False] has [Eq { isEq: boolIsEq }]
 
