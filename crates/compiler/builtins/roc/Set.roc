@@ -201,9 +201,8 @@ fromList = \list ->
 ## ```
 ## set1 = Set.single Left
 ## set2 = Set.single Right
-## combined = Set.fromList [Left, Right]
 ##
-## expect Set.union set1 set2 == combined
+## expect Set.union set1 set2 == Set.fromList [Left, Right]
 ## ```
 union : Set k, Set k -> Set k | k has Hash & Eq
 union = \@Set dict1, @Set dict2 ->
@@ -216,9 +215,7 @@ union = \@Set dict1, @Set dict2 ->
 ## set1 = Set.fromList [Left, Other]
 ## set2 = Set.fromList [Left, Right]
 ##
-## intersection = Set.single Left
-##
-## expect Set.intersection set1 set2 == intersection
+## expect Set.intersection set1 set2 == Set.single Left
 ## ```
 intersection : Set k, Set k -> Set k | k has Hash & Eq
 intersection = \@Set dict1, @Set dict2 ->
@@ -232,9 +229,7 @@ intersection = \@Set dict1, @Set dict2 ->
 ## first = Set.fromList [Left, Right, Up, Down]
 ## second = Set.fromList [Left, Right]
 ##
-## difference = Set.fromList [Up, Down]
-##
-## expect Set.difference first second == difference
+## expect Set.difference first second == Set.fromList [Up, Down]
 ## ```
 difference : Set k, Set k -> Set k | k has Hash & Eq
 difference = \@Set dict1, @Set dict2 ->
