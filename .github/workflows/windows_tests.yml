@@ -26,15 +26,15 @@ jobs:
       #  with:
       #    shared-key: "rust-cache-windows-${{env.GITHUB_RUNNER_CPU}}"
 
-      #- name: download and install zig
-      #  run: |
-      #    curl.exe --output "C:\zig-windows-x86_64-0.9.1.zip" --url https://ziglang.org/download/0.9.1/zig-windows-x86_64-0.9.1.zip
-      #    cd C:\
-      #    7z x zig-windows-x86_64-0.9.1.zip
-      #    Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.9.1\"
+      - name: download and install zig
+        run: |
+          curl.exe --output "C:\zig-windows-x86_64-0.9.1.zip" --url https://ziglang.org/download/0.9.1/zig-windows-x86_64-0.9.1.zip
+          cd C:\
+          7z x zig-windows-x86_64-0.9.1.zip
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.9.1\"
 
-      #- name: zig version
-      #  run: zig version
+      - name: zig version
+        run: zig version
 
       - name: install rust nightly 1.65
         run: rustup install nightly-2022-09-17
