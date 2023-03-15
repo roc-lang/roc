@@ -319,31 +319,31 @@ procedure Num.24 (#Attr.2, #Attr.3):
     ret Num.303;
 
 procedure Str.12 (#Attr.2):
-    let Str.282 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.282;
+    let Str.283 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.283;
 
 procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
-    let Str.274 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
-    ret Str.274;
+    let Str.275 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
+    ret Str.275;
 
-procedure Str.9 (Str.76):
-    let Str.272 : U64 = 0i64;
-    let Str.273 : U64 = CallByName List.6 Str.76;
-    let Str.77 : {U64, Str, Int1, U8} = CallByName Str.48 Str.76 Str.272 Str.273;
-    let Str.269 : Int1 = StructAtIndex 2 Str.77;
-    if Str.269 then
-        let Str.271 : Str = StructAtIndex 1 Str.77;
-        inc Str.271;
-        dec Str.77;
-        let Str.270 : [C {U64, U8}, C Str] = TagId(1) Str.271;
-        ret Str.270;
+procedure Str.9 (Str.77):
+    let Str.273 : U64 = 0i64;
+    let Str.274 : U64 = CallByName List.6 Str.77;
+    let Str.78 : {U64, Str, Int1, U8} = CallByName Str.48 Str.77 Str.273 Str.274;
+    let Str.270 : Int1 = StructAtIndex 2 Str.78;
+    if Str.270 then
+        let Str.272 : Str = StructAtIndex 1 Str.78;
+        inc Str.272;
+        dec Str.78;
+        let Str.271 : [C {U64, U8}, C Str] = TagId(1) Str.272;
+        ret Str.271;
     else
-        let Str.267 : U8 = StructAtIndex 3 Str.77;
-        let Str.268 : U64 = StructAtIndex 0 Str.77;
-        dec Str.77;
-        let Str.266 : {U64, U8} = Struct {Str.268, Str.267};
-        let Str.265 : [C {U64, U8}, C Str] = TagId(0) Str.266;
-        ret Str.265;
+        let Str.268 : U8 = StructAtIndex 3 Str.78;
+        let Str.269 : U64 = StructAtIndex 0 Str.78;
+        dec Str.78;
+        let Str.267 : {U64, U8} = Struct {Str.269, Str.268};
+        let Str.266 : [C {U64, U8}, C Str] = TagId(0) Str.267;
+        ret Str.266;
 
 procedure Test.0 ():
     let Test.12 : Str = "bar";
