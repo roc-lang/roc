@@ -197,7 +197,7 @@ walk = \@Dict { data }, initialState, transform ->
 
 ## Same as [Dict.walk], except you can stop walking early.
 ##
-## **Performance Details**
+## ## Performance Details
 ##
 ## Compared to [Dict.walk], this can potentially visit fewer elements (which can
 ## improve performance) at the cost of making each step take longer.

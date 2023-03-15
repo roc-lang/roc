@@ -212,7 +212,10 @@ graphemes : Str -> List Str
 ## expect !Str.startsWithScalar "9" 9 # the Unicode scalar for "9" is 57, not 9
 ## expect !Str.startsWithScalar "" 40527
 ## ```
-## **Performance Note:** This runs slightly faster than [Str.startsWith], so
+##
+## ## Performance Details
+##
+## This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
 ## in a single code point, you can use (for example) `Str.startsWithScalar '鹏'`
 ## instead of `Str.startsWith "鹏"`. ('鹏' evaluates to the [U32] value `40527`.)

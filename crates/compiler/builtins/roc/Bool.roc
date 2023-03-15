@@ -59,7 +59,7 @@ false = @Bool False
 ## expect (Bool.false && Bool.false) == Bool.false
 ## ```
 ##
-## **Performance Details**
+## ## Performance Details
 ##
 ## In Roc the `&&` and `||` work the same way as any
 ## other function. However, in some languages `&&` and `||` are special-cased.
@@ -87,7 +87,10 @@ and : Bool, Bool -> Bool
 ## expect (Bool.true || Bool.false) == Bool.true
 ## expect (Bool.false || Bool.false) == Bool.false
 ## ```
-## **Performance Note** that in Roc the `&&` and `||` work the same way as any
+##
+## ## Performance Details
+##
+## In Roc the `&&` and `||` work the same way as any
 ## other functions. However, in some languages `&&` and `||` are special-cased.
 ## Refer to the note in `Bool.and` for more detail.
 or : Bool, Bool -> Bool

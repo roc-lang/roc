@@ -239,7 +239,7 @@ Num range := range
 ##
 ## This pattern continues up to [U128] and [I128].
 ##
-## **Performance notes**
+## ## Performance Details
 ##
 ## In general, using smaller numeric sizes means your program will use less memory.
 ## However, if a mathematical operation results in an answer that is too big
@@ -381,7 +381,7 @@ Int range : Num (Integer range)
 ## Whenever a function in this module could return one of these values, that
 ## possibility is noted in the function's documentation.
 ##
-## **Performance Notes**
+## ## Performance Details
 ##
 ## On typical modern CPUs, performance is similar between [Dec], [F64], and [F32]
 ## for addition and subtraction. For example, [F32] and [F64] do addition using
@@ -481,7 +481,7 @@ F32 : Num (FloatingPoint Binary32)
 ## details, below), and decimal precision loss isn't as big a concern when
 ## dealing with screen coordinates as it is when dealing with currency.
 ##
-## **Performance**
+## ## Performance Details
 ##
 ## [Dec] typically takes slightly less time than [F64] to perform addition and
 ## subtraction, but 10-20 times longer to perform multiplication and division.

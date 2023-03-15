@@ -90,7 +90,7 @@ interface List
 ## > in Roc code will always fail, although in practice it is likely to fail
 ## > at much smaller lengths due to insufficient memory being available.
 ##
-## **Performance Details**
+## ## Performance Details
 ##
 ## Under the hood, a list is a record containing a `len : Nat` field, a `capacity : Nat`
 ## field, and a pointer to a reference count and a flat array of bytes.
@@ -425,7 +425,7 @@ walkBackwardsHelp = \list, state, f, indexPlusOne ->
 
 ## Same as [List.walk], except you can stop walking early.
 ##
-## **Performance Details**
+## ## Performance Details
 ##
 ## Compared to [List.walk], this can potentially visit fewer elements (which can
 ## improve performance) at the cost of making each step take longer.
@@ -504,7 +504,7 @@ all = \list, predicate ->
 ## ```
 ## List.keepIf [1, 2, 3, 4] (\num -> num > 2)
 ## ```
-## **Performance Details**
+## ## Performance Details
 ##
 ## [List.keepIf] always returns a list that takes up exactly the same amount
 ## of memory as the original, even if its length decreases. This is because it
@@ -541,7 +541,7 @@ keepIfHelp = \list, predicate, kept, index, length ->
 ## ```
 ## List.dropIf [1, 2, 3, 4] (\num -> num > 2)
 ## ```
-## **Performance Details**
+## ## Performance Details
 ##
 ## `List.dropIf` has the same performance characteristics as [List.keepIf].
 ## See its documentation for details on those characteristics!
