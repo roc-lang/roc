@@ -1887,7 +1887,7 @@ pub fn isValidUnicode(ptr: [*]const u8, len: usize) callconv(.C) bool {
     const step = size;
     var i: usize = 0;
     while (i + step < buf.len) {
-        var bytes: usize = 0;
+        var bytes: u64 = 0;
         @memcpy(@ptrCast([*]u8, &bytes), @ptrCast([*]const u8, buf) + i, size);
         const unicode_bytes = bytes & 0x8080_8080_8080_8080;
         if (unicode_bytes == 0) {
