@@ -1811,7 +1811,7 @@ pub fn fromUtf8RangeC(
 pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
     const bytes = @ptrCast([*]const u8, arg.bytes)[start..count];
 
-    if (unicode.utf8ValidateSlice(bytes)) {
+    if (isValidUnicode(bytes)) {
         // the output will be correct. Now we need to clone the input
 
         // TODO: rework this to properly take advantage fo seamless slices.
@@ -1877,9 +1877,48 @@ fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: U
     unreachable;
 }
 
-pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
-    const bytes: []u8 = ptr[0..len];
-    return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{bytes});
+pub fn isValidUnicode(buf: []const u8) bool {
+    const size = @sizeOf(u64);
+    // TODO: we should test changing the step on other platforms.
+    // The general tradeoff is making extremely large strings potentially much faster
+    // at the cost of small strings being slightly slower.
+    const step = size;
+    var i: usize = 0;
+    while (i + step < buf.len) {
+        var bytes: u64 = undefined;
+        @memcpy(@ptrCast([*]u8, &bytes), @ptrCast([*]const u8, buf) + i, size);
+        const unicode_bytes = bytes & 0x8080_8080_8080_8080;
+        if (unicode_bytes == 0) {
+            i += step;
+            continue;
+        }
+
+        while (buf[i] < 0b1000_0000) : (i += 1) {}
+
+        while (buf[i] >= 0b1000_0000) {
+            // This forces prefetching, otherwise the loop can run at about half speed.
+            var small_buf: [4]u8 = undefined;
+            @memcpy(&small_buf, @ptrCast([*]const u8, buf) + i, 4);
+            // TODO: Should we always inline these function calls below?
+            if (std.unicode.utf8ByteSequenceLength(small_buf[0])) |cp_len| {
+                if (std.meta.isError(std.unicode.utf8Decode(small_buf[0..cp_len]))) {
+                    return false;
+                }
+                i += cp_len;
+                if (i + 4 >= buf.len) break;
+            } else |_| {
+                return false;
+            }
+        }
+    }
+
+    if (i == buf.len) return true;
+    while (buf[i] < 0b1000_0000) {
+        i += 1;
+        if (i == buf.len) return true;
+    }
+
+    return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{buf[i..]});
 }
 
 const Utf8DecodeError = error{
