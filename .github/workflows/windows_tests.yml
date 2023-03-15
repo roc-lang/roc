@@ -22,9 +22,9 @@ jobs:
 
       - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "rust-cache-windows-${{env.GITHUB_RUNNER_CPU}}"
+      #- uses: Swatinem/rust-cache@v2
+      #  with:
+      #    shared-key: "rust-cache-windows-${{env.GITHUB_RUNNER_CPU}}"
 
       - name: download and install zig
         run: |
