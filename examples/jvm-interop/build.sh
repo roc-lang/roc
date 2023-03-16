@@ -10,14 +10,13 @@ set -euxo pipefail
 
 
 # if roc is in your path, you could
-# roc build --lib
+# roc build impl.roc --no-link
 # else, assuming in roc repo and that you ran `cargo run --release`
-../../target/release/roc build --lib
+# ../../target/release/roc build impl.roc --lib
+../../target/release/roc build impl.roc --no-link
 
-mv libhello.so.1.0 libhello.so.1
-ln -sf libhello.so.1 libhello.so
 
-# for clang's compilation
+# make jvm look here to see libinterop.so
 export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
 
 # needs jdk10 +
@@ -26,19 +25,17 @@ export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
 # but this is the way of java packaging
 # we could go without it with an "implicit" package, but that would ache later on,
 # especially with other jvm langs
-javac -h . javaSource/Greeter.java
+javac -h . javaSource/Demo.java
 
 
-# build jni bridge
 clang \
-    -c -fPIC \
+    -g -Wall \
+    -fPIC \
     -I"$JAVA_HOME/include" \
     -I"$JAVA_HOME/include/linux" \
-    -o bridge.o bridge.c
+    -shared -o libinterop.so \
+    rocdemo.o bridge.c
 
-
-# build interop
-clang -shared -o libinterop.so bridge.o -L. -lhello
 
 # then run
-java javaSource.Greeter
+java javaSource.Demo

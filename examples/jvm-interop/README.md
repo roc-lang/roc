@@ -17,45 +17,43 @@ As the time of writing this post, the following is the current bare bones tree o
 
 ``` console
 .
+├── impl.roc
+├── platform.roc
 ├── bridge.c
-├── javaSource
-│   └── Greeter.java
-├── main.roc          # application main
-└── platform
-    ├── host.c
-    └── main.roc      # main for host
+└── javaSource
+    └── Demo.java
 ```
 
-bridge.c is the JNI bridge. The interesting part of it is the function `Java_javaSource_Greeter_sayHello`, this function will accept a `jint` and return a `jstring`.
+impl.roc is the application where we actually implement our native Roc functions.\
+platform.roc as the name suggests contains platform logic, (but doesn't really have much here, mostly just) exposes functions to the host - bridge.c\
+bridge.c is the JNI bridge, it's the host that implements the Roc functions (e.g roc_alloc) and the JNI functions that act like the bridge between Roc and Java (bridge as in, doing type conversions between the languages, needed jvm boilerplate, etc). 
 
-In this function, the number, encoded as bytes, will be passed to the platform.\
-The platform will then pass the number to the application which in turn will create our newly formatted string.\
+For now we care about the function `Java_javaSource_Demo_sayHello`, this function will accept a `jstring` denoting the name and return a `jstring` denoting the message from Roc.
+
+In this function, the name will be passed to the platform.\
+The platform will then call the application with the given name, and we'll get back our formatted java String.\
+
 Just so you know what to expect, the formatting function looks like this:
 ``` coffee
-main : U64 -> Str
-main = \num ->
-    if num == 0 then
-        "I need a positive number here!"
-    else
-        str = Num.toStr num
-        "The number was \(str), OH YEAH!!! 🤘🤘"
+interpolateString : Str -> Str
+interpolateString = \name ->
+    "Hello from Roc \(name)!!!🤘🤘🤘"
 ```
 
-The Roc string, formatted with the java integer, will then be converted into a Java String the JVM could understand.
 
-I mentioned the C code will accept a number, but let's step back and see how we declare our native C function and pass the number to it, from Java:
+I mentioned the C code will accept a name, but let's step back and see how we declare our native C function and pass the name to it, in Java:
 
 ``` java
 package javaSource;
 
-public class Greeter {
+public class Demo {
    static {
       System.loadLibrary("interop"); // this loads the dynamic library created from our JNI code!
    }
-   public static native String sayHello(int num);
+   public static native String sayHello(String name);
 
    public static void main(String[] args) {
-      System.out.println(sayHello(420));
+      System.out.println(sayHello("Brendan"));
    }
 }
 
@@ -67,7 +65,7 @@ public class Greeter {
 
 ```console
 [dankey@computer:~/dev/roc/examples/jvm-interop]$ ./build.sh && java javaSource.Greeter
-The number was 420, OH YEAH!!! 🤘🤘
+Hello from Roc Brendan!!!🤘🤘🤘
 ```
 That's pretty cool!\
 Since we're talking JVM Bytecode, we can pretty much call our native function from any language that speaks JVM Bytecode.
@@ -86,9 +84,9 @@ Now, let's try Kotlin!
 [nix-shell:~/dev/roc/examples/jvm-interop]$ kotlin
 Welcome to Kotlin version 1.7.20 (JRE 17.0.5+8-nixos)
 Type :help for help, :quit for quit
->>> import javaSource.Greeter
->>> Greeter.sayHello(69)
-res1: kotlin.String = The number was 69, OH YEAH!!! 🤘🤘
+>>> import javaSource.Demo
+>>> Demo.sayHello("Kotlin Users")
+res1: kotlin.String = Hello from Roc Kotlin Users!!!🤘🤘🤘
 ```
 And it just works, out of the box!
 
@@ -98,35 +96,35 @@ Now let's do Scala
 [nix-shell:~/dev/roc/examples/jvm-interop]$ scala
 Welcome to Scala 2.13.10 (OpenJDK 64-Bit Server VM, Java 17.0.5).
 Type in expressions for evaluation. Or try :help.
+scala> import javaSource.Demo
+import javaSource.Demo
 
-scala> import javaSource.Greeter
-import javaSource.Greeter
-
-scala> Greeter.sayHello(1337)
-val res0: String = The number was 1337, OH YEAH!!! 🤘🤘
+scala> Demo.sayHello("Scala Users")
+val res0: String = Hello from Roc Scala Users!!!🤘🤘🤘
 
 ```
 And it also works beautifully.
 
 Last one - Clojure
+Do note that in Clojure you need to add a `-Sdeps '{:paths ["."]}'` flag to add the working directory to paths.
 ``` console
 [nix-shell:~/dev/roc/examples/jvm-interop]$ clj -Sdeps '{:paths ["."]}'
 Clojure 1.11.1
-user=> (import 'javaSource.Greeter)
-javaSource.Greeter
-user=> (Greeter/sayHello 21)
-"The number was 21, OH YEAH!!! 🤘🤘"
+user=> (import 'javaSource.Demo)
+javaSource.Demo
+user=> (Demo/sayHello "Clojure Users")
+"Hello from Roc Clojure Users!!!🤘🤘🤘"
 ```
-Do note that in Clojure you need to add a `-Sdeps '{:paths ["."]}'` flag to add the working directory to paths.
 
 Test it out on your favorite JVM lang!\
 And again, if anything goes not according to plan, tell me in the link above and we'll figure it out.
 
 ## Notes on building
-I suggest reading the build script and uncommenting according to your setup.\
-But one note on something that may not be obvious:\
-As of the time of writing this document, `roc build --lib` generates a shared object with the suffix `.so.1.0`.\
-This `.0` suffix is unneeded in any part of the build, so we can simply rename it.\
-But one does depend on `libhello.so` (without `.1`), so we symlink into it.
+The process is basically the following:
+1. Build our application + platform .roc files with (`roc build impl.roc --no-link`) into an object file
+2. Generate a C header file (for bridge.c's) using java.
+3. Bundle up the C bridge together with our object file into a shared object.
 
+And that's it, use that shared object from your JVM language. Note every JVM language has its own way to declare that native library so you may want to look at it, or do like in the demo and declare it in java and use the binding from anywhere.
 
+I suggest reading the build script (build.sh) and adjusting according to your setup.

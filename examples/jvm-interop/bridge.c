@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 #include <jni.h>
-#include "javaSource_Greeter.h"
+#include "javaSource_Demo.h"
 
 
 void *roc_alloc(size_t size, unsigned int alignment)
@@ -89,20 +89,27 @@ void decref(uint8_t* bytes, uint32_t alignment)
     }
 }
 
-// RocBytes (List U8)
+struct RocBytesI32
+{
+    int32_t *bytes;
+    size_t len;
+    size_t capacity;
+};
 
-struct RocBytes
+// RocBytesU8 (List U8)
+
+struct RocBytesU8
 {
     uint8_t *bytes;
     size_t len;
     size_t capacity;
 };
 
-struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
+struct RocBytesU8 init_rocbytes_u8(uint8_t *bytes, size_t len)
 {
     if (len == 0)
     {
-        struct RocBytes ret = {
+        struct RocBytesU8 ret = {
             .len = 0,
             .bytes = NULL,
             .capacity = MASK,
@@ -112,7 +119,7 @@ struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
     }
     else
     {
-        struct RocBytes ret;
+        struct RocBytesU8 ret;
         size_t refcount_size = sizeof(size_t);
         uint8_t *new_content = ((uint8_t *)roc_alloc(len + refcount_size, alignof(size_t))) + refcount_size;
 
@@ -162,15 +169,15 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
         // Copy the bytes into the stack allocation
         memcpy(&ret, bytes, len);
 
-        // Record the string's length in the last byte of the stack allocation
+        // Record the string's len in the last byte of the stack allocation
         ((uint8_t *)&ret)[sizeof(struct RocStr) - 1] = (uint8_t)len | 0b10000000;
 
         return ret;
     }
     else
     {
-        // A large RocStr is the same as a List U8 (aka RocBytes) in memory.
-        struct RocBytes roc_bytes = init_rocbytes(bytes, len);
+        // A large RocStr is the same as a List U8 (aka RocBytesU8) in memory.
+        struct RocBytesU8 roc_bytes = init_rocbytes_u8(bytes, len);
 
         struct RocStr ret = {
             .len = roc_bytes.len,
@@ -184,7 +191,7 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
 
 bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
 
-// Determine the length of the string, taking into
+// Determine the len of the string, taking into
 // account the small string optimization
 size_t roc_str_len(struct RocStr str)
 {
@@ -207,15 +214,32 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
-extern void roc__stringInterpolation_1_exposed_generic(struct RocBytes *ret, int32_t arg);
 
-JNIEXPORT jstring JNICALL Java_javaSource_Greeter_sayHello
-   (JNIEnv *env, jobject thisObj, jint num)
+extern void roc__interpolateStringy_1_exposed_generic(struct RocStr *ret, struct RocStr *name);
+// uncomment to test record
+/* extern void roc__programForHost_1__InterpolateString_caller(struct RocStr *ret, struct RocStr *name); */
+
+/* extern void roc__programForHost_1__MulArrByScalar_caller(struct RocBytesI32 *ret, struct RocBytesI32 *arr); */
+
+
+JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
+   (JNIEnv *env, jobject thisObj, jstring name)
 {
-    struct RocBytes ret = {0};
+    const char *jnameChars = (*env)->GetStringUTFChars(env, name, 0);
+    // we copy just in case the jvm would try to reclaim that mem
+    uint8_t *cnameChars = (uint8_t *)strdup(jnameChars);
+    size_t nameLength = (size_t) (*env)->GetStringLength(env, name);
+    (*env)->ReleaseStringUTFChars(env, name, jnameChars);
+
+
+    struct RocStr rocName = init_rocstr(cnameChars, nameLength);
+    struct RocStr ret = {0};
 
     // Call the Roc function to populate `ret`'s bytes.
-    roc__stringInterpolation_1_exposed_generic(&ret, (int32_t) num);
+    // uncomment to test record
+    /* roc__programForHost_1__InterpolateString_caller(&ret, &rocName); */
+    roc__interpolateStringy_1_exposed_generic(&ret, &rocName);
+
 
     // java being java making this a lot harder than it needs to be
     // https://stackoverflow.com/questions/32205446/getting-true-utf-8-characters-in-java-jni
@@ -230,14 +254,44 @@ JNIEXPORT jstring JNICALL Java_javaSource_Greeter_sayHello
     jclass stringClass = (*env)->FindClass(env, "java/lang/String");
     // https://docs.oracle.com/javase/7/docs/jdk/api/jpda/jdi/com/sun/jdi/doc-files/signature.html
     jmethodID stringConstructor = (*env)->GetMethodID(env, stringClass, "<init>", "([BLjava/lang/String;)V");
-
     jstring result = (*env)->NewObject(env, stringClass, stringConstructor, byteArray, charsetName);
 
     // cleanup
     decref((void *)&ret, alignof(uint8_t *));
+    decref((void *)&rocName, alignof(uint8_t *));
+
     (*env)->DeleteLocalRef(env, charsetName);
     (*env)->ReleaseByteArrayElements(env, byteArray, bytes, 0);
     (*env)->DeleteLocalRef(env, byteArray);
 
+    free(cnameChars);
+
     return result;
 }
+
+
+/* JNIEXPORT jintArray JNICALL Java_javaSource_Greeter_mularr */
+/*    (JNIEnv *env, jobject thisObj, jintArray arr) */
+/* { */
+/*     jsize len = (*env)->GetArrayLength(env, arr); */
+
+/*     struct RocBytesI32 ret = {0}; */
+/*     int* jarr = (int*) (*env)->GetIntArrayElements(env, arr, NULL); */
+/*     /\* int *cArray = new int[len]; *\/ */
+
+/*     /\* memcpy(cArray, jArray, len * sizeof(int)); *\/ */
+/*     /\* (env*)->ReleaseIntArrayElements(env, arr, jArray, JNI_ABORT); *\/ */
+
+/*     struct RocBytesI32 originalArray = { .bytes = jarr, .len = len, .capacity = len }; */
+
+/*     roc__programForHost_1__MulArrByScalar_caller(&ret, &originalArray); */
+
+/*     jintArray multiplied = (*env)->NewIntArray(env, len); */
+/*     (*env)->SetIntArrayRegion(env, multiplied, 0, len, (jint*) ret.bytes); */
+
+/*     decref((void *)&originalArray, alignof(int32_t*)); */
+/*     decref((void *)&ret, alignof(int32_t *)); */
+
+/*     return multiplied; */
+
+/* } */
