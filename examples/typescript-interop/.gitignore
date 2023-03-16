@@ -2,3 +2,5 @@ build
 node_modules
 hello.js
 .vscode
+libhello
+*.o
