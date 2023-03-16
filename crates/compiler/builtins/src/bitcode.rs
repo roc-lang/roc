@@ -334,6 +334,7 @@ pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 pub const STR_WITH_CAPACITY: &str = "roc_builtins.str.with_capacity";
 pub const STR_GRAPHEMES: &str = "roc_builtins.str.graphemes";
 pub const STR_REFCOUNT_PTR: &str = "roc_builtins.str.refcount_ptr";
+pub const STR_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.str.release_excess_capacity";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";

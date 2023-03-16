@@ -2035,3 +2035,51 @@ fn destructure_pattern_assigned_from_thunk_tag() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.reserve "" 50
+            |> Str.releaseExcessCapacity
+            "#
+        ),
+        (RocStr::empty().capacity(), RocStr::empty()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity_with_len() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "123456789012345678901234567890"
+            |> Str.reserve 50
+            |> Str.releaseExcessCapacity
+            "#
+        ),
+        (30, "123456789012345678901234567890".into()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.releaseExcessCapacity ""
+            "#
+        ),
+        (RocStr::empty().capacity(), RocStr::empty()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
+    );
+}

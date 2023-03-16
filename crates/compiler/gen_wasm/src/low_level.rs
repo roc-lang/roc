@@ -285,6 +285,9 @@ impl<'a> LowLevelCall<'a> {
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
             StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
+            StrReleaseExcessCapacity => {
+                self.load_args_and_call_zig(backend, bitcode::STR_RELEASE_EXCESS_CAPACITY)
+            }
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
             StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),

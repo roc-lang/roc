@@ -121,6 +121,22 @@ pub const RocStr = extern struct {
         }
     }
 
+    // allocate space for a (big or small) RocStr, but put nothing in it yet.
+    // Will have the exact same capacity as length if it is not a small string.
+    pub fn allocateExact(length: usize) RocStr {
+        const result_is_big = length >= SMALL_STRING_SIZE;
+
+        if (result_is_big) {
+            return RocStr.allocateBig(length, length);
+        } else {
+            var string = RocStr.empty();
+
+            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
+
+            return string;
+        }
+    }
+
     // This returns all ones if the list is a seamless slice.
     // Otherwise, it returns all zeros.
     // This is done without branching for optimization purposes.
@@ -2890,4 +2906,28 @@ pub fn strRefcountPtr(
     string: RocStr,
 ) callconv(.C) ?[*]u8 {
     return string.getRefcountPtr();
+}
+
+pub fn strReleaseExcessCapacity(
+    string: RocStr,
+) callconv(.C) RocStr {
+    const old_length = string.len();
+    // We use the direct list.capacity_or_ref_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
+    if (string.isSmallStr()) {
+        // SmallStr has no excess capacity.
+        return string;
+    } else if (string.isUnique() and !string.isSeamlessSlice() and string.getCapacity() == old_length) {
+        return string;
+    } else if (old_length == 0) {
+        string.decref();
+        return RocStr.empty();
+    } else {
+        var output = RocStr.allocateExact(old_length);
+        const source_ptr = string.asU8ptr();
+        const dest_ptr = output.asU8ptrMut();
+
+        @memcpy(dest_ptr, source_ptr, old_length);
+
+        return output;
+    }
 }

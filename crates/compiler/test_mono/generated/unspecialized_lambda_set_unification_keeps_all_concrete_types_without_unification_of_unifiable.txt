@@ -330,8 +330,8 @@ procedure Num.24 (#Attr.2, #Attr.3):
     ret Num.305;
 
 procedure Str.12 (#Attr.2):
-    let Str.267 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.267;
+    let Str.268 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.268;
 
 procedure Test.2 (Test.11):
     let Test.18 : {{}, {}} = CallByName Encode.22 Test.11;
