@@ -805,10 +805,10 @@ mod cli_run {
             "False.roc",
             "false",
             &[],
-            &[Arg::ExamplePath("examples/hello.false")],
+            &[Arg::ExamplePath("examples/sqrt.false")],
             &[],
-            &("Hello, World!".to_string() + LINE_ENDING),
-            UseValgrind::No,
+            "1414",
+            UseValgrind::Yes,
             TestCliCommands::Many,
         )
     }
