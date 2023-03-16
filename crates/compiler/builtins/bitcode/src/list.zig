@@ -606,18 +606,18 @@ pub fn listSublist(
 ) callconv(.C) RocList {
     const size = list.len();
     if (len == 0 or start >= size) {
-        if (list.isUnique()) {
-            // Decrement the reference counts of all elements.
-            if (list.bytes) |source_ptr| {
-                var i: usize = 0;
-                while (i < size) : (i += 1) {
-                    const element = source_ptr + i * element_width;
-                    dec(element);
-                }
-                var output = list;
-                output.length = 0;
-                return output;
+        // Decrement the reference counts of all elements.
+        if (list.bytes) |source_ptr| {
+            var i: usize = 0;
+            while (i < size) : (i += 1) {
+                const element = source_ptr + i * element_width;
+                dec(element);
             }
+        }
+        if (list.isUnique()) {
+            var output = list;
+            output.length = 0;
+            return output;
         }
         list.decref(alignment);
         return RocList.empty();
