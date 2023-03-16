@@ -269,16 +269,7 @@ napi_value call_roc(napi_env env, napi_callback_info info) {
     // Call the Roc function to populate `roc_ret`'s bytes.
     struct RocStr roc_ret;
 
-    printf("Calling Roc...\n"); // TODO small string is busted for some reason here
-
-    // for(size_t i = 0; i < roc_arg_strlen; i++) {
-    //     printf("%c ", ((char*)&roc_str_arg)[i]);
-    // }
-    // printf("\n");
-
     roc__mainForHost_1_exposed_generic(&roc_ret, &roc_str_arg);
-
-    printf("Called Roc...\n");
 
     // Create a Node string from the Roc string and return it.
     char* roc_str_contents;
