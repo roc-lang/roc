@@ -12,7 +12,6 @@ set -euxo pipefail
 # if roc is in your path, you could
 # roc build impl.roc --no-link
 # else, assuming in roc repo and that you ran `cargo run --release`
-# ../../target/release/roc build impl.roc --lib
 ../../target/release/roc build impl.roc --no-link
 
 
@@ -24,7 +23,7 @@ export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
 # the "javaSource" directory may seem redundant (why not just a plain java file),
 # but this is the way of java packaging
 # we could go without it with an "implicit" package, but that would ache later on,
-# especially with other jvm langs
+# especially with other JVM langs
 javac -h . javaSource/Demo.java
 
 
