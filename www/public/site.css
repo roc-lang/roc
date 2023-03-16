@@ -173,22 +173,27 @@ table {
     overflow-x: auto;
     border: 2px solid #f0f0f0;
 }
+
 thead {
     border: none;
 }
+
 tbody {
     border: none;
 }
+
 tr {
     border: none;
     border-top: 2px solid #f0f0f0;
 }
+
 th,
 td {
     border: none;
     border-right: 2px solid #f0f0f0;
     padding: 12px;
 }
+
 th:last-child,
 td:last-child {
     border-right: none;
@@ -269,7 +274,8 @@ td:last-child {
 #tutorial-toc-toggle,
 #tutorial-toc-toggle-label,
 #close-tutorial-toc {
-    display: none; /* This may be overridden on mobile-friendly screen widths */
+    display: none;
+    /* This may be overridden on mobile-friendly screen widths */
 }
 
 #tutorial-toc-toggle,
@@ -296,6 +302,7 @@ footer {
 
 /* Mobile-friendly screen width */
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
+
     p,
     aside,
     li,
@@ -322,9 +329,11 @@ footer {
     #close-tutorial-toc {
         display: block;
     }
-    #tutorial-toc-toggle:checked + #tutorial-toc {
+
+    #tutorial-toc-toggle:checked+#tutorial-toc {
         display: block;
     }
+
     #tutorial-toc {
         display: none;
         position: fixed;
@@ -337,6 +346,7 @@ footer {
         padding-right: 120px;
         border: 0;
     }
+
     h1,
     h2,
     h3,
@@ -347,6 +357,7 @@ footer {
     code {
         word-break: break-word !important;
     }
+
     h1,
     h2,
     h3,
@@ -355,6 +366,7 @@ footer {
         line-height: 1.2em !important;
         font-size: 2rem !important;
     }
+
     #top-bar-links a,
     #top-bar-links label {
         padding: 12px 8px;
@@ -470,10 +482,8 @@ h4 {
     font-family: "Permanent Marker";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2")
-            format("woff2"),
-        url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff")
-            format("woff");
+    src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2") format("woff2"),
+        url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
         U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
         U+2215, U+FEFF, U+FFFD;
@@ -484,10 +494,8 @@ h4 {
     font-family: "Merriweather";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2")
-            format("woff2"),
-        url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff")
-            format("woff");
+    src: url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2") format("woff2"),
+        url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
         U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
@@ -497,10 +505,8 @@ h4 {
     font-family: "Merriweather";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2")
-            format("woff2"),
-        url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff")
-            format("woff");
+    src: url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2") format("woff2"),
+        url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
         U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
         U+2215, U+FEFF, U+FFFD;
@@ -511,22 +517,19 @@ h4 {
     font-family: "Merriweather Sans";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff2")
-            format("woff2"),
-        url("/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff")
-            format("woff");
+    src: url("/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff2") format("woff2"),
+        url("/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
         U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
+
 /* latin */
 @font-face {
     font-family: "Merriweather Sans";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff2")
-            format("woff2"),
-        url("/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff")
-            format("woff");
+    src: url("/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff2") format("woff2"),
+        url("/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
         U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
         U+2215, U+FEFF, U+FFFD;
@@ -537,20 +540,18 @@ h4 {
     font-family: "Lato";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2")
-            format("woff2"),
-        url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff")
-            format("woff");
+    src: url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2") format("woff2"),
+        url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
         U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
+
 /* latin */
 @font-face {
     font-family: "Lato";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2")
-            format("woff2"),
+    src: url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2") format("woff2"),
         url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
         U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
@@ -562,22 +563,19 @@ h4 {
     font-family: "Source Code Pro";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2")
-            format("woff2"),
-        url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff")
-            format("woff");
+    src: url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2") format("woff2"),
+        url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
         U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
+
 /* latin */
 @font-face {
     font-family: "Source Code Pro";
     font-style: normal;
     font-weight: 400;
-    src: url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2")
-            format("woff2"),
-        url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff")
-            format("woff");
+    src: url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2") format("woff2"),
+        url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
         U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
         U+2215, U+FEFF, U+FFFD;
@@ -635,16 +633,19 @@ samp .comment,
 code .comment {
     color: var(--green);
 }
+
 /* Number, String, Tag, Type literals */
 samp .literal,
 code .literal {
     color: var(--cyan);
 }
+
 /* Keywords and punctuation */
 samp .kw,
 code .kw {
     color: var(--magenta);
 }
+
 /* Operators */
 samp .op,
 code .op {
@@ -672,4 +673,29 @@ code .upperident {
 samp .dim,
 code .dim {
     opacity: 0.55;
+}
+
+pre {
+    position: relative;
+}
+
+.button-container {
+    position: absolute;
+    top: 0;
+    right: 0;
+}
+
+.copy-button {
+    background: none;
+    border: 1px solid var(--magenta);
+    color: var(--magenta);
+    border-radius: 3px;
+    display: inline-block;
+    cursor: pointer;
+    margin: 8px;
+}
+
+.copy-button:hover {
+    border-color: var(--green);
+    color: var(--green);
 }
