@@ -9,12 +9,6 @@ const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
 const STR = "str";
 
-comptime {
-    if (builtin.cpu.arch != .wasm32) {
-        _ = @import("compiler_rt");
-    }
-}
-
 // Dec Module
 const dec = @import("dec.zig");
 

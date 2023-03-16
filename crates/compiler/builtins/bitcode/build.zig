@@ -14,31 +14,11 @@ pub fn build(b: *Builder) void {
     const main_path_desc = b.fmt("Override path to main.zig. Used by \"ir\" and \"test\". Defaults to \"{s}\". ", .{fallback_main_path});
     const main_path = b.option([]const u8, "main-path", main_path_desc) orelse fallback_main_path;
 
-    // workaround for https://github.com/ziglang/zig/issues/14099
-    const zig_exe =
-        std.fs.path.dirname(b.zig_exe) orelse unreachable;
-    // This is where nix stores compiler_rt.
-    var compiler_rt_path =
-        std.fmt.allocPrint(std.heap.page_allocator, "{s}/../lib/zig/std/special/compiler_rt.zig", .{zig_exe}) catch unreachable;
-    std.fs.accessAbsolute(compiler_rt_path, .{}) catch {
-        // The path didn't work. Try the other common possiblity of zig living next to the lib directory instead of in a bin folder.
-        compiler_rt_path =
-            std.fmt.allocPrint(std.heap.page_allocator, "{s}/lib/std/special/compiler_rt.zig", .{zig_exe}) catch unreachable;
-    };
-    const compiler_rt: std.build.Pkg = .{
-        .name = "compiler_rt",
-        // Note: this folder will change location when updating zig. Also the outer `.path` will become `.source`.
-        .path = .{ .path = compiler_rt_path },
-    };
-
     // Tests
     var main_tests = b.addTest(main_path);
     main_tests.setBuildMode(mode);
     main_tests.linkSystemLibrary("c");
-
-    // workaround for https://github.com/ziglang/zig/issues/14099
-    main_tests.addPackage(compiler_rt);
-
+    main_tests.bundle_compiler_rt = true;
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&main_tests.step);
 
@@ -55,16 +35,16 @@ pub fn build(b: *Builder) void {
     const wasm32_target = makeWasm32Target();
 
     // LLVM IR
-    generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host", compiler_rt);
-    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386", compiler_rt);
-    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64", compiler_rt);
-    generateLlvmIrFile(b, mode, windows64_target, main_path, "ir-windows-x86_64", "builtins-windows-x86_64", compiler_rt);
-    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32", compiler_rt);
+    generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host");
+    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386");
+    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64");
+    generateLlvmIrFile(b, mode, windows64_target, main_path, "ir-windows-x86_64", "builtins-windows-x86_64");
+    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32");
 
     // Generate Object Files
-    generateObjectFile(b, mode, host_target, main_path, "object", "builtins-host", compiler_rt);
-    generateObjectFile(b, mode, windows64_target, main_path, "windows-x86_64-object", "builtins-windows-x86_64", compiler_rt);
-    generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "builtins-wasm32", compiler_rt);
+    generateObjectFile(b, mode, host_target, main_path, "object", "builtins-host");
+    generateObjectFile(b, mode, windows64_target, main_path, "windows-x86_64-object", "builtins-windows-x86_64");
+    generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "builtins-wasm32");
 
     removeInstallSteps(b);
 }
@@ -77,7 +57,6 @@ fn generateLlvmIrFile(
     main_path: []const u8,
     step_name: []const u8,
     object_name: []const u8,
-    compiler_rt: std.build.Pkg,
 ) void {
     const obj = b.addObject(object_name, main_path);
     obj.setBuildMode(mode);
@@ -85,10 +64,8 @@ fn generateLlvmIrFile(
     obj.emit_llvm_ir = .emit;
     obj.emit_llvm_bc = .emit;
     obj.emit_bin = .no_emit;
+    obj.bundle_compiler_rt = target.cpu_arch != std.Target.Cpu.Arch.wasm32;
     obj.target = target;
-
-    // workaround for https://github.com/ziglang/zig/issues/14099
-    obj.addPackage(compiler_rt);
 
     const ir = b.step(step_name, "Build LLVM ir");
     ir.dependOn(&obj.step);
@@ -106,7 +83,6 @@ fn generateObjectFile(
     main_path: []const u8,
     step_name: []const u8,
     object_name: []const u8,
-    compiler_rt: std.build.Pkg,
 ) void {
     const obj = b.addObject(object_name, main_path);
     obj.setBuildMode(mode);
@@ -115,10 +91,7 @@ fn generateObjectFile(
     obj.strip = true;
     obj.target = target;
     obj.link_function_sections = true;
-
-    // workaround for https://github.com/ziglang/zig/issues/14099
-    obj.addPackage(compiler_rt);
-
+    obj.bundle_compiler_rt = target.cpu_arch != std.Target.Cpu.Arch.wasm32;
     const obj_step = b.step(step_name, "Build object file for linking");
     obj_step.dependOn(&obj.step);
 }
