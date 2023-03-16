@@ -148,8 +148,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 .iter()
                 .map(|(tag_id, info, branch)| {
                     let mut branch_env = environment.clone();
-                    if let BranchInfo::Constructor { tag_id: tag, .. } = info {
-                        branch_env.add_layout_tag(cond_layout, *tag);
+                    if let BranchInfo::Constructor {
+                        tag_id: tag,
+                        layout: branch_layout,
+                        ..
+                    } = info
+                    {
+                        branch_env.add_layout_tag(branch_layout, *tag);
                     }
 
                     let new_branch = insert_reset_reuse_operations_stmt(
@@ -158,7 +163,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         home,
                         ident_ids,
                         update_mode_ids,
-                        &mut environment.clone(),
+                        &mut branch_env,
                         branch,
                     );
 
@@ -170,8 +175,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 let (info, branch) = default_branch;
 
                 let mut branch_env = environment.clone();
-                if let BranchInfo::Constructor { tag_id: tag, .. } = info {
-                    branch_env.add_layout_tag(cond_layout, *tag);
+                if let BranchInfo::Constructor {
+                    tag_id: tag,
+                    layout: branch_layout,
+                    ..
+                } = info
+                {
+                    branch_env.add_layout_tag(branch_layout, *tag);
                 }
 
                 let new_branch = insert_reset_reuse_operations_stmt(
@@ -180,7 +190,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     home,
                     ident_ids,
                     update_mode_ids,
-                    &mut environment.clone(),
+                    &mut branch_env,
                     branch,
                 );
 
