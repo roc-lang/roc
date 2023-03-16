@@ -807,7 +807,7 @@ mod cli_run {
             &[],
             &[Arg::ExamplePath("examples/sqrt.false")],
             &[],
-            &("1414".to_string()),
+            "1414",
             UseValgrind::Yes,
             TestCliCommands::Many,
         )
