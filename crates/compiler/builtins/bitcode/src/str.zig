@@ -1989,6 +1989,7 @@ pub fn isValidUnicode(buf: []const u8) bool {
 
         while (buf[i] >= 0b1000_0000) {
             // This forces prefetching, otherwise the loop can run at about half speed.
+            if (i + 4 >= buf.len) break;
             var small_buf: [4]u8 = undefined;
             @memcpy(&small_buf, @ptrCast([*]const u8, buf) + i, 4);
             // TODO: Should we always inline these function calls below?
@@ -1997,7 +1998,6 @@ pub fn isValidUnicode(buf: []const u8) bool {
                     return false;
                 }
                 i += cp_len;
-                if (i + 4 >= buf.len) break;
             } else |_| {
                 return false;
             }
@@ -2927,6 +2927,7 @@ pub fn strReleaseExcessCapacity(
         const dest_ptr = output.asU8ptrMut();
 
         @memcpy(dest_ptr, source_ptr, old_length);
+        string.decref();
 
         return output;
     }

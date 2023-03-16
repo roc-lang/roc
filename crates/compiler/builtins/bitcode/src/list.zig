@@ -511,6 +511,7 @@ pub fn listReleaseExcessCapacity(
 
             @memcpy(dest_ptr, source_ptr, old_length * element_width);
         }
+        list.decref(alignment);
         return output;
     }
 }
