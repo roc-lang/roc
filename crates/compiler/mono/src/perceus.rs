@@ -703,15 +703,16 @@ fn insert_refcount_operations_stmt<'v, 'a>(
 
             // First evaluate the continuation and let it consume it's free variables.
             environment.add_variable(*binding); // Add the bound variable to the environment. As it can be used in the continuation.
-            let mut new_stmt = insert_refcount_operations_stmt(arena, environment, stmt);
+            let new_stmt = insert_refcount_operations_stmt(arena, environment, stmt);
 
             // If the binding is still owned in the environment, it is not used in the continuation and we can drop it right away.
-            if matches!(
+            let new_stmt_without_unused = match matches!(
                 environment.get_variable_ownership(binding),
                 Some(Ownership::Owned)
             ) {
-                new_stmt = insert_dec_stmt(arena, *binding, new_stmt);
-            }
+                true => insert_dec_stmt(arena, *binding, new_stmt),
+                false => new_stmt,
+            };
 
             // And as the variable should not be in scope before this let binding, remove it from the environment.
             environment.remove_variable(*binding);
@@ -725,9 +726,34 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 );
 
             // Insert decrement operations for borrowed variables if they are currently owned.
-            let newer_stmt = consume_and_insert_dec_stmts(arena, environment, borrowed, new_stmt);
+            let new_stmt_with_owned_dec =
+                consume_and_insert_dec_stmts(arena, environment, borrowed, new_stmt_without_unused);
 
-            let new_let = arena.alloc(Stmt::Let(*binding, expr.clone(), *layout, newer_stmt));
+            // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
+            let new_stmt_with_inc_index = if !matches!(
+                environment.get_variable_rc_type(binding),
+                VarRcType::ReferenceCounted
+            ) {
+                // If the variable is not reference counted, we don't need to increment it.
+                new_stmt_with_owned_dec
+            } else {
+                match expr {
+                    Expr::StructAtIndex { .. }
+                    | Expr::UnionAtIndex { .. }
+                    | Expr::ExprUnbox { .. } => {
+                        insert_inc_stmt(arena, *binding, 1, new_stmt_with_owned_dec)
+                    }
+                    // No usage of an element of a reference counted variable. No need to increment.
+                    _ => new_stmt_with_owned_dec,
+                }
+            };
+
+            let new_let = arena.alloc(Stmt::Let(
+                *binding,
+                expr.clone(),
+                *layout,
+                new_stmt_with_inc_index,
+            ));
 
             // Insert increment operations for the owned variables used in the expression.
             consume_and_insert_inc_stmts(arena, environment, owned, new_let)
@@ -1088,10 +1114,22 @@ fn consume_and_insert_inc_stmt<'a>(
         Ownership::Owned => usage_count - 1,
     };
 
-    match new_count {
+    insert_inc_stmt(arena, *symbol, new_count, continuation)
+}
+
+/**
+Insert a increment statement for the given symbol.
+*/
+fn insert_inc_stmt<'a, 's>(
+    arena: &'a Bump,
+    symbol: Symbol,
+    count: u64,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    match count {
         0 => continuation,
         positive_count => arena.alloc(Stmt::Refcounting(
-            ModifyRc::Inc(*symbol, positive_count),
+            ModifyRc::Inc(symbol, positive_count),
             continuation,
         )),
     }
@@ -1142,6 +1180,7 @@ fn insert_dec_stmts<'a, 's>(
         insert_dec_stmt(arena, symbol, continuation)
     })
 }
+
 /**
 Insert a decrement statement for the given symbol.
 */
