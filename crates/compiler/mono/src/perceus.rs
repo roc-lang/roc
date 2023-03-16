@@ -62,7 +62,6 @@ struct VariableRcTypesEnv<'a, 'i> {
     layout_interner: &'i STLayoutInterner<'a>,
 }
 
-// TODO what would be a good way to structure a similar pattern? creating env, evaluating multiple different objects and returning an element from the env.
 impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
     /**
     Create a new VariableRcTypesEnv from a layout interner.
@@ -352,6 +351,7 @@ impl VariableUsage {
                         // We need to treat them as owned by incrementing the reference count before calling the function,
                         {
                             // TODO probably update the list sort implementation to assume the functions take their argument as owned.
+                            // TODO update llvm code to do the increment.
                             todo!()
                             // TODO sort will perform sort in place (if unique), take this into account.
                         }

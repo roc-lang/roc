@@ -329,6 +329,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                         // If we generate a reuse token, we no longer want to use the drop statement anymore. So we just return the reset expression.
                         // TODO verify if this works for both dec and decref.
+                        // TODO reset probably decrements it's children. So we probably need to create a resetref that only does the token.
                         return arena.alloc(Stmt::Let(
                             reuse_token.symbol,
                             reset_expr,
@@ -465,7 +466,7 @@ struct ReuseToken {
     // The symbol of the reuse token.
     symbol: Symbol,
 
-    // TODO figure out what this is.
+    // Index that can be used later to determine if in place mutation is possible.
     update_mode_id: UpdateModeId,
 }
 
