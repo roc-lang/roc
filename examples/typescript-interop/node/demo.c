@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <node_api.h>
 
+napi_env napi_global_env;
+
 void *roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
 
 void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
@@ -17,9 +19,12 @@ void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
 
 void roc_dealloc(void *ptr, unsigned int alignment) { free(ptr); }
 
-__attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
+void roc_panic(void *ptr, unsigned int alignment)
 {
-    rb_raise(rb_eException, "%s", (char *)ptr);
+    // WARNING: If roc_panic is called before napi_global_env is set,
+    // the result will be undefined behavior. So never call any Roc
+    // functions before setting napi_global_env!
+    napi_throw_error(napi_global_env, NULL, (char *)ptr);
 }
 
 void *roc_memcpy(void *dest, const void *src, size_t n)
@@ -99,7 +104,7 @@ struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
     {
         struct RocBytes ret;
         size_t refcount_size = sizeof(size_t);
-        uint8_t *new_content = (uint8_t *)roc_alloc(len + refcount_size, alignof(size_t)) + refcount_size;
+        uint8_t *new_content = (uint8_t *)roc_alloc(len + refcount_size, __alignof__(size_t)) + refcount_size;
 
         memcpy(new_content, bytes, len);
 
@@ -192,61 +197,133 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
-extern void roc__mainForHost_1_exposed_generic(struct RocBytes *ret, struct RocBytes *arg);
+extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
 
-// Receive a value from Ruby, JSON serialized it and pass it to Roc as a List U8
-// (at which point the Roc platform will decode it and crash if it's invalid,
-// which roc_panic will translate into a Ruby exception), then get some JSON back from Roc
-// - also as a List U8 - and have Ruby JSON.parse it into a plain Ruby value to return.
-VALUE call_roc(VALUE self, VALUE rb_arg)
-{
-    // This must be required before the to_json method will exist on String.
-    rb_require("json");
+// Receive a string value from Node and pass it to Roc as a RocStr, then get a RocStr
+// back from Roc and convert it into a Node string.
+napi_value call_roc(napi_env env, napi_callback_info info) {
+    napi_status status;
 
-    // Turn the given Ruby value into a JSON string.
-    // TODO should we defensively encode it as UTF-8 first?
-    VALUE json_arg = rb_funcall(rb_arg, rb_intern("to_json"), 0);
+    // roc_panic needs a napi_env in order to throw a Node exception, so we provide this
+    // one globally in case roc_panic gets called during the execution of our Roc function.
+    //
+    // According do the docs - https://nodejs.org/api/n-api.html#napi_env -
+    // it's very important that the napi_env that was passed into "the initial
+    // native function" is the one that's "passed to any subsequent nested Node-API calls,"
+    // so we must override this every time we call this function (as opposed to, say,
+    // setting it once during init).
+    napi_global_env = env;
 
-    struct RocBytes arg = init_rocbytes((uint8_t *)RSTRING_PTR(json_arg), RSTRING_LEN(json_arg));
-    struct RocBytes ret;
+    // Get the argument passed to the Node function
+    size_t argc = 1;
+    napi_value argv[1];
 
-    // Call the Roc function to populate `ret`'s bytes.
-    roc__mainForHost_1_exposed_generic(&ret, &arg);
+    status = napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
 
-    // Create a rb_utf8_str from the heap-allocated JSON bytes the Roc function returned.
-    VALUE returned_json = rb_utf8_str_new((char *)ret.bytes, ret.len);
+    if (status != napi_ok)
+    {
+        return NULL;
+    }
 
-    // Now that we've created our Ruby JSON string, we're no longer referencing the RocBytes.
-    decref((void *)&ret, alignof(uint8_t *));
+    napi_value node_arg = argv[0];
 
-    return rb_funcall(rb_define_module("JSON"), rb_intern("parse"), 1, returned_json);
-}
+    struct RocStr roc_arg;
 
-void Init_demo()
-{
-    VALUE roc_app = rb_define_module("RocApp");
-    rb_define_module_function(roc_app, "call_roc", &call_roc, 1);
-}
+    // Write the length of the Node string into `roc_arg_len`
+    size_t roc_arg_len;
 
-napi_value Method(napi_env env, napi_callback_info args) {
-  napi_value greeting;
-  napi_status status;
+    status = napi_get_value_string_utf8(env, node_arg, NULL, 0, &roc_arg_len);
 
-  status = napi_create_string_utf8(env, "World!", NAPI_AUTO_LENGTH, &greeting);
-  if (status != napi_ok) return NULL;
-  return greeting;
+    if (status != napi_ok)
+    {
+        return NULL;
+    }
+
+    // Node always writes a null terminator, so we need to keep that in mind.
+    size_t nul_terminated_str_bytes = roc_arg_len + 1;
+
+    // Create a RocStr from the Node string
+    size_t roc_arg_strlen;
+    char* roc_arg_bytes;
+
+    if (nul_terminated_str_bytes < sizeof(struct RocStr))
+    {
+        // If it can fit in a small string, use the string itself as the buffer.
+        roc_arg_bytes = (char*)&roc_arg;
+    }
+    else
+    {
+        // It was too big for a small string, so do a heap allocation and write into that.
+        roc_arg_bytes = (char*)roc_alloc(nul_terminated_str_bytes, __alignof__(char));
+    }
+
+    status = napi_get_value_string_utf8(env, node_arg, roc_arg_bytes, nul_terminated_str_bytes, &roc_arg_strlen);
+
+    if (status != napi_ok)
+    {
+        return NULL;
+    }
+
+    struct RocStr roc_str_arg = init_rocstr((uint8_t*)roc_arg_bytes, roc_arg_strlen);
+
+    // Call the Roc function to populate `roc_ret`'s bytes.
+    struct RocStr roc_ret;
+
+    printf("Calling Roc...\n"); // TODO small string is busted for some reason here
+
+    // for(size_t i = 0; i < roc_arg_strlen; i++) {
+    //     printf("%c ", ((char*)&roc_str_arg)[i]);
+    // }
+    // printf("\n");
+
+    roc__mainForHost_1_exposed_generic(&roc_ret, &roc_str_arg);
+
+    printf("Called Roc...\n");
+
+    // Create a Node string from the Roc string and return it.
+    char* roc_str_contents;
+
+    if (is_small_str(roc_ret))
+    {
+        // In a small string, the string itself contains its contents.
+        roc_str_contents = (char*)&roc_ret;
+    }
+    else
+    {
+        roc_str_contents = (char*)roc_ret.bytes;
+    }
+
+    napi_value node_ret;
+
+    status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_ret), &node_ret);
+
+    if (status != napi_ok)
+    {
+        return NULL;
+    }
+
+    return node_ret;
 }
 
 napi_value init(napi_env env, napi_value exports) {
-  napi_status status;
-  napi_value fn;
+    napi_status status;
+    napi_value fn;
 
-  status = napi_create_function(env, NULL, 0, Method, NULL, &fn);
-  if (status != napi_ok) return NULL;
+    status = napi_create_function(env, NULL, 0, call_roc, NULL, &fn);
 
-  status = napi_set_named_property(env, exports, "hello", fn);
-  if (status != napi_ok) return NULL;
-  return exports;
+    if (status != napi_ok)
+    {
+        return NULL;
+    }
+
+    status = napi_set_named_property(env, exports, "hello", fn);
+
+    if (status != napi_ok)
+    {
+        return NULL;
+    }
+
+    return exports;
 }
 
 NAPI_MODULE(NODE_GYP_MODULE_NAME, init)

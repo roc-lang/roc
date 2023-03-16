@@ -3,4 +3,7 @@ node_modules
 hello.js
 .vscode
 libhello
+*.dylib
+*.so
+*.dll
 *.o
