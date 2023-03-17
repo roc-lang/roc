@@ -446,10 +446,10 @@ Here's the type of `table`:
 ```roc
 table :
     {
-        height: Pixels,
-        width: Pixels,
-        title? Str,
-        description? Str,
+        height : Pixels,
+        width : Pixels,
+        title ? Str,
+        description ? Str,
     }
     -> Table
 ```
@@ -1847,7 +1847,7 @@ Putting these together, whether a tag union is inferred to be open or closed dep
 
 ### [Combining Open Unions](#combining-open-unions) {#combining-open-unions}
 
-When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`, the type of `{ a: "hi" }` is inferred to be `{ a: Str }`. In contrast, when we make a new tag, it's inferred to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[Bar Str]*`.
+When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`, the type of `{ a: "hi" }` is inferred to be `{ a : Str }`. In contrast, when we make a new tag, it's inferred to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[Bar Str]*`.
 
 This is because open unions can accumulate additional tags based on how they're used in the program, whereas closed unions cannot. For example, let's look at this conditional:
 

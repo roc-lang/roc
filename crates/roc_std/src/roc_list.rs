@@ -94,18 +94,18 @@ impl<T> RocList<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.length
+        self.length & (isize::MAX as usize)
     }
 
     pub fn is_seamless_slice(&self) -> bool {
-        (self.capacity_or_ref_ptr as isize) < 0
+        ((self.length | self.capacity_or_ref_ptr) as isize) < 0
     }
 
     pub fn capacity(&self) -> usize {
         if !self.is_seamless_slice() {
             self.capacity_or_ref_ptr
         } else {
-            self.length
+            self.len()
         }
     }
 
@@ -278,8 +278,10 @@ where
 
                 // Copy the old elements to the new allocation.
                 unsafe {
-                    copy_nonoverlapping(elements.as_ptr(), new_elements.as_ptr(), self.length);
+                    copy_nonoverlapping(elements.as_ptr(), new_elements.as_ptr(), self.len());
                 }
+                // Clear the seamless slice bit since we now have clear ownership.
+                self.length = self.len();
 
                 new_elements
             }
@@ -316,7 +318,7 @@ impl<T> RocList<T> {
     ///
     /// May return a new RocList, if the provided one was not unique.
     pub fn reserve(&mut self, num_elems: usize) {
-        let new_len = num_elems + self.length;
+        let new_len = num_elems + self.len();
         let new_elems;
         let old_elements_ptr;
 
@@ -359,7 +361,7 @@ impl<T> RocList<T> {
 
                     unsafe {
                         // Copy the old elements to the new allocation.
-                        copy_nonoverlapping(old_elements_ptr, new_elems.as_ptr(), self.length);
+                        copy_nonoverlapping(old_elements_ptr, new_elems.as_ptr(), self.len());
                     }
 
                     // Decrease the current allocation's reference count.
@@ -392,7 +394,7 @@ impl<T> RocList<T> {
 
         self.update_to(Self {
             elements: Some(new_elems),
-            length: self.length,
+            length: self.len(),
             capacity_or_ref_ptr: new_len,
         });
     }
@@ -413,7 +415,7 @@ impl<T> Deref for RocList<T> {
 
     fn deref(&self) -> &Self::Target {
         if let Some(elements) = self.elements {
-            let elements = ptr::slice_from_raw_parts(elements.as_ptr().cast::<T>(), self.length);
+            let elements = ptr::slice_from_raw_parts(elements.as_ptr().cast::<T>(), self.len());
 
             unsafe { &*elements }
         } else {
@@ -458,7 +460,7 @@ where
 {
     fn partial_cmp(&self, other: &RocList<U>) -> Option<cmp::Ordering> {
         // If one is longer than the other, use that as the ordering.
-        match self.length.partial_cmp(&other.length) {
+        match self.len().partial_cmp(&other.len()) {
             Some(Ordering::Equal) => {}
             ord => return ord,
         }
@@ -482,7 +484,7 @@ where
 {
     fn cmp(&self, other: &Self) -> Ordering {
         // If one is longer than the other, use that as the ordering.
-        match self.length.cmp(&other.length) {
+        match self.len().cmp(&other.len()) {
             Ordering::Equal => {}
             ord => return ord,
         }

@@ -16,7 +16,7 @@ path = "src/main.rs"
 test = false
 
 [features]
-default = ["target-aarch64", "target-x86_64", "target-wasm32", "editor"]
+default = ["target-aarch64", "target-x86_64", "target-wasm32"]
 
 i386-cli-run = ["target-x86"]
 wasm32-cli-run = ["target-wasm32", "run-wasm32"]

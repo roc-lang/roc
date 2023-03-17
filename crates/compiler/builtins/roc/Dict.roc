@@ -34,7 +34,7 @@ interface Dict
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you
 ## associate keys with values.
 ##
-## ### Inserting
+## ## Inserting
 ##
 ## The most basic way to use a dictionary is to start with an empty one and
 ## then:
@@ -54,7 +54,7 @@ interface Dict
 ##     |> Dict.insert "Delhi" 16_787_941
 ##     |> Dict.insert "Amsterdam" 872_680
 ## ```
-## ### Accessing keys or values
+## ## Accessing keys or values
 ##
 ## We can use [Dict.keys] and [Dict.values] functions to get only the keys or
 ## only the values.
@@ -63,7 +63,7 @@ interface Dict
 ## order. This will be true if all you ever do is [Dict.insert] and [Dict.get] operations
 ## on the dictionary, but [Dict.remove] operations can change this order.
 ##
-## ### Removing
+## ## Removing
 ##
 ## We can remove an element from the dictionary, like so:
 ## ```

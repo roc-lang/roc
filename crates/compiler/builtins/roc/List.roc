@@ -62,6 +62,7 @@ interface List
         sortAsc,
         sortDesc,
         reserve,
+        releaseExcessCapacity,
         walkBackwardsUntil,
         countIf,
     ]
@@ -186,7 +187,7 @@ interface List
 ##
 ## first
 ## ```
-## TODO explain how in the former example, when we go to free `nums` at the end,
+## **TODO** explain how in the former example, when we go to free `nums` at the end,
 ## we can free it immediately because there are no other refcounts. However,
 ## in the case of `lists`, we have to iterate through the list and decrement
 ## the refcounts of each of its contained lists - because they, too, have
@@ -290,6 +291,10 @@ withCapacity : Nat -> List a
 
 ## Enlarge the list for at least capacity additional elements
 reserve : List a, Nat -> List a
+
+## Shrink the memory footprint of a list such that it's capacity and length are equal.
+## Note: This will also convert seamless slices to regular lists.
+releaseExcessCapacity : List a -> List a
 
 ## Put two lists together.
 ## ```

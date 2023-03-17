@@ -285,6 +285,9 @@ impl<'a> LowLevelCall<'a> {
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
             StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
+            StrReleaseExcessCapacity => {
+                self.load_args_and_call_zig(backend, bitcode::STR_RELEASE_EXCESS_CAPACITY)
+            }
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
             StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
@@ -553,6 +556,46 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 7, false);
+            }
+
+            ListReleaseExcessCapacity => {
+                // List.releaseExcessCapacity : List elem -> List elem
+
+                let list: Symbol = self.arguments[0];
+
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get(elem_layout);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  list: RocList              i64, i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+                //  update_mode: UpdateMode    i32
+
+                // return pointer and list
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    &[list],
+                    self.ret_symbol,
+                    &WasmLayout::new(backend.layout_interner, self.ret_layout),
+                    CallConv::Zig,
+                );
+
+                backend.code_builder.i32_const(elem_align as i32);
+
+                backend.code_builder.i32_const(elem_width as i32);
+
+                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
+
+                backend.call_host_fn_after_loading_args(
+                    bitcode::LIST_RELEASE_EXCESS_CAPACITY,
+                    6,
+                    false,
+                );
             }
 
             ListAppendUnsafe => {

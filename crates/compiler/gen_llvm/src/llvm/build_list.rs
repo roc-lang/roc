@@ -183,6 +183,26 @@ pub(crate) fn list_reserve<'a, 'ctx, 'env>(
     )
 }
 
+/// List.releaseExcessCapacity : List elem -> List elem
+pub(crate) fn list_release_excess_capacity<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: InLayout<'a>,
+    update_mode: UpdateMode,
+) -> BasicValueEnum<'ctx> {
+    call_list_bitcode_fn_1(
+        env,
+        list.into_struct_value(),
+        &[
+            env.alignment_intvalue(layout_interner, element_layout),
+            layout_width(env, layout_interner, element_layout),
+            pass_update_mode(env, update_mode),
+        ],
+        bitcode::LIST_RELEASE_EXCESS_CAPACITY,
+    )
+}
+
 /// List.appendUnsafe : List elem, elem -> List elem
 pub(crate) fn list_append_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

@@ -333,6 +333,8 @@ pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
 pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 pub const STR_WITH_CAPACITY: &str = "roc_builtins.str.with_capacity";
 pub const STR_GRAPHEMES: &str = "roc_builtins.str.graphemes";
+pub const STR_REFCOUNT_PTR: &str = "roc_builtins.str.refcount_ptr";
+pub const STR_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.str.release_excess_capacity";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
@@ -352,6 +354,7 @@ pub const LIST_APPEND_UNSAFE: &str = "roc_builtins.list.append_unsafe";
 pub const LIST_RESERVE: &str = "roc_builtins.list.reserve";
 pub const LIST_CAPACITY: &str = "roc_builtins.list.capacity";
 pub const LIST_REFCOUNT_PTR: &str = "roc_builtins.list.refcount_ptr";
+pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess_capacity";
 
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";

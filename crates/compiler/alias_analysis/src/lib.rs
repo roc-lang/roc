@@ -1157,6 +1157,11 @@ fn lowlevel_spec<'a>(
 
             list_clone(builder, block, update_mode_var, list)
         }
+        ListReleaseExcessCapacity => {
+            let list = env.symbols[&arguments[0]];
+
+            list_clone(builder, block, update_mode_var, list)
+        }
         ListAppendUnsafe => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];

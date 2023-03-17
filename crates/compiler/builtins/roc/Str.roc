@@ -1,6 +1,5 @@
-## Working with Unicode strings in Roc.
 ##
-## ### Unicode
+## ## Working with Unicode strings in Roc
 ##
 ## Unicode can represent text values which span multiple languages, symbols, and emoji.
 ## Here are some valid Roc strings:
@@ -110,6 +109,7 @@ interface Str
         splitLast,
         walkUtf8WithIndex,
         reserve,
+        releaseExcessCapacity,
         appendScalar,
         walkScalars,
         walkScalarsUntil,
@@ -124,7 +124,6 @@ interface Str
         Num.{ Nat, Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
     ]
 
-## Test
 Utf8ByteProblem : [
     InvalidStartByte,
     UnexpectedEndOfSequence,
@@ -214,7 +213,10 @@ graphemes : Str -> List Str
 ## expect !Str.startsWithScalar "9" 9 # the Unicode scalar for "9" is 57, not 9
 ## expect !Str.startsWithScalar "" 40527
 ## ```
-## **Performance Note:** This runs slightly faster than [Str.startsWith], so
+##
+## ## Performance Details
+##
+## This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
 ## in a single code point, you can use (for example) `Str.startsWithScalar '鹏'`
 ## instead of `Str.startsWith "鹏"`. ('鹏' evaluates to the [U32] value `40527`.)
@@ -744,6 +746,10 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
 
 ## Enlarge a string for at least the given number additional bytes.
 reserve : Str, Nat -> Str
+
+## Shrink the memory footprint of a str such that it's capacity and length are equal.
+## Note: This will also convert seamless slices to regular lists.
+releaseExcessCapacity : Str -> Str
 
 ## is UB when the scalar is invalid
 appendScalarUnsafe : Str, U32 -> Str

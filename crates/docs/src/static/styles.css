@@ -182,6 +182,10 @@ section > *:last-child {
   margin-bottom: 0;
 }
 
+section h1,
+section h2,
+section h3,
+section h4,
 section p {
 padding: 0px 16px;
 }
