@@ -226,7 +226,7 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
             }
             pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(_)) => {
                 if in_code_block {
-                    match replace_code_with_static_file(&code_to_highlight, input_dir) {
+                    match replace_code_with_static_file(&code_to_highlight, input_file) {
                         None => {}
                         // Check if the code block is actually just a relative
                         // path to a static file, if so replace the code with
@@ -327,10 +327,12 @@ fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
     }
 }
 
-fn replace_code_with_static_file(code: &str, input_dir: &Path) -> Option<String> {
+fn replace_code_with_static_file(code: &str, input_file: &Path) -> Option<String> {
+    let input_dir = input_file.parent()?;
     let trimmed_code = code.trim();
     if trimmed_code.len() <= 255 && trimmed_code.contains(".") {
         let file_path = input_dir.join(trimmed_code);
+
         let vec_u8 = fs::read(file_path).ok()?;
 
         String::from_utf8(vec_u8).ok()
