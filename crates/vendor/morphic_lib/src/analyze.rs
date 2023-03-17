@@ -1,7 +1,10 @@
 use smallvec::SmallVec;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 use std::convert::TryInto;
 use typed_arena::Arena;
+
+use roc_collections::MutMap as HashMap;
+use roc_collections::MutSet as HashSet;
 
 use crate::api;
 use crate::ir;
@@ -192,7 +195,7 @@ impl Origin {
 
 impl Default for Origin {
     fn default() -> Self {
-        Origin::FromArgSlots(Set::new())
+        Origin::FromArgSlots(Set::default())
     }
 }
 
@@ -243,7 +246,7 @@ impl<'a> ForwardState<'a> {
     fn add_heap_cell(&mut self) -> HeapCellId {
         self.heap_cells.push(ForwardData {
             origin: Origin::default(),
-            aliases: Set::new(),
+            aliases: Set::default(),
         })
     }
 
@@ -256,7 +259,6 @@ impl<'a> ForwardState<'a> {
         // TODO: Optimize this so that it does not traverse the whole parent chain when the heap
         // cell is guaranteed to not have any back ref annotations before a certain point (i.e.,
         // when we have some information about when the heap cell was created).
-        // TODO: Remove query points from back ref sets when they are set to 'DirectTouch'.
         if back_ref_states[version].overlay.contains_key(&heap_cell) {
             return back_ref_states[version]
                 .overlay
@@ -267,7 +269,7 @@ impl<'a> ForwardState<'a> {
             &[parent] => Self::back_refs_in_states(back_ref_states, parent, heap_cell).clone(),
             parents => {
                 let num_parents = parents.len();
-                let mut back_refs = HashSet::new();
+                let mut back_refs = HashSet::default();
                 for parent_i in 0..num_parents {
                     let parent = back_ref_states[version].parents[parent_i];
                     let parent_back_refs =
@@ -357,8 +359,8 @@ impl<'a> ForwardState<'a> {
     }
 
     fn touch(&mut self, version: BackRefStateVersionId, heap_cell: HeapCellId) {
-        let back_refs = std::mem::take(self.back_refs(version, heap_cell));
-        for &query_point in &back_refs {
+        let mut back_refs = std::mem::take(self.back_refs(version, heap_cell));
+        for query_point in back_refs.drain() {
             self.fates.insert(query_point, Fate::DirectTouch);
         }
         *self.back_refs(version, heap_cell) = back_refs;
@@ -429,14 +431,14 @@ impl<'a> ForwardState<'a> {
                 debug_assert_eq!(input_slot_arrs.len(), 1);
                 let arg_slots = input_slot_arrs[0];
                 // TODO: optimize this entire case!
-                let mut heap_cell_slots = HashMap::<HeapCellId, SmallVec<[u32; 4]>>::new();
+                let mut heap_cell_slots = HashMap::<HeapCellId, SmallVec<[u32; 4]>>::default();
                 for (slot_i, &heap_cell) in arg_slots.iter().enumerate() {
                     heap_cell_slots
                         .entry(heap_cell)
                         .or_insert_with(SmallVec::new)
                         .push(slot_i.try_into().unwrap());
                 }
-                let mut arg_aliases = HashSet::new();
+                let mut arg_aliases = HashSet::default();
                 for (heap_cell, slot_indices) in &heap_cell_slots {
                     // Wire up to occurrences of the same heap cell in the argument slots
                     for (i, &slot_i) in slot_indices.iter().enumerate() {
@@ -832,7 +834,7 @@ impl<'a> ForwardState<'a> {
     ) {
         let block_info = graph.blocks().block_info(block);
         let new_version = self.back_ref_states.push(BackRefState {
-            overlay: HashMap::new(),
+            overlay: HashMap::default(),
             parents: block_info
                 .predecessors
                 .iter()
@@ -872,7 +874,7 @@ impl<'a> ForwardState<'a> {
         graph: &ir::Graph,
         blocks: impl Iterator<Item = ir::BlockId>,
     ) -> HeapCellSlotMapping {
-        let mut heap_cell_to_slots = HashMap::new();
+        let mut heap_cell_to_slots = HashMap::default();
         for block in blocks {
             for val_id in block_values_inclusive(graph, block) {
                 for (i, &heap_cell) in self.value_slots[val_id].unwrap().iter().enumerate() {
@@ -894,7 +896,7 @@ impl<'a> ForwardState<'a> {
         heap_cell_slots_inductive: &HeapCellSlotMapping,
         heap_cell_slots_current: &HeapCellSlotMapping,
     ) -> ForwardSccSummary {
-        let mut summary = ForwardSccSummary::new();
+        let mut summary = ForwardSccSummary::default();
         for block in blocks {
             for val_id in block_values_inclusive(graph, block) {
                 let block_version = self.block_versions[block].unwrap();
@@ -904,9 +906,9 @@ impl<'a> ForwardState<'a> {
                     .enumerate()
                     .map(|(slot_i, &heap_cell)| {
                         let mut val_summary = ForwardSccSlotSummary {
-                            pre_aliases: Set::new(),
-                            inductive_aliases: Set::new(),
-                            internal_aliases: Set::new(),
+                            pre_aliases: Set::default(),
+                            inductive_aliases: Set::default(),
+                            internal_aliases: Set::default(),
                             back_refs: Self::back_refs_in_states(
                                 &mut self.back_ref_states,
                                 block_version,
@@ -993,7 +995,7 @@ impl<'a> ForwardState<'a> {
                     .into_iter()
                     .collect::<Vec<_>>();
                 let init_version = self.back_ref_states.push(BackRefState {
-                    overlay: HashMap::new(),
+                    overlay: HashMap::default(),
                     parents: init_version_parents,
                 });
 
@@ -1114,11 +1116,11 @@ impl<'a> ForwardState<'a> {
             .map(|arg_val_id| {
                 let slot_count = id_result_slot_count(sc, graph, arg_val_id);
                 let arg_slots: &[_] = slots_arena.alloc_extend((0..slot_count).map(|i| {
-                    let mut origin_arg_slots = Set::new();
+                    let mut origin_arg_slots = Set::default();
                     origin_arg_slots.insert(i);
                     heap_cells.push(ForwardData {
                         origin: Origin::FromArgSlots(origin_arg_slots),
-                        aliases: Set::new(),
+                        aliases: Set::default(),
                     })
                 }));
                 if let Some(arg_alias) = arg_alias {
@@ -1138,7 +1140,7 @@ impl<'a> ForwardState<'a> {
                 .flatten()
                 .enumerate()
                 .map(|(slot_i, &heap_cell)| {
-                    let mut heap_cell_back_refs = HashSet::new();
+                    let mut heap_cell_back_refs = HashSet::default();
                     heap_cell_back_refs.insert(QueryPoint::EntryArg(slot_i.try_into().unwrap()));
                     (heap_cell, heap_cell_back_refs)
                 })
@@ -1160,7 +1162,7 @@ impl<'a> ForwardState<'a> {
             block_versions: IdVec::filled_with(graph.blocks().block_count(), || None),
             block_versions_inductive: IdVec::filled_with(graph.blocks().block_count(), || None),
             entry_version,
-            fates: HashMap::new(),
+            fates: HashMap::default(),
         };
 
         for scc_id in graph.sccs().count().iter() {
@@ -1168,7 +1170,7 @@ impl<'a> ForwardState<'a> {
         }
 
         let exit_version = state.back_ref_states.push(BackRefState {
-            overlay: HashMap::new(),
+            overlay: HashMap::default(),
             parents: graph
                 .exit_blocks()
                 .iter()
@@ -1242,7 +1244,7 @@ impl Default for Fate {
     fn default() -> Self {
         Fate::Other {
             indirect_touch: false,
-            ret_slots: Set::new(),
+            ret_slots: Set::default(),
         }
     }
 }
@@ -1256,12 +1258,12 @@ fn analyze_func(
     let slots_arena = Arena::new();
     let (forward, ret_slots) =
         ForwardState::analyze_graph(&slots_arena, sc, ctx, &func_def.graph, arg_alias);
-    let mut heap_cell_to_arg_slot = HashMap::<HeapCellId, u32>::new();
+    let mut heap_cell_to_arg_slot = HashMap::<HeapCellId, u32>::default();
     for (slot_i, &heap_cell) in forward.arg_slots.unwrap().iter().enumerate() {
         let existing = heap_cell_to_arg_slot.insert(heap_cell, slot_i.try_into().unwrap());
         debug_assert!(existing.is_none());
     }
-    let mut heap_cell_to_ret_slots = HashMap::<HeapCellId, SmallVec<[u32; 4]>>::new();
+    let mut heap_cell_to_ret_slots = HashMap::<HeapCellId, SmallVec<[u32; 4]>>::default();
     for (slot_i, &heap_cell) in ret_slots.iter().enumerate() {
         heap_cell_to_ret_slots
             .entry(heap_cell)
@@ -1281,8 +1283,8 @@ fn analyze_func(
         .iter()
         .enumerate()
         .map(|(this_ret_slot_i, &heap_cell)| {
-            let mut arg_aliases = Set::new();
-            let mut ret_aliases = Set::new();
+            let mut arg_aliases = Set::default();
+            let mut ret_aliases = Set::default();
             for other in std::iter::once(heap_cell)
                 .chain(forward.heap_cells[heap_cell].aliases.iter().cloned())
             {
@@ -1437,8 +1439,8 @@ impl<'a> GlobalAnalysisContext<'a> {
         let mut scc_ctx = SccAnalysisContext {
             global: &mut *self,
             scc,
-            prev_iter: HashMap::new(),
-            curr_iter: HashMap::new(),
+            prev_iter: HashMap::default(),
+            curr_iter: HashMap::default(),
         };
         match scc_kind {
             SccKind::Acyclic => {
@@ -1552,21 +1554,20 @@ struct Query {
 
 impl Query {
     fn to_spec(&self, func: FuncId) -> api::FuncSpec {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(func.0.to_le_bytes());
-        hasher.update((self.arg_aliases.len() as u64).to_le_bytes());
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&func.0.to_le_bytes());
+        hasher.update(&(self.arg_aliases.len() as u64).to_le_bytes());
         for arg_alias in &self.arg_aliases {
-            hasher.update(arg_alias.fst().to_le_bytes());
-            hasher.update(arg_alias.snd().to_le_bytes());
+            hasher.update(&arg_alias.fst().to_le_bytes());
+            hasher.update(&arg_alias.snd().to_le_bytes());
         }
-        hasher.update((self.arg_slots_touched.len() as u64).to_le_bytes());
+        hasher.update(&(self.arg_slots_touched.len() as u64).to_le_bytes());
         for &arg_touched in &self.arg_slots_touched {
-            hasher.update([arg_touched as u8]);
+            hasher.update(&[arg_touched as u8]);
         }
-        hasher.update((self.ret_slots_touched.len() as u64).to_le_bytes());
+        hasher.update(&(self.ret_slots_touched.len() as u64).to_le_bytes());
         for &ret_touched in &self.ret_slots_touched {
-            hasher.update([ret_touched as u8]);
+            hasher.update(&[ret_touched as u8]);
         }
         api::FuncSpec(hasher.finalize().into())
     }
@@ -1738,7 +1739,7 @@ pub(crate) fn analyze(tc: TypeCache, program: &ir::Program) -> ProgramSolutions 
         func_defs: &program.funcs,
         sccs: &func_sccs,
         func_to_scc: &func_to_scc,
-        committed: IdVec::filled_with(program.funcs.count(), HashMap::new),
+        committed: IdVec::filled_with(program.funcs.count(), HashMap::default),
     };
 
     for (_, &func) in &program.entry_points {
@@ -1748,7 +1749,7 @@ pub(crate) fn analyze(tc: TypeCache, program: &ir::Program) -> ProgramSolutions 
     }
 
     let mut func_solutions = FuncSolutions {
-        solutions: IdVec::filled_with(program.funcs.count(), HashMap::new),
+        solutions: IdVec::filled_with(program.funcs.count(), HashMap::default),
     };
 
     let entry_point_solutions = program.entry_points.map(|_, &func| {
@@ -1773,9 +1774,8 @@ pub(crate) fn analyze(tc: TypeCache, program: &ir::Program) -> ProgramSolutions 
 // specialization and all update modes are `Immutable`:
 
 fn hash_func_id_trivial(func_id: FuncId) -> api::FuncSpec {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(func_id.0.to_le_bytes());
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&func_id.0.to_le_bytes());
     api::FuncSpec(hasher.finalize().into())
 }
 
