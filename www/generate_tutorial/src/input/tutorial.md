@@ -870,7 +870,7 @@ It then proceeds to walk over each element in the list and call that function. E
 |     `{ evens: [], odds: [1] }`    |   `2`   |      `{ evens: [2], odds: [1] }`     |
 |    `{ evens: [2], odds: [1] }`    |   `3`   |    `{ evens: [2], odds: [1, 3] }`    |
 |   `{ evens: [2], odds: [1, 3] }`  |   `4`   |   `{ evens: [2, 4], odds: [1, 3] }`  |
-| `{ evens: [2, 4], odds: [1, 3] }` |   `4`   | `{ evens: [2, 4], odds: [1, 3, 5] }` |
+| `{ evens: [2, 4], odds: [1, 3] }` |   `5`   | `{ evens: [2, 4], odds: [1, 3, 5] }` |
 
 Note that the initial `state` argument is `{ evens: [], odds: [] }` because that's the argument
 we passed `List.walk` for its initial state. From then on, each `state` argument is whatever the
