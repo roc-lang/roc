@@ -359,11 +359,10 @@ impl<'a> ForwardState<'a> {
     }
 
     fn touch(&mut self, version: BackRefStateVersionId, heap_cell: HeapCellId) {
-        let mut back_refs = std::mem::take(self.back_refs(version, heap_cell));
-        for query_point in back_refs.drain() {
+        let back_refs = std::mem::take(self.back_refs(version, heap_cell));
+        for query_point in back_refs.into_iter() {
             self.fates.insert(query_point, Fate::DirectTouch);
         }
-        *self.back_refs(version, heap_cell) = back_refs;
     }
 
     fn recursive_touch(&mut self, version: BackRefStateVersionId, heap_cells: &[HeapCellId]) {
