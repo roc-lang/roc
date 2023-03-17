@@ -15,7 +15,7 @@ mulArrByScalar  = \arr, scalar ->
     List.map arr \x -> x * scalar
 
 # java doesn't have unsigned numbers so we cope with long
-factorial : I64 -> I64
+# factorial : I64 -> I64
 factorial = \n ->
     if n < 0 then
         # while we get the chance,  examplify a roc panic in an interop
@@ -23,7 +23,7 @@ factorial = \n ->
     else if n == 0 then
         1
     else
-        n * (factorial n - 1)
+        n * (factorial (n - 1))
 
 
 program = { interpolateString, factorial, mulArrByScalar }
