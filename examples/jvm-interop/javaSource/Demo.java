@@ -32,7 +32,7 @@ public class Demo {
       // This can be implemented more peacefully but for sake of demonstration-
       // this will panic from the roc side if n is negative
       // and in turn will throw a JVM RuntimeException
-      long n = -1;
+      long n = 3;
       System.out.println("Factorial of " + n + " is " + factorial(n) + "\n");
 
    }
