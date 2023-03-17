@@ -145,15 +145,22 @@ a:visited code {
 }
 
 pre {
+    position: relative;
     margin-bottom: 16px;
     padding: 8px 16px;
     box-sizing: border-box;
     border-radius: 8px;
     background-color: var(--code-bg);
-    overflow-x: auto;
+    overflow-x: hidden;
+    word-wrap: normal;
     font-size: 1.2rem;
     line-height: 1.76em;
     white-space: pre;
+}
+
+pre>samp {
+    overflow-x: auto;
+    display: block;
 }
 
 .repl-prompt:before {
@@ -675,10 +682,6 @@ code .dim {
     opacity: 0.55;
 }
 
-pre {
-    position: relative;
-}
-
 .button-container {
     position: absolute;
     top: 0;
@@ -686,7 +689,7 @@ pre {
 }
 
 .copy-button {
-    background: none;
+    background: var(--code-bg);
     border: 1px solid var(--magenta);
     color: var(--magenta);
     border-radius: 3px;

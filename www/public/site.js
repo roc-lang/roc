@@ -14,6 +14,11 @@ document.addEventListener("keydown", (event) => {
     }
 });
 
+const isTouchSupported = () => {
+  try{ document.createEvent("TouchEvent"); return true; }
+  catch(e){ return false; }
+}
+
 // Select all <samp> elements that are children of <pre> elements
 const codeBlocks = document.querySelectorAll("pre > samp");
 
@@ -45,12 +50,23 @@ codeBlocks.forEach((codeBlock) => {
   // Hide the button container by default
   buttonContainer.style.display = "none";
 
-  // Show the button container on hover
-  codeBlock.parentNode.addEventListener("mouseenter", () => {
-    buttonContainer.style.display = "block";
-  });
+  if (isTouchSupported()) {
+    // Show the button container on click for touch support (e.g. mobile)
+    document.addEventListener("click", (event) => {
+      if (event.target.closest("pre > samp") !== codeBlock) {
+        buttonContainer.style.display = "none";
+      } else {
+        buttonContainer.style.display = "block";
+      }
+    });
+  } else {
+    // Show the button container on hover for non-touch support (e.g. desktop)
+    codeBlock.parentNode.addEventListener("mouseenter", () => {
+      buttonContainer.style.display = "block";
+    });
 
-  codeBlock.parentNode.addEventListener("mouseleave", () => {
-    buttonContainer.style.display = "none";
-  });
+    codeBlock.parentNode.addEventListener("mouseleave", () => {
+      buttonContainer.style.display = "none";
+    });  
+  }
 });

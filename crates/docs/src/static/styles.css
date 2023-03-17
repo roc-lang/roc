@@ -389,7 +389,14 @@ pre {
   padding: 8px 16px;
   box-sizing: border-box;
   background-color: var(--code-bg);
+  overflow-x: hidden;
+  position: relative;
+  word-wrap: normal;
+}
+
+pre>samp {
   overflow-x: auto;
+  display: block;
 }
 
 .hidden {
@@ -657,10 +664,6 @@ code .dim {
   opacity: 0.55;
 }
 
-pre {
-  position: relative;
-}
-
 .button-container {
   position: absolute;
   top: 0;
@@ -668,7 +671,7 @@ pre {
 }
 
 .copy-button {
-  background: none;
+  background: var(--code-bg);
   border: 1px solid var(--magenta);
   color: var(--magenta);
   border-radius: 3px;
