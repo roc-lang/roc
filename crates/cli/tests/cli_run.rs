@@ -474,7 +474,7 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
+    #[cfg_attr(windows, ignore)]
     fn hello_world() {
         test_roc_app_slim(
             "examples",
@@ -864,6 +864,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(parser_package)]
     #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
@@ -877,7 +878,8 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
+    #[serial(parser_package)]
+    #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
             "examples/parser/examples",
