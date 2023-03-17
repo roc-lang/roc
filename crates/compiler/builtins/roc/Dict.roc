@@ -234,15 +234,15 @@ walk = \@Dict { data }, initialState, transform ->
 ##     |> Dict.insert "Bob" 18
 ##     |> Dict.insert "Charlie" 19
 ##
-## over18 = \_, _, age ->
+## isAdult = \_, _, age ->
 ##         if age >= 18 then
 ##             Break Bool.true
 ##         else
 ##             Continue Bool.false
 ##
-## someoneIsOver18 = Dict.walkUntil people Bool.false over18
+## someoneIsAnAdult = Dict.walkUntil people Bool.false isAdult
 ##
-## expect someoneIsOver18 == Bool.true
+## expect someoneIsAnAdult == Bool.true
 ## ```
 walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
