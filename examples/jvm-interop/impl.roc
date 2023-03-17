@@ -1,10 +1,7 @@
 app "rocdemo"
     packages { pf: "platform.roc" }
     imports []
-
-    # uncomment to test record
-    # provides [program] to pf
-    provides [interpolateString] to pf
+    provides [program] to pf
 
 
 interpolateString : Str -> Str
@@ -13,11 +10,20 @@ interpolateString = \name ->
 
 
 # jint is i32
-# mulArrByScalar : List I32 -> List I32
-# mulArrByScalar  = \arr ->
-#     List.map arr \x -> x * 2
+mulArrByScalar : List I32, I32 -> List I32
+mulArrByScalar  = \arr, scalar ->
+    List.map arr \x -> x * scalar
 
-# program = { interpolateString, mulArrByScalar }
+# java doesn't have unsigned numbers so we cope with long
+factorial : I64 -> I64
+factorial = \n ->
+    if n < 0 then
+        # while we get the chance,  examplify a roc panic in an interop
+        crash "No negatives here!!!"
+    # else if n == 0 then
+    #     1
+    else n
+    #     factorial n * (n - 1)
 
-# uncomment to test record
-# program = { interpolateString }
+
+program = { interpolateString, factorial, mulArrByScalar }

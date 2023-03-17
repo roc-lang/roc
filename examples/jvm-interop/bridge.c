@@ -31,7 +31,9 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
 {
    // TODO throw a RuntimeException from JNI
-   exit(0);
+   if (ptr != NULL)
+        printf("%s", ptr);
+   exit(1);
 }
 
 void *roc_memcpy(void *dest, const void *src, size_t n)
@@ -215,11 +217,11 @@ size_t roc_str_len(struct RocStr str)
 }
 
 
-extern void roc__interpolateStringy_1_exposed_generic(struct RocStr *ret, struct RocStr *name);
-// uncomment to test record
-/* extern void roc__programForHost_1__InterpolateString_caller(struct RocStr *ret, struct RocStr *name); */
+extern void roc__programForHost_1__InterpolateString_caller(struct RocStr *name, char *closure_data, struct RocStr *ret);
 
-/* extern void roc__programForHost_1__MulArrByScalar_caller(struct RocBytesI32 *ret, struct RocBytesI32 *arr); */
+extern void roc__programForHost_1__MulArrByScalar_caller(struct RocBytesI32 *arr, int32_t *scalar, char *closure_data, struct RocBytesI32 *ret);
+
+extern void roc__programForHost_1__Factorial_caller(int64_t *scalar, char *closure_data, int64_t *ret);
 
 
 JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
@@ -236,10 +238,7 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     struct RocStr ret = {0};
 
     // Call the Roc function to populate `ret`'s bytes.
-    // uncomment to test record
-    /* roc__programForHost_1__InterpolateString_caller(&ret, &rocName); */
-    roc__interpolateStringy_1_exposed_generic(&ret, &rocName);
-
+    roc__programForHost_1__InterpolateString_caller(&rocName, 0, &ret);
 
     // java being java making this a lot harder than it needs to be
     // https://stackoverflow.com/questions/32205446/getting-true-utf-8-characters-in-java-jni
@@ -270,28 +269,39 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
 }
 
 
-/* JNIEXPORT jintArray JNICALL Java_javaSource_Greeter_mularr */
-/*    (JNIEnv *env, jobject thisObj, jintArray arr) */
-/* { */
-/*     jsize len = (*env)->GetArrayLength(env, arr); */
+JNIEXPORT jintArray JNICALL Java_javaSource_Demo_mulArrByScalar
+   (JNIEnv *env, jobject thisObj, jintArray arr, jint scalar)
+{
+    // extract data from jvm types
+    jint* jarr = (*env)->GetIntArrayElements(env, arr, NULL);
+    jsize len = (*env)->GetArrayLength(env, arr);
 
-/*     struct RocBytesI32 ret = {0}; */
-/*     int* jarr = (int*) (*env)->GetIntArrayElements(env, arr, NULL); */
-/*     /\* int *cArray = new int[len]; *\/ */
+    // copying because better safe than sorry to mess with jvm array contents ig
+    int* carr = malloc(len * sizeof(int));
+    memcpy(carr, (int*) jarr, len * sizeof(int));
 
-/*     /\* memcpy(cArray, jArray, len * sizeof(int)); *\/ */
-/*     /\* (env*)->ReleaseIntArrayElements(env, arr, jArray, JNI_ABORT); *\/ */
+    // pass data to platform
+    struct RocBytesI32 originalArray = { .bytes = carr, .len = len, .capacity = len };
+    struct RocBytesI32 ret = {0};
+    roc__programForHost_1__MulArrByScalar_caller(&originalArray, &scalar, 0, &ret);
 
-/*     struct RocBytesI32 originalArray = { .bytes = jarr, .len = len, .capacity = len }; */
+    // create jvm constructs
+    jintArray multiplied = (*env)->NewIntArray(env, ret.len);
+    (*env)->SetIntArrayRegion(env, multiplied, 0, ret.len, (jint*) ret.bytes);
 
-/*     roc__programForHost_1__MulArrByScalar_caller(&ret, &originalArray); */
+    // cleanup
+    (*env)->ReleaseIntArrayElements(env, arr, jarr, 0);
+    /* decref((void *)&originalArray, alignof(int32_t*));*/
+    decref((void *)&ret, alignof(int32_t *));
+    free(carr);
 
-/*     jintArray multiplied = (*env)->NewIntArray(env, len); */
-/*     (*env)->SetIntArrayRegion(env, multiplied, 0, len, (jint*) ret.bytes); */
+    return multiplied;
+}
 
-/*     decref((void *)&originalArray, alignof(int32_t*)); */
-/*     decref((void *)&ret, alignof(int32_t *)); */
-
-/*     return multiplied; */
-
-/* } */
+JNIEXPORT jlong JNICALL Java_javaSource_Demo_factorial
+   (JNIEnv *env, jobject thisObj, jlong n)
+{
+    int64_t ret;
+    roc__programForHost_1__Factorial_caller(&n, 0, &ret);
+    return ret;
+}
