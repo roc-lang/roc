@@ -117,6 +117,7 @@ empty = \{} ->
 ## foodDict =
 ##           Dict.empty {}
 ##           |> Dict.insert "apple" "fruit"
+##
 ## capacityOfDict = Dict.capacity foodDict
 ## ```
 capacity : Dict k v -> Nat | k has Hash & Eq
@@ -180,7 +181,8 @@ len = \@Dict { size } ->
 ##        |> Dict.insert "Three" "Boughs of Holly"
 ##
 ## clearSongs = Dict.clear songs
-## expect Dict.len clearSongs |> Bool.isEq 0
+##
+## expect Dict.len clearSongs == 0
 ## ```
 clear : Dict k v -> Dict k v | k has Hash & Eq
 clear = \@Dict { metadata, dataIndices, data } ->
@@ -225,21 +227,22 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ## As such, it is typically better for performance to use this over [Dict.walk]
 ## if returning `Break` earlier than the last element is expected to be common.
-## Below is a real world example
 ## ```
-## transform = \count, k, v ->
-##     if k == "Orange" then
-##         Break count
-##     else
-##         Continue (count + v)
+## people =
+##     Dict.empty {}
+##     |> Dict.insert "Alice" 17
+##     |> Dict.insert "Bob" 18
+##     |> Dict.insert "Charlie" 19
 ##
-## foodDict = Dict.empty {}
-##     |> Dict.insert "Apples" 12
-##     |> Dict.insert "Orange" 24
-##     |> Dict.insert "Banana" 36
+## over18 = \_, _, age ->
+##         if age >= 18 then
+##             Break Bool.true
+##         else
+##             Continue Bool.false
 ##
-## walkUntil = Dict.walkUntil foodDict 0 transform
-## expect walkUntil == Bool.isEq 12
+## someoneIsOver18 = Dict.walkUntil people Bool.false over18
+##
+## expect someoneIsOver18 == Bool.true
 ## ```
 walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
@@ -1287,8 +1290,8 @@ expect
 
 expect
     Dict.empty {}
-    |> Dict.insert "Apples" 12
-    |> Dict.insert "Orange" 24
-    |> Dict.insert "Banana" 36
-    |> Dict.walkUntil 0 (\count, k, qty -> if k == "Orange" then Break count else Continue (count + qty))
-    |> Bool.isEq 12
+    |> Dict.insert "Alice" 17
+    |> Dict.insert "Bob" 18
+    |> Dict.insert "Charlie" 19
+    |> Dict.walkUntil Bool.false (\_, _, age -> if age >= 18 then Break Bool.true else Continue Bool.false)
+    |> Bool.isEq Bool.true
