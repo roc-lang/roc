@@ -125,7 +125,7 @@ pub const RocList = extern struct {
     }
 
     fn refcountMachine(self: RocList) usize {
-        if (self.getCapacity() == 0) {
+        if (self.getCapacity() == 0 and !self.isSeamlessSlice()) {
             // the zero-capacity is Clone, copying it will not leak memory
             return utils.REFCOUNT_ONE;
         }
@@ -147,12 +147,15 @@ pub const RocList = extern struct {
     }
 
     pub fn makeUnique(self: RocList, alignment: u32, element_width: usize) RocList {
-        if (self.isEmpty()) {
+        if (self.isUnique()) {
             return self;
         }
 
-        if (self.isUnique()) {
-            return self;
+        if (self.isEmpty()) {
+            // Empty is not necessarily unique on it's own.
+            // The list could have capacity and be shared.
+            self.decref(alignment);
+            return RocList.empty();
         }
 
         // unfortunately, we have to clone
@@ -511,6 +514,7 @@ pub fn listReleaseExcessCapacity(
 
             @memcpy(dest_ptr, source_ptr, old_length * element_width);
         }
+        list.decref(alignment);
         return output;
     }
 }
@@ -602,18 +606,18 @@ pub fn listSublist(
 ) callconv(.C) RocList {
     const size = list.len();
     if (len == 0 or start >= size) {
-        if (list.isUnique()) {
-            // Decrement the reference counts of all elements.
-            if (list.bytes) |source_ptr| {
-                var i: usize = 0;
-                while (i < size) : (i += 1) {
-                    const element = source_ptr + i * element_width;
-                    dec(element);
-                }
-                var output = list;
-                output.length = 0;
-                return output;
+        // Decrement the reference counts of all elements.
+        if (list.bytes) |source_ptr| {
+            var i: usize = 0;
+            while (i < size) : (i += 1) {
+                const element = source_ptr + i * element_width;
+                dec(element);
             }
+        }
+        if (list.isUnique()) {
+            var output = list;
+            output.length = 0;
+            return output;
         }
         list.decref(alignment);
         return RocList.empty();
@@ -831,6 +835,8 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
     if (list_b.isEmpty()) {
         if (list_a.getCapacity() == 0) {
+            // a could be a seamless slice, so we still need to decref.
+            list_a.decref(alignment);
             return list_b;
         } else {
             // we must consume this list. Even though it has no elements, it could still have capacity
