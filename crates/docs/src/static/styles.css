@@ -656,3 +656,28 @@ samp .dim,
 code .dim {
   opacity: 0.55;
 }
+
+pre {
+  position: relative;
+}
+
+.button-container {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.copy-button {
+  background: none;
+  border: 1px solid var(--magenta);
+  color: var(--magenta);
+  border-radius: 3px;
+  display: inline-block;
+  cursor: pointer;
+  margin: 8px;
+}
+
+.copy-button:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
