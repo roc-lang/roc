@@ -100,6 +100,9 @@ Dict k v := {
 } | k has Hash & Eq
 
 ## Return an empty dictionary.
+## ```
+## emptyDict = Dict.empty {}
+## ```
 empty : {} -> Dict k v | k has Hash & Eq
 empty = \{} ->
     @Dict {
@@ -110,6 +113,13 @@ empty = \{} ->
     }
 
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
+## ```
+## foodDict =
+##           Dict.empty {}
+##           |> Dict.insert "apple" "fruit"
+##
+## capacityOfDict = Dict.capacity foodDict
+## ```
 capacity : Dict k v -> Nat | k has Hash & Eq
 capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
@@ -163,6 +173,17 @@ len = \@Dict { size } ->
     size
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
+## ```
+## songs =
+##        Dict.empty {}
+##        |> Dict.insert "One" "A Song"
+##        |> Dict.insert "Two" "Candy Canes"
+##        |> Dict.insert "Three" "Boughs of Holly"
+##
+## clearSongs = Dict.clear songs
+##
+## expect Dict.len clearSongs == 0
+## ```
 clear : Dict k v -> Dict k v | k has Hash & Eq
 clear = \@Dict { metadata, dataIndices, data } ->
     cap = List.len dataIndices
@@ -206,6 +227,23 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ## As such, it is typically better for performance to use this over [Dict.walk]
 ## if returning `Break` earlier than the last element is expected to be common.
+## ```
+## people =
+##     Dict.empty {}
+##     |> Dict.insert "Alice" 17
+##     |> Dict.insert "Bob" 18
+##     |> Dict.insert "Charlie" 19
+##
+## isAdult = \_, _, age ->
+##         if age >= 18 then
+##             Break Bool.true
+##         else
+##             Continue Bool.false
+##
+## someoneIsAnAdult = Dict.walkUntil people Bool.false isAdult
+##
+## expect someoneIsAnAdult == Bool.true
+## ```
 walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
     List.walkUntil data initialState (\state, T k v -> transform state k v)
@@ -1235,3 +1273,25 @@ expect
         |> complete
 
     hash1 != hash2
+
+expect
+    empty {}
+    |> len
+    |> Bool.isEq 0
+
+expect
+    empty {}
+    |> insert "One" "A Song"
+    |> insert "Two" "Candy Canes"
+    |> insert "Three" "Boughs of Holly"
+    |> clear
+    |> len
+    |> Bool.isEq 0
+
+expect
+    Dict.empty {}
+    |> Dict.insert "Alice" 17
+    |> Dict.insert "Bob" 18
+    |> Dict.insert "Charlie" 19
+    |> Dict.walkUntil Bool.false (\_, _, age -> if age >= 18 then Break Bool.true else Continue Bool.false)
+    |> Bool.isEq Bool.true
