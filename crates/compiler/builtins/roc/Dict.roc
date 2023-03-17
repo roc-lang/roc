@@ -100,6 +100,9 @@ Dict k v := {
 } | k has Hash & Eq
 
 ## Return an empty dictionary.
+## ```
+## emptyDict = Dict.empty {}
+## ```
 empty : {} -> Dict k v | k has Hash & Eq
 empty = \{} ->
     @Dict {
@@ -110,6 +113,12 @@ empty = \{} ->
     }
 
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
+## ```
+## foodDict =
+##           Dict.empty {}
+##           |> Dict.insert "apple" "fruit"
+## capacityOfDict = Dict.capacity foodDict
+## ```
 capacity : Dict k v -> Nat | k has Hash & Eq
 capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
@@ -163,6 +172,16 @@ len = \@Dict { size } ->
     size
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
+## ```
+## songs =
+##        Dict.empty {}
+##        |> Dict.insert "One" "A Song"
+##        |> Dict.insert "Two" "Candy Canes"
+##        |> Dict.insert "Three" "Boughs of Holly"
+##
+## clearSongs = Dict.clear songs
+## expect Dict.len clearSongs |> Bool.isEq 0
+## ```
 clear : Dict k v -> Dict k v | k has Hash & Eq
 clear = \@Dict { metadata, dataIndices, data } ->
     cap = List.len dataIndices
@@ -206,6 +225,22 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ## As such, it is typically better for performance to use this over [Dict.walk]
 ## if returning `Break` earlier than the last element is expected to be common.
+## Below is a real world example
+## ```
+## transform = \count, k, v ->
+##     if k == "Orange" then
+##         Break count
+##     else
+##         Continue (count + v)
+##
+## foodDict = Dict.empty {}
+##     |> Dict.insert "Apples" 12
+##     |> Dict.insert "Orange" 24
+##     |> Dict.insert "Banana" 36
+##
+## walkUntil = Dict.walkUntil foodDict 0 transform
+## expect walkUntil == Bool.isEq 12
+## ```
 walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
     List.walkUntil data initialState (\state, T k v -> transform state k v)
@@ -1235,3 +1270,25 @@ expect
         |> complete
 
     hash1 != hash2
+
+expect
+    empty {}
+    |> len
+    |> Bool.isEq 0
+
+expect
+    empty {}
+    |> insert "One" "A Song"
+    |> insert "Two" "Candy Canes"
+    |> insert "Three" "Boughs of Holly"
+    |> clear
+    |> len
+    |> Bool.isEq 0
+
+expect
+    Dict.empty {}
+    |> Dict.insert "Apples" 12
+    |> Dict.insert "Orange" 24
+    |> Dict.insert "Banana" 36
+    |> Dict.walkUntil 0 (\count, k, qty -> if k == "Orange" then Break count else Continue (count + qty))
+    |> Bool.isEq 12
