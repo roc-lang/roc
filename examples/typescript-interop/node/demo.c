@@ -186,7 +186,7 @@ size_t roc_str_len(struct RocStr str)
     uint8_t last_byte = bytes[sizeof(str) - 1];
     uint8_t last_byte_xored = last_byte ^ 0b10000000;
     size_t small_len = (size_t)(last_byte_xored);
-    size_t big_len = str.len;
+    size_t big_len = str.len & PTRDIFF_MAX; // Account for seamless slices
 
     // Avoid branch misprediction costs by always
     // determining both small_len and big_len,
