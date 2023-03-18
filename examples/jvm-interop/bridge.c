@@ -14,6 +14,11 @@
 
 JavaVM* vm;
 
+#define ERR_MSG_MAX_SIZE 256
+
+jmp_buf exception_buffer;
+char* err_msg[ERR_MSG_MAX_SIZE] = {0};
+
 jint JNI_OnLoad(JavaVM *loadedVM, void *reserved)
 {
     // https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/invocation.html
@@ -37,27 +42,17 @@ void roc_dealloc(void *ptr, unsigned int alignment)
     free(ptr);
 }
 
-jint javaException(void *ptr)
-{
-    JNIEnv* env = NULL;
-    jint returnCode = (*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6);
-
-    if (returnCode != JNI_OK) {
-        printf("failed to get jvm env");
-        exit(1);
-    }
-
-    char* msg = ptr == NULL ? "roc panic" : (char*)ptr;
-    jclass exceptionClass = (*env)->FindClass(env, "java/lang/RuntimeException");
-    return (*env)->ThrowNew(env, exceptionClass, msg);
-}
-
 __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
 {
-    // TODO throw a RuntimeException from JNI
-    if (ptr != NULL)
-        printf("%s", ptr);
-    exit(1);
+    if (ptr != NULL) {
+        int ptr_len = strlen((char*)ptr);
+        int len = ptr_len > ERR_MSG_MAX_SIZE ? ERR_MSG_MAX_SIZE : ptr_len;
+        strncpy((char*)err_msg, ptr, (len + 1));
+    }
+    else {
+        strncpy((char *)err_msg, "roc paniced", strlen("roc paniced") + 1);
+    }
+    longjmp(exception_buffer, 1);
 }
 
 
@@ -327,6 +322,15 @@ JNIEXPORT jlong JNICALL Java_javaSource_Demo_factorial
    (JNIEnv *env, jobject thisObj, jlong n)
 {
     int64_t ret;
-    roc__programForHost_1__Factorial_caller(&n, 0, &ret);
-    return ret;
+    // can crash - meaning call roc_panic, so we set a jump here
+    if (setjmp(exception_buffer)) {
+        // exception was thrown, handle it
+        jclass exClass = (*env)->FindClass(env, "java/lang/RuntimeException");
+        const char *msg = (const char *)err_msg;
+        return (*env)->ThrowNew(env, exClass, msg);
+    }
+    else {
+        roc__programForHost_1__Factorial_caller(&n, 0, &ret);
+        return ret;
+    }
 }

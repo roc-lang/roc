@@ -12,7 +12,7 @@ public class Demo {
 
    public static native int[] mulArrByScalar(int[] arr, int scalar);
 
-   public static native long factorial(long n);
+   public static native long factorial(long n) throws RuntimeException;
 
 
    public static void main(String[] args) {
@@ -23,7 +23,7 @@ public class Demo {
       // array demo
       int[] arr = {10, 20, 30, 40};
       int x = 3;
-      System.out.println("Array " + Arrays.toString(arr) +
+      System.out.println(Arrays.toString(arr) +
                          " multipled by " + x +
                          " results in " + Arrays.toString(mulArrByScalar(arr, x)) +
                          "\n");
@@ -33,7 +33,7 @@ public class Demo {
       // this will panic from the roc side if n is negative
       // and in turn will throw a JVM RuntimeException
       long n = 5;
-      System.out.println("Factorial of " + n + " is " + factorial(n) + "\n");
+      System.out.println("Factorial of " + n + " is " + factorial(n));
 
    }
 }
