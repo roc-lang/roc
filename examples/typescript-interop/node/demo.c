@@ -130,7 +130,7 @@ struct RocStr
     size_t capacity;
 };
 
-struct RocStr empty_rocstr()
+struct RocStr empty_roc_str()
 {
     struct RocStr ret = {
         .len = 0,
@@ -141,45 +141,39 @@ struct RocStr empty_rocstr()
     return ret;
 }
 
-struct RocStr init_rocstr(uint8_t *bytes, size_t len)
+// Record the small string's length in the last byte of the given stack allocation
+void write_small_str_len(size_t len, struct RocStr *str) {
+    ((uint8_t *)str)[sizeof(struct RocStr) - 1] = (uint8_t)len | 0b10000000;
+}
+
+struct RocStr roc_str_init_small(uint8_t *bytes, size_t len)
 {
-    if (len == 0)
-    {
-        return empty_rocstr();
-    }
-    else if (len < sizeof(struct RocStr))
-    {
-        // Start out with zeroed memory, so that
-        // if we end up comparing two small RocStr values
-        // for equality, we won't risk memory garbage resulting
-        // in two equal strings appearing unequal.
-        struct RocStr ret = {
-            .len = 0,
-            .bytes = NULL,
-            .capacity = MASK,
-        };
+    // Start out with zeroed memory, so that
+    // if we end up comparing two small RocStr values
+    // for equality, we won't risk memory garbage resulting
+    // in two equal strings appearing unequal.
+    struct RocStr ret = empty_roc_str();
 
-        // Copy the bytes into the stack allocation
-        memcpy(&ret, bytes, len);
+    // Copy the bytes into the stack allocation
+    memcpy(&ret, bytes, len);
 
-        // Record the string's length in the last byte of the stack allocation
-        ((uint8_t *)&ret)[sizeof(struct RocStr) - 1] = (uint8_t)len | 0b10000000;
+    write_small_str_len(len, &ret);
 
-        return ret;
-    }
-    else
-    {
-        // A large RocStr is the same as a List U8 (aka RocBytes) in memory.
-        struct RocBytes roc_bytes = init_rocbytes(bytes, len);
+    return ret;
+}
 
-        struct RocStr ret = {
-            .len = roc_bytes.len,
-            .bytes = roc_bytes.bytes,
-            .capacity = roc_bytes.capacity,
-        };
+struct RocStr roc_str_init_large(uint8_t *bytes, size_t len, size_t capacity)
+{
+    // A large RocStr is the same as a List U8 (aka RocBytes) in memory.
+    struct RocBytes roc_bytes = init_rocbytes(bytes, len);
 
-        return ret;
-    }
+    struct RocStr ret = {
+        .len = roc_bytes.len,
+        .bytes = roc_bytes.bytes,
+        .capacity = roc_bytes.capacity,
+    };
+
+    return ret;
 }
 
 bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
@@ -207,15 +201,142 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
+// Turn the given Node string into a RocStr and return it
+napi_status node_string_into_roc_str(napi_env env, napi_value node_string, struct RocStr *roc_str) {
+    size_t len;
+    napi_status status;
+
+    // Passing NULL for a buffer (and size 0) will make it write the length of the string into `len`.
+    // https://nodejs.org/api/n-api.html#napi_get_value_string_utf8
+    status = napi_get_value_string_utf8(env, node_string, NULL, 0, &len);
+
+    if (status != napi_ok)
+    {
+        return status;
+    }
+
+    // Node's "write a string into this buffer" function always writes a null terminator,
+    // so capacity will need to be length + 1.
+    // https://nodejs.org/api/n-api.html#napi_get_value_string_utf8
+    size_t capacity = len + 1;
+
+    // Create a RocStr and write it into the out param
+    if (capacity < sizeof(struct RocStr))
+    {
+        // If it can fit in a small string, use the string itself as the buffer.
+        // First, zero out those bytes; small strings need to have zeroes for any bytes
+        // that are not part of the string, or else comparisons between small strings might fail.
+        *roc_str = empty_roc_str();
+
+        // This writes the actual number of bytes copied into len. Theoretically they should be the same,
+        // but it could be different if the buffer was somehow smaller. This way we guarantee that
+        // the RocStr does not present any memory garbage to the user.
+        status = napi_get_value_string_utf8(env, node_string, (char*)roc_str, sizeof(struct RocStr), &len);
+
+        if (status != napi_ok)
+        {
+            return status;
+        }
+
+        // We have to write the length into the buffer *after* Node copies its bytes in,
+        // because Node will have written a null terminator, which we may need to overwrite.
+        write_small_str_len(len, roc_str);
+    }
+    else
+    {
+        // capacity was too big for a small string, so make a heap allocation and write into that.
+        uint8_t *buf = (uint8_t*)roc_alloc(capacity, __alignof__(char));
+
+        // This writes the actual number of bytes copied into len. Theoretically they should be the same,
+        // but it could be different if the buffer was somehow smaller. This way we guarantee that
+        // the RocStr does not present any memory garbage to the user.
+        status = napi_get_value_string_utf8(env, node_string, (char*)buf, capacity, &len);
+
+        if (status != napi_ok)
+        {
+            // Something went wrong, so free the bytes we just allocated before returning.
+            roc_dealloc((void *)&buf, __alignof__(char *));
+
+            return status;
+        }
+
+        *roc_str = roc_str_init_large(buf, len, capacity);
+    }
+
+    return status;
+}
+
+// Consume the given RocStr (decrement its refcount) after creating a Node string from it.
+napi_value roc_str_into_node_string(napi_env env, struct RocStr roc_str) {
+    bool is_small = is_small_str(roc_str);
+    char* roc_str_contents;
+
+    if (is_small)
+    {
+        // In a small string, the string itself contains its contents.
+        roc_str_contents = (char*)&roc_str;
+    }
+    else
+    {
+        roc_str_contents = (char*)roc_str.bytes;
+    }
+
+    napi_status status;
+    napi_value answer;
+
+    status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_str), &answer);
+
+    if (status != napi_ok)
+    {
+        answer = NULL;
+    }
+
+    // Decrement the RocStr because we consumed it.
+    if (!is_small)
+    {
+        decref((void *)&roc_str.bytes, __alignof__(uint8_t *));
+    }
+
+    return answer;
+}
+
+// Create a Node string from the given RocStr.
+// Don't decrement the RocStr's refcount. (To decrement it, use roc_str_into_node_string instead.)
+napi_value roc_str_as_node_string(napi_env env, struct RocStr roc_str) {
+    bool is_small = is_small_str(roc_str);
+    char* roc_str_contents;
+
+    if (is_small)
+    {
+        // In a small string, the string itself contains its contents.
+        roc_str_contents = (char*)&roc_str;
+    }
+    else
+    {
+        roc_str_contents = (char*)roc_str.bytes;
+    }
+
+    napi_status status;
+    napi_value answer;
+
+    status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_str), &answer);
+
+    if (status != napi_ok)
+    {
+        return NULL;
+    }
+
+    // Do not decrement the RocStr's refcount because we did not consume it.
+
+    return answer;
+}
+
 extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
 
 // Receive a string value from Node and pass it to Roc as a RocStr, then get a RocStr
 // back from Roc and convert it into a Node string.
 napi_value call_roc(napi_env env, napi_callback_info info) {
     napi_status status;
-    napi_value node_ret;
-    struct RocStr roc_ret = empty_rocstr();
-    struct RocStr roc_str_arg = empty_rocstr();
 
     // roc_panic needs a napi_env in order to throw a Node exception, so we provide this
     // one globally in case roc_panic gets called during the execution of our Roc function.
@@ -235,90 +356,26 @@ napi_value call_roc(napi_env env, napi_callback_info info) {
 
     if (status != napi_ok)
     {
-        node_ret = NULL;
-        goto cleanup;
+        return NULL;
     }
 
     napi_value node_arg = argv[0];
 
     struct RocStr roc_arg;
 
-    // Write the length of the Node string into `roc_arg_len`
-    size_t roc_arg_len;
-
-    status = napi_get_value_string_utf8(env, node_arg, NULL, 0, &roc_arg_len);
+    status = node_string_into_roc_str(env, node_arg, &roc_arg);
 
     if (status != napi_ok)
     {
-        node_ret = NULL;
-        goto cleanup;
+        return NULL;
     }
 
-    // Node always writes a null terminator, so we need to keep that in mind.
-    size_t nul_terminated_str_bytes = roc_arg_len + 1;
-
-    // Create a RocStr from the Node string
-    size_t roc_arg_strlen;
-    char* roc_arg_bytes;
-
-    if (nul_terminated_str_bytes < sizeof(struct RocStr))
-    {
-        // If it can fit in a small string, use the string itself as the buffer.
-        roc_arg_bytes = (char*)&roc_arg;
-    }
-    else
-    {
-        // It was too big for a small string, so do a heap allocation and write into that.
-        roc_arg_bytes = (char*)roc_alloc(nul_terminated_str_bytes, __alignof__(char));
-    }
-
-    status = napi_get_value_string_utf8(env, node_arg, roc_arg_bytes, nul_terminated_str_bytes, &roc_arg_strlen);
-
-    if (status != napi_ok)
-    {
-        node_ret = NULL;
-        goto cleanup;
-    }
-
-    roc_str_arg = init_rocstr((uint8_t*)roc_arg_bytes, roc_arg_strlen);
-
+    struct RocStr roc_ret;
     // Call the Roc function to populate `roc_ret`'s bytes.
-    roc__mainForHost_1_exposed_generic(&roc_ret, &roc_str_arg);
+    roc__mainForHost_1_exposed_generic(&roc_ret, &roc_arg);
 
-    // Create a Node string from the Roc string and return it.
-    char* roc_str_contents;
-
-    if (is_small_str(roc_ret))
-    {
-        // In a small string, the string itself contains its contents.
-        roc_str_contents = (char*)&roc_ret;
-    }
-    else
-    {
-        roc_str_contents = (char*)roc_ret.bytes;
-    }
-
-    status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_ret), &node_ret);
-
-    if (status != napi_ok)
-    {
-        node_ret = NULL;
-        goto cleanup;
-    }
-
-    cleanup:
-    // Free the heap allocations if we used any.
-    if (!is_small_str(roc_ret))
-    {
-        decref((void *)&roc_ret.bytes, __alignof__(uint8_t *));
-    }
-
-    if (!is_small_str(roc_str_arg))
-    {
-        decref((void *)&roc_str_arg.bytes, __alignof__(uint8_t *));
-    }
-
-    return node_ret;
+    // Consume the RocStr to create the Node string.
+    return roc_str_into_node_string(env, roc_ret);
 }
 
 napi_value init(napi_env env, napi_value exports) {
