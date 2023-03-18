@@ -56,14 +56,10 @@ void incref(uint8_t* bytes, uint32_t alignment)
     }
 }
 
-// Decrement reference count, given a pointer to the first element in a collection.
+// Decrement reference count, given a pointer to the first element in a RocList.
 // Then call roc_dealloc if nothing is referencing this collection anymore.
-void decref(uint8_t* bytes, uint32_t alignment)
+void decref_list(uint8_t* bytes, uint32_t alignment)
 {
-    if (bytes == NULL) {
-        return;
-    }
-
     size_t extra_bytes = (sizeof(size_t) >= (size_t)alignment) ? sizeof(size_t) : (size_t)alignment;
     ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
     ssize_t refcount = *refcount_ptr;
@@ -201,6 +197,24 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
+void decref_large_str(struct RocStr str)
+{
+    uint8_t* bytes;
+
+    if ((ssize_t)str.len < 0)
+    {
+        // This is a seamless slice, so the bytes are located in the capacity slot.
+        bytes = (uint8_t*)(str.capacity << 1);
+    }
+    else
+    {
+        bytes = str.bytes;
+    }
+
+    decref_list(bytes, __alignof__(uint8_t));
+}
+
+
 // Turn the given Node string into a RocStr and return it
 napi_status node_string_into_roc_str(napi_env env, napi_value node_string, struct RocStr *roc_str) {
     size_t len;
@@ -294,7 +308,7 @@ napi_value roc_str_into_node_string(napi_env env, struct RocStr roc_str) {
     // Decrement the RocStr because we consumed it.
     if (!is_small)
     {
-        decref((void *)&roc_str.bytes, __alignof__(uint8_t *));
+        decref_large_str(roc_str);
     }
 
     return answer;
