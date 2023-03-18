@@ -88,17 +88,22 @@ struct RocBytes
     size_t capacity;
 };
 
+struct RocBytes empty_rocbytes()
+{
+    struct RocBytes ret = {
+        .len = 0,
+        .bytes = NULL,
+        .capacity = 0,
+    };
+
+    return ret;
+}
+
 struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
 {
     if (len == 0)
     {
-        struct RocBytes ret = {
-            .len = 0,
-            .bytes = NULL,
-            .capacity = 0,
-        };
-
-        return ret;
+        return empty_rocbytes();
     }
     else
     {
@@ -125,17 +130,22 @@ struct RocStr
     size_t capacity;
 };
 
+struct RocStr empty_rocstr()
+{
+    struct RocStr ret = {
+        .len = 0,
+        .bytes = NULL,
+        .capacity = MASK,
+    };
+
+    return ret;
+}
+
 struct RocStr init_rocstr(uint8_t *bytes, size_t len)
 {
     if (len == 0)
     {
-        struct RocStr ret = {
-            .len = 0,
-            .bytes = NULL,
-            .capacity = MASK,
-        };
-
-        return ret;
+        return empty_rocstr();
     }
     else if (len < sizeof(struct RocStr))
     {
@@ -203,6 +213,9 @@ extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr
 // back from Roc and convert it into a Node string.
 napi_value call_roc(napi_env env, napi_callback_info info) {
     napi_status status;
+    napi_value node_ret;
+    struct RocStr roc_ret = empty_rocstr();
+    struct RocStr roc_str_arg = empty_rocstr();
 
     // roc_panic needs a napi_env in order to throw a Node exception, so we provide this
     // one globally in case roc_panic gets called during the execution of our Roc function.
@@ -222,7 +235,8 @@ napi_value call_roc(napi_env env, napi_callback_info info) {
 
     if (status != napi_ok)
     {
-        return NULL;
+        node_ret = NULL;
+        goto cleanup;
     }
 
     napi_value node_arg = argv[0];
@@ -236,7 +250,8 @@ napi_value call_roc(napi_env env, napi_callback_info info) {
 
     if (status != napi_ok)
     {
-        return NULL;
+        node_ret = NULL;
+        goto cleanup;
     }
 
     // Node always writes a null terminator, so we need to keep that in mind.
@@ -261,14 +276,13 @@ napi_value call_roc(napi_env env, napi_callback_info info) {
 
     if (status != napi_ok)
     {
-        return NULL;
+        node_ret = NULL;
+        goto cleanup;
     }
 
-    struct RocStr roc_str_arg = init_rocstr((uint8_t*)roc_arg_bytes, roc_arg_strlen);
+    roc_str_arg = init_rocstr((uint8_t*)roc_arg_bytes, roc_arg_strlen);
 
     // Call the Roc function to populate `roc_ret`'s bytes.
-    struct RocStr roc_ret;
-
     roc__mainForHost_1_exposed_generic(&roc_ret, &roc_str_arg);
 
     // Create a Node string from the Roc string and return it.
@@ -284,13 +298,24 @@ napi_value call_roc(napi_env env, napi_callback_info info) {
         roc_str_contents = (char*)roc_ret.bytes;
     }
 
-    napi_value node_ret;
-
     status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_ret), &node_ret);
 
     if (status != napi_ok)
     {
-        return NULL;
+        node_ret = NULL;
+        goto cleanup;
+    }
+
+    cleanup:
+    // Free the heap allocations if we used any.
+    if (!is_small_str(roc_ret))
+    {
+        decref((void *)&roc_ret.bytes, __alignof__(uint8_t *));
+    }
+
+    if (!is_small_str(roc_str_arg))
+    {
+        decref((void *)&roc_str_arg.bytes, __alignof__(uint8_t *));
     }
 
     return node_ret;
