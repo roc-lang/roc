@@ -5,7 +5,7 @@ This is an example of calling Roc code from [TypeScript](https://www.typescriptl
 ## Installation
 
 You'll need to have a C compiler installed, but most operating systems will have one already.
-(e.g. macOS has `clang` installed by default, Linux usually has GCC by default, etc.)
+(e.g. macOS has `clang` installed by default, Linux usually has `gcc` by default, etc.)
 All of these commands should be run from the same directory as this README file.
 
 
