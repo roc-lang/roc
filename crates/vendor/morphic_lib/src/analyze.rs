@@ -915,35 +915,49 @@ impl<'a> ForwardState<'a> {
                             )
                             .clone(),
                         };
+                        let matching_slot: (ir::ValueId, u32) =
+                            (val_id, slot_i.try_into().unwrap());
+
+                        // Iterators and cloning are used here.
+                        // These iterators are small with cheap to clone items so it is fast and ok.
                         let aliased_heap_cells = std::iter::once(heap_cell)
                             .chain(self.heap_cells[heap_cell].aliases.iter().cloned());
-                        for aliased in aliased_heap_cells {
-                            if aliased < min_new_id {
-                                val_summary.pre_aliases.insert(aliased);
-                            }
-                            for &aliased_slot in heap_cell_slots_current
-                                .get(&aliased)
-                                .iter()
-                                .cloned()
-                                .flatten()
-                            {
-                                if aliased_slot == (val_id, slot_i.try_into().unwrap()) {
-                                    continue;
-                                }
-                                val_summary.internal_aliases.insert(aliased_slot);
-                            }
-                            for &aliased_slot in heap_cell_slots_inductive
-                                .get(&aliased)
-                                .iter()
-                                .cloned()
-                                .flatten()
-                            {
-                                if aliased_slot == (val_id, slot_i.try_into().unwrap()) {
-                                    continue;
-                                }
-                                val_summary.inductive_aliases.insert(aliased_slot);
-                            }
-                        }
+                        let pre_aliases_iter = aliased_heap_cells
+                            .clone()
+                            .filter(|&aliased| aliased < min_new_id);
+                        let internal_aliases_iter = aliased_heap_cells
+                            .clone()
+                            .flat_map(|aliased| {
+                                heap_cell_slots_current.get(&aliased).into_iter().flatten()
+                            })
+                            .cloned()
+                            .filter(|&aliased_slot| aliased_slot == matching_slot);
+                        let inductive_aliases_iter = aliased_heap_cells
+                            .flat_map(|aliased| {
+                                heap_cell_slots_inductive
+                                    .get(&aliased)
+                                    .into_iter()
+                                    .flatten()
+                            })
+                            .cloned()
+                            .filter(|&aliased_slot| aliased_slot == matching_slot);
+
+                        // These are all cheap to clone.
+                        // Clone them and count them to avoid expensive resizing of HashSets.
+                        let pre_aliases_count = pre_aliases_iter.clone().count();
+                        val_summary.pre_aliases.reserve(pre_aliases_count);
+                        val_summary.pre_aliases.extend(pre_aliases_iter);
+
+                        let internal_aliases_count = internal_aliases_iter.clone().count();
+                        val_summary.internal_aliases.reserve(internal_aliases_count);
+                        val_summary.internal_aliases.extend(internal_aliases_iter);
+
+                        let inductive_aliases_count = inductive_aliases_iter.clone().count();
+                        val_summary
+                            .inductive_aliases
+                            .reserve(inductive_aliases_count);
+                        val_summary.inductive_aliases.extend(inductive_aliases_iter);
+
                         val_summary
                     })
                     .collect();
