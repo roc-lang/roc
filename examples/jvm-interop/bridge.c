@@ -272,7 +272,7 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     // by first making a java byte array then converting the byte array to our final jstring
     jbyteArray byteArray = (*env)->NewByteArray(env, ret.len);
     (*env)->SetByteArrayRegion(env, byteArray, 0, ret.len, (jbyte*)ret.bytes);
-    jbyte* bytes = (*env)->GetByteArrayElements(env, byteArray, 0);
+    /* jbyte* bytes = (*env)->GetByteArrayElements(env, byteArray, 0); */
 
     jstring charsetName = (*env)->NewStringUTF(env, "UTF-8");
     jclass stringClass = (*env)->FindClass(env, "java/lang/String");
@@ -285,7 +285,7 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     decref((void *)&rocName, alignof(uint8_t *));
 
     (*env)->DeleteLocalRef(env, charsetName);
-    (*env)->ReleaseByteArrayElements(env, byteArray, bytes, 0);
+    /* (*env)->ReleaseByteArrayElements(env, byteArray, bytes, 0); */
     (*env)->DeleteLocalRef(env, byteArray);
 
     free(cnameChars);
