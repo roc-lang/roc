@@ -7,10 +7,19 @@
 #include <unistd.h>
 #include <stdalign.h>
 #include <stdint.h>
+#include <setjmp.h>
 
 #include <jni.h>
 #include "javaSource_Demo.h"
 
+JavaVM* vm;
+
+jint JNI_OnLoad(JavaVM *loadedVM, void *reserved)
+{
+    // https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/invocation.html
+    vm = loadedVM;
+    return JNI_VERSION_1_2;
+}
 
 void *roc_alloc(size_t size, unsigned int alignment)
 {
@@ -25,16 +34,32 @@ void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
 
 void roc_dealloc(void *ptr, unsigned int alignment)
 {
-   free(ptr);
+    free(ptr);
+}
+
+jint javaException(void *ptr)
+{
+    JNIEnv* env = NULL;
+    jint returnCode = (*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6);
+
+    if (returnCode != JNI_OK) {
+        printf("failed to get jvm env");
+        exit(1);
+    }
+
+    char* msg = ptr == NULL ? "roc panic" : (char*)ptr;
+    jclass exceptionClass = (*env)->FindClass(env, "java/lang/RuntimeException");
+    return (*env)->ThrowNew(env, exceptionClass, msg);
 }
 
 __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
 {
-   // TODO throw a RuntimeException from JNI
-   if (ptr != NULL)
+    // TODO throw a RuntimeException from JNI
+    if (ptr != NULL)
         printf("%s", ptr);
-   exit(1);
+    exit(1);
 }
+
 
 void *roc_memcpy(void *dest, const void *src, size_t n)
 {
@@ -43,7 +68,7 @@ void *roc_memcpy(void *dest, const void *src, size_t n)
 
 void *roc_memset(void *str, int c, size_t n)
 {
-   return memset(str, c, n);
+    return memset(str, c, n);
 }
 
 // Reference counting
@@ -276,14 +301,15 @@ JNIEXPORT jintArray JNICALL Java_javaSource_Demo_mulArrByScalar
     jint* jarr = (*env)->GetIntArrayElements(env, arr, NULL);
     jsize len = (*env)->GetArrayLength(env, arr);
 
-    // copying because better safe than sorry to mess with jvm array contents ig
-    int* carr = malloc(len * sizeof(int));
-    memcpy(carr, (int*) jarr, len * sizeof(int));
+    // copy just to not mess with jvm ds
+    jint* carr = aligned_alloc(alignof(jint), len * sizeof(jint));
+    memcpy(carr, jarr, len * sizeof(jint));
 
     // pass data to platform
     struct RocBytesI32 originalArray = { .bytes = carr, .len = len, .capacity = len };
     struct RocBytesI32 ret = {0};
     roc__programForHost_1__MulArrByScalar_caller(&originalArray, &scalar, 0, &ret);
+    free(carr);
 
     // create jvm constructs
     jintArray multiplied = (*env)->NewIntArray(env, ret.len);
@@ -293,7 +319,6 @@ JNIEXPORT jintArray JNICALL Java_javaSource_Demo_mulArrByScalar
     (*env)->ReleaseIntArrayElements(env, arr, jarr, 0);
     /* decref((void *)&originalArray, alignof(int32_t*));*/
     decref((void *)&ret, alignof(int32_t *));
-    free(carr);
 
     return multiplied;
 }
