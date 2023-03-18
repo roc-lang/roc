@@ -56,9 +56,9 @@ void incref(uint8_t* bytes, uint32_t alignment)
     }
 }
 
-// Decrement reference count, given a pointer to the first element in a RocList.
+// Decrement reference count, given a pointer to the first byte of a collection's elements.
 // Then call roc_dealloc if nothing is referencing this collection anymore.
-void decref_list(uint8_t* bytes, uint32_t alignment)
+void decref_heap_bytes(uint8_t* bytes, uint32_t alignment)
 {
     size_t extra_bytes = (sizeof(size_t) >= (size_t)alignment) ? sizeof(size_t) : (size_t)alignment;
     ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
@@ -211,7 +211,7 @@ void decref_large_str(struct RocStr str)
         bytes = str.bytes;
     }
 
-    decref_list(bytes, __alignof__(uint8_t));
+    decref_heap_bytes(bytes, __alignof__(uint8_t));
 }
 
 
