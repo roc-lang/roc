@@ -118,6 +118,36 @@ struct RocBytesI32
     size_t capacity;
 };
 
+struct RocBytesI32 init_rocbytes_i32(int32_t *bytes, size_t len)
+{
+    if (len == 0)
+    {
+        struct RocBytesI32 ret = {
+            .len = 0,
+            .bytes = NULL,
+            .capacity = 0,
+        };
+
+        return ret;
+    }
+    else
+    {
+        size_t refcount_size = sizeof(size_t);
+        ssize_t* data = (ssize_t*)roc_alloc(len + refcount_size, alignof(size_t));
+        data[0] = REFCOUNT_ONE;
+        int32_t *new_content = (int32_t *)(data + 1);
+
+        struct RocBytesI32 ret;
+
+        memcpy(new_content, bytes, len);
+
+        ret.bytes = new_content;
+        ret.len = len;
+        ret.capacity = len;
+
+        return ret;
+    }
+}
 // RocBytesU8 (List U8)
 
 struct RocBytesU8
@@ -134,7 +164,7 @@ struct RocBytesU8 init_rocbytes_u8(uint8_t *bytes, size_t len)
         struct RocBytesU8 ret = {
             .len = 0,
             .bytes = NULL,
-            .capacity = MASK,
+            .capacity = 0,
         };
 
         return ret;
@@ -171,7 +201,7 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
         struct RocStr ret = {
             .len = 0,
             .bytes = NULL,
-            .capacity = MASK,
+            .capacity = 0,
         };
 
         return ret;
@@ -185,7 +215,7 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
         struct RocStr ret = {
             .len = 0,
             .bytes = NULL,
-            .capacity = MASK,
+            .capacity = 0,
         };
 
         // Copy the bytes into the stack allocation
@@ -280,7 +310,6 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     decref((void *)&rocName, alignof(uint8_t *));
 
     (*env)->DeleteLocalRef(env, charsetName);
-    /* (*env)->ReleaseByteArrayElements(env, byteArray, bytes, 0); */
     (*env)->DeleteLocalRef(env, byteArray);
 
     free(cnameChars);
@@ -296,15 +325,12 @@ JNIEXPORT jintArray JNICALL Java_javaSource_Demo_mulArrByScalar
     jint* jarr = (*env)->GetIntArrayElements(env, arr, NULL);
     jsize len = (*env)->GetArrayLength(env, arr);
 
-    // copy just to not mess with jvm ds
-    jint* carr = aligned_alloc(alignof(jint), len * sizeof(jint));
-    memcpy(carr, jarr, len * sizeof(jint));
-
     // pass data to platform
-    struct RocBytesI32 originalArray = { .bytes = carr, .len = len, .capacity = len };
+    struct RocBytesI32 originalArray = init_rocbytes_i32(jarr, len);
+    incref((void *)&originalArray, alignof(int32_t*));
     struct RocBytesI32 ret = {0};
+
     roc__programForHost_1__MulArrByScalar_caller(&originalArray, &scalar, 0, &ret);
-    free(carr);
 
     // create jvm constructs
     jintArray multiplied = (*env)->NewIntArray(env, ret.len);
@@ -312,7 +338,7 @@ JNIEXPORT jintArray JNICALL Java_javaSource_Demo_mulArrByScalar
 
     // cleanup
     (*env)->ReleaseIntArrayElements(env, arr, jarr, 0);
-    /* decref((void *)&originalArray, alignof(int32_t*));*/
+    decref((void *)&originalArray, alignof(int32_t*));
     decref((void *)&ret, alignof(int32_t *));
 
     return multiplied;
