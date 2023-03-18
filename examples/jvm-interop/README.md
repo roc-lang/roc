@@ -32,7 +32,7 @@ impl.roc is the application where we actually implement our native Roc functions
 platform.roc as the name suggests contains platform logic, (but doesn't really have much here, mostly just) exposes functions to the host - bridge.c\
 bridge.c is the JNI bridge, it's the host that implements the Roc functions (e.g roc_alloc) and the JNI functions that act like the bridge between Roc and Java (bridge as in, doing type conversions between the languages, needed jvm boilerplate, etc). 
 
-For each of our native Roc functions, in the application (impl.roc), we have a corresponding Java_javaSource_Demo_FUNC C function that handles the "behind the scenes", this includes type conversions between the languages, adjustments, transforming roc panics into java exceptions and basically all the glue code necessary.
+For each of our native Roc functions, in the application (impl.roc), we have a corresponding `Java_javaSource_Demo_FUNC` C function that handles the "behind the scenes", this includes type conversions between the languages, transforming roc panics into java exceptions and basically all the glue code necessary.
 
 
 Just so you know what to expect, our Roc functions look like this;
@@ -41,11 +41,13 @@ interpolateString : Str -> Str
 interpolateString = \name ->
     "Hello from Roc \(name)!!!🤘🤘🤘"
 
+
 mulArrByScalar : List I32, I32 -> List I32
 mulArrByScalar  = \arr, scalar ->
     List.map arr \x -> x * scalar
 
-# factorial : I64 -> I64
+
+factorial : I64 -> I64
 factorial = \n ->
     if n < 0 then
         # while we get the chance,  examplify a roc panic in an interop
@@ -56,7 +58,7 @@ factorial = \n ->
         n * (factorial (n - 1))
 ```
 
-Pretty simple, nothing too crazy. Do note how we crash if n < 0, see how this would play out from the Java side. 
+Nothing too crazy. Again, do note how we crash if n < 0, see how this would play out from the Java side. 
 
 Now let's take a quick look on the Java side of things;
 
@@ -94,15 +96,15 @@ public class Demo {
    }
 }
 ```
-First we load our library - interop, which is a shared library (.so file) that our Roc+C code compiles to.\
+First we load our library - "interop", which is a shared library (`.so` file) that our Roc+C code compiles to.\
 Then, we declare our native functions with suitable types and throws annotation.\
-Finally in main we test it out with some examples.
+Finally in main we test it out with some inputs.
 
 ## See it in action
 ##### For brevity's sake we'll run the build script and omit some of its (intentionally) verbose output:
 
 ```console
-[dankey@computer:~/dev/roc/examples/jvm-interop]$ ./build.sh && java javaSource.Greeter
+[nix-shell:~/dev/roc/examples/jvm-interop]$ ./build.sh && java javaSource.Greeter
 Hello from Roc Brendan!!!🤘🤘🤘
 
 [10, 20, 30, 40] multipled by 3 results in [30, 60, 90, 120]
@@ -112,6 +114,7 @@ Factorial of 5 is 120
 That's pretty cool!\
 Let's also see what happens if in the code above we define n to be -1:
 ``` console
+[nix-shell:~/dev/roc/examples/jvm-interop]$ ./build.sh && java javaSource.Greeter
 Hello from Roc Brendan!!!🤘🤘🤘
 
 [10, 20, 30, 40] multipled by 3 results in [30, 60, 90, 120]
@@ -120,7 +123,7 @@ Exception in thread "main" java.lang.RuntimeException: No negatives here!!!
 	at javaSource.Demo.factorial(Native Method)
 	at javaSource.Demo.main(Demo.java:36)
 ```
-And as we expected, it runs the first two examples fine, but crashes on the third.
+And as we expected, it runs the first two examples fine, throws a RuntimeException on the third.
 
 Since we're talking JVM Bytecode, we can pretty much call our native function from any language that speaks JVM Bytecode.
 
