@@ -139,7 +139,7 @@ struct RocBytesI32 init_rocbytes_i32(int32_t *bytes, size_t len)
 
         struct RocBytesI32 ret;
 
-        memcpy(new_content, bytes, len);
+        memcpy(new_content, bytes, len * sizeof(int32_t));
 
         ret.bytes = new_content;
         ret.len = len;
