@@ -1,25 +1,29 @@
+use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::MmapMut;
 use object::{elf, endian};
 use object::{
-    CompressedFileRange, CompressionFormat, LittleEndian as LE, NativeEndian, Object,
-    ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex,
-    SectionKind, Symbol, SymbolIndex, SymbolSection,
+    CompressedFileRange, CompressionFormat, LittleEndian as LE, Object, ObjectSection,
+    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
+    SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
+use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::mem;
 use std::os::raw::c_char;
-use std::path::Path;
-use std::time::{Duration, Instant};
-
-use crate::metadata::{self, Metadata, VirtualOffset};
+use std::{
+    io::{BufReader, BufWriter},
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
-    load_struct_inplace_mut, load_structs_inplace_mut, open_mmap, open_mmap_mut,
+    load_struct_inplace_mut, load_structs_inplace, load_structs_inplace_mut, open_mmap,
+    open_mmap_mut,
 };
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
@@ -33,6 +37,86 @@ struct ElfDynamicDeps {
     app_sym_indices: Vec<usize>,
     dynamic_lib_count: usize,
     shared_lib_index: usize,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+enum VirtualOffset {
+    Absolute,
+    Relative(u64),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct SurgeryEntry {
+    file_offset: u64,
+    virtual_offset: VirtualOffset,
+    size: u8,
+}
+
+// TODO: Reanalyze each piece of data in this struct.
+// I think a number of them can be combined to reduce string duplication.
+// Also I think a few of them aren't need.
+// For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
+#[derive(Default, Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct Metadata {
+    app_functions: Vec<String>,
+    // offset followed by address.
+    plt_addresses: MutMap<String, (u64, u64)>,
+    surgeries: MutMap<String, Vec<SurgeryEntry>>,
+    dynamic_symbol_indices: MutMap<String, u64>,
+    static_symbol_indices: MutMap<String, u64>,
+    roc_symbol_vaddresses: MutMap<String, u64>,
+    exec_len: u64,
+    load_align_constraint: u64,
+    last_vaddr: u64,
+    dynamic_section_offset: u64,
+    dynamic_section_count: u64,
+    dynamic_symbol_table_section_offset: u64,
+    symbol_table_section_offset: u64,
+    symbol_table_size: u64,
+    original_rela_paddr: u64,
+    original_rela_vaddr: u64,
+    new_rela_paddr: u64,
+    new_rela_vaddr: u64,
+    rela_size: u64,
+    rela_section_index: u64,
+    ph_physical_shift_start: u64,
+    ph_virtual_shift_start: u64,
+    ph_shift_bytes: u64,
+}
+
+impl Metadata {
+    fn write_to_file(&self, metadata_filename: &Path) {
+        let metadata_file =
+            std::fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+
+        serialize_into(BufWriter::new(metadata_file), self)
+            .unwrap_or_else(|err| internal_error!("Failed to serialize metadata: {err}"));
+    }
+
+    fn read_from_file(metadata_filename: &Path) -> Self {
+        let input =
+            std::fs::File::open(metadata_filename)
+            .unwrap_or_else(
+                |e| internal_error!(r#"
+
+                Error:
+                    {}
+
+                > This may occur when using a release of roc that relies on a specific metadata format like 'rm2' and the imported platform only has an older metadata format available, like rm1.
+                  The platform you are using can be found in the header of your main.roc: `packages {{ pf: <PLATFORM>}}`.
+                  You should check if a more recent version of the platform is available.
+                  If not, you should notify the author of the platform about this issue.
+
+"#, e)
+            );
+
+        match deserialize_from(BufReader::new(input)) {
+            Ok(data) => data,
+            Err(err) => {
+                internal_error!("Failed to deserialize metadata: {}", err);
+            }
+        }
+    }
 }
 
 fn report_timing(label: &str, duration: Duration) {
@@ -95,7 +179,7 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
 }
 
 struct Surgeries<'a> {
-    surgeries: MutMap<String, Vec<metadata::SurgeryEntry>>,
+    surgeries: MutMap<String, Vec<SurgeryEntry>>,
     app_func_addresses: MutMap<u64, &'a str>,
     indirect_warning_given: bool,
 }
@@ -229,7 +313,7 @@ impl<'a> Surgeries<'a> {
                         self.surgeries
                             .get_mut(*func_name)
                             .unwrap()
-                            .push(metadata::SurgeryEntry {
+                            .push(SurgeryEntry {
                                 file_offset: offset,
                                 virtual_offset: VirtualOffset::Relative(inst.next_ip()),
                                 size: op_size,
@@ -265,7 +349,7 @@ impl<'a> Surgeries<'a> {
     }
 }
 
-/// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
+/// Constructs a `Metadata` from a host executable binary, and writes it to disk
 pub(crate) fn preprocess_elf(
     endianness: target_lexicon::Endianness,
     host_exe_path: &Path,
@@ -285,7 +369,7 @@ pub(crate) fn preprocess_elf(
         }
     };
 
-    let mut md = metadata::Metadata {
+    let mut md = Metadata {
         roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
         ..Default::default()
     };
@@ -504,10 +588,40 @@ pub(crate) fn preprocess_elf(
     }
 }
 
+fn update_physical_offset(md: &Metadata, offset: u64) -> u64 {
+    // Special case: the rela section was moved to a new location.
+    if md.original_rela_paddr <= offset && offset < md.original_rela_paddr + md.rela_size {
+        return md.new_rela_paddr + (offset - md.original_rela_paddr) + md.ph_shift_bytes;
+    }
+    let mut out = offset;
+    if md.ph_physical_shift_start <= offset {
+        out += md.ph_shift_bytes;
+    }
+    if md.new_rela_paddr <= offset {
+        out += md.rela_size;
+    }
+    out
+}
+
+fn update_virtual_offset(md: &Metadata, offset: u64) -> u64 {
+    // Special case: the rela section was moved to a new location.
+    if md.original_rela_vaddr <= offset && offset < md.original_rela_vaddr + md.rela_size {
+        return md.new_rela_vaddr + (offset - md.original_rela_vaddr) + md.ph_shift_bytes;
+    }
+    let mut out = offset;
+    if md.ph_virtual_shift_start <= offset {
+        out += md.ph_shift_bytes;
+    }
+    if md.new_rela_vaddr <= offset {
+        out += md.rela_size;
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 fn gen_elf_le(
     exec_data: &[u8],
-    md: &mut metadata::Metadata,
+    md: &mut Metadata,
     preprocessed_path: &Path,
     got_app_syms: &[(String, usize)],
     got_sections: &[(usize, usize)],
@@ -517,12 +631,12 @@ fn gen_elf_le(
     verbose: bool,
 ) -> MmapMut {
     let exec_header = load_struct_inplace::<elf::FileHeader64<LE>>(exec_data, 0);
-    let ph_offset = exec_header.e_phoff.get(NativeEndian);
-    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
-    let ph_num = exec_header.e_phnum.get(NativeEndian);
-    let sh_offset = exec_header.e_shoff.get(NativeEndian);
-    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
-    let sh_num = exec_header.e_shnum.get(NativeEndian);
+    let ph_offset = exec_header.e_phoff.get(LE);
+    let ph_ent_size = exec_header.e_phentsize.get(LE);
+    let ph_num = exec_header.e_phnum.get(LE);
+    let sh_offset = exec_header.e_shoff.get(LE);
+    let sh_ent_size = exec_header.e_shentsize.get(LE);
+    let sh_num = exec_header.e_shnum.get(LE);
 
     if verbose {
         println!();
@@ -534,15 +648,43 @@ fn gen_elf_le(
         println!("SH Entry Count: {}", sh_num);
     }
 
-    // Copy header and shift everything to enable more program sections.
-    let added_header_count = 2;
-    md.added_byte_count = ph_ent_size as u64 * added_header_count;
-    md.added_byte_count = md.added_byte_count
-        + (MIN_SECTION_ALIGNMENT as u64 - md.added_byte_count % MIN_SECTION_ALIGNMENT as u64);
-    let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
-    let physical_shift_start = ph_end as u64;
+    // Get the rela section. It needs to be put at the end of the file before the section headers.
+    for d in load_structs_inplace::<elf::Dyn64<LE>>(
+        exec_data,
+        md.dynamic_section_offset as usize,
+        dynamic_lib_count,
+    ) {
+        match d.d_tag.get(LE) as u32 {
+            elf::DT_RELA => {
+                md.original_rela_vaddr = d.d_val.get(LE);
+            }
+            elf::DT_RELASZ => {
+                md.rela_size = d.d_val.get(LE);
+            }
+            _ => {}
+        }
+    }
+    md.new_rela_paddr = sh_offset;
 
-    md.exec_len = exec_data.len() as u64 + md.added_byte_count;
+    // Copy header and shift everything to enable more program sections.
+    let added_header_count = 3;
+    md.ph_shift_bytes = ph_ent_size as u64 * added_header_count;
+    md.ph_shift_bytes = md.ph_shift_bytes
+        + (MIN_SECTION_ALIGNMENT as u64 - md.ph_shift_bytes % MIN_SECTION_ALIGNMENT as u64);
+    let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
+    md.ph_physical_shift_start = ph_end as u64;
+
+    md.exec_len = exec_data.len() as u64 + md.ph_shift_bytes + md.rela_size;
+    // Ensure the old file is gone if it currently exists. Othewise we will end up editing that instead of starting from scratch.
+    match std::fs::remove_file(preprocessed_path) {
+        Ok(_) => {}
+        Err(ref e) => match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                // This is the only errors we don't care about.
+            }
+            _ => internal_error!("Failed to delete old preprocessed file: {}", e),
+        },
+    }
     let mut out_mmap = open_mmap_mut(preprocessed_path, md.exec_len as usize);
 
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
@@ -550,16 +692,24 @@ fn gen_elf_le(
     let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LE>>(
         &mut out_mmap,
         ph_offset as usize,
-        ph_num as usize,
+        ph_num as usize + 1,
     );
     let mut first_load_found = false;
-    let mut virtual_shift_start = 0;
     for ph in program_headers.iter() {
-        let p_type = ph.p_type.get(NativeEndian);
-        if p_type == elf::PT_LOAD && ph.p_offset.get(NativeEndian) == 0 {
+        let p_type = ph.p_type.get(LE);
+        let p_offset = ph.p_offset.get(LE);
+        if p_type == elf::PT_LOAD && p_offset == 0 {
             first_load_found = true;
-            md.load_align_constraint = ph.p_align.get(NativeEndian);
-            virtual_shift_start = physical_shift_start + ph.p_vaddr.get(NativeEndian);
+            md.load_align_constraint = ph.p_align.get(LE);
+            md.ph_virtual_shift_start = md.ph_physical_shift_start + ph.p_vaddr.get(LE);
+        }
+        if p_type == elf::PT_LOAD
+            && p_offset <= md.original_rela_paddr
+            && md.original_rela_paddr < p_offset + ph.p_filesz.get(LE)
+        {
+            let p_vaddr = ph.p_vaddr.get(LE);
+            let virtual_shift = p_vaddr - p_offset;
+            md.original_rela_paddr = md.original_rela_vaddr - virtual_shift;
         }
     }
     if !first_load_found {
@@ -568,37 +718,16 @@ fn gen_elf_le(
     if verbose {
         println!(
             "Shifting all data after: {:+x}({:+x})",
-            physical_shift_start, virtual_shift_start
+            md.ph_physical_shift_start, md.ph_virtual_shift_start
         );
-    }
-
-    // Shift all of the program headers.
-    for ph in program_headers.iter_mut() {
-        let p_type = ph.p_type.get(NativeEndian);
-        let p_offset = ph.p_offset.get(NativeEndian);
-        if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
-            // Extend length for the first segment and the program header.
-            ph.p_filesz = endian::U64::new(LE, ph.p_filesz.get(NativeEndian) + md.added_byte_count);
-            ph.p_memsz = endian::U64::new(LE, ph.p_memsz.get(NativeEndian) + md.added_byte_count);
-        } else {
-            // Shift if needed.
-            if physical_shift_start <= p_offset {
-                ph.p_offset = endian::U64::new(LE, p_offset + md.added_byte_count);
-            }
-            let p_vaddr = ph.p_vaddr.get(NativeEndian);
-            if virtual_shift_start <= p_vaddr {
-                ph.p_vaddr = endian::U64::new(LE, p_vaddr + md.added_byte_count);
-                ph.p_paddr = endian::U64::new(LE, p_vaddr + md.added_byte_count);
-            }
-        }
     }
 
     // Get last segment virtual address.
     let last_segment_vaddr = program_headers
         .iter()
         .filter_map(|ph| {
-            if ph.p_type.get(NativeEndian) != elf::PT_GNU_STACK {
-                Some(ph.p_vaddr.get(NativeEndian) + ph.p_memsz.get(NativeEndian))
+            if ph.p_type.get(LE) != elf::PT_GNU_STACK {
+                Some(ph.p_vaddr.get(LE) + ph.p_memsz.get(LE))
             } else {
                 None
             }
@@ -606,87 +735,131 @@ fn gen_elf_le(
         .max()
         .unwrap();
 
-    // Copy the rest of the file shifted as needed.
-    out_mmap[physical_shift_start as usize + md.added_byte_count as usize..]
-        .copy_from_slice(&exec_data[physical_shift_start as usize..]);
+    md.new_rela_vaddr = align_to_offset_by_constraint(
+        last_segment_vaddr as usize + md.load_align_constraint as usize,
+        md.new_rela_paddr as usize,
+        md.load_align_constraint as usize,
+    ) as u64;
+
+    // Shift all of the program headers.
+    for ph in program_headers.iter_mut() {
+        let p_type = ph.p_type.get(LE);
+        let p_offset = ph.p_offset.get(LE);
+        if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
+            // Extend length for the first segment and the program header.
+            ph.p_filesz.set(LE, ph.p_filesz.get(LE) + md.ph_shift_bytes);
+            ph.p_memsz.set(LE, ph.p_memsz.get(LE) + md.ph_shift_bytes);
+        } else {
+            // Shift if needed.
+            ph.p_offset.set(LE, update_physical_offset(md, p_offset));
+
+            let p_vaddr = ph.p_vaddr.get(LE);
+            ph.p_vaddr.set(LE, update_virtual_offset(md, p_vaddr));
+            let p_paddr = ph.p_paddr.get(LE);
+            ph.p_paddr.set(LE, update_virtual_offset(md, p_paddr));
+        }
+    }
+
+    // Add new segement for the duplicate .rela.dyn section.
+    program_headers[program_headers.len() - 1] = elf::ProgramHeader64 {
+        p_type: endian::U32::new(LE, elf::PT_LOAD),
+        p_flags: endian::U32::new(LE, elf::PF_R),
+        p_offset: endian::U64::new(LE, md.new_rela_paddr + md.ph_shift_bytes),
+        p_vaddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
+        p_paddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
+        p_filesz: endian::U64::new(LE, md.rela_size),
+        p_memsz: endian::U64::new(LE, md.rela_size),
+        p_align: endian::U64::new(LE, md.load_align_constraint),
+    };
+
+    // Give lots of space between the new rela section and the future app sections in virtual memory.
+    md.last_vaddr = md.new_rela_vaddr + md.rela_size;
+
+    // Copy everything until the section header table.
+    out_mmap[md.ph_physical_shift_start as usize + md.ph_shift_bytes as usize
+        ..sh_offset as usize + md.ph_shift_bytes as usize]
+        .copy_from_slice(&exec_data[md.ph_physical_shift_start as usize..sh_offset as usize]);
+
+    // TODO: This is just duplicating the rela section at the end of the binary.
+    // It would be best practice to remove the original section and shift everything.
+    // This was causing issues with Rust and C hosts that I have not figured out yet,
+    // but would be a good idea in the long run.
+    // This has a cost in binary bloat, but hopefully nothing more than a few KB.
+    out_mmap[md.new_rela_paddr as usize + md.ph_shift_bytes as usize
+        ..md.new_rela_paddr as usize + md.rela_size as usize + md.ph_shift_bytes as usize]
+        .copy_from_slice(
+            &exec_data[md.original_rela_paddr as usize
+                ..md.original_rela_paddr as usize + md.rela_size as usize],
+        );
+
+    // Copy the section header table.
+    out_mmap[sh_offset as usize + md.ph_shift_bytes as usize + md.rela_size as usize..]
+        .copy_from_slice(&exec_data[sh_offset as usize..]);
 
     // Update all sections for shift for extra program headers.
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
         &mut out_mmap,
-        sh_offset as usize + md.added_byte_count as usize,
+        update_physical_offset(md, sh_offset) as usize,
         sh_num as usize,
     );
 
     let mut rel_sections: Vec<(u64, u64)> = vec![];
     let mut rela_sections: Vec<(usize, u64, u64)> = vec![];
     for (i, sh) in section_headers.iter_mut().enumerate() {
-        let sh_offset = sh.sh_offset.get(NativeEndian);
-        let sh_addr = sh.sh_addr.get(NativeEndian);
-        if physical_shift_start <= sh_offset {
-            sh.sh_offset = endian::U64::new(LE, sh_offset + md.added_byte_count);
-        }
-        if virtual_shift_start <= sh_addr {
-            sh.sh_addr = endian::U64::new(LE, sh_addr + md.added_byte_count);
-        }
+        let sh_offset = sh.sh_offset.get(LE);
+        let sh_addr = sh.sh_addr.get(LE);
+
+        sh.sh_offset.set(LE, update_physical_offset(md, sh_offset));
+        sh.sh_addr.set(LE, update_virtual_offset(md, sh_addr));
 
         // Record every relocation section.
-        let sh_type = sh.sh_type.get(NativeEndian);
+        let sh_type = sh.sh_type.get(LE);
         if sh_type == elf::SHT_REL {
-            rel_sections.push((sh_offset, sh.sh_size.get(NativeEndian)));
+            rel_sections.push((sh_offset, sh.sh_size.get(LE)));
         } else if sh_type == elf::SHT_RELA {
-            rela_sections.push((i, sh_offset, sh.sh_size.get(NativeEndian)));
+            rela_sections.push((i, sh_offset, sh.sh_size.get(LE)));
         }
     }
-
-    // Get last section virtual address.
-    let last_section_vaddr = section_headers
-        .iter()
-        .map(|sh| sh.sh_addr.get(NativeEndian) + sh.sh_size.get(NativeEndian))
-        .max()
-        .unwrap();
-
-    // Calculate end virtual address for new segment.
-    // TODO: potentially remove md.load_align_constraint here. I think we should be able to cram things together.
-    md.last_vaddr =
-        std::cmp::max(last_section_vaddr, last_segment_vaddr) + md.load_align_constraint;
 
     // Update all relocations for shift for extra program headers.
     for (sec_offset, sec_size) in rel_sections {
         let relocations = load_structs_inplace_mut::<elf::Rel64<LE>>(
             &mut out_mmap,
-            sec_offset as usize + md.added_byte_count as usize,
+            update_physical_offset(md, sec_offset) as usize,
             sec_size as usize / mem::size_of::<elf::Rel64<LE>>(),
         );
         for rel in relocations.iter_mut() {
-            let r_offset = rel.r_offset.get(NativeEndian);
-            if virtual_shift_start <= r_offset {
-                rel.r_offset = endian::U64::new(LE, r_offset + md.added_byte_count);
-            }
+            let r_offset = rel.r_offset.get(LE);
+            rel.r_offset.set(LE, update_virtual_offset(md, r_offset));
         }
     }
 
-    let dyn_offset = md.dynamic_section_offset + md.added_byte_count;
+    let dyn_offset = update_physical_offset(md, md.dynamic_section_offset);
+    // TODO: In the case that we shift an earlier sections, it will put the removed items at the end of that sections.
+    // This mean we will get valid items, removed items, valid items, removed items.
+    // This doesn't seem to happen in practice because rela.plt is always the last sections, but it would lead to issues if it happens.
+    // we really should generate all valid items and then all removed items.
     for (sec_index, sec_offset, sec_size) in rela_sections {
         let relocations = load_structs_inplace_mut::<elf::Rela64<LE>>(
             &mut out_mmap,
-            sec_offset as usize + md.added_byte_count as usize,
+            update_physical_offset(md, sec_offset) as usize,
             sec_size as usize / mem::size_of::<elf::Rela64<LE>>(),
         );
         for (i, rel) in relocations.iter_mut().enumerate() {
-            let r_offset = rel.r_offset.get(NativeEndian);
-            if virtual_shift_start <= r_offset {
-                rel.r_offset = endian::U64::new(LE, r_offset + md.added_byte_count);
-                // Deal with potential adjusts to absolute jumps.
-                // TODO: Verify other relocation types.
-                if rel.r_type(LE, false) == elf::R_X86_64_RELATIVE {
-                    let r_addend = rel.r_addend.get(LE);
-                    rel.r_addend.set(LE, r_addend + md.added_byte_count as i64);
-                }
+            let r_offset = rel.r_offset.get(LE);
+            rel.r_offset.set(LE, update_virtual_offset(md, r_offset));
+            // Deal with potential adjusts to absolute jumps.
+            // TODO: Verify other relocation types.
+            if rel.r_type(LE, false) == elf::R_X86_64_RELATIVE {
+                let r_addend = rel.r_addend.get(LE);
+                assert!(r_addend >= 0);
+                rel.r_addend
+                    .set(LE, update_virtual_offset(md, r_addend as u64) as i64);
             }
             // If the relocation goes to a roc function, we need to surgically link it and change it to relative.
-            let r_type = rel.r_type(NativeEndian, false);
+            let r_type = rel.r_type(LE, false);
             if r_type == elf::R_X86_64_GLOB_DAT {
-                let r_sym = rel.r_sym(NativeEndian, false);
+                let r_sym = rel.r_sym(LE, false);
                 for (name, index) in got_app_syms.iter() {
                     if *index as u32 == r_sym {
                         rel.set_r_info(LE, false, 0, elf::R_X86_64_RELATIVE);
@@ -694,14 +867,11 @@ fn gen_elf_le(
                             + i * mem::size_of::<elf::Rela64<LE>>()
                             // This 16 skips the first 2 fields and gets to the addend field.
                             + 16;
-                        md.surgeries
-                            .get_mut(name)
-                            .unwrap()
-                            .push(metadata::SurgeryEntry {
-                                file_offset: addend_addr as u64,
-                                virtual_offset: VirtualOffset::Absolute,
-                                size: 8,
-                            });
+                        md.surgeries.get_mut(name).unwrap().push(SurgeryEntry {
+                            file_offset: addend_addr as u64,
+                            virtual_offset: VirtualOffset::Absolute,
+                            size: 8,
+                        });
                     }
                 }
             }
@@ -715,8 +885,8 @@ fn gen_elf_le(
             .iter()
             .enumerate()
             .filter_map(|(i, rel)| {
-                let r_type = rel.r_type(NativeEndian, false);
-                let r_sym = rel.r_sym(NativeEndian, false);
+                let r_type = rel.r_type(LE, false);
+                let r_sym = rel.r_sym(LE, false);
                 if r_type == elf::R_X86_64_JUMP_SLOT && app_sym_indices.contains(&(r_sym as usize))
                 {
                     Some(i)
@@ -733,23 +903,23 @@ fn gen_elf_le(
         let mut j = relocations.len() - 1;
         for i in to_remove.iter() {
             relocations.swap(*i, j);
-            let r_sym = relocations[j].r_sym(NativeEndian, false);
+            let r_sym = relocations[j].r_sym(LE, false);
             relocations[j].set_r_info(LE, false, r_sym, elf::R_X86_64_NONE);
             j -= 1;
         }
 
         let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
             &mut out_mmap,
-            sh_offset as usize + md.added_byte_count as usize,
+            update_physical_offset(md, sh_offset) as usize,
             sh_num as usize,
         );
 
-        let old_size = section_headers[sec_index].sh_size.get(NativeEndian);
+        let old_size = section_headers[sec_index].sh_size.get(LE);
         let removed_count = to_remove.len();
         let removed_size = removed_count * std::mem::size_of::<elf::Rela64<LE>>();
         section_headers[sec_index]
             .sh_size
-            .set(NativeEndian, old_size - removed_size as u64);
+            .set(LE, old_size - removed_size as u64);
 
         let dyns = load_structs_inplace_mut::<elf::Dyn64<LE>>(
             &mut out_mmap,
@@ -759,30 +929,32 @@ fn gen_elf_le(
         let is_rela_dyn = dyns
             .iter()
             .filter(|d| {
-                let tag = d.d_tag.get(NativeEndian) as u32;
+                let tag = d.d_tag.get(LE) as u32;
                 tag == elf::DT_RELA
             })
-            .any(|d| d.d_val.get(NativeEndian) == sec_offset);
+            .any(|d| d.d_val.get(LE) == sec_offset);
+        if is_rela_dyn {
+            md.rela_section_index = sec_index as u64;
+        }
         let is_rela_plt = dyns
             .iter()
             .filter(|d| {
-                let tag = d.d_tag.get(NativeEndian) as u32;
+                let tag = d.d_tag.get(LE) as u32;
                 tag == elf::DT_JMPREL
             })
-            .any(|d| d.d_val.get(NativeEndian) == sec_offset);
+            .any(|d| d.d_val.get(LE) == sec_offset);
 
         for d in dyns.iter_mut() {
-            match d.d_tag.get(NativeEndian) as u32 {
-                elf::DT_RELACOUNT if is_rela_dyn => {
-                    let old_count = d.d_val.get(NativeEndian);
-                    d.d_val.set(LE, old_count - removed_count as u64);
-                }
+            match d.d_tag.get(LE) as u32 {
+                // These explicitly don't effect RELACOUNT.
+                // RELACOUNT is only for RELATIVE relocations.
+                // These are all JUMREL relocations.
                 elf::DT_RELASZ if is_rela_dyn => {
-                    let old_size = d.d_val.get(NativeEndian);
+                    let old_size = d.d_val.get(LE);
                     d.d_val.set(LE, old_size - removed_size as u64);
                 }
                 elf::DT_PLTRELSZ if is_rela_plt => {
-                    let old_size = d.d_val.get(NativeEndian);
+                    let old_size = d.d_val.get(LE);
                     d.d_val.set(LE, old_size - removed_size as u64);
                 }
                 _ => {}
@@ -796,23 +968,24 @@ fn gen_elf_le(
         dyn_offset as usize,
         dynamic_lib_count,
     );
-    for mut d in dyns {
-        match d.d_tag.get(NativeEndian) as u32 {
+    for d in dyns {
+        match d.d_tag.get(LE) as u32 {
+            // TODO: Double check these. I am pretty sure a number of them are physical and not virtual addresses.
             // I believe this is the list of symbols that need to be update if addresses change.
             // I am less sure about the symbols from GNU_HASH down.
             elf::DT_INIT
             | elf::DT_FINI
             | elf::DT_PLTGOT
-            | elf::DT_HASH
-            | elf::DT_STRTAB
-            | elf::DT_SYMTAB
-            | elf::DT_RELA
             | elf::DT_REL
-            | elf::DT_DEBUG
             | elf::DT_JMPREL
             | elf::DT_INIT_ARRAY
             | elf::DT_FINI_ARRAY
             | elf::DT_PREINIT_ARRAY
+            | elf::DT_RELA
+            | elf::DT_HASH
+            | elf::DT_STRTAB
+            | elf::DT_SYMTAB
+            | elf::DT_DEBUG
             | elf::DT_SYMTAB_SHNDX
             | elf::DT_GNU_HASH
             | elf::DT_TLSDESC_PLT
@@ -828,17 +1001,15 @@ fn gen_elf_le(
             | elf::DT_VERSYM
             | elf::DT_VERDEF
             | elf::DT_VERNEED => {
-                let d_addr = d.d_val.get(NativeEndian);
-                if virtual_shift_start <= d_addr {
-                    d.d_val = endian::U64::new(LE, d_addr + md.added_byte_count);
-                }
+                let d_addr = d.d_val.get(LE);
+                d.d_val.set(LE, update_virtual_offset(md, d_addr));
             }
             _ => {}
         }
     }
 
     // Update symbol table entries for shift for extra program headers.
-    let symtab_offset = md.symbol_table_section_offset + md.added_byte_count;
+    let symtab_offset = update_physical_offset(md, md.symbol_table_section_offset);
     let symtab_size = md.symbol_table_size as usize;
 
     let symbols = load_structs_inplace_mut::<elf::Sym64<LE>>(
@@ -848,24 +1019,20 @@ fn gen_elf_le(
     );
 
     for sym in symbols {
-        let addr = sym.st_value.get(NativeEndian);
-        if virtual_shift_start <= addr {
-            sym.st_value = endian::U64::new(LE, addr + md.added_byte_count);
-        }
+        let addr = sym.st_value.get(LE);
+        sym.st_value.set(LE, update_virtual_offset(md, addr));
     }
 
     // Update all data in the global offset table.
     for (offset, size) in got_sections {
         let global_offsets = load_structs_inplace_mut::<endian::U64<LE>>(
             &mut out_mmap,
-            *offset + md.added_byte_count as usize,
+            update_physical_offset(md, *offset as u64) as usize,
             size / mem::size_of::<endian::U64<LE>>(),
         );
         for go in global_offsets.iter_mut() {
-            let go_addr = go.get(NativeEndian);
-            if physical_shift_start <= go_addr {
-                go.set(LE, go_addr + md.added_byte_count);
-            }
+            let go_addr = go.get(LE);
+            go.set(LE, update_physical_offset(md, go_addr));
         }
     }
 
@@ -880,25 +1047,27 @@ fn gen_elf_le(
             16 * (dynamic_lib_count - shared_lib_index),
         );
     }
+    md.dynamic_section_count = dynamic_lib_count as u64 - 1;
 
     // Update main elf header for extra data.
-    let mut file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(&mut out_mmap, 0);
-    file_header.e_shoff = endian::U64::new(
-        LE,
-        file_header.e_shoff.get(NativeEndian) + md.added_byte_count,
-    );
-    let e_entry = file_header.e_entry.get(NativeEndian);
-    if virtual_shift_start <= e_entry {
-        file_header.e_entry = endian::U64::new(LE, e_entry + md.added_byte_count);
-    }
-    file_header.e_phnum = endian::U16::new(LE, ph_num + added_header_count as u16);
+    let file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(&mut out_mmap, 0);
+    file_header
+        .e_shoff
+        .set(LE, update_physical_offset(md, file_header.e_shoff.get(LE)));
+    let e_entry = file_header.e_entry.get(LE);
+    file_header
+        .e_entry
+        .set(LE, update_virtual_offset(md, e_entry));
+    file_header
+        .e_phnum
+        .set(LE, ph_num + added_header_count as u16);
 
     out_mmap
 }
 
 fn scan_elf_dynamic_deps(
     exec_obj: &object::File,
-    md: &mut metadata::Metadata,
+    md: &mut Metadata,
     app_syms: &[Symbol],
     shared_lib: &Path,
     exec_data: &[u8],
@@ -1097,18 +1266,21 @@ pub(crate) fn surgery_elf(
         }
     };
 
-    if app_obj
+    let absolute_relocation_count = app_obj
         .sections()
         .filter(|sec| {
             let name = sec.name().unwrap_or_default();
             !name.starts_with(".debug") && !name.starts_with(".eh")
         })
         .flat_map(|sec| sec.relocations())
-        .any(|(_, reloc)| reloc.kind() == RelocationKind::Absolute)
-    {
-        eprintln!("The surgical linker currently has issue #3609 and would fail linking your app.");
-        eprintln!("Please use `--linker=legacy` to avoid the issue for now.");
-        std::process::exit(1);
+        .filter(|(_, reloc)| reloc.kind() == RelocationKind::Absolute)
+        .count();
+
+    if verbose {
+        println!(
+            "Have {} absolute relocations to handle",
+            absolute_relocation_count
+        );
     }
 
     let total_start = Instant::now();
@@ -1118,14 +1290,26 @@ pub(crate) fn surgery_elf(
     let loading_metadata_duration = loading_metadata_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
-    let max_out_len = md.exec_len + roc_app_bytes.len() as u64 + md.load_align_constraint;
+    let max_out_len = md.exec_len
+        + roc_app_bytes.len() as u64
+        + (absolute_relocation_count
+            * (mem::size_of::<elf::Rela64<LE>>() - mem::size_of::<elf::Rel64<LE>>()))
+            as u64
+        + md.load_align_constraint;
     let mut exec_mmap = open_mmap_mut(executable_path, max_out_len as usize);
     let load_and_mmap_duration = load_and_mmap_start.elapsed();
 
     let out_gen_start = Instant::now();
     let mut offset = 0;
 
-    surgery_elf_help(verbose, &md, &mut exec_mmap, &mut offset, app_obj);
+    surgery_elf_help(
+        verbose,
+        &md,
+        &mut exec_mmap,
+        &mut offset,
+        app_obj,
+        absolute_relocation_count,
+    );
 
     let out_gen_duration = out_gen_start.elapsed();
     let flushing_data_start = Instant::now();
@@ -1173,10 +1357,11 @@ pub(crate) fn surgery_elf(
 
 fn surgery_elf_help(
     verbose: bool,
-    md: &metadata::Metadata,
+    md: &Metadata,
     exec_mmap: &mut MmapMut,
     offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
     app_obj: object::File,
+    absolute_relocation_count: usize,
 ) {
     let elf64 = exec_mmap[4] == 2;
     let litte_endian = exec_mmap[5] == 1;
@@ -1185,12 +1370,12 @@ fn surgery_elf_help(
     }
     let exec_header = load_struct_inplace::<elf::FileHeader64<LE>>(exec_mmap, 0);
 
-    let ph_offset = exec_header.e_phoff.get(NativeEndian);
-    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
-    let ph_num = exec_header.e_phnum.get(NativeEndian);
-    let sh_offset = exec_header.e_shoff.get(NativeEndian);
-    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
-    let sh_num = exec_header.e_shnum.get(NativeEndian);
+    let ph_offset = exec_header.e_phoff.get(LE);
+    let ph_ent_size = exec_header.e_phentsize.get(LE);
+    let ph_num = exec_header.e_phnum.get(LE);
+    let sh_offset = exec_header.e_shoff.get(LE);
+    let sh_ent_size = exec_header.e_shentsize.get(LE);
+    let sh_num = exec_header.e_shnum.get(LE);
 
     if verbose {
         println!();
@@ -1209,6 +1394,9 @@ fn surgery_elf_help(
     let sh_tab = exec_mmap[sh_offset as usize..][..sh_size].to_vec();
 
     let mut offset = sh_offset as usize;
+
+    offset += absolute_relocation_count * mem::size_of::<elf::Rela64<LE>>();
+
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
 
     let new_rodata_section_offset = offset;
@@ -1234,7 +1422,10 @@ fn surgery_elf_help(
     // in development builds for caching the results of top-level constants
     let rodata_sections: Vec<Section> = app_obj
         .sections()
-        .filter(|sec| sec.name().unwrap_or_default().starts_with(".rodata"))
+        .filter(|sec| {
+            let name = sec.name().unwrap_or_default();
+            name.starts_with(".rodata") || name.ends_with(".rel.ro")
+        })
         .collect();
 
     // bss section is like rodata section, but it has zero file size and non-zero virtual size.
@@ -1317,6 +1508,7 @@ fn surgery_elf_help(
         (*new_text_section_offset, *new_text_section_vaddr);
 
     // Move data and deal with relocations.
+    let mut current_rela_index = 0;
     for sec in rodata_sections
         .iter()
         .chain(bss_sections.iter())
@@ -1336,7 +1528,7 @@ fn surgery_elf_help(
         if verbose {
             println!();
             println!(
-                "Processing Relocations for Section: 0x{:+x?} @ {:+x} (virt: {:+x})",
+                "Processing Relocations for Section: {:+x?} @ {:+x} (virt: {:+x})",
                 sec, section_offset, section_virtual_offset
             );
         }
@@ -1361,7 +1553,8 @@ fn surgery_elf_help(
                             .ok()
                             .and_then(|name| {
                                 md.roc_symbol_vaddresses.get(name).map(|address| {
-                                    let vaddr = (*address + md.added_byte_count) as i64;
+                                    // let vaddr = (*address + md.added_byte_count) as i64;
+                                    let vaddr = update_virtual_offset(md, *address) as i64;
                                     if verbose {
                                         println!(
                                             "\t\tRelocation targets symbol in host: {} @ {:+x}",
@@ -1379,6 +1572,25 @@ fn surgery_elf_help(
                         let target: i64 = match rel.1.kind() {
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
+                            }
+                            RelocationKind::Absolute => {
+                                // Absolute relocations are special. We do not know the final address they will be loaded into due to PIC and aslr.
+                                // As such, we need to convert them to dynamic relocations that can be run at load time.
+                                let current_rela = load_struct_inplace_mut::<elf::Rela64<LE>>(
+                                    exec_mmap,
+                                    md.new_rela_paddr as usize
+                                        + md.rela_size as usize
+                                        + md.ph_shift_bytes as usize
+                                        + (current_rela_index * mem::size_of::<elf::Rela64<LE>>()),
+                                );
+                                current_rela.set_r_info(LE, false, 0, elf::R_X86_64_RELATIVE);
+                                current_rela.r_offset.set(LE, virt_base as u64);
+                                current_rela
+                                    .r_addend
+                                    .set(LE, target_offset as i64 + rel.1.addend());
+
+                                current_rela_index += 1;
+                                continue;
                             }
                             x => {
                                 internal_error!("Relocation Kind not yet support: {:?}", x);
@@ -1429,6 +1641,20 @@ fn surgery_elf_help(
         }
     }
 
+    // Update RELASZ and RELACOUNT to reflect the added dynamic relocations.
+    let added_rela_size = current_rela_index * mem::size_of::<elf::Rela64<LE>>();
+    for d in load_structs_inplace_mut::<elf::Dyn64<LE>>(
+        exec_mmap,
+        update_physical_offset(md, md.dynamic_section_offset) as usize,
+        md.dynamic_section_count as usize,
+    ) {
+        match d.d_tag.get(LE) as u32 {
+            elf::DT_RELASZ => d.d_val.set(LE, d.d_val.get(LE) + added_rela_size as u64),
+            elf::DT_RELACOUNT => d.d_val.set(LE, d.d_val.get(LE) + current_rela_index as u64),
+            _ => {}
+        }
+    }
+
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
     let new_sh_offset = offset;
     exec_mmap[offset..][..sh_size].copy_from_slice(&sh_tab);
@@ -1458,6 +1684,12 @@ fn surgery_elf_help(
         new_text_section_vaddr as u64 - new_rodata_section_vaddr as u64;
     let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size as u64;
     let new_text_section_size = new_sh_offset as u64 - new_text_section_offset as u64;
+
+    // update the .rela.dyn section size.
+    let rela_sec = &mut section_headers[md.rela_section_index as usize];
+    rela_sec
+        .sh_size
+        .set(LE, rela_sec.sh_size.get(LE) + added_rela_size as u64);
 
     // set the new rodata section header
     section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
@@ -1489,8 +1721,10 @@ fn surgery_elf_help(
 
     // Reload and update file header and size.
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(exec_mmap, 0);
-    file_header.e_shoff = endian::U64::new(LE, new_sh_offset as u64);
-    file_header.e_shnum = endian::U16::new(LE, sh_num + new_section_count as u16);
+    file_header.e_shoff.set(LE, new_sh_offset as u64);
+    file_header
+        .e_shnum
+        .set(LE, sh_num + new_section_count as u16);
 
     // Add 2 new segments that match the new sections.
     let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LE>>(
@@ -1499,10 +1733,27 @@ fn surgery_elf_help(
         ph_num as usize,
     );
 
+    // Update the .rela.dyn segment size
+    let rela_seg = &mut program_headers[program_headers.len() - 3];
+    rela_seg
+        .p_filesz
+        .set(LE, rela_seg.p_filesz.get(LE) + added_rela_size as u64);
+    rela_seg
+        .p_memsz
+        .set(LE, rela_seg.p_memsz.get(LE) + added_rela_size as u64);
+
+    // TODO: Neither of these below segments should have the write bit set.
+    // Sadly, dynamic loading only supports 1 relro segment.
+    // This means we need to somehow merge the new and old relro segment by shifting data in the binary around more.
+    // This is left for a later PR because it is brittle work.
+    // For now, the roc app text and read only data sections are writable.
+    // Given roc won't generate code to abuse this, this should only really be an issue if the platform chooses to do something.
+    // It is also a minor security concern if someone is trying to hack into a running roc app.
+
     // set the new rodata section program header
     program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
-        p_flags: endian::U32::new(LE, elf::PF_R),
+        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_W),
         p_offset: endian::U64::new(LE, new_rodata_section_offset as u64),
         p_vaddr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
         p_paddr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
@@ -1515,7 +1766,7 @@ fn surgery_elf_help(
     let new_text_section_index = program_headers.len() - 1;
     program_headers[new_text_section_index] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
-        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_X),
+        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_X | elf::PF_W),
         p_offset: endian::U64::new(LE, new_text_section_offset as u64),
         p_vaddr: endian::U64::new(LE, new_text_section_vaddr),
         p_paddr: endian::U64::new(LE, new_text_section_vaddr),
@@ -1525,8 +1776,8 @@ fn surgery_elf_help(
     };
 
     // Update calls from platform and dynamic symbols.
-    let dynsym_offset = md.dynamic_symbol_table_section_offset + md.added_byte_count;
-    let symtab_offset = md.symbol_table_section_offset + md.added_byte_count;
+    let dynsym_offset = update_physical_offset(md, md.dynamic_symbol_table_section_offset);
+    let symtab_offset = update_physical_offset(md, md.symbol_table_section_offset);
 
     for func_name in md.app_functions.iter() {
         let func_virt_offset = match app_func_vaddr_map.get(func_name) {
@@ -1547,7 +1798,7 @@ fn surgery_elf_help(
                 println!("\tPerforming surgery: {:+x?}", s);
             }
             let surgery_virt_offset = match s.virtual_offset {
-                VirtualOffset::Relative(vs) => (vs + md.added_byte_count) as i64,
+                VirtualOffset::Relative(vs) => update_virtual_offset(md, vs) as i64,
                 VirtualOffset::Absolute => 0,
             };
             match s.size {
@@ -1557,7 +1808,7 @@ fn surgery_elf_help(
                         println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize..][..4]
+                    exec_mmap[update_physical_offset(md, s.file_offset) as usize..][..4]
                         .copy_from_slice(&data);
                 }
                 8 => {
@@ -1566,7 +1817,7 @@ fn surgery_elf_help(
                         println!("\tTarget Jump: {:+x}", target);
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize..][..8]
+                    exec_mmap[update_physical_offset(md, s.file_offset) as usize..][..8]
                         .copy_from_slice(&data);
                 }
                 x => {
@@ -1578,8 +1829,8 @@ fn surgery_elf_help(
         // Replace plt call code with just a jump.
         // This is a backup incase we missed a call to the plt.
         if let Some((plt_off, plt_vaddr)) = md.plt_addresses.get(func_name) {
-            let plt_off = (*plt_off + md.added_byte_count) as usize;
-            let plt_vaddr = *plt_vaddr + md.added_byte_count;
+            let plt_off = update_physical_offset(md, *plt_off) as usize;
+            let plt_vaddr = update_virtual_offset(md, *plt_vaddr);
             let jmp_inst_len = 5;
             let target =
                 (func_virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
@@ -1600,9 +1851,9 @@ fn surgery_elf_help(
                 exec_mmap,
                 dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
             );
-            sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LE, func_virt_offset as u64);
-            sym.st_size = endian::U64::new(
+            sym.st_shndx.set(LE, new_text_section_index as u16);
+            sym.st_value.set(LE, func_virt_offset as u64);
+            sym.st_size.set(
                 LE,
                 match app_func_size_map.get(func_name) {
                     Some(size) => *size,
@@ -1617,9 +1868,9 @@ fn surgery_elf_help(
                 exec_mmap,
                 symtab_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
             );
-            sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LE, func_virt_offset as u64);
-            sym.st_size = endian::U64::new(
+            sym.st_shndx.set(LE, new_text_section_index as u16);
+            sym.st_value.set(LE, func_virt_offset as u64);
+            sym.st_size.set(
                 LE,
                 match app_func_size_map.get(func_name) {
                     Some(size) => *size,
@@ -1706,14 +1957,14 @@ mod tests {
 
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();
-                try stdout.print("Hello {s}\n", .{roc_magic1(0)[0..3]});
+                try stdout.print("Hello {s}\n", .{roc_magic1(1)[0..3]});
             }
             "#
         );
 
         let app_zig = indoc!(
             r#"
-            const X = [_][]const u8 { "foo" };
+            const X = [_][]const u8 { "foo", "bar" };
 
             export fn roc_magic1(index: usize) [*]const u8 {
                 return X[index].ptr;
@@ -1840,6 +2091,6 @@ mod tests {
 
         let output = String::from_utf8_lossy(&output.stdout);
 
-        assert_eq!("Hello foo\n", output);
+        assert_eq!("Hello bar\n", output);
     }
 }

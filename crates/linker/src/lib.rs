@@ -20,7 +20,6 @@ mod macho;
 mod pe;
 
 mod generate_dylib;
-mod metadata;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
