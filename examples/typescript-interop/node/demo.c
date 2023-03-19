@@ -105,7 +105,10 @@ struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
     {
         struct RocBytes ret;
         size_t refcount_size = sizeof(size_t);
-        uint8_t *new_content = (uint8_t *)roc_alloc(len + refcount_size, __alignof__(size_t)) + refcount_size;
+        uint8_t *new_refcount = (uint8_t *)roc_alloc(len + refcount_size, __alignof__(size_t));
+        uint8_t *new_content = new_refcount + refcount_size;
+
+        ((ssize_t *)new_refcount)[0] = REFCOUNT_ONE;
 
         memcpy(new_content, bytes, len);
 
