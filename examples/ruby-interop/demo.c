@@ -91,7 +91,7 @@ struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
         struct RocBytes ret = {
             .len = 0,
             .bytes = NULL,
-            .capacity = MASK,
+            .capacity = 0,
         };
 
         return ret;
