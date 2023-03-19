@@ -2,7 +2,7 @@ platform "typescript-interop"
     requires {} { main : Str -> Str }
     exposes []
     packages {}
-    imports [Json]
+    imports []
     provides [mainForHost]
 
 mainForHost : Str -> Str
