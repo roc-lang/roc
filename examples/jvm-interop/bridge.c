@@ -171,11 +171,15 @@ struct RocBytesU8 init_rocbytes_u8(uint8_t *bytes, size_t len)
     }
     else
     {
-        struct RocBytesU8 ret;
-        size_t refcount_size = sizeof(size_t);
-        uint8_t *new_content = ((uint8_t *)roc_alloc(len + refcount_size, alignof(size_t))) + refcount_size;
 
-        memcpy(new_content, bytes, len);
+        size_t refcount_size = sizeof(size_t);
+        ssize_t* data = (ssize_t*)roc_alloc(len + refcount_size, alignof(size_t));
+        data[0] = REFCOUNT_ONE;
+        uint8_t *new_content = (uint8_t *)(data + 1);
+
+        struct RocBytesU8 ret;
+
+        memcpy(new_content, bytes, len * sizeof(uint8_t));
 
         ret.bytes = new_content;
         ret.len = len;
@@ -320,13 +324,9 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     jstring result = (*env)->NewObject(env, stringClass, stringConstructor, byteArray, charsetName);
 
     // cleanup
-    if (is_seamless_str_slice(ret)) {
-      decref((void *)(ret.capacity << 1), alignof(uint8_t *));
-    }
-    else {
+    if (!is_seamless_str_slice(ret)) {
       decref(ret.bytes, alignof(uint8_t *));
     }
-    decref((void *)&rocName, alignof(uint8_t *));
 
     (*env)->DeleteLocalRef(env, charsetName);
     (*env)->DeleteLocalRef(env, byteArray);
