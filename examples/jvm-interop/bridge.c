@@ -241,7 +241,20 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
     }
 }
 
-bool is_small_str(struct RocStr str) { return ((ssize_t)str.capacity) < 0; }
+bool is_small_str(struct RocStr str)
+{
+    return ((ssize_t)str.capacity) < 0;
+}
+
+bool is_seamless_str_slice(struct RocStr str)
+{
+    return ((ssize_t)str.len) < 0;
+}
+
+bool is_seamless_listi32_slice(struct RocBytesI32 list)
+{
+    return ((ssize_t)list.capacity) < 0;
+}
 
 // Determine the len of the string, taking into
 // account the small string optimization
@@ -289,6 +302,7 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
 
     // Call the Roc function to populate `ret`'s bytes.
     roc__programForHost_1__InterpolateString_caller(&rocName, 0, &ret);
+    jbyte *bytes = (jbyte*)(is_small_str(ret) ? (uint8_t*)&ret : ret.bytes);
 
     // java being java making this a lot harder than it needs to be
     // https://stackoverflow.com/questions/32205446/getting-true-utf-8-characters-in-java-jni
@@ -296,7 +310,7 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     // but as i refuse converting those manually to their correct form, we just let the jvm handle the conversion
     // by first making a java byte array then converting the byte array to our final jstring
     jbyteArray byteArray = (*env)->NewByteArray(env, ret.len);
-    (*env)->SetByteArrayRegion(env, byteArray, 0, ret.len, (jbyte*)ret.bytes);
+    (*env)->SetByteArrayRegion(env, byteArray, 0, ret.len, bytes);
     /* jbyte* bytes = (*env)->GetByteArrayElements(env, byteArray, 0); */
 
     jstring charsetName = (*env)->NewStringUTF(env, "UTF-8");
@@ -306,7 +320,12 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     jstring result = (*env)->NewObject(env, stringClass, stringConstructor, byteArray, charsetName);
 
     // cleanup
-    decref((void *)&ret, alignof(uint8_t *));
+    if (is_seamless_str_slice(ret)) {
+      decref((void *)(ret.capacity << 1), alignof(uint8_t *));
+    }
+    else {
+      decref(ret.bytes, alignof(uint8_t *));
+    }
     decref((void *)&rocName, alignof(uint8_t *));
 
     (*env)->DeleteLocalRef(env, charsetName);
@@ -338,14 +357,19 @@ JNIEXPORT jintArray JNICALL Java_javaSource_Demo_mulArrByScalar
 
     // cleanup
     (*env)->ReleaseIntArrayElements(env, arr, jarr, 0);
-    decref((void *)&originalArray, alignof(int32_t*));
-    decref((void *)&ret, alignof(int32_t *));
+
+    if (is_seamless_listi32_slice(ret)) {
+      decref((void *)(ret.capacity << 1), alignof(uint8_t *));
+    }
+    else {
+      decref((void *)ret.bytes, alignof(uint8_t *));
+    }
 
     return multiplied;
 }
 
 JNIEXPORT jlong JNICALL Java_javaSource_Demo_factorial
-   (JNIEnv *env, jobject thisObj, jlong n)
+   (JNIEnv *env, jobject thisObj, jlong num)
 {
     int64_t ret;
     // can crash - meaning call roc_panic, so we set a jump here
@@ -356,6 +380,7 @@ JNIEXPORT jlong JNICALL Java_javaSource_Demo_factorial
         return (*env)->ThrowNew(env, exClass, msg);
     }
     else {
+        int64_t n = (int64_t)num;
         roc__programForHost_1__Factorial_caller(&n, 0, &ret);
         return ret;
     }
