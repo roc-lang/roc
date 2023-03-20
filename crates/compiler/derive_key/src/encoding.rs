@@ -113,7 +113,7 @@ impl FlatEncodable {
                 FlatType::Func(..) => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match from_builtin_symbol(sym) {
-                Some(lambda) => Ok(lambda),
+                Some(lambda) => lambda,
                 // TODO: I believe it is okay to unwrap opaques here because derivers are only used
                 // by the backend, and the backend treats opaques like structural aliases.
                 _ => Self::from_var(subs, real_var),
@@ -133,28 +133,28 @@ impl FlatEncodable {
     }
 
     pub(crate) fn from_builtin_symbol(symbol: Symbol) -> Result<FlatEncodable, DeriveError> {
-        from_builtin_symbol(symbol).ok_or(DeriveError::Underivable)
+        from_builtin_symbol(symbol).unwrap_or(Err(DeriveError::Underivable))
     }
 }
 
-const fn from_builtin_symbol(symbol: Symbol) -> Option<FlatEncodable> {
+const fn from_builtin_symbol(symbol: Symbol) -> Option<Result<FlatEncodable, DeriveError>> {
     use FlatEncodable::*;
     match symbol {
-        Symbol::BOOL_BOOL => Some(Immediate(Symbol::ENCODE_BOOL)),
-        Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => Some(Immediate(Symbol::ENCODE_U8)),
-        Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => Some(Immediate(Symbol::ENCODE_U16)),
-        Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => Some(Immediate(Symbol::ENCODE_U32)),
-        Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => Some(Immediate(Symbol::ENCODE_U64)),
-        Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => Some(Immediate(Symbol::ENCODE_U128)),
-        Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => Some(Immediate(Symbol::ENCODE_I8)),
-        Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => Some(Immediate(Symbol::ENCODE_I16)),
-        Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => Some(Immediate(Symbol::ENCODE_I32)),
-        Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => Some(Immediate(Symbol::ENCODE_I64)),
-        Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => Some(Immediate(Symbol::ENCODE_I128)),
-        Symbol::NUM_DEC | Symbol::NUM_DECIMAL => Some(Immediate(Symbol::ENCODE_DEC)),
-        Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Some(Immediate(Symbol::ENCODE_F32)),
-        Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Some(Immediate(Symbol::ENCODE_F64)),
-        Symbol::NUM_NAT | Symbol::NUM_NATURAL => None,
+        Symbol::BOOL_BOOL => Some(Ok(Immediate(Symbol::ENCODE_BOOL))),
+        Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => Some(Ok(Immediate(Symbol::ENCODE_U8))),
+        Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => Some(Ok(Immediate(Symbol::ENCODE_U16))),
+        Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => Some(Ok(Immediate(Symbol::ENCODE_U32))),
+        Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => Some(Ok(Immediate(Symbol::ENCODE_U64))),
+        Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => Some(Ok(Immediate(Symbol::ENCODE_U128))),
+        Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => Some(Ok(Immediate(Symbol::ENCODE_I8))),
+        Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => Some(Ok(Immediate(Symbol::ENCODE_I16))),
+        Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => Some(Ok(Immediate(Symbol::ENCODE_I32))),
+        Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => Some(Ok(Immediate(Symbol::ENCODE_I64))),
+        Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => Some(Ok(Immediate(Symbol::ENCODE_I128))),
+        Symbol::NUM_DEC | Symbol::NUM_DECIMAL => Some(Ok(Immediate(Symbol::ENCODE_DEC))),
+        Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Some(Ok(Immediate(Symbol::ENCODE_F32))),
+        Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Some(Ok(Immediate(Symbol::ENCODE_F64))),
+        Symbol::NUM_NAT | Symbol::NUM_NATURAL => Some(Err(DeriveError::Underivable)),
         _ => None,
     }
 }

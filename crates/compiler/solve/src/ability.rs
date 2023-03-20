@@ -4,7 +4,7 @@ use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_UNDERIVABLE;
-use roc_derive_key::Derived;
+use roc_derive_key::{DeriveError, Derived};
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -1353,12 +1353,25 @@ pub(crate) fn builtin_module_with_unlisted_ability_impl(module_id: ModuleId) -> 
     matches!(module_id, ModuleId::NUM | ModuleId::BOOL)
 }
 
+#[derive(Debug)]
+pub enum ResolveError {
+    NonDerivableAbility(Symbol),
+    DeriveError(DeriveError),
+    NoTypeImplementingSpecialization,
+}
+
+impl From<DeriveError> for ResolveError {
+    fn from(e: DeriveError) -> Self {
+        Self::DeriveError(e)
+    }
+}
+
 pub fn resolve_ability_specialization<R: AbilityResolver>(
     subs: &mut Subs,
     resolver: &R,
     ability_member: Symbol,
     specialization_var: Variable,
-) -> Option<Resolved> {
+) -> Result<Resolved, ResolveError> {
     use roc_unify::unify::{unify, Mode};
 
     let (parent_ability, signature_var) = resolver
@@ -1382,18 +1395,18 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
 
     subs.rollback_to(snapshot);
 
-    let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)?;
+    use ResolveError::*;
+
+    let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)
+        .ok_or(NoTypeImplementingSpecialization)?;
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
             if builtin_module_with_unlisted_ability_impl(symbol.module_id()) {
                 let derive_key = roc_derive_key::Derived::builtin_with_builtin_symbol(
-                    ability_member
-                        .try_into()
-                        .expect("derived symbols must be builtins"),
+                    ability_member.try_into().map_err(NonDerivableAbility)?,
                     symbol,
-                )
-                .expect("specialization var not derivable!");
+                )?;
 
                 Resolved::Derive(derive_key)
             } else {
@@ -1402,7 +1415,10 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
                     ability_member,
                 };
 
-                match resolver.get_implementation(impl_key)? {
+                match resolver
+                    .get_implementation(impl_key)
+                    .ok_or(NoTypeImplementingSpecialization)?
+                {
                     roc_types::types::MemberImpl::Impl(spec_symbol) => {
                         Resolved::Specialization(spec_symbol)
                     }
@@ -1416,17 +1432,14 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
         }
         Obligated::Adhoc(variable) => {
             let derive_key = roc_derive_key::Derived::builtin(
-                ability_member
-                    .try_into()
-                    .expect("derived symbols must be builtins"),
+                ability_member.try_into().map_err(NonDerivableAbility)?,
                 subs,
                 variable,
-            )
-            .expect("specialization var not derivable!");
+            )?;
 
             Resolved::Derive(derive_key)
         }
     };
 
-    Some(resolved)
+    Ok(resolved)
 }

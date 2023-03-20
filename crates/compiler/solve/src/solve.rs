@@ -1718,14 +1718,12 @@ fn solve(
                 member,
                 specialization_id,
             }) => {
-                if let Some(Resolved::Specialization(specialization)) =
-                    resolve_ability_specialization(
-                        subs,
-                        abilities_store,
-                        member,
-                        specialization_variable,
-                    )
-                {
+                if let Ok(Resolved::Specialization(specialization)) = resolve_ability_specialization(
+                    subs,
+                    abilities_store,
+                    member,
+                    specialization_variable,
+                ) {
                     abilities_store.insert_resolved(specialization_id, specialization);
                 }
 
