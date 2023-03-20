@@ -55,14 +55,15 @@ impl Metadata {
     }
 
     pub fn read_from_file(metadata_filename: &Path) -> Self {
-        let input =
-            std::fs::File::open(metadata_filename)
-            .unwrap_or_else(
-                |e| internal_error!(r#"
+        let input = std::fs::File::open(metadata_filename).unwrap_or_else(|e| {
+            internal_error!(
+                r#"
 
                 Error:
-                    {}\n"#, e)
-            );
+                    {}\n"#,
+                e
+            )
+        });
 
         match deserialize_from(BufReader::new(input)) {
             Ok(data) => data,

@@ -983,6 +983,13 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
         false => "",
     };
 
+    let preprocessed_host_path_str = preprocessed_host_path.to_string_lossy();
+    let extra_err_msg = if preprocessed_host_path_str.ends_with(".rh") {
+        "\n\n\tNote: If the platform does have an .rh1 file but no .rh file, it's because it's been built with an older version of roc. Contact the author to release a new build of the platform using a roc release newer than March 21 2023.\n"
+    } else {
+        ""
+    };
+
     eprintln!(
         indoc::indoc!(
             r#"
@@ -990,13 +997,14 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
 
                 {}
 
-            However, it was not there!
+            However, it was not there!{}
 
             If you have the platform's source code locally, you may be able to generate it by re-running this command with --prebuilt-platform=false
             "#
         ),
         prefix,
         preprocessed_host_path.to_string_lossy(),
+        extra_err_msg
     );
 }
 
