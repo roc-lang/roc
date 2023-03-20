@@ -42,20 +42,6 @@ void roc_dealloc(void *ptr, unsigned int alignment)
     free(ptr);
 }
 
-__attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
-{
-    if (ptr != NULL) {
-        int ptr_len = strlen((char*)ptr);
-        int len = ptr_len > ERR_MSG_MAX_SIZE ? ERR_MSG_MAX_SIZE : ptr_len;
-        strncpy((char*)err_msg, ptr, (len + 1));
-    }
-    else {
-        strncpy((char *)err_msg, "roc paniced", strlen("roc paniced") + 1);
-    }
-    longjmp(exception_buffer, 1);
-}
-
-
 void *roc_memcpy(void *dest, const void *src, size_t n)
 {
     return memcpy(dest, src, n);
@@ -273,6 +259,26 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
+__attribute__((noreturn)) void roc_panic(struct RocStr *msg, unsigned int alignment)
+{
+    char* bytes = is_small_str(*msg) ? (char*)msg : (char*)msg->bytes;
+    const size_t str_len = roc_str_len(*msg);
+
+    int len = str_len > ERR_MSG_MAX_SIZE ? ERR_MSG_MAX_SIZE : str_len;
+    strncpy((char*)err_msg, bytes, len);
+
+    // Free the underlying allocation if needed.
+    if (!is_small_str(*msg)) {
+        if (is_seamless_str_slice(*msg)){
+            decref((uint8_t *)(msg->capacity << 1), alignof(uint8_t *));
+        }
+        else {
+            decref(msg->bytes, alignof(uint8_t *));
+        }
+    }
+
+    longjmp(exception_buffer, 1);
+}
 
 extern void roc__programForHost_1__InterpolateString_caller(struct RocStr *name, char *closure_data, struct RocStr *ret);
 
