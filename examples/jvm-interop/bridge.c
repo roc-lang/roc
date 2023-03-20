@@ -111,18 +111,18 @@ void decref(uint8_t* bytes, uint32_t alignment)
     }
 }
 
-struct RocBytesI32
+struct RocListI32
 {
     int32_t *bytes;
     size_t len;
     size_t capacity;
 };
 
-struct RocBytesI32 init_rocbytes_i32(int32_t *bytes, size_t len)
+struct RocListI32 init_roclist_i32(int32_t *bytes, size_t len)
 {
     if (len == 0)
     {
-        struct RocBytesI32 ret = {
+        struct RocListI32 ret = {
             .len = 0,
             .bytes = NULL,
             .capacity = 0,
@@ -137,7 +137,7 @@ struct RocBytesI32 init_rocbytes_i32(int32_t *bytes, size_t len)
         data[0] = REFCOUNT_ONE;
         int32_t *new_content = (int32_t *)(data + 1);
 
-        struct RocBytesI32 ret;
+        struct RocListI32 ret;
 
         memcpy(new_content, bytes, len * sizeof(int32_t));
 
@@ -148,20 +148,20 @@ struct RocBytesI32 init_rocbytes_i32(int32_t *bytes, size_t len)
         return ret;
     }
 }
-// RocBytesU8 (List U8)
+// RocListU8 (List U8)
 
-struct RocBytesU8
+struct RocListU8
 {
     uint8_t *bytes;
     size_t len;
     size_t capacity;
 };
 
-struct RocBytesU8 init_rocbytes_u8(uint8_t *bytes, size_t len)
+struct RocListU8 init_roclist_u8(uint8_t *bytes, size_t len)
 {
     if (len == 0)
     {
-        struct RocBytesU8 ret = {
+        struct RocListU8 ret = {
             .len = 0,
             .bytes = NULL,
             .capacity = 0,
@@ -177,7 +177,7 @@ struct RocBytesU8 init_rocbytes_u8(uint8_t *bytes, size_t len)
         data[0] = REFCOUNT_ONE;
         uint8_t *new_content = (uint8_t *)(data + 1);
 
-        struct RocBytesU8 ret;
+        struct RocListU8 ret;
 
         memcpy(new_content, bytes, len * sizeof(uint8_t));
 
@@ -200,17 +200,7 @@ struct RocStr
 
 struct RocStr init_rocstr(uint8_t *bytes, size_t len)
 {
-    if (len == 0)
-    {
-        struct RocStr ret = {
-            .len = 0,
-            .bytes = NULL,
-            .capacity = 0,
-        };
-
-        return ret;
-    }
-    else if (len < sizeof(struct RocStr))
+    if (len < sizeof(struct RocStr))
     {
         // Start out with zeroed memory, so that
         // if we end up comparing two small RocStr values
@@ -232,8 +222,8 @@ struct RocStr init_rocstr(uint8_t *bytes, size_t len)
     }
     else
     {
-        // A large RocStr is the same as a List U8 (aka RocBytesU8) in memory.
-        struct RocBytesU8 roc_bytes = init_rocbytes_u8(bytes, len);
+        // A large RocStr is the same as a List U8 (aka RocListU8) in memory.
+        struct RocListU8 roc_bytes = init_roclist_u8(bytes, len);
 
         struct RocStr ret = {
             .len = roc_bytes.len,
@@ -255,7 +245,7 @@ bool is_seamless_str_slice(struct RocStr str)
     return ((ssize_t)str.len) < 0;
 }
 
-bool is_seamless_listi32_slice(struct RocBytesI32 list)
+bool is_seamless_listi32_slice(struct RocListI32 list)
 {
     return ((ssize_t)list.capacity) < 0;
 }
@@ -286,7 +276,7 @@ size_t roc_str_len(struct RocStr str)
 
 extern void roc__programForHost_1__InterpolateString_caller(struct RocStr *name, char *closure_data, struct RocStr *ret);
 
-extern void roc__programForHost_1__MulArrByScalar_caller(struct RocBytesI32 *arr, int32_t *scalar, char *closure_data, struct RocBytesI32 *ret);
+extern void roc__programForHost_1__MulArrByScalar_caller(struct RocListI32 *arr, int32_t *scalar, char *closure_data, struct RocListI32 *ret);
 
 extern void roc__programForHost_1__Factorial_caller(int64_t *scalar, char *closure_data, int64_t *ret);
 
@@ -345,9 +335,9 @@ JNIEXPORT jintArray JNICALL Java_javaSource_Demo_mulArrByScalar
     jsize len = (*env)->GetArrayLength(env, arr);
 
     // pass data to platform
-    struct RocBytesI32 originalArray = init_rocbytes_i32(jarr, len);
+    struct RocListI32 originalArray = init_roclist_i32(jarr, len);
     incref((void *)&originalArray, alignof(int32_t*));
-    struct RocBytesI32 ret = {0};
+    struct RocListI32 ret = {0};
 
     roc__programForHost_1__MulArrByScalar_caller(&originalArray, &scalar, 0, &ret);
 
