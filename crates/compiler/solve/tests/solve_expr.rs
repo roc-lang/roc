@@ -8820,7 +8820,7 @@ mod solve_expr {
                 #                           ^^^^^^^^^^^^^^
                 "#
             ),
-            @"Decoding#Decode.decoder(4) : List U8, fmt -[[]]-> { rest : List U8, result : [Err [TooShort], Ok [False, True]] } | fmt has DecoderFormatting"
+            @"Decoding#Decode.decoder(4) : List U8, fmt -[[] + fmt:Decode.bool(19):1]-> { rest : List U8, result : [Err [TooShort], Ok [False, True]] } | fmt has DecoderFormatting"
             print_only_under_alias: true
         );
     }
