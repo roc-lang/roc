@@ -113,6 +113,7 @@ impl FlatEncodable {
                 FlatType::Func(..) => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match sym {
+                Symbol::BOOL_BOOL => Ok(Immediate(Symbol::ENCODE_BOOL)),
                 Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => Ok(Immediate(Symbol::ENCODE_U8)),
                 Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => Ok(Immediate(Symbol::ENCODE_U16)),
                 Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => Ok(Immediate(Symbol::ENCODE_U32)),

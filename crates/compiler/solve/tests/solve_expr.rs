@@ -8824,4 +8824,19 @@ mod solve_expr {
             print_only_under_alias: true
         );
     }
+
+    #[test]
+    fn derive_to_encoder_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Encode.toEncoder Bool.true
+                #      ^^^^^^^^^^^^^^^^
+                "#
+            ),
+            @"Encoding#Encode.toEncoder(2) : Bool -[[] + fmt:Encode.bool(17):1]-> Encoder fmt | fmt has EncoderFormatting"
+        );
+    }
 }
