@@ -62,7 +62,7 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
     }
 }
 
-pub const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
+pub const PRECOMPILED_HOST_EXT: &str = "rh"; // Short for "roc host"
 
 pub fn preprocessed_host_filename(target: &Triple) -> Option<String> {
     roc_target::get_target_triple_str(target).map(|x| format!("{}.{}", x, PRECOMPILED_HOST_EXT))
@@ -71,7 +71,7 @@ pub fn preprocessed_host_filename(target: &Triple) -> Option<String> {
 fn metadata_file_name(target: &Triple) -> String {
     let target_triple_str = get_target_triple_str(target);
 
-    format!("metadata_{}.rm2", target_triple_str.unwrap_or("unknown"))
+    format!("metadata_{}.rm", target_triple_str.unwrap_or("unknown"))
 }
 
 pub fn link_preprocessed_host(

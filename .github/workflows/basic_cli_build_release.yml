@@ -41,13 +41,13 @@ jobs:
           CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
         run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
-      - name: Save .rh1, .rm2 and .o file 
+      - name: Save .rh, .rm and .o file 
         uses: actions/upload-artifact@v3
         with:
           name: linux-x86_64-files
           path: |
-            basic-cli/src/metadata_linux-x86_64.rm2
-            basic-cli/src/linux-x86_64.rh1
+            basic-cli/src/metadata_linux-x86_64.rm
+            basic-cli/src/linux-x86_64.rh
             basic-cli/src/linux-x86_64.o
 
   build-macos-x86_64-files:

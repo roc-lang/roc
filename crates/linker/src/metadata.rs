@@ -61,14 +61,7 @@ impl Metadata {
                 |e| internal_error!(r#"
 
                 Error:
-                    {}
-
-                > This may occur when using a release of roc that relies on a specific metadata format like 'rm2' and the imported platform only has an older metadata format available, like rm1.
-                  The platform you are using can be found in the header of your main.roc: `packages {{ pf: <PLATFORM>}}`.
-                  You should check if a more recent version of the platform is available.
-                  If not, you should notify the author of the platform about this issue.
-
-"#, e)
+                    {}\n"#, e)
             );
 
         match deserialize_from(BufReader::new(input)) {
