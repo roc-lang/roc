@@ -128,7 +128,6 @@ li code,
 th code,
 samp {
     padding: 0 8px;
-    border-radius: 4px;
 }
 
 code a,
@@ -149,7 +148,6 @@ pre {
     margin-bottom: 16px;
     padding: 8px 16px;
     box-sizing: border-box;
-    border-radius: 8px;
     background-color: var(--code-bg);
     overflow-x: hidden;
     word-wrap: normal;
@@ -238,7 +236,6 @@ td:last-child {
 #tutorial-toc {
     margin-top: 18px;
     background: var(--code-bg);
-    border-radius: 8px;
     padding: 12px 24px;
     margin-left: 64px;
 }
@@ -692,7 +689,6 @@ code .dim {
     background: var(--code-bg);
     border: 1px solid var(--magenta);
     color: var(--magenta);
-    border-radius: 3px;
     display: inline-block;
     cursor: pointer;
     margin: 8px;
