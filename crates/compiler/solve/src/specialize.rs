@@ -625,7 +625,9 @@ fn make_specialization_decision<P: Phase>(
     use Content::*;
     use SpecializationTypeKey::*;
     match subs.get_content_without_compacting(var) {
-        Alias(opaque, _, _, AliasKind::Opaque) if opaque.module_id() != ModuleId::NUM => {
+        Alias(opaque, _, _, AliasKind::Opaque)
+            if !matches!(opaque.module_id(), ModuleId::NUM | ModuleId::BOOL) =>
+        {
             if P::IS_LATE {
                 SpecializeDecision::Specialize(Opaque(*opaque))
             } else {
