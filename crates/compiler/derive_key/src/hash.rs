@@ -109,7 +109,7 @@ impl FlatHash {
                 //
                 FlatType::Func(..) => Err(Underivable),
             },
-            Content::Alias(sym, _, real_var, _) => match num_symbol_to_hash_lambda(sym) {
+            Content::Alias(sym, _, real_var, _) => match builtin_symbol_to_hash_lambda(sym) {
                 Some(lambda) => Ok(lambda),
                 // NB: I believe it is okay to unwrap opaques here because derivers are only used
                 // by the backend, and the backend treats opaques like structural aliases.
@@ -129,7 +129,7 @@ impl FlatHash {
                 //     during monomorphization, at which point we always choose a default layout
                 //     for ranged numbers, without concern for reification to a ground type.
                 let chosen_width = range.default_compilation_width();
-                let lambda = num_symbol_to_hash_lambda(chosen_width.symbol()).unwrap();
+                let lambda = builtin_symbol_to_hash_lambda(chosen_width.symbol()).unwrap();
                 Ok(lambda)
             }
             //
@@ -145,7 +145,7 @@ impl FlatHash {
     }
 }
 
-const fn num_symbol_to_hash_lambda(symbol: Symbol) -> Option<FlatHash> {
+const fn builtin_symbol_to_hash_lambda(symbol: Symbol) -> Option<FlatHash> {
     use FlatHash::*;
     match symbol {
         Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => {

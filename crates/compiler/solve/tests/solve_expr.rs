@@ -8839,4 +8839,19 @@ mod solve_expr {
             @"Encoding#Encode.toEncoder(2) : Bool -[[] + fmt:Encode.bool(17):1]-> Encoder fmt | fmt has EncoderFormatting"
         );
     }
+
+    #[test]
+    fn derive_eq_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Bool.isEq Bool.true Bool.false
+                #      ^^^^^^^^^
+                "#
+            ),
+            @"Bool#Bool.isEq(10) : Bool, Bool -[[Bool.structuralEq(11)]]-> Bool"
+        );
+    }
 }
