@@ -2768,3 +2768,23 @@ fn inline_return_joinpoints_in_union_lambda_set() {
         "#
     )
 }
+
+#[mono_test]
+fn recursive_closure_with_transiently_used_capture() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        thenDo = \x, callback ->
+            callback x
+
+        f = \{} ->
+            code = 10u16
+
+            bf = \{} ->
+                thenDo code \_ -> bf {}
+
+            bf {}
+        "#
+    )
+}
