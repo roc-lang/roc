@@ -808,7 +808,6 @@ trait DerivableVisitor {
                         .is_err()
                         && !Self::is_derivable_builtin_opaque(opaque)
                     {
-                        dbg!(opaque);
                         return Err(NotDerivable {
                             var,
                             context: NotDerivableContext::Opaque(opaque),
