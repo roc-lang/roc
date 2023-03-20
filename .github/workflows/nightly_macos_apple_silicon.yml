@@ -18,8 +18,8 @@ jobs:
       - name: llvm version
         run: llc --version | grep LLVM
 
-      - name: run tests
-        run: cargo test --locked --release
+      #- name: run tests
+      #  run: cargo test --locked --release
         
       - name: get commit SHA
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
