@@ -18,7 +18,7 @@ mulArrByScalar  = \arr, scalar ->
 # factorial : I64 -> I64
 factorial = \n ->
     if n < 0 then
-        # while we get the chance,  examplify a roc panic in an interop
+        # while we get the chance,  exemplify a roc panic in an interop
         crash "No negatives here!!!"
     else if n == 0 then
         1

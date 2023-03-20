@@ -259,7 +259,7 @@ size_t roc_str_len(struct RocStr str)
     }
 }
 
-__attribute__((noreturn)) void roc_panic(struct RocStr *msg, unsigned int alignment)
+__attribute__((noreturn)) void roc_panic(struct RocStr *msg, unsigned int tag_id)
 {
     char* bytes = is_small_str(*msg) ? (char*)msg : (char*)msg->bytes;
     const size_t str_len = roc_str_len(*msg);
@@ -311,7 +311,6 @@ JNIEXPORT jstring JNICALL Java_javaSource_Demo_sayHello
     // by first making a java byte array then converting the byte array to our final jstring
     jbyteArray byteArray = (*env)->NewByteArray(env, ret.len);
     (*env)->SetByteArrayRegion(env, byteArray, 0, ret.len, bytes);
-    /* jbyte* bytes = (*env)->GetByteArrayElements(env, byteArray, 0); */
 
     jstring charsetName = (*env)->NewStringUTF(env, "UTF-8");
     jclass stringClass = (*env)->FindClass(env, "java/lang/String");

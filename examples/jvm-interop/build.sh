@@ -31,7 +31,9 @@ clang \
     -g -Wall \
     -fPIC \
     -I"$JAVA_HOME/include" \
+    # -I"$JAVA_HOME/include/darwin" # for macos
     -I"$JAVA_HOME/include/linux" \
+    # -shared -o libinterop.dylib \ # for macos
     -shared -o libinterop.so \
     rocdemo.o bridge.c
 
