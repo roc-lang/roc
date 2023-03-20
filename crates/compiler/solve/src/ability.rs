@@ -369,7 +369,20 @@ impl ObligationCache {
         }
 
         let ImplKey { opaque, ability } = impl_key;
+
         let has_declared_impl = abilities_store.has_declared_implementation(opaque, ability);
+
+        // Some builtins, like Float32 and Bool, would have a cyclic dependency on Encode/Decode/etc.
+        // if their Roc implementations explicitly defined some abilities they support.
+        let builtin_opaque_impl_ok = || match ability {
+            DeriveEncoding::ABILITY => DeriveEncoding::is_derivable_builtin_opaque(opaque),
+            DeriveDecoding::ABILITY => DeriveDecoding::is_derivable_builtin_opaque(opaque),
+            DeriveEq::ABILITY => DeriveEq::is_derivable_builtin_opaque(opaque),
+            DeriveHash::ABILITY => DeriveHash::is_derivable_builtin_opaque(opaque),
+            _ => false,
+        };
+
+        let has_declared_impl = has_declared_impl || builtin_opaque_impl_ok();
 
         let obligation_result = if !has_declared_impl {
             Err(Unfulfilled::OpaqueDoesNotImplement {
@@ -491,6 +504,11 @@ fn is_builtin_number_alias(symbol: Symbol) -> bool {
         || is_builtin_nat_alias(symbol)
         || is_builtin_float_alias(symbol)
         || is_builtin_dec_alias(symbol)
+}
+
+#[inline(always)]
+fn is_builtin_bool_alias(symbol: Symbol) -> bool {
+    matches!(symbol, Symbol::BOOL_BOOL)
 }
 
 struct NotDerivable {
@@ -789,6 +807,7 @@ trait DerivableVisitor {
                         .is_err()
                         && !Self::is_derivable_builtin_opaque(opaque)
                     {
+                        dbg!(opaque);
                         return Err(NotDerivable {
                             var,
                             context: NotDerivableContext::Opaque(opaque),
@@ -829,7 +848,8 @@ impl DerivableVisitor for DeriveEncoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol)
+        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -924,7 +944,8 @@ impl DerivableVisitor for DeriveDecoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol)
+        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1030,7 +1051,7 @@ impl DerivableVisitor for DeriveHash {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol)
+        is_builtin_number_alias(symbol) || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1132,6 +1153,7 @@ impl DerivableVisitor for DeriveEq {
         is_builtin_fixed_int_alias(symbol)
             || is_builtin_nat_alias(symbol)
             || is_builtin_dec_alias(symbol)
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
