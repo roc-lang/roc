@@ -4,8 +4,9 @@ use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_UNDERIVABLE;
+use roc_derive_key::Derived;
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
@@ -1298,12 +1299,12 @@ pub fn type_implementing_specialization(
 }
 
 /// Result of trying to resolve an ability specialization.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Resolved {
     /// A user-defined specialization should be used.
     Specialization(Symbol),
-    /// A specialization must be generated for the given type variable.
-    NeedsGenerated(Variable),
+    /// A specialization must be generated with the given derive key.
+    Derive(Derived),
 }
 
 /// An [`AbilityResolver`] is a shell of an abilities store that answers questions needed for
@@ -1346,6 +1347,13 @@ impl AbilityResolver for AbilitiesStore {
     }
 }
 
+/// Whether this a module whose types' ability implementations should be checked via derive_key,
+/// because they do not explicitly list ability implementations due to circular dependencies.
+#[inline]
+pub(crate) fn builtin_module_with_unlisted_ability_impl(module_id: ModuleId) -> bool {
+    matches!(module_id, ModuleId::NUM | ModuleId::BOOL)
+}
+
 pub fn resolve_ability_specialization<R: AbilityResolver>(
     subs: &mut Subs,
     resolver: &R,
@@ -1379,23 +1387,45 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
-            let impl_key = roc_can::abilities::ImplKey {
-                opaque: symbol,
-                ability_member,
-            };
+            if builtin_module_with_unlisted_ability_impl(symbol.module_id()) {
+                let derive_key = roc_derive_key::Derived::builtin_with_builtin_symbol(
+                    ability_member
+                        .try_into()
+                        .expect("derived symbols must be builtins"),
+                    symbol,
+                )
+                .expect("specialization var not derivable!");
 
-            match resolver.get_implementation(impl_key)? {
-                roc_types::types::MemberImpl::Impl(spec_symbol) => {
-                    Resolved::Specialization(spec_symbol)
+                Resolved::Derive(derive_key)
+            } else {
+                let impl_key = roc_can::abilities::ImplKey {
+                    opaque: symbol,
+                    ability_member,
+                };
+
+                match resolver.get_implementation(impl_key)? {
+                    roc_types::types::MemberImpl::Impl(spec_symbol) => {
+                        Resolved::Specialization(spec_symbol)
+                    }
+                    // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
+                    // which will make this simpler.
+                    roc_types::types::MemberImpl::Error => {
+                        Resolved::Specialization(Symbol::UNDERSCORE)
+                    }
                 }
-                // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
-                // which will make this simpler.
-                roc_types::types::MemberImpl::Error => Resolved::Specialization(Symbol::UNDERSCORE),
             }
         }
         Obligated::Adhoc(variable) => {
-            // TODO: more rules need to be validated here, like is this a builtin ability?
-            Resolved::NeedsGenerated(variable)
+            let derive_key = roc_derive_key::Derived::builtin(
+                ability_member
+                    .try_into()
+                    .expect("derived symbols must be builtins"),
+                subs,
+                variable,
+            )
+            .expect("specialization var not derivable!");
+
+            Resolved::Derive(derive_key)
         }
     };
 

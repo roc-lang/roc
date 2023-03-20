@@ -143,6 +143,10 @@ impl FlatHash {
             Content::LambdaSet(_) => Err(Underivable),
         }
     }
+
+    pub fn from_builtin_symbol(symbol: Symbol) -> Result<FlatHash, DeriveError> {
+        builtin_symbol_to_hash_lambda(symbol).ok_or(DeriveError::Underivable)
+    }
 }
 
 const fn builtin_symbol_to_hash_lambda(symbol: Symbol) -> Option<FlatHash> {
