@@ -1,3 +1,5 @@
+## This is a documentation comment
+# This is a comment
 app "static-site"
     packages { pf: "platform/main.roc" }
     imports [
@@ -7,6 +9,7 @@ app "static-site"
     provides [transformFileContent] to pf
 
 NavLink : {
+    # this is another comment
     url : Str,
     title : Str,
     text : Str,
@@ -14,7 +17,7 @@ NavLink : {
 
 navLinks : List NavLink
 navLinks = [
-    { url: "subFolder/apple.html", title: "Exempli Gratia Pagina Pomi", text: "Apple" },
+    { url: "apple.html", title: "Exempli Gratia Pagina Pomi", text: "Apple" },
     { url: "banana.html", title: "Exempli Gratia Pagina Musa", text: "Banana" },
     { url: "cherry.html", title: "Exempli Pagina Cerasus", text: "Cherry" },
 ]

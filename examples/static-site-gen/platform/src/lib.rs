@@ -206,7 +206,7 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     // We'll build a new vector of events since we can only consume the parser once
     let mut parser_with_highlighting = Vec::new();
     // As we go along, we'll want to highlight code in bundles, not lines
-    let mut to_highlight = String::new();
+    let mut code_to_highlight = String::new();
     // And track a little bit of state
     let mut in_code_block = false;
     let mut is_roc_code = false;
@@ -226,26 +226,39 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
             }
             pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(_)) => {
                 if in_code_block {
+                    match replace_code_with_static_file(&code_to_highlight, input_file) {
+                        None => {}
+                        // Check if the code block is actually just a relative
+                        // path to a static file, if so replace the code with
+                        // the contents of the file.
+                        // ```
+                        // file:myCodeFile.roc
+                        // ```
+                        Some(new_code_to_highlight) => {
+                            code_to_highlight = new_code_to_highlight;
+                        }
+                    }
+
                     // Format the whole multi-line code block as HTML all at once
                     let highlighted_html: String;
                     if is_roc_code {
-                        highlighted_html = roc_highlight::highlight_roc_code(&to_highlight)
+                        highlighted_html = roc_highlight::highlight_roc_code(&code_to_highlight)
                     } else {
-                        highlighted_html = format!("<pre><samp>{}</pre></samp>", &to_highlight)
+                        highlighted_html = format!("<pre><samp>{}</pre></samp>", &code_to_highlight)
                     }
 
                     // And put it into the vector
                     parser_with_highlighting.push(pulldown_cmark::Event::Html(
                         pulldown_cmark::CowStr::from(highlighted_html),
                     ));
-                    to_highlight = String::new();
+                    code_to_highlight = String::new();
                     in_code_block = false;
                 }
             }
             pulldown_cmark::Event::Text(t) => {
                 if in_code_block {
                     // If we're in a code block, build up the string of text
-                    to_highlight.push_str(&t);
+                    code_to_highlight.push_str(&t);
                 } else {
                     parser_with_highlighting.push(pulldown_cmark::Event::Text(t))
                 }
@@ -309,6 +322,37 @@ fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
                 true
             } else {
                 false
+            }
+        }
+    }
+}
+
+fn replace_code_with_static_file(code: &str, input_file: &Path) -> Option<String> {
+    let input_dir = input_file.parent()?;
+    let trimmed_code = code.trim();
+    
+    // Confirm the code block starts with a `file:` tag
+    match trimmed_code.strip_prefix("file:") {
+        None => None,
+        Some(path) => {
+
+            // File must be located in input folder or sub-directory
+            if path.contains("../") {
+                panic!("ERROR File must be located within the input diretory!");
+            }
+
+            let file_path = input_dir.join(path);
+
+            // Check file exists before opening
+            match file_path.try_exists() {
+                Err(_) | Ok(false) => {
+                    panic!("ERROR File does not exist: \"{}\"", file_path.to_str().unwrap());
+                }
+                Ok(true) => {
+                    let vec_u8 = fs::read(file_path).ok()?;
+
+                    String::from_utf8(vec_u8).ok()
+                }
             }
         }
     }
