@@ -8806,4 +8806,22 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn derive_decoder_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main : Decoder Bool _
+                main = Decode.custom \bytes, fmt ->
+                    Decode.decodeWith bytes Decode.decoder fmt
+                #                           ^^^^^^^^^^^^^^
+                "#
+            ),
+            @"Decoding#Decode.decoder(4) : List U8, fmt -[[]]-> { rest : List U8, result : [Err [TooShort], Ok [False, True]] } | fmt has DecoderFormatting"
+            print_only_under_alias: true
+        );
+    }
 }
