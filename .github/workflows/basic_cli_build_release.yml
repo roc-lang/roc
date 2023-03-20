@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -18,9 +19,9 @@ jobs:
         run: |
           ./ci/get_releases_json.sh
 
-      - run: curl -OL $(./ci/get_latest_release_url.sh linux_x86_64)
-      - run: curl -OL $(./ci/get_latest_release_url.sh macos_x86_64)
-      - run: curl -OL $(./ci/get_latest_release_url.sh silicon)
+      - run: curl -OL $(./ci/get_latest_release_url.sh linuxTESTING_x86_64)
+      - run: curl -OL $(./ci/get_latest_release_url.sh macosTESTING_x86_64)
+      - run: curl -OL $(./ci/get_latest_release_url.sh macosTESTING_apple_silicon)
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v3
@@ -39,7 +40,7 @@ jobs:
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
           CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
-        run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
+        run: ./ci/build_basic_cli.sh linuxTESTING_x86_64 "--linker legacy"
 
       - name: Save .rh, .rm and .o file 
         uses: actions/upload-artifact@v3
@@ -59,7 +60,7 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
 
-      - run: ./ci/build_basic_cli.sh macos_x86_64
+      - run: ./ci/build_basic_cli.sh macosTESTING_x86_64
 
       - name: Save .o files
         uses: actions/upload-artifact@v3
@@ -78,7 +79,7 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
 
-      - run: ./ci/build_basic_cli.sh silicon
+      - run: ./ci/build_basic_cli.sh macosTESTING_apple_silicon
 
       - name: Save macos-arm64.o file
         uses: actions/upload-artifact@v3
