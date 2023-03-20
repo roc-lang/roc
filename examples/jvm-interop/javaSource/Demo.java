@@ -24,7 +24,7 @@ public class Demo {
       int[] arr = {10, 20, 30, 40};
       int x = 3;
       System.out.println(Arrays.toString(arr) +
-                         " multipled by " + x +
+                         " multiplied by " + x +
                          " results in " + Arrays.toString(mulArrByScalar(arr, x)) +
                          "\n");
 
@@ -32,7 +32,7 @@ public class Demo {
       // This can be implemented more peacefully but for sake of demonstration-
       // this will panic from the roc side if n is negative
       // and in turn will throw a JVM RuntimeException
-      long n = 5;
+      long n = -1;
       System.out.println("Factorial of " + n + " is " + factorial(n));
 
    }

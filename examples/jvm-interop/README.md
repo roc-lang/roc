@@ -85,7 +85,7 @@ public class Demo {
       int[] arr = {10, 20, 30, 40};
       int x = 3;
       System.out.println(Arrays.toString(arr) +
-                         " multipled by " + x +
+                         " multiplied by " + x +
                          " results in " + Arrays.toString(mulArrByScalar(arr, x)) +
                          "\n");
 
