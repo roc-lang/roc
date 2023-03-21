@@ -103,7 +103,7 @@ pub fn helper(
         // println!("=================================\n");
     }
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
+    debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
     let entry_point = match loaded.entry_point {
         EntryPoint::Executable {
             exposed_to_host,
@@ -188,7 +188,7 @@ pub fn helper(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
         generate_allocators: true, // Needed for testing, since we don't have a platform
     };
