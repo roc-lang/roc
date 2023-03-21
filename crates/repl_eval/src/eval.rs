@@ -883,12 +883,6 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         (_, Layout::Boxed(_)) => {
             unreachable!("Box layouts can only be behind a `Box.Box` application")
         }
-        other => {
-            todo!(
-                "TODO add support for rendering pointer to {:?} in the REPL",
-                other
-            );
-        }
     };
     apply_newtypes(env, newtype_containers.into_bump_slice(), expr)
 }
