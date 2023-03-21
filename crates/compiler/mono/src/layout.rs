@@ -2862,6 +2862,18 @@ impl<'a> Layout<'a> {
             Dec => Layout::DEC,
         }
     }
+
+    pub fn is_recursive_tag_union(self) -> bool {
+        matches!(
+            self,
+            Layout::Union(
+                UnionLayout::NullableUnwrapped { .. }
+                    | UnionLayout::Recursive(_)
+                    | UnionLayout::NullableWrapped { .. }
+                    | UnionLayout::NonNullableUnwrapped { .. },
+            )
+        )
+    }
 }
 
 impl<'a> Builtin<'a> {
@@ -3597,18 +3609,6 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
-fn is_recursive_tag_union(layout: &Layout) -> bool {
-    matches!(
-        layout,
-        Layout::Union(
-            UnionLayout::NullableUnwrapped { .. }
-                | UnionLayout::Recursive(_)
-                | UnionLayout::NullableWrapped { .. }
-                | UnionLayout::NonNullableUnwrapped { .. },
-        )
-    )
-}
-
 fn union_sorted_non_recursive_tags_help<'a, L>(
     env: &mut Env<'a, '_>,
     tags_list: &[(&'_ L, &[Variable])],
@@ -3901,7 +3901,7 @@ where
                                     == env
                                         .subs
                                         .get_root_key_without_compacting(opt_rec_var.unwrap())
-                                && is_recursive_tag_union(&layout);
+                                && layout.is_recursive_tag_union();
 
                             let arg_layout = if self_recursion {
                                 Layout::NAKED_RECURSIVE_PTR

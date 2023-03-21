@@ -196,7 +196,12 @@ fn gen_from_mono_module_llvm<'a>(
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
         },
 
-        exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: loaded
+            .exposed_to_host
+            .top_level_values
+            .keys()
+            .copied()
+            .collect(),
     };
 
     // does not add any externs for this mode (we have a host) but cleans up some functions around
@@ -224,6 +229,7 @@ fn gen_from_mono_module_llvm<'a>(
         loaded.procedures,
         entry_point,
         Some(&app_ll_file),
+        &loaded.glue_layouts,
     );
 
     env.dibuilder.finalize();
@@ -500,7 +506,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let exposed_to_host = loaded
         .exposed_to_host
-        .values
+        .top_level_values
         .keys()
         .copied()
         .collect::<MutSet<_>>();
@@ -571,7 +577,7 @@ fn gen_from_mono_module_dev_assembly<'a>(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
@@ -771,25 +777,10 @@ fn build_loaded_file<'a>(
         // Also, we should no longer need to do this once we have platforms on
         // a package repository, as we can then get prebuilt platforms from there.
 
-        let exposed_values = loaded
-            .exposed_to_host
-            .values
-            .keys()
-            .map(|x| x.as_str(&loaded.interns).to_string())
-            .collect();
-
-        let exposed_closure_types = loaded
-            .exposed_to_host
-            .closure_types
-            .iter()
-            .map(|x| {
-                format!(
-                    "{}_{}",
-                    x.module_string(&loaded.interns),
-                    x.as_str(&loaded.interns)
-                )
-            })
-            .collect();
+        let dll_stub_symbols = roc_linker::ExposedSymbols::from_exposed_to_host(
+            &loaded.interns,
+            &loaded.exposed_to_host,
+        );
 
         let join_handle = spawn_rebuild_thread(
             code_gen_options.opt_level,
@@ -798,8 +789,7 @@ fn build_loaded_file<'a>(
             preprocessed_host_path.clone(),
             output_exe_path.clone(),
             target,
-            exposed_values,
-            exposed_closure_types,
+            dll_stub_symbols,
         );
 
         Some(join_handle)
@@ -993,6 +983,13 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
         false => "",
     };
 
+    let preprocessed_host_path_str = preprocessed_host_path.to_string_lossy();
+    let extra_err_msg = if preprocessed_host_path_str.ends_with(".rh") {
+        "\n\n\tNote: If the platform does have an .rh1 file but no .rh file, it's because it's been built with an older version of roc. Contact the author to release a new build of the platform using a roc release newer than March 21 2023.\n"
+    } else {
+        ""
+    };
+
     eprintln!(
         indoc::indoc!(
             r#"
@@ -1000,13 +997,14 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
 
                 {}
 
-            However, it was not there!
+            However, it was not there!{}
 
             If you have the platform's source code locally, you may be able to generate it by re-running this command with --prebuilt-platform=false
             "#
         ),
         prefix,
         preprocessed_host_path.to_string_lossy(),
+        extra_err_msg
     );
 }
 
@@ -1018,8 +1016,7 @@ fn spawn_rebuild_thread(
     preprocessed_host_path: PathBuf,
     output_exe_path: PathBuf,
     target: &Triple,
-    exported_symbols: Vec<String>,
-    exported_closure_types: Vec<String>,
+    dll_stub_symbols: Vec<String>,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
@@ -1042,13 +1039,12 @@ fn spawn_rebuild_thread(
                 preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
             }
             LinkingStrategy::Surgical => {
-                build_and_preprocess_host(
+                build_and_preprocess_host_lowlevel(
                     opt_level,
                     &thread_local_target,
                     platform_main_roc.as_path(),
                     preprocessed_host_path.as_path(),
-                    exported_symbols,
-                    exported_closure_types,
+                    &dll_stub_symbols,
                 );
 
                 // Copy preprocessed host to executable location.
@@ -1074,15 +1070,31 @@ pub fn build_and_preprocess_host(
     target: &Triple,
     platform_main_roc: &Path,
     preprocessed_host_path: &Path,
-    exposed_to_host: Vec<String>,
-    exported_closure_types: Vec<String>,
+    exposed_symbols: roc_linker::ExposedSymbols,
 ) {
-    let (stub_lib, stub_dll_symbols) = roc_linker::generate_stub_lib_from_loaded(
+    let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
+
+    build_and_preprocess_host_lowlevel(
+        opt_level,
         target,
         platform_main_roc,
-        exposed_to_host,
-        exported_closure_types,
-    );
+        preprocessed_host_path,
+        &stub_dll_symbols,
+    )
+}
+
+fn build_and_preprocess_host_lowlevel(
+    opt_level: OptLevel,
+    target: &Triple,
+    platform_main_roc: &Path,
+    preprocessed_host_path: &Path,
+    stub_dll_symbols: &[String],
+) {
+    let stub_lib =
+        roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc, stub_dll_symbols);
+
+    debug_assert!(stub_lib.exists());
+
     rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 
     roc_linker::preprocess_host(
@@ -1090,7 +1102,7 @@ pub fn build_and_preprocess_host(
         platform_main_roc,
         preprocessed_host_path,
         &stub_lib,
-        &stub_dll_symbols,
+        stub_dll_symbols,
     )
 }
 

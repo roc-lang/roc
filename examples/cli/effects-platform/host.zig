@@ -25,10 +25,10 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
-extern fn roc__mainForHost_size() i64;
-extern fn roc__mainForHost_1__Fx_caller(*const u8, [*]u8, [*]u8) void;
-extern fn roc__mainForHost_1__Fx_size() i64;
-extern fn roc__mainForHost_1__Fx_result_size() i64;
+extern fn roc__mainForHost_1_exposed_size() i64;
+extern fn roc__mainForHost_0_caller(*const u8, [*]u8, [*]u8) void;
+extern fn roc__mainForHost_0_size() i64;
+extern fn roc__mainForHost_0_result_size() i64;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -123,7 +123,7 @@ pub export fn main() u8 {
     const stderr = std.io.getStdErr().writer();
 
     // NOTE the return size can be zero, which will segfault. Always allocate at least 8 bytes
-    const size = std.math.max(8, @intCast(usize, roc__mainForHost_size()));
+    const size = std.math.max(8, @intCast(usize, roc__mainForHost_1_exposed_size()));
     const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
@@ -152,7 +152,7 @@ fn to_seconds(tms: std.os.timespec) f64 {
 fn call_the_closure(closure_data_pointer: [*]u8) void {
     const allocator = std.heap.page_allocator;
 
-    const size = roc__mainForHost_1__Fx_result_size();
+    const size = roc__mainForHost_0_result_size();
 
     if (size == 0) {
         // the function call returns an empty record
@@ -160,7 +160,7 @@ fn call_the_closure(closure_data_pointer: [*]u8) void {
         // So it's special-cased
         const flags: u8 = 0;
         var result: [1]u8 = .{0};
-        roc__mainForHost_1__Fx_caller(&flags, closure_data_pointer, &result);
+        roc__mainForHost_0_caller(&flags, closure_data_pointer, &result);
 
         return;
     }
@@ -173,7 +173,7 @@ fn call_the_closure(closure_data_pointer: [*]u8) void {
     }
 
     const flags: u8 = 0;
-    roc__mainForHost_1__Fx_caller(&flags, closure_data_pointer, output);
+    roc__mainForHost_0_caller(&flags, closure_data_pointer, output);
 
     return;
 }
