@@ -346,8 +346,8 @@ The `addAndStringify` function will accept any record with at least the fields `
 ```roc
 total = addAndStringify { birds: 5, iguanas: 7 }
 
-# The `name` field is unused by addAndStringify
-totalWithNote = addAndStringify { birds: 4, iguanas: 3, name: "Whee!" }
+# The `note` field is unused by addAndStringify
+totalWithNote = addAndStringify { birds: 4, iguanas: 3, note: "Whee!" }
 
 addAndStringify = \counts ->
     Num.toStr (counts.birds + counts.iguanas)
