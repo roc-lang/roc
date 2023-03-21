@@ -1539,7 +1539,7 @@ fn report_shadowing<'b>(
             alloc.concat([
                 alloc.reflow("Since these "),
                 alloc.reflow(what_plural),
-                alloc.reflow(" have the same name, it's easy to use the wrong one on accident. Give one of them a new name."),
+                alloc.reflow(" have the same name, it's easy to use the wrong one by accident. Give one of them a new name."),
             ]),
         ])
     };

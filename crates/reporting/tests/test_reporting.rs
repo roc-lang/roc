@@ -543,7 +543,7 @@ mod test_reporting {
                  ^
 
     Since these variables have the same name, it's easy to use the wrong
-    one on accident. Give one of them a new name.
+    one by accident. Give one of them a new name.
     "###
     );
 
@@ -575,7 +575,7 @@ mod test_reporting {
             ^^^^^^^^^^^^^^^^^^^^^^^^
 
     Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    by accident. Give one of them a new name.
     "###
     );
 
@@ -8425,7 +8425,7 @@ In roc, functions are always written as a lambda, like{}
                                                ^^^^^^^^^
 
         Since these variables have the same name, it's easy to use the wrong
-        one on accident. Give one of them a new name.
+        one by accident. Give one of them a new name.
         "#
     );
 
@@ -8454,7 +8454,7 @@ In roc, functions are always written as a lambda, like{}
             ^^^^^^^
 
         Since these abilities have the same name, it's easy to use the wrong
-        one on accident. Give one of them a new name.
+        one by accident. Give one of them a new name.
         "#
     );
 
@@ -9739,7 +9739,7 @@ In roc, functions are always written as a lambda, like{}
         ^^^^
 
     Since these variables have the same name, it's easy to use the wrong
-    one on accident. Give one of them a new name.
+    one by accident. Give one of them a new name.
 
     ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
 

@@ -5,8 +5,10 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.so
 *.obj
 *.dll
+*.dylib
 *.lib
 *.def
 *.tmp
@@ -26,7 +28,6 @@ vgcore.*
 *.rm*
 preprocessedhost
 metadata
-roc-cheaty-lib.so
 
 #editors
 .idea/
@@ -73,3 +74,10 @@ result
 
 # tutorial
 www/src/roc-tutorial
+
+# Only keep Cargo.lock dependencies for the main compiler.
+# Examples and test only crates should be fine to be unlocked.
+# This remove unneccessary lock file versioning.
+# It also ensures the compiler can always pull in 1 version of things and doesn't get restricted by sub lockfiles.
+/**/Cargo.lock
+!/Cargo.lock

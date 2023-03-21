@@ -4,9 +4,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
-use roc_utils::cargo;
-use roc_utils::pretty_command_string;
-use roc_utils::root_dir;
+use roc_command_utils::{cargo, pretty_command_string, root_dir};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -42,39 +40,49 @@ pub fn build_roc_bin_cached() -> PathBuf {
     let roc_binary_path = path_to_roc_binary();
 
     if !roc_binary_path.exists() {
-        // Remove the /target/release/roc part
-        let root_project_dir = roc_binary_path
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap();
+        build_roc_bin(&[]);
+    }
 
-        // cargo build --bin roc
-        // (with --release iff the test is being built with --release)
-        let args = if cfg!(debug_assertions) {
-            vec!["build", "--bin", "roc"]
-        } else {
-            vec!["build", "--release", "--bin", "roc"]
-        };
+    roc_binary_path
+}
 
-        let mut cargo_cmd = cargo();
+pub fn build_roc_bin(extra_args: &[&str]) -> PathBuf {
+    let roc_binary_path = path_to_roc_binary();
 
-        cargo_cmd.current_dir(root_project_dir).args(&args);
+    // Remove the /target/release/roc part
+    let root_project_dir = roc_binary_path
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
 
-        let cargo_cmd_str = format!("{:?}", cargo_cmd);
+    // cargo build --bin roc
+    // (with --release iff the test is being built with --release)
+    let mut args = if cfg!(debug_assertions) {
+        vec!["build", "--bin", "roc"]
+    } else {
+        vec!["build", "--release", "--bin", "roc"]
+    };
 
-        let cargo_output = cargo_cmd.output().unwrap();
+    args.extend(extra_args);
 
-        if !cargo_output.status.success() {
-            panic!(
-                "The following cargo command failed:\n\n  {}\n\n  stdout was:\n\n    {}\n\n  stderr was:\n\n    {}\n",
-                cargo_cmd_str,
-                String::from_utf8(cargo_output.stdout).unwrap(),
-                String::from_utf8(cargo_output.stderr).unwrap()
-            );
-        }
+    let mut cargo_cmd = cargo();
+
+    cargo_cmd.current_dir(root_project_dir).args(&args);
+
+    let cargo_cmd_str = format!("{:?}", cargo_cmd);
+
+    let cargo_output = cargo_cmd.output().unwrap();
+
+    if !cargo_output.status.success() {
+        panic!(
+            "The following cargo command failed:\n\n  {}\n\n  stdout was:\n\n    {}\n\n  stderr was:\n\n    {}\n",
+            cargo_cmd_str,
+            String::from_utf8(cargo_output.stdout).unwrap(),
+            String::from_utf8(cargo_output.stderr).unwrap()
+        );
     }
 
     roc_binary_path
@@ -396,7 +404,7 @@ pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
     // Descend into examples/{dir_name}
     path.push("crates");
     path.push("cli_testing_examples");
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }
@@ -405,7 +413,7 @@ pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
 pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }
@@ -428,7 +436,7 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     path.push("cli");
     path.push("tests");
     path.push("fixtures");
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }

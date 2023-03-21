@@ -2471,19 +2471,19 @@ fn issue_4772_weakened_monomorphic_destructure() {
 
         getNumber =
             { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.fromUtf8
-                    
-            when result is 
-                Ok val -> 
-                    when Str.toI64 val is 
+
+            when result is
+                Ok val ->
+                    when Str.toI64 val is
                         Ok number ->
                             Ok {val : number, input : rest}
                         Err InvalidNumStr ->
                             Err (ParsingFailure "not a number")
 
-                Err _ -> 
+                Err _ ->
                     Err (ParsingFailure "not a number")
 
-        expect 
+        expect
             result = getNumber
             result == Ok {val : -1234i64, input : []}
         "###
@@ -2553,6 +2553,7 @@ fn recursively_build_effect() {
 }
 
 #[mono_test]
+#[ignore = "roc glue code generation cannot handle a type that this test generates"]
 fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
     indoc!(
         r#"
@@ -2720,6 +2721,51 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
 
         main =
             Encode.toBytes accessor Json.toUtf8
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_bool_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = if Bool.false then f else \n -> n
+            caller (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_enum_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n
+                C -> \n -> n + 1
+                D -> \n -> n + 2
+            (caller A) (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_union_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n + x
+            (caller A) (x + 1)
         "#
     )
 }

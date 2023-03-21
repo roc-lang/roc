@@ -15,13 +15,37 @@ const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
 const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
+const SEAMLESS_SLICE_BIT: usize =
+    @bitCast(usize, @as(isize, std.math.minInt(isize)));
+
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
-    capacity: usize,
+    // This technically points to directly after the refcount.
+    // This is an optimization that enables use one code path for regular lists and slices for geting the refcount ptr.
+    capacity_or_ref_ptr: usize,
 
     pub inline fn len(self: RocList) usize {
         return self.length;
+    }
+
+    pub fn getCapacity(self: RocList) usize {
+        const list_capacity = self.capacity_or_ref_ptr;
+        const slice_capacity = self.length;
+        const slice_mask = self.seamlessSliceMask();
+        const capacity = (list_capacity & ~slice_mask) | (slice_capacity & slice_mask);
+        return capacity;
+    }
+
+    pub fn isSeamlessSlice(self: RocList) bool {
+        return @bitCast(isize, self.capacity_or_ref_ptr) < 0;
+    }
+
+    // This returns all ones if the list is a seamless slice.
+    // Otherwise, it returns all zeros.
+    // This is done without branching for optimization purposes.
+    pub fn seamlessSliceMask(self: RocList) usize {
+        return @bitCast(usize, @bitCast(isize, self.capacity_or_ref_ptr) >> (@bitSizeOf(isize) - 1));
     }
 
     pub fn isEmpty(self: RocList) bool {
@@ -29,7 +53,7 @@ pub const RocList = extern struct {
     }
 
     pub fn empty() RocList {
-        return RocList{ .bytes = null, .length = 0, .capacity = 0 };
+        return RocList{ .bytes = null, .length = 0, .capacity_or_ref_ptr = 0 };
     }
 
     pub fn eql(self: RocList, other: RocList) bool {
@@ -75,8 +99,21 @@ pub const RocList = extern struct {
         return list;
     }
 
-    pub fn deinit(self: RocList, comptime T: type) void {
-        utils.decref(self.bytes, self.capacity, @alignOf(T));
+    // returns a pointer to just after the refcount.
+    // It is just after the refcount as an optimization for other shared code paths.
+    // For regular list, it just returns their bytes pointer.
+    // For seamless slices, it returns the pointer stored in capacity_or_ref_ptr.
+    pub fn getRefcountPtr(self: RocList) ?[*]u8 {
+        const list_ref_ptr = @ptrToInt(self.bytes);
+        const slice_ref_ptr = self.capacity_or_ref_ptr << 1;
+        const slice_mask = self.seamlessSliceMask();
+        const ref_ptr = (list_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
+        return @intToPtr(?[*]u8, ref_ptr);
+    }
+
+    pub fn decref(self: RocList, alignment: u32) void {
+        // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
+        utils.decref(self.getRefcountPtr(), self.capacity_or_ref_ptr, alignment);
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -88,7 +125,7 @@ pub const RocList = extern struct {
     }
 
     fn refcountMachine(self: RocList) usize {
-        if (self.capacity == 0) {
+        if (self.getCapacity() == 0 and !self.isSeamlessSlice()) {
             // the zero-capacity is Clone, copying it will not leak memory
             return utils.REFCOUNT_ONE;
         }
@@ -110,12 +147,15 @@ pub const RocList = extern struct {
     }
 
     pub fn makeUnique(self: RocList, alignment: u32, element_width: usize) RocList {
-        if (self.isEmpty()) {
+        if (self.isUnique()) {
             return self;
         }
 
-        if (self.isUnique()) {
-            return self;
+        if (self.isEmpty()) {
+            // Empty is not necessarily unique on it's own.
+            // The list could have capacity and be shared.
+            self.decref(alignment);
+            return RocList.empty();
         }
 
         // unfortunately, we have to clone
@@ -127,9 +167,8 @@ pub const RocList = extern struct {
         const number_of_bytes = self.len() * element_width;
         @memcpy(new_bytes, old_bytes, number_of_bytes);
 
-        // NOTE we fuse an increment of all keys/values with a decrement of the input dict
-        const data_bytes = self.capacity * element_width;
-        utils.decref(self.bytes, data_bytes, alignment);
+        // NOTE we fuse an increment of all keys/values with a decrement of the input list.
+        self.decref(alignment);
 
         return new_list;
     }
@@ -148,7 +187,24 @@ pub const RocList = extern struct {
         return RocList{
             .bytes = utils.allocateWithRefcount(data_bytes, alignment),
             .length = length,
-            .capacity = capacity,
+            .capacity_or_ref_ptr = capacity,
+        };
+    }
+
+    pub fn allocateExact(
+        alignment: u32,
+        length: usize,
+        element_width: usize,
+    ) RocList {
+        if (length == 0) {
+            return empty();
+        }
+
+        const data_bytes = length * element_width;
+        return RocList{
+            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
+            .length = length,
+            .capacity_or_ref_ptr = length,
         };
     }
 
@@ -159,13 +215,14 @@ pub const RocList = extern struct {
         element_width: usize,
     ) RocList {
         if (self.bytes) |source_ptr| {
-            if (self.isUnique()) {
-                if (self.capacity >= new_length) {
-                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity = self.capacity };
+            if (self.isUnique() and !self.isSeamlessSlice()) {
+                const capacity = self.capacity_or_ref_ptr;
+                if (capacity >= new_length) {
+                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_ref_ptr = capacity };
                 } else {
-                    const new_capacity = utils.calculateCapacity(self.capacity, new_length, element_width);
-                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.capacity, new_capacity, element_width);
-                    return RocList{ .bytes = new_source, .length = new_length, .capacity = new_capacity };
+                    const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width);
+                    return RocList{ .bytes = new_source, .length = new_length, .capacity_or_ref_ptr = new_capacity };
                 }
             }
             return self.reallocateFresh(alignment, new_length, element_width);
@@ -193,7 +250,7 @@ pub const RocList = extern struct {
             @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
 
-        utils.decref(self.bytes, old_length * element_width, alignment);
+        self.decref(alignment);
 
         return result;
     }
@@ -428,11 +485,36 @@ pub fn listReserve(
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
     const old_length = list.len();
-    if ((update_mode == .InPlace or list.isUnique()) and list.capacity >= list.len() + spare) {
+    if ((update_mode == .InPlace or list.isUnique()) and list.getCapacity() >= list.len() + spare) {
         return list;
     } else {
         var output = list.reallocate(alignment, old_length + spare, element_width);
         output.length = old_length;
+        return output;
+    }
+}
+
+pub fn listReleaseExcessCapacity(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    update_mode: UpdateMode,
+) callconv(.C) RocList {
+    const old_length = list.len();
+    // We use the direct list.capacity_or_ref_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
+    if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_ref_ptr == old_length) {
+        return list;
+    } else if (old_length == 0) {
+        list.decref(alignment);
+        return RocList.empty();
+    } else {
+        var output = RocList.allocateExact(alignment, old_length, element_width);
+        if (list.bytes) |source_ptr| {
+            const dest_ptr = output.bytes orelse unreachable;
+
+            @memcpy(dest_ptr, source_ptr, old_length * element_width);
+        }
+        list.decref(alignment);
         return output;
     }
 }
@@ -462,10 +544,12 @@ fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usi
 
 pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width: usize) callconv(.C) RocList {
     const old_length = list.len();
-    var output = list.reallocate(alignment, old_length + 1, element_width);
+    // TODO: properly wire in update mode.
+    var with_capacity = listReserve(list, alignment, 1, element_width, .Immutable);
+    with_capacity.length += 1;
 
     // can't use one memcpy here because source and target overlap
-    if (output.bytes) |target| {
+    if (with_capacity.bytes) |target| {
         var i: usize = old_length;
 
         while (i > 0) {
@@ -481,7 +565,7 @@ pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width
         }
     }
 
-    return output;
+    return with_capacity;
 }
 
 pub fn listSwap(
@@ -522,19 +606,20 @@ pub fn listSublist(
 ) callconv(.C) RocList {
     const size = list.len();
     if (len == 0 or start >= size) {
-        if (list.isUnique()) {
-            // Decrement the reference counts of all elements.
-            if (list.bytes) |source_ptr| {
-                var i: usize = 0;
-                while (i < size) : (i += 1) {
-                    const element = source_ptr + i * element_width;
-                    dec(element);
-                }
-                var output = list;
-                output.length = 0;
-                return output;
+        // Decrement the reference counts of all elements.
+        if (list.bytes) |source_ptr| {
+            var i: usize = 0;
+            while (i < size) : (i += 1) {
+                const element = source_ptr + i * element_width;
+                dec(element);
             }
         }
+        if (list.isUnique()) {
+            var output = list;
+            output.length = 0;
+            return output;
+        }
+        list.decref(alignment);
         return RocList.empty();
     }
 
@@ -557,26 +642,20 @@ pub fn listSublist(
             dec(element);
         }
 
-        if (list.isUnique()) {
+        if (start == 0 and list.isUnique()) {
             var output = list;
             output.length = keep_len;
-            if (start == 0) {
-                return output;
-            } else {
-                // We want memmove due to aliasing. Zig does not expose it directly.
-                // Instead use copy which can write to aliases as long as the dest is before the source.
-                mem.copy(u8, source_ptr[0 .. keep_len * element_width], source_ptr[start * element_width .. (start + keep_len) * element_width]);
-                return output;
-            }
-        } else {
-            const output = RocList.allocate(alignment, keep_len, element_width);
-            const target_ptr = output.bytes orelse unreachable;
-
-            @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
-
-            utils.decref(list.bytes, size * element_width, alignment);
-
             return output;
+        } else {
+            const list_ref_ptr = (@ptrToInt(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
+            const slice_ref_ptr = list.capacity_or_ref_ptr;
+            const slice_mask = list.seamlessSliceMask();
+            const ref_ptr = (list_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
+            return RocList{
+                .bytes = source_ptr + start * element_width,
+                .length = keep_len,
+                .capacity_or_ref_ptr = ref_ptr,
+            };
         }
     }
 
@@ -590,9 +669,17 @@ pub fn listDropAt(
     drop_index: usize,
     dec: Dec,
 ) callconv(.C) RocList {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
+    const size = list.len();
+    // If droping the first or last element, return a seamless slice.
+    // For simplicity, do this by calling listSublist.
+    // In the future, we can test if it is faster to manually inline the important parts here.
+    if (drop_index == 0) {
+        return listSublist(list, alignment, element_width, 1, size -| 1, dec);
+    } else if (drop_index == size -| 1) {
+        return listSublist(list, alignment, element_width, 0, size -| 1, dec);
+    }
 
+    if (list.bytes) |source_ptr| {
         if (drop_index >= size) {
             return list;
         }
@@ -607,7 +694,7 @@ pub fn listDropAt(
         // because we rely on the pointer field being null if the list is empty
         // which also requires duplicating the utils.decref call to spend the RC token
         if (size < 2) {
-            utils.decref(list.bytes, size * element_width, alignment);
+            list.decref(alignment);
             return RocList.empty();
         }
 
@@ -637,7 +724,7 @@ pub fn listDropAt(
         const tail_size = (size - drop_index - 1) * element_width;
         @memcpy(tail_target, tail_source, tail_size);
 
-        utils.decref(list.bytes, size * element_width, alignment);
+        list.decref(alignment);
 
         return output;
     } else {
@@ -747,11 +834,13 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
 pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
     // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
     if (list_b.isEmpty()) {
-        if (list_a.capacity == 0) {
+        if (list_a.getCapacity() == 0) {
+            // a could be a seamless slice, so we still need to decref.
+            list_a.decref(alignment);
             return list_b;
         } else {
             // we must consume this list. Even though it has no elements, it could still have capacity
-            list_b.deinit(usize);
+            list_b.decref(alignment);
 
             return list_a;
         }
@@ -766,7 +855,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         @memcpy(source_a + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
         // decrement list b.
-        utils.decref(source_b, list_b.len(), alignment);
+        list_b.decref(alignment);
 
         return resized_list_a;
     } else if (list_b.isUnique()) {
@@ -787,7 +876,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         @memcpy(source_b, source_a, byte_count_a);
 
         // decrement list a.
-        utils.decref(source_a, list_a.capacity, alignment);
+        list_a.decref(alignment);
 
         return resized_list_b;
     }
@@ -804,8 +893,8 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     @memcpy(target + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
     // decrement list a and b.
-    utils.decref(source_a, list_a.capacity, alignment);
-    utils.decref(source_b, list_b.capacity, alignment);
+    list_a.decref(alignment);
+    list_b.decref(alignment);
 
     return output;
 }
@@ -868,20 +957,32 @@ pub fn listIsUnique(
     return list.isEmpty() or list.isUnique();
 }
 
+pub fn listCapacity(
+    list: RocList,
+) callconv(.C) usize {
+    return list.getCapacity();
+}
+
+pub fn listRefcountPtr(
+    list: RocList,
+) callconv(.C) ?[*]u8 {
+    return list.getRefcountPtr();
+}
+
 test "listConcat: non-unique with unique overlapping" {
     var nonUnique = RocList.fromSlice(u8, ([_]u8{1})[0..]);
     var bytes: [*]u8 = @ptrCast([*]u8, nonUnique.bytes);
     const ptr_width = @sizeOf(usize);
     const refcount_ptr = @ptrCast([*]isize, @alignCast(ptr_width, bytes) - ptr_width);
     utils.increfC(&refcount_ptr[0], 1);
-    defer nonUnique.deinit(u8); // listConcat will dec the other refcount
+    defer nonUnique.decref(@sizeOf(u8)); // listConcat will dec the other refcount
 
     var unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..]);
-    defer unique.deinit(u8);
+    defer unique.decref(@sizeOf(u8));
 
     var concatted = listConcat(nonUnique, unique, 1, 1);
     var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3, 4 })[0..]);
-    defer wanted.deinit(u8);
+    defer wanted.decref(@sizeOf(u8));
 
     try expect(concatted.eql(wanted));
 }

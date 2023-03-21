@@ -22,7 +22,7 @@ jobs:
         # this issue may be caused by using older versions of XCode
 
       - name: build release
-        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --release --locked
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --features "editor" --bin roc
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
           
       - name: get commit SHA
@@ -39,7 +39,7 @@ jobs:
 
       # this makes the roc binary a lot smaller
       - name: strip debug info
-        run: strip ./target/release/roc
+        run: strip ./target/release-with-lto/roc
         
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}

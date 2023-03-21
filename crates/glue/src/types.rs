@@ -1205,12 +1205,27 @@ impl<'a> Env<'a> {
                     FlatType::Func(_, lambda_set_var, _) => {
                         result.insert(*lambda_set_var, lambda_set_id);
                         lambda_set_id = lambda_set_id.next();
+
+                        // the lambda set itself can contain more lambda sets
+                        stack.push(*lambda_set_var);
                     }
-                    FlatType::Record(_, _) => todo!(),
-                    FlatType::Tuple(_, _) => todo!(),
-                    FlatType::TagUnion(_, _) => todo!(),
-                    FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
-                    FlatType::RecursiveTagUnion(_, union_tags, ext) => {
+                    FlatType::Record(fields, ext) => {
+                        stack.extend(self.subs.get_subs_slice(fields.variables()).iter().rev());
+                        stack.push(*ext);
+                    }
+                    FlatType::Tuple(elements, ext) => {
+                        stack.extend(self.subs.get_subs_slice(elements.variables()).iter().rev());
+                        stack.push(*ext);
+                    }
+                    FlatType::FunctionOrTagUnion(_, _, ext) => {
+                        // just the ext
+                        match ext {
+                            roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                            roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                        }
+                    }
+                    FlatType::TagUnion(union_tags, ext)
+                    | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
                         for tag in union_tags.variables() {
                             stack.extend(
                                 self.subs
@@ -1232,8 +1247,13 @@ impl<'a> Env<'a> {
                 Content::Alias(_, _, actual, _) => {
                     stack.push(*actual);
                 }
-                Content::LambdaSet(_) => {
-                    unreachable!("should be caught FlatType::Func above");
+                Content::LambdaSet(lambda_set) => {
+                    // the lambda set itself should already be caught by Func above, but the
+                    // capture can itself contain more lambda sets
+                    for index in lambda_set.solved.variables() {
+                        let subs_slice = self.subs.variable_slices[index.index as usize];
+                        stack.extend(self.subs.variables[subs_slice.indices()].iter());
+                    }
                 }
             }
         }
@@ -1461,6 +1481,11 @@ fn add_type_help<'a>(
                                 unreachable!();
                             }
                         }
+                    }
+                    Layout::Struct { .. } if *name == Symbol::RESULT_RESULT => {
+                        // can happen if one or both of a and b in `Result.Result a b` are the
+                        // empty tag union `[]`
+                        add_type_help(env, layout, *real_var, opt_name, types)
                     }
                     Layout::Struct { .. } if *name == Symbol::DICT_DICT => {
                         let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
@@ -1826,7 +1851,7 @@ where
             RocStructFields::HasClosure { fields }
         }
         None => {
-            debug_assert!(layout.has_varying_stack_size(&env.layout_cache.interner, arena));
+            debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
 
             let fields: Vec<(String, TypeId)> = sortables
                 .into_iter()
@@ -2173,8 +2198,9 @@ fn single_tag_payload<'a>(
 ) -> (String, &'a [Variable]) {
     let mut iter = union_tags.iter_from_subs(subs);
     let (tag_name, payload_vars) = iter.next().unwrap();
-    // This should be a single-tag union.
-    debug_assert!(iter.next().is_none());
+
+    // This should be a single-tag union, but it could be the remnant of a `Result.Result a []`,
+    // where the `Err` branch is inconsequential, but still part of the type
 
     (tag_name.union_tag_name(), payload_vars)
 }

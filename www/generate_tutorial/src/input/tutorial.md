@@ -20,7 +20,7 @@ Try typing this in the REPL and pressing Enter:
 
 The REPL should cheerfully display the following:
 
-<pre><samp><span class="str">"Hello, World!" </span><span class="colon">:</span> Str <span class="autovar">               # val1</span></samp></pre>
+<pre><samp><span class="literal">"Hello, World!" </span><span class="colon">:</span> Str <span class="comment">               # val1</span></samp></pre>
 
 Congratulations! You've just written your first Roc code.
 
@@ -38,8 +38,8 @@ You should see the same `"Hello, World!"` line as before.
 
 You can also assign specific names to expressions. Try entering these lines:
 
-<pre><samp class="repl-prompt">greeting = <span class="str">"Hi"</span></samp></pre>
-<pre><samp class="repl-prompt">audience = <span class="str">"World"</span></samp></pre>
+<pre><samp class="repl-prompt">greeting = <span class="literal">"Hi"</span></samp></pre>
+<pre><samp class="repl-prompt">audience = <span class="literal">"World"</span></samp></pre>
 
 From now until you exit the REPL, you can refer to either `greeting` or `audience` by those names!
 
@@ -47,11 +47,11 @@ From now until you exit the REPL, you can refer to either `greeting` or `audienc
 
 You can combine named strings together using _string interpolation_, like so:
 
-<pre><samp class="repl-prompt"><span class="str">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
 
 If you put this into the REPL, you should see this output:
 
-<pre><samp><span class="str">"Hi there, World!" </span><span class="colon">:</span> Str <span class="autovar">               # val2</span></samp></pre>
+<pre><samp><span class="literal">"Hi there, World!" </span><span class="colon">:</span> Str <span class="comment">               # val2</span></samp></pre>
 
 Notice that the REPL printed `# val2` here. This works just like `# val1` did before, but it chose the name `val2` for this expression because `val1` was already taken. As we continue entering more expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.
 
@@ -83,7 +83,7 @@ Remember back in the [string interpolation](#string-interpolation) section when 
 
 <pre><samp><span class="repl-prompt">Str.concat "Hi " "there!"</span>
 
-<span class="str">"Hi there!"</span> <span class="colon">:</span> Str
+<span class="literal">"Hi there!"</span> <span class="colon">:</span> Str
 </samp></pre>
 
 Here we're calling the `Str.concat` function and passing two arguments: the string `"Hi "` and the string `"there!"`. This _concatenates_ the two strings together (that is, it puts one after the other) and returns the resulting combined string of `"Hi there!"`.
@@ -94,7 +94,7 @@ That said, just like in the arithmetic example above, we can use parentheses to 
 
 <pre><samp><span class="repl-prompt">Str.concat "Birds: " (Num.toStr 42)</span>
 
-<span class="str">"Birds: 42"</span> <span class="colon">:</span> Str
+<span class="literal">"Birds: 42"</span> <span class="colon">:</span> Str
 </samp></pre>
 
 This calls `Num.toStr` on the number `42`, which converts it into the string `"42"`, and then passes that string as the second argument to `Str.concat`.
@@ -120,15 +120,13 @@ We'll get into more depth about modules later, but for now you can think of a mo
 
 ## [Building an Application](#building-an-application) {#building-an-application}
 
-> **For NixOS:** URL imports don't work yet. Instead you'll have to clone [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) locally and use it like [this](https://github.com/roc-lang/roc/issues/4655#issuecomment-1336215883).
-
 Let's move out of the REPL and create our first Roc application!
 
 Make a file named `main.roc` and put this in it:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3/5CcipdhTTAtISf4FwlBNHmyu1unYAV8b0MKRwYiEHys.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -161,7 +159,7 @@ main =
     Stdout.line "There are \(total) animals."
 ```
 
-Now run `roc dev` again. This time the "Downloading …" message won't appear; the file has been cached from last time, and won't need to be downloaded again.
+Now run `roc dev` again. This time the "Downloading ..." message won't appear; the file has been cached from last time, and won't need to be downloaded again.
 
 You should see this:
 
@@ -195,7 +193,7 @@ birds = 3
 
 iguanas = 2
 
-total = Num.toStr (birds + iguanas)
+total = addAndStringify birds iguanas
 
 main =
     Stdout.line "There are \(total) animals."
@@ -348,8 +346,8 @@ The `addAndStringify` function will accept any record with at least the fields `
 ```roc
 total = addAndStringify { birds: 5, iguanas: 7 }
 
-# The `name` field is unused by addAndStringify
-totalWithNote = addAndStringify { birds: 4, iguanas: 3, name: "Whee!" }
+# The `note` field is unused by addAndStringify
+totalWithNote = addAndStringify { birds: 4, iguanas: 3, note: "Whee!" }
 
 addAndStringify = \counts ->
     Num.toStr (counts.birds + counts.iguanas)
@@ -446,10 +444,10 @@ Here's the type of `table`:
 ```roc
 table :
     {
-        height: Pixels,
-        width: Pixels,
-        title? Str,
-        description? Str,
+        height : Pixels,
+        width : Pixels,
+        title ? Str,
+        description ? Str,
     }
     -> Table
 ```
@@ -518,9 +516,9 @@ This results in the same value for `stoplightStr`. In both the `when` version an
 Besides being more concise, there are other advantages to using `when` here.
 
 1.  We don't have to specify an `else` branch, so the code can be more self-documenting about exactly what all the options are.
-2.  We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if …` definition.
+2.  We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if ...` definition.
 
-We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing `else`, we write `\_ ->` like so:
+We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing `else`, we write `_ ->` like so:
 
 ```roc
 stoplightStr =
@@ -628,7 +626,7 @@ This can be both more concise and more efficient (at runtime) than calling [`Lis
 
 In many programming languages, `true` and `false` are special language keywords that refer to the two [boolean](https://en.wikipedia.org/wiki/Boolean_data_type) values. In Roc, booleans do not get special keywords; instead, they are exposed as the ordinary values `Bool.true` and `Bool.false`.
 
-This design is partly to keep the number of special keywords in the language smaller, but mainly to suggest how booleans are intended be used in Roc: for [_boolean logic_](https://en.wikipedia.org/wiki/Boolean_algebra) (`&&`, `||`, and so on) as opposed to for data modeling. Tags are the preferred choice for data modeling, and having tag values be more concise than boolean values helps make this preference clear.
+This design is partly to keep the number of special keywords in the language smaller, but mainly to suggest how booleans are intended to be used in Roc: for [_boolean logic_](https://en.wikipedia.org/wiki/Boolean_algebra) (`&&`, `||`, and so on) as opposed to for data modeling. Tags are the preferred choice for data modeling, and having tag values be more concise than boolean values helps make this preference clear.
 
 As an example of why tags are encouraged for data modeling, in many languages it would be common to write a record like `{ name: "Richard", isAdmin: Bool.true }`, but in Roc it would be preferable to write something like `{ name: "Richard", role: Admin }`. At first, the `role` field might only ever be set to `Admin` or `Normal`, but because the data has been modeled using tags instead of booleans, it's much easier to add other alternatives in the future, like `Guest` or `Moderator` - some of which might also want payloads.
 
@@ -741,7 +739,7 @@ List.map ["a", "b", "c"] Foo
 
 These two versions compile to the same thing. As a convenience, Roc lets you specify a tag name where a function is expected; when you do this, the compiler infers that you want a function which uses all of its arguments as the payload to the given tag.
 
-### [`List.any` and `List.all`](#list-any-and-list-all) {#list-any-and-list-all}
+### [List.any and List.all](#list-any-and-list-all) {#list-any-and-list-all}
 
 There are several functions that work like `List.map`, they walk through each element of a list and do something with it. Another is `List.any`, which returns `Bool.true` if calling the given function on any element in the list returns `Bool.true`:
 
@@ -862,17 +860,17 @@ In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to
 
 1. A list. (`[1, 2, 3, 4, 5]`)
 2. An initial `state` value. (`{ evens: [], odds: [] }`)
-3. A function which takes the current `state` and element, and returns a new `state`. (`\state, elem -> …`)
+3. A function which takes the current `state` and element, and returns a new `state`. (`\state, elem -> ...`)
 
 It then proceeds to walk over each element in the list and call that function. Each time, the state that function returns becomes the argument to the next function call. Here are the arguments the function will receive, and what it will return, as `List.walk` walks over the list `[1, 2, 3, 4, 5]`:
 
 |               State               | Element |             Return Value             |
-| :-------------------------------: | :-----: | :----------------------------------: |
+| --------------------------------- | ------- | ------------------------------------ |
 |     `{ evens: [], odds: [] }`     |   `1`   |      `{ evens: [], odds: [1] }`      |
 |     `{ evens: [], odds: [1] }`    |   `2`   |      `{ evens: [2], odds: [1] }`     |
 |    `{ evens: [2], odds: [1] }`    |   `3`   |    `{ evens: [2], odds: [1, 3] }`    |
 |   `{ evens: [2], odds: [1, 3] }`  |   `4`   |   `{ evens: [2, 4], odds: [1, 3] }`  |
-| `{ evens: [2, 4], odds: [1, 3] }` |   `4`   | `{ evens: [2, 4], odds: [1, 3, 5] }` |
+| `{ evens: [2, 4], odds: [1, 3] }` |   `5`   | `{ evens: [2, 4], odds: [1, 3, 5] }` |
 
 Note that the initial `state` argument is `{ evens: [], odds: [] }` because that's the argument
 we passed `List.walk` for its initial state. From then on, each `state` argument is whatever the
@@ -884,7 +882,7 @@ Note that the state doesn't have to be a record; it can be anything you want. Fo
 
 A helpful way to remember the argument order for `List.walk` is that that its arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is in the middle!
 
-> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for…in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
+> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for...in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
 
 ### [The pipe operator](#the-pipe-operator) {#the-pipe-operator}
 
@@ -1092,7 +1090,7 @@ Tag union types can accumulate more tags based on how they're used. Consider thi
 
 Here, Roc sees that the first branch has the type `[Ok Str]` and that the `else` branch has the type `[Err (List Str)]`, so it concludes that the whole `if` expression evaluates to the combination of those two tag unions: `[Ok Str, Err (List Str)]`.
 
-This means this entire `\str -> …` function has the type `Str -> [Ok Str, Err (List Str)]`. However, it would be most common to annotate it as `Result Str (List Str)` instead, because the `Result` type (for operations like `Result.withDefault`, which we saw earlier) is a type alias for a tag union with `Ok` and `Err` tags that each have one payload:
+This means this entire `\str -> ...` function has the type `Str -> [Ok Str, Err (List Str)]`. However, it would be most common to annotate it as `Result Str (List Str)` instead, because the `Result` type (for operations like `Result.withDefault`, which we saw earlier) is a type alias for a tag union with `Ok` and `Err` tags that each have one payload:
 
 ```roc
 Result ok err : [Ok ok, Err err]
@@ -1163,7 +1161,7 @@ Choosing a size depends on your performance needs and the range of numbers you w
 Here are the different fixed-size integer types that Roc supports:
 
 | Range                                                                                                             | Type   |
-|--:----------------------------------------------------------------------------------------------------------------|-:-:----|
+|-------------------------------------------------------------------------------------------------------------------|--------|
 | `-128`  <br> `127`                                                                                                | `I8`   |
 | `0`     <br> `255`                                                                                                | `U8`   |
 | `-32_768`  <br> `32_767`                                                                                          | `I16`  |
@@ -1370,7 +1368,7 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3/5CcipdhTTAtISf4FwlBNHmyu1unYAV8b0MKRwYiEHys.tar.br" }
     imports [pf.Stdout]
     provides main to pf
 ```
@@ -1382,14 +1380,14 @@ The line `app "hello"` states that this module defines a Roc application, and th
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
 ```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3/5CcipdhTTAtISf4FwlBNHmyu1unYAV8b0MKRwYiEHys.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
 
-The `packages { pf: "https://…tar.br" }` part says three things:
+The `packages { pf: "https://...tar.br" }` part says three things:
 
-- We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://…tar.br"`
+- We're going to be using a _package_ (a collection of modules) that can be downloaded from the URL `"https://...tar.br"`
 - That package's [base64](https://en.wikipedia.org/wiki/Base64#URL_applications)\-encoded [BLAKE3](<https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3>) cryptographic hash is the long string at the end (before the `.tar.br` file extension). Once the file has been downloaded, its contents will be verified against this hash, and it will only be installed if they match. This way, you can be confident the download was neither corrupted nor changed since it was originally published.
 - We're going to name that package `pf` so we can refer to it more concisely in the future.
 
@@ -1403,7 +1401,7 @@ main = Stdout.line "I'm a Roc application!"
 
 Here, `main` is calling a function called `Stdout.line`. More specifically, it's calling a function named `line` which is exposed by a module named `Stdout`.
 
-When we write `imports [pf.Stdout]`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: … }` section.
+When we write `imports [pf.Stdout]`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: ... }` section.
 
 If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly in `imports` like this:
 
@@ -1415,9 +1413,29 @@ You can find documentation for the `Stdout.line` function in the [Stdout](https:
 
 ### [Package Modules](#interface-modules) {#interface-modules}
 
-\[This part of the tutorial has not been written yet. Coming soon!\]
+Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [ MyInterface ] packages {}`. The modules that are listed in the `exposes` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
 See [Parser Package](https://github.com/roc-lang/roc/tree/main/examples/parser/package) for an example.
+
+Package documentation can be generated using the Roc cli with `roc docs /package/*.roc`.
+
+Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.  
+
+You can import a package that is available either locally, or from a URL into a Roc application or platform. This is achieved by specifying the package in the `packages` section of the application or platform file structure. For example, `packages { .., parser: "<package URL>" }` is an example that imports a parser module from a URL.
+
+How does the Roc cli import and download a package from a URL? 
+
+1. First it checks to see whether the relevant folder already exists in the local filesystem and if not, creates it. If there is a package already downloaded then there is no need to download or extract anything. Packages are cached in a directory, typically `~/.cache/roc` on UNIX, and `%APPDATA%\\Roc` on Windows.
+2. It then downloads the file at that URL and verifies that the hash of the file matches the hash at the end of the URL.
+3. If the hash of the file matches the hash in the URL, then decompress and extract its contents into the cache folder so that it can be used.
+
+Why is a Roc package URL so long?
+
+Including the hash solves a number of problems:
+
+1. The package at the URL can not suddenly change and cause different behavior.
+2. Because of 1. there is no need to check the URL on every compilation to see if we have the latest version.
+3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.   
 
 ### [Interface Modules](#interface-modules) {#interface-modules}
 
@@ -1448,7 +1466,7 @@ Let's start with a basic "Hello World" program.
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3/5CcipdhTTAtISf4FwlBNHmyu1unYAV8b0MKRwYiEHys.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1478,7 +1496,7 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3/5CcipdhTTAtISf4FwlBNHmyu1unYAV8b0MKRwYiEHys.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
@@ -1497,7 +1515,7 @@ The type of `Task.await` is:
 Task.await : Task a err, (a -> Task b err) -> Task b err
 ```
 
-The second argument to `Task.await` is a "callback function" which runs after the first task completes. This callback function receives the output of that first task, and then returns the second task. This means the second task can make use of output from the first task, like we did in our `\text -> …` callback function here:
+The second argument to `Task.await` is a "callback function" which runs after the first task completes. This callback function receives the output of that first task, and then returns the second task. This means the second task can make use of output from the first task, like we did in our `\text -> ...` callback function here:
 
 ```roc
 \text ->
@@ -1519,7 +1537,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3/5CcipdhTTAtISf4FwlBNHmyu1unYAV8b0MKRwYiEHys.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
@@ -1543,7 +1561,7 @@ task =
     Stdout.line "You just entered: \(text)"
 ```
 
-This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymous function, just like `\ … ->` is.
+This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymous function, just like `\ ... ->` is.
 
 Here, we're using backpassing to define two anonymous functions. Here's one of them:
 
@@ -1756,13 +1774,13 @@ Using `User a` type alias, I can still write the same three functions, but now t
 isValid : User * -> Bool
 ```
 
-Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
+Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email : Str, ... }a` to `{ email : Str, ... }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
 
 ```roc
 userFromEmail : Str -> User {}
 ```
 
-Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
+Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email : Str, ... }a` to `{ email : Str, ... }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
 
 > **Aside:** This works because you can form new record types by replacing the type variable with other record types. For example, `{ a : Str, b : Str }` can also be written `{ a : Str }{ b : Str }`. You can chain these more than once, e.g. `{ a : Str }{ b : Str }{ c : Str, d : Str }`. This is more useful when used with type annotations; for example, `{ a : Str, b : Str }User` describes a closed record consisting of all the fields in the closed record `User`, plus `a : Str` and `b : Str`.
 
@@ -1827,7 +1845,7 @@ Putting these together, whether a tag union is inferred to be open or closed dep
 
 ### [Combining Open Unions](#combining-open-unions) {#combining-open-unions}
 
-When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`, the type of `{ a: "hi" }` is inferred to be `{ a: Str }`. In contrast, when we make a new tag, it's inferred to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[Bar Str]*`.
+When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`, the type of `{ a: "hi" }` is inferred to be `{ a : Str }`. In contrast, when we make a new tag, it's inferred to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[Bar Str]*`.
 
 This is because open unions can accumulate additional tags based on how they're used in the program, whereas closed unions cannot. For example, let's look at this conditional:
 
@@ -1856,7 +1874,7 @@ Earlier we saw how a function which accepts an open union must account for more 
 So if I have an `[Ok Str]*` value, I can pass it to functions with any of these types (among others):
 
 |              Function Type              | Can it receive `[Ok Str]*`? |
-| :-------------------------------------- | :-------------------------: |
+| --------------------------------------- | --------------------------- |
 |           `[Ok Str]* -> Bool`           |             Yes             |
 |           `[Ok Str] -> Bool`            |             Yes             |
 |      `[Ok Str, Err Bool]* -> Bool`      |             Yes             |
@@ -1939,7 +1957,7 @@ For this reason, any time you see a function that only runs a `when` on its only
 Here are various Roc expressions involving operators, and what they desugar to.
 
 | Expression                    |    Desugars To     |
-| :---------------------------: | :----------------: | 
+| ----------------------------- | ------------------ | 
 | `a + b`                       |   `Num.add a b`    |
 | `a - b`                       |   `Num.sub a b`    |
 | `a * b`                       |   `Num.mul a b`    |

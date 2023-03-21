@@ -60,7 +60,6 @@ The compiler includes the following sub-crates;
 - `roc_serialize` provides helpers for serializing and deserializing to/from bytes.
 - `roc_solve` The entry point of Roc's [type inference](https://en.wikipedia.org/wiki/Type_inference) system. Implements type inference and specialization of abilities.
 - `roc_solve_problem` provides types to describe problems that can occur during solving.
-- `roc_str` provides `Roc` styled collection [reference counting](https://en.wikipedia.org/wiki/Reference_counting). See [README.md](./compiler/str/README.md) for more information.
 - `test_derive` Tests Roc's auto-derivers.
 - `test_gen` contains all of Roc's [code generation](https://en.wikipedia.org/wiki/Code_generation_(compiler)) tests. See [README.md](./compiler/test_gen/README.md) for more information.
 - `test_mono` Tests Roc's generation of the mono intermediate representation.

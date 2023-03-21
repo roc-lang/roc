@@ -1,32 +1,31 @@
 [package]
 name = "roc_parse"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Implements the Roc parser, which transforms a textual representation of a Roc program to an AST."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [features]
 "parse_debug_trace" = []
 
 [dependencies]
 roc_collections = { path = "../collections" }
-roc_region = { path = "../region" }
 roc_module = { path = "../module" }
+roc_region = { path = "../region" }
 
 bumpalo.workspace = true
 encode_unicode.workspace = true
 
 [dev-dependencies]
-roc_test_utils = { path = "../../test_utils" }
-proptest = "1.0.0"
-
 criterion.workspace = true
-pretty_assertions.workspace = true
 indoc.workspace = true
+pretty_assertions.workspace = true
+proptest.workspace = true
 quickcheck.workspace = true
 quickcheck_macros.workspace = true
 
 [[bench]]
-name = "bench_parse"
 harness = false
+name = "bench_parse"

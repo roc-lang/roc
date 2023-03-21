@@ -25,9 +25,5 @@ jobs:
         # swift tests are skipped because of "Could not find or use auto-linked library 'swiftCompatibilityConcurrency'" on macos-11 x86_64 CI machine
         # this issue may be caused by using older versions of XCode
 
-      # TODO build basic-cli for macos 11
-      #- name: test examples/helloWorld.roc separately because it is ignored by default
-      #  run: cargo test --locked --release -p roc_cli cli_run::hello_world -- --ignored && sccache --show-stats
-
       - name: test launching the editor
         run: cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs

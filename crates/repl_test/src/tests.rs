@@ -990,7 +990,7 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
                              ^
 
                 Since these variables have the same name, it's easy to use the wrong
-                one on accident. Give one of them a new name.
+                one by accident. Give one of them a new name.
                 "#
         ),
     );

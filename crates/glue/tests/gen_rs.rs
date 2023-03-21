@@ -38,7 +38,7 @@ mod test_gen_rs {
                         target_arch = "x86",
                         target_arch = "x86_64"
                     ))]
-                    #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                    #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
                     #[repr(C)]
                     pub struct MyRcd {
                         pub b: roc_std::I128,
@@ -134,7 +134,7 @@ mod test_gen_rs {
                         target_arch = "x86",
                         target_arch = "x86_64"
                     ))]
-                    #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                    #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
                     #[repr(C)]
                     pub struct R1 {
                         pub b: roc_std::U128,
@@ -228,7 +228,7 @@ mod test_gen_rs {
                         target_arch = "x86",
                         target_arch = "x86_64"
                     ))]
-                    #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
+                    #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
                     #[repr(u8)]
                     pub enum Enumeration {
                         Bar = 0,

@@ -3,7 +3,6 @@ use crate::link::{
 };
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
-use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
@@ -973,8 +972,8 @@ fn build_loaded_file<'a>(
 
             std::fs::write(app_o_file, &*roc_app_bytes).unwrap();
 
-            let builtins_host_tempfile =
-                bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+            let builtins_host_tempfile = roc_bitcode::host_tempfile()
+                .expect("failed to write host builtins object to tempfile");
 
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
@@ -1029,6 +1028,13 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
         false => "",
     };
 
+    let preprocessed_host_path_str = preprocessed_host_path.to_string_lossy();
+    let extra_err_msg = if preprocessed_host_path_str.ends_with(".rh") {
+        "\n\n\tNote: If the platform does have an .rh1 file but no .rh file, it's because it's been built with an older version of roc. Contact the author to release a new build of the platform using a roc release newer than March 21 2023.\n"
+    } else {
+        ""
+    };
+
     eprintln!(
         indoc::indoc!(
             r#"
@@ -1036,13 +1042,14 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
 
                 {}
 
-            However, it was not there!
+            However, it was not there!{}
 
             If you have the platform's source code locally, you may be able to generate it by re-running this command with --prebuilt-platform=false
             "#
         ),
         prefix,
         preprocessed_host_path.to_string_lossy(),
+        extra_err_msg
     );
 }
 
@@ -1128,7 +1135,10 @@ fn build_and_preprocess_host_lowlevel(
     preprocessed_host_path: &Path,
     stub_dll_symbols: &[String],
 ) {
-    let stub_lib = roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc);
+    let stub_lib =
+        roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc, stub_dll_symbols);
+
+    debug_assert!(stub_lib.exists());
 
     rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 

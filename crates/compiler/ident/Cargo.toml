@@ -1,7 +1,8 @@
 [package]
 name = "roc_ident"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Implements data structures used for efficiently representing small strings, like identifiers."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true

@@ -2059,77 +2059,111 @@ fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
         }
     }
 
+    derives.sort();
+
     format!("#[derive({})]", derives.join(", "))
 }
 
-fn has_functions(typ: &RocType, types: &Types) -> bool {
-    match typ {
-        RocType::RocStr
-        | RocType::Bool
-        | RocType::Unit
-        | RocType::Num(_)
-        | RocType::EmptyTagUnion
-        | RocType::Unsized
-        | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
-        RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. })
-        | RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-        | RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
-            tags.iter().any(|(_, opt_payload_id)| {
-                if let Some(payload_id) = opt_payload_id {
-                    has_functions(types.get_type(*payload_id), types)
-                } else {
-                    false
-                }
-            })
-        }
-        RocType::RocBox(type_id)
-        | RocType::RocList(type_id)
-        | RocType::RocSet(type_id)
-        | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
-            non_null_payload: type_id,
-            ..
-        })
-        | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped {
-            payload: type_id, ..
-        }) => has_functions(types.get_type(*type_id), types),
-        RocType::TagUnion(RocTagUnion::SingleTagStruct {
-            payload: RocSingleTagPayload::HasNoClosure { payload_fields },
-            ..
-        }) => payload_fields
-            .iter()
-            .any(|payload_id| has_functions(types.get_type(*payload_id), types)),
-        RocType::TagUnion(RocTagUnion::SingleTagStruct {
-            payload: RocSingleTagPayload::HasClosure { payload_getters },
-            ..
-        }) => payload_getters
-            .iter()
-            .any(|(payload_id, _)| has_functions(types.get_type(*payload_id), types)),
-        RocType::TagUnionPayload {
-            fields: RocStructFields::HasNoClosure { fields },
-            ..
-        }
-        | RocType::Struct {
-            fields: RocStructFields::HasNoClosure { fields },
-            ..
-        } => fields
-            .iter()
-            .any(|(_, type_id)| has_functions(types.get_type(*type_id), types)),
-        RocType::TagUnionPayload {
-            fields: RocStructFields::HasClosure { fields },
-            ..
-        }
-        | RocType::Struct {
-            fields: RocStructFields::HasClosure { fields },
-            ..
-        } => fields
-            .iter()
-            .any(|(_, type_id, _)| has_functions(types.get_type(*type_id), types)),
-        RocType::RecursivePointer(type_id) => has_functions(types.get_type(*type_id), types),
-        RocType::RocResult(id1, id2) | RocType::RocDict(id1, id2) => {
-            has_functions(types.get_type(*id1), types) || has_functions(types.get_type(*id2), types)
-        }
-        RocType::Function(_) => true,
+fn has_functions(start: &RocType, types: &Types) -> bool {
+    let mut seen: Vec<TypeId> = vec![];
+    let mut stack = vec![start];
+
+    macro_rules! push {
+        ($id:expr) => {{
+            if !seen.contains($id) {
+                seen.push(*$id);
+                stack.push(types.get_type(*$id));
+            }
+        }};
     }
+
+    while let Some(typ) = stack.pop() {
+        match typ {
+            RocType::RocStr
+            | RocType::Bool
+            | RocType::Unit
+            | RocType::Num(_)
+            | RocType::EmptyTagUnion
+            | RocType::Unsized
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => { /* terminal */ }
+
+            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. })
+            | RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
+            | RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
+                for (_, opt_payload_id) in tags.iter() {
+                    if let Some(payload_id) = opt_payload_id {
+                        push!(payload_id);
+                    }
+                }
+            }
+            RocType::RocBox(type_id)
+            | RocType::RocList(type_id)
+            | RocType::RocSet(type_id)
+            | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+                non_null_payload: type_id,
+                ..
+            })
+            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped {
+                payload: type_id, ..
+            }) => {
+                push!(type_id);
+            }
+
+            RocType::TagUnion(RocTagUnion::SingleTagStruct {
+                payload: RocSingleTagPayload::HasNoClosure { payload_fields },
+                ..
+            }) => {
+                for payload_id in payload_fields {
+                    push!(payload_id);
+                }
+            }
+
+            RocType::TagUnion(RocTagUnion::SingleTagStruct {
+                payload: RocSingleTagPayload::HasClosure { payload_getters },
+                ..
+            }) => {
+                for (payload_id, _) in payload_getters {
+                    push!(payload_id);
+                }
+            }
+
+            RocType::TagUnionPayload {
+                fields: RocStructFields::HasNoClosure { fields },
+                ..
+            }
+            | RocType::Struct {
+                fields: RocStructFields::HasNoClosure { fields },
+                ..
+            } => {
+                for (_, type_id) in fields {
+                    push!(type_id);
+                }
+            }
+
+            RocType::TagUnionPayload {
+                fields: RocStructFields::HasClosure { fields },
+                ..
+            }
+            | RocType::Struct {
+                fields: RocStructFields::HasClosure { fields },
+                ..
+            } => {
+                for (_, type_id, _) in fields {
+                    push!(type_id);
+                }
+            }
+            RocType::RecursivePointer(type_id) => {
+                push!(type_id);
+            }
+            RocType::RocResult(id1, id2) | RocType::RocDict(id1, id2) => {
+                push!(id1);
+                push!(id2);
+            }
+            RocType::Function(_) => return true,
+        }
+    }
+
+    false
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -86,6 +86,57 @@ This is the general procedure I follow with some helpful links:
 1. If things aren't working, reach out on zulip. Get advice, maybe even pair.
 1. Make a PR.
 
+## Debugging x86_64 backend output
+
+While working on the x86_64 backend it may be useful to inspect the assembly output of a given piece of Roc code. With the right tools, you can do this rather easily. You'll need `objdump` to follow along.
+
+We'll try to explore the x86 assembly output of some lines of Roc code:
+
+```elixir
+app "dbg"
+    provides [main] to "."
+
+main =
+    (List.len [1]) + 41
+```
+
+If this file exists somewhere in the repo as `dbg.roc`, we'll be able to compile an object file by issuing the following command:
+
+```console
+# `cargo run --` can be replaces with calling the compiled `roc` cli binary.
+$ cargo run -- build --dev main.roc --no-link
+```
+
+Which will produce a minimal `dbg.o` object file containing the output assembly code. This object file can be inspected by using `objdump` in the following way:
+
+```console
+$ objdump -M intel -dS dbg.o
+dbg.o:     file format elf64-x86-64
+
+Disassembly of section .text.700000006:
+
+0000000000000000 <List_len_1>:
+   0:   55                      push   rbp
+   1:   48 89 e5                mov    rbp,rsp
+   4:   48 8b 85 18 00 00 00    mov    rax,QWORD PTR [rbp+0x18]
+   b:   5d                      pop    rbp
+   c:   c3                      ret
+
+Disassembly of section .text.400000013:
+
+0000000000000000 <Num_add_1>:
+   0:   55                      push   rbp
+# .. more output ..
+
+Disassembly of section .text.1000000000:
+
+0000000000000000 <roc__main_1_exposed>:
+   0:   55                      push   rbp
+# .. more output ..
+```
+
+The output lines contain the hexadecimal representation of the x86 opcodes and fields followed by the `intel` assembly syntax. This setup is very useful for figuring out the causes of invalid pointer references (or equivalent) when running the resulting x86 assembly.
+
 ## Helpful Resources
 
 - [Compiler Explorer](https://godbolt.org/) -
@@ -108,7 +159,7 @@ This is the general procedure I follow with some helpful links:
 - [x86 and amd64 instruction reference](https://web.archive.org/web/20230221053750/https://www.felixcloutier.com/x86/) -
   Great for looking up x86_64 instructions and there bytes.
   Definitely missing information if you aren't used to reading it.
-- [Intel 64 ISA Reference](https://software.intel.com/content/dam/develop/public/us/en/documents/325383-sdm-vol-2abcd.pdf) -
+- [Intel 64 ISA Reference](https://community.intel.com/legacyfs/online/drupal_files/managed/a4/60/325383-sdm-vol-2abcd.pdf) -
   Super dense manual.
   Contains everything you would need to know for x86_64.
   Also is like 2000 pages.
