@@ -8778,4 +8778,32 @@ mod solve_expr {
         @"main : List w_a"
         );
     }
+
+    #[test]
+    fn recursive_closure_with_transiently_used_capture() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [f] to "./platform"
+
+                thenDo = \x, callback ->
+                    callback x
+
+                f = \{} ->
+                    code = 10u16
+
+                    bf = \{} ->
+                    #^^{-1}
+                        thenDo code \_ -> bf {}
+                        #           ^^^^^^^^^^^
+
+                    bf {}
+                "#
+            ),
+        @r###"
+        bf : {} -[[bf(5) U16]]-> *
+        \_ -> bf {} : U16 -[[6 U16]]-> *
+        "###
+        );
+    }
 }
