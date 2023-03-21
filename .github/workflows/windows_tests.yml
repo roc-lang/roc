@@ -59,6 +59,9 @@ jobs:
 
       - run: |
           .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
 
       - run: |
           .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
