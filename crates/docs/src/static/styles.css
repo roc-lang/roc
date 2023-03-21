@@ -82,16 +82,24 @@ table tr td {
 }
 
 .entry-name a {
-  font-weight: bold;
+  visibility: hidden;
+  display: inline-block;
+  width: 18px;
+  height: 14px;
+  margin-left: -8px;
+  margin-right: 4px;
+  user-select: none;
   color: var(--violet);
 }
 
-.entry-name a:visited {
-  color: var(--violet);
+.entry-name:hover a {
+  visibility: visible;
+  text-decoration: none;
 }
 
-.entry-name a:hover {
-color: var(--green);
+.entry-name:not(:hover) a {
+  visibility: hidden;
+  transition: visibility 2s;
 }
 
 .pkg-full-name a {
