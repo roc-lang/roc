@@ -8851,7 +8851,7 @@ mod solve_expr {
                 #      ^^^^^^^^^
                 "#
             ),
-            @"Bool#Bool.isEq(10) : Bool, Bool -[[Bool.structuralEq(11)]]-> Bool"
+            @"Eq#Bool.isEq(9) : Bool, Bool -[[Bool.structuralEq(11)]]-> Bool"
         );
     }
 }
