@@ -45,11 +45,11 @@ jobs:
       #    7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
 
       - run: |
-          curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-windows_x86_64-TESTING.zip
-          7z x roc_nightly-windows_x86_64-TESTING.zip
+          curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-windowsTESTING_x86_64.zip
+          7z x roc_nightly-windowsTESTING_x86_64.zip
     
       - run: |
-          .\roc_nightly-windows_x86_64-TESTING\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
 
       - run: |
           .\examples\platform-switching\rocLovesRust.exe
@@ -61,10 +61,10 @@ jobs:
           .\examples\platform-switching\rocLovesRust.exe
 
       - run: |
-          .\roc_nightly-windows_x86_64-TESTING\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
 
       - run: |
-          .\roc_nightly-windows_x86_64-TESTING\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
 
       - run: |
-          .\roc_nightly-windows_x86_64-TESTING\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
