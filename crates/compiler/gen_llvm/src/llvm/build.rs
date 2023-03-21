@@ -1337,14 +1337,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     let field_layouts = tag_layouts[*tag_id as usize];
 
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
+                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
 
                     lookup_at_index_ptr2(
                         env,
                         layout_interner,
-                        union_layout,
                         field_layouts,
                         *index as usize,
                         ptr,
+                        target_loaded_type,
                     )
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
@@ -1380,13 +1381,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     let field_layouts = other_tags[tag_index as usize];
 
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
+                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+
                     lookup_at_index_ptr2(
                         env,
                         layout_interner,
-                        union_layout,
                         field_layouts,
                         *index as usize,
                         ptr,
+                        target_loaded_type,
                     )
                 }
                 UnionLayout::NullableUnwrapped {
@@ -2029,10 +2032,10 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
-    union_layout: &UnionLayout<'a>,
     field_layouts: &'a [InLayout<'a>],
     index: usize,
     value: PointerValue<'ctx>,
+    target_loaded_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
@@ -2064,27 +2067,9 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         "load_at_index_ptr",
     );
 
-    if let Some(Layout::RecursivePointer(_)) = field_layouts
-        .get(index as usize)
-        .map(|l| layout_interner.get(*l))
-    {
-        // a recursive field is stored as a `i64*`, to use it we must cast it to
-        // a pointer to the block of memory representation
-
-        let union_layout = layout_interner.insert(Layout::Union(*union_layout));
-        let actual_type = basic_type_from_layout(env, layout_interner, union_layout);
-        debug_assert!(actual_type.is_pointer_type());
-
-        builder
-            .build_pointer_cast(
-                result.into_pointer_value(),
-                actual_type.into_pointer_type(),
-                "cast_rec_pointer_lookup_at_index_ptr_new",
-            )
-            .into()
-    } else {
-        result
-    }
+    // A recursive pointer in the loaded structure is stored as a `i64*`, but the loaded layout
+    // might want a more precise structure. As such, cast it to the refined type if needed.
+    cast_if_necessary_for_opaque_recursive_pointers(env.builder, result, target_loaded_type)
 }
 
 pub fn reserve_with_refcount<'a, 'ctx, 'env>(
