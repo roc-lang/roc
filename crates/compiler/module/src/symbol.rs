@@ -1327,6 +1327,7 @@ define_builtins! {
         54 STR_WITH_PREFIX: "withPrefix"
         55 STR_GRAPHEMES: "graphemes"
         56 STR_IS_VALID_SCALAR: "isValidScalar"
+        57 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias

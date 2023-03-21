@@ -9,9 +9,9 @@
 #include <stdalign.h>
 #include <Python.h>
 
-void *roc_alloc(size_t size, unsigned int alignment) 
-{ 
-    return malloc(size); 
+void *roc_alloc(size_t size, unsigned int alignment)
+{
+    return malloc(size);
 }
 
 void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
@@ -95,7 +95,7 @@ struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
         struct RocBytes ret = {
             .len = 0,
             .bytes = NULL,
-            .capacity = MASK,
+            .capacity = 0,
         };
 
         return ret;

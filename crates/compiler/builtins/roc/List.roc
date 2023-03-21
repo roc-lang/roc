@@ -187,7 +187,7 @@ interface List
 ##
 ## first
 ## ```
-## TODO explain how in the former example, when we go to free `nums` at the end,
+## **TODO** explain how in the former example, when we go to free `nums` at the end,
 ## we can free it immediately because there are no other refcounts. However,
 ## in the case of `lists`, we have to iterate through the list and decrement
 ## the refcounts of each of its contained lists - because they, too, have
