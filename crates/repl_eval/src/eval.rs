@@ -596,6 +596,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 F64 => helper!(deref_f64, f64),
             }
         }
+        (_, Layout::Builtin(Builtin::Decimal)) => {
+            helper!(deref_dec, RocDec)
+        }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
             let elem_addr = mem.deref_usize(addr);
             let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
