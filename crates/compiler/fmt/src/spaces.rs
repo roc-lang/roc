@@ -420,6 +420,9 @@ impl<'a> RemoveSpaces<'a> for ImportsEntry<'a> {
         match *self {
             ImportsEntry::Module(a, b) => ImportsEntry::Module(a, b.remove_spaces(arena)),
             ImportsEntry::Package(a, b, c) => ImportsEntry::Package(a, b, c.remove_spaces(arena)),
+            ImportsEntry::IngestedFile(a, b) => {
+                ImportsEntry::IngestedFile(a, b.remove_spaces(arena))
+            }
         }
     }
 }

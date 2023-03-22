@@ -9,12 +9,12 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, increment_min_indent, optional, reset_min_indent, specialize, word1, EExposes,
-    EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent,
-    Parser, SourceError, SpaceProblem, SyntaxError,
+    backtrackable, increment_min_indent, optional, reset_min_indent, specialize, word1, word2,
+    EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires,
+    ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::state::State;
-use crate::string_literal;
+use crate::string_literal::{self, parse_str_literal};
 use crate::type_annotation;
 use roc_region::all::{Loc, Position};
 
@@ -606,40 +606,60 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
         Option<Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
     );
 
-    map_with_arena!(
-        and!(
+    one_of!(
+        map!(
             and!(
-                // e.g. `pf.`
-                optional(backtrackable(skip_second!(
-                    shortname(),
-                    word1(b'.', EImports::ShorthandDot)
-                ))),
-                // e.g. `Task`
-                module_name_help(EImports::ModuleName)
+                and!(
+                    // e.g. `pf.`
+                    optional(backtrackable(skip_second!(
+                        shortname(),
+                        word1(b'.', EImports::ShorthandDot)
+                    ))),
+                    // e.g. `Task`
+                    module_name_help(EImports::ModuleName)
+                ),
+                // e.g. `.{ Task, after}`
+                optional(skip_first!(
+                    word1(b'.', EImports::ExposingDot),
+                    collection_trailing_sep_e!(
+                        word1(b'{', EImports::SetStart),
+                        exposes_entry(EImports::Identifier),
+                        word1(b',', EImports::SetEnd),
+                        word1(b'}', EImports::SetEnd),
+                        Spaced::SpaceBefore
+                    )
+                ))
             ),
-            // e.g. `.{ Task, after}`
-            optional(skip_first!(
-                word1(b'.', EImports::ExposingDot),
-                collection_trailing_sep_e!(
-                    word1(b'{', EImports::SetStart),
-                    exposes_entry(EImports::Identifier),
-                    word1(b',', EImports::SetEnd),
-                    word1(b'}', EImports::SetEnd),
-                    Spaced::SpaceBefore
-                )
-            ))
+            |((opt_shortname, module_name), opt_values): Temp<'a>| {
+                let exposed_values = opt_values.unwrap_or_else(Collection::empty);
+
+                let entry = match opt_shortname {
+                    Some(shortname) => {
+                        ImportsEntry::Package(shortname, module_name, exposed_values)
+                    }
+
+                    None => ImportsEntry::Module(module_name, exposed_values),
+                };
+
+                Spaced::Item(entry)
+            }
         ),
-        |_arena, ((opt_shortname, module_name), opt_values): Temp<'a>| {
-            let exposed_values = opt_values.unwrap_or_else(Collection::empty);
-
-            let entry = match opt_shortname {
-                Some(shortname) => ImportsEntry::Package(shortname, module_name, exposed_values),
-
-                None => ImportsEntry::Module(module_name, exposed_values),
-            };
-
-            Spaced::Item(entry)
-        }
+        map!(
+            and!(
+                and!(
+                    // e.g. "filename"
+                    // TODO: str literal allows for multiline strings. We probably don't want that for file names.
+                    specialize(|_, pos| EImports::StrLiteral(pos), parse_str_literal()),
+                    // e.g. as
+                    word2(b'a', b's', EImports::AsKeyword)
+                ),
+                // e.g. file : Str
+                specialize(|_, pos| EImports::TypedIdent(pos), typed_ident())
+            ),
+            |((file_name, _), typed_ident)| {
+                Spaced::Item(ImportsEntry::IngestedFile(file_name, typed_ident))
+            }
+        )
     )
     .trace("imports_entry")
 }

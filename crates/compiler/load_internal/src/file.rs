@@ -4490,7 +4490,8 @@ fn build_header<'a>(
     let mut scope_size = 0;
 
     for loc_entry in imports {
-        let (qualified_module_name, exposed) = exposed_from_import(&loc_entry.value);
+        let (qualified_module_name, exposed) =
+            exposed_from_import(&loc_entry.value, &declared_name);
 
         scope_size += num_exposes;
 
@@ -5620,7 +5621,10 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     Ok(Msg::Parsed(parsed))
 }
 
-fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Loc<Ident>>) {
+fn exposed_from_import<'a>(
+    entry: &ImportsEntry<'a>,
+    current_module: &ModuleName,
+) -> (QualifiedModuleName<'a>, Vec<Loc<Ident>>) {
     use roc_parse::header::ImportsEntry::*;
 
     match entry {
@@ -5649,6 +5653,21 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
             let qualified_module_name = QualifiedModuleName {
                 opt_package: Some(package_name),
                 module: module_name.as_str().into(),
+            };
+
+            (qualified_module_name, exposed)
+        }
+
+        IngestedFile(_, typed_ident) => {
+            let exposed = vec![typed_ident
+                .extract_spaces()
+                .item
+                .ident
+                .map(|&ident_str| Ident(ident_str.into()))];
+
+            let qualified_module_name = QualifiedModuleName {
+                opt_package: None,
+                module: current_module.to_owned(),
             };
 
             (qualified_module_name, exposed)
