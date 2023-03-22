@@ -22,9 +22,9 @@ jobs:
 
       - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
 
-      #- uses: Swatinem/rust-cache@v2
-      #  with:
-      #    shared-key: "rust-cache-windows-${{env.GITHUB_RUNNER_CPU}}"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-windows-${{env.GITHUB_RUNNER_CPU}}"
 
       - name: download and install zig
         run: |
@@ -39,35 +39,17 @@ jobs:
       - name: install rust nightly 1.65
         run: rustup install nightly-2022-09-17
 
-      #- name: set up llvm 13
-      #  run: |
-      #    curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
-      #    7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
+      - name: set up llvm 13
+        run: |
+          curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
+          7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
 
-      - run: |
-          curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-windowsTESTING_x86_64.zip
-          7z x roc_nightly-windowsTESTING_x86_64.zip
-    
-      - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+      - name: Build tests --release without running. Twice for zig lld-link error.
+        run: cargo test --locked --release --no-run || cargo test --locked --release --no-run
 
-      - run: |
-          .\examples\platform-switching\rocLovesRust.exe
+      # Why are these tests not build with previous command? => fingerprint error. Use `CARGO_LOG=cargo::core::compiler::fingerprint=info` to investigate
+      - name: Build specific tests without running. Twice for zig lld-link error.
+        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli || cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli
 
-      - run: |
-          .\examples\platform-switching\rocLovesRust.exe
-
-      - run: |
-          .\examples\platform-switching\rocLovesRust.exe
-          
-      - run: |
-          .\examples\platform-switching\rocLovesRust.exe
-
-      - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
-
-      - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
-
-      - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+      - name: Actually run the tests.
+        run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli

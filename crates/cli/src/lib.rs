@@ -743,10 +743,7 @@ pub fn build(
                     }
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
-
-                    // don't waste time deallocating; the process ends anyway
-                    // ManuallyDrop will leak the bytes because we don't drop manually
-                    let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
+                    let bytes = &std::fs::read(&binary_path).unwrap();
 
                     roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
