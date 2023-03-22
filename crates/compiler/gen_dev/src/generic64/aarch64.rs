@@ -1677,6 +1677,11 @@ fn cmp_reg64_imm12(buf: &mut Vec<'_, u8>, src: AArch64GeneralReg, imm12: u16) {
 }
 
 #[inline(always)]
+fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, src1: AArch64GeneralReg, src2: AArch64GeneralReg) {
+    subs_reg64_reg64_reg64(buf, AArch64GeneralReg::ZRSP, src1, src2);
+}
+
+#[inline(always)]
 fn cneg_reg64_reg64_cond(
     buf: &mut Vec<'_, u8>,
     dst: AArch64GeneralReg,
@@ -1887,6 +1892,18 @@ fn subs_reg64_reg64_imm12(
     buf.extend(inst.bytes());
 }
 
+#[inline(always)]
+fn subs_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = ArithmeticShifted::new(true, true, ShiftType::LSL, 0, src2, src1, dst);
+
+    buf.extend(inst.bytes());
+}
+
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
@@ -2071,6 +2088,20 @@ mod tests {
             ),
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+    
+    #[test]
+    fn test_cmp_reg64_reg64() {
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "cmp {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 
@@ -2431,6 +2462,42 @@ mod tests {
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+    
+    #[test]
+    fn test_subs_reg64_reg64_reg64() {
+        disassembler_test!(
+            subs_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| {
+                if reg1 == AArch64GeneralReg::ZRSP {
+                    // When the first register is SP, it gets disassembled as cmp,
+                    // which is an alias for subs.
+                    format!(
+                        "cmp {}, {}",
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                } else if reg2 == AArch64GeneralReg::ZRSP {
+                    // When the second register is ZR, it gets disassembled as negs,
+                    // which is an alias for subs.
+                    format!(
+                        "negs {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                } else {
+                    format!(
+                        "subs {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 
