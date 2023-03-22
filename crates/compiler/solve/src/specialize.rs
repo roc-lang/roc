@@ -743,7 +743,7 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
                                 let specialized_lambda_set = *specialization
                                     .specialization_lambda_sets
                                     .get(&lset_region)
-                                    .expect("lambda set region not resolved");
+                                    .unwrap_or_else(|| panic!("lambda set region not resolved: {:?}", (spec_symbol, specialization)));
                                 Ok(specialized_lambda_set)
                             }
                             MemberImpl::Error => todo_abilities!(),
