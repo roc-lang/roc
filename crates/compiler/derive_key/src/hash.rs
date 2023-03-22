@@ -5,7 +5,7 @@ use roc_module::{
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
 use crate::{
-    util::{check_derivable_ext_var, debug_name_record, debug_name_tag},
+    util::{check_derivable_ext_var, debug_name_record, debug_name_tag, debug_name_tuple},
     DeriveError,
 };
 
@@ -21,6 +21,7 @@ pub enum FlatHash {
 pub enum FlatHashKey {
     // Unfortunate that we must allocate here, c'est la vie
     Record(Vec<Lowercase>),
+    Tuple(u32),
     TagUnion(Vec<(TagName, u16)>),
 }
 
@@ -28,6 +29,7 @@ impl FlatHashKey {
     pub(crate) fn debug_name(&self) -> String {
         match self {
             FlatHashKey::Record(fields) => debug_name_record(fields),
+            FlatHashKey::Tuple(arity) => debug_name_tuple(*arity),
             FlatHashKey::TagUnion(tags) => debug_name_tag(tags),
         }
     }
@@ -65,8 +67,14 @@ impl FlatHash {
 
                     Ok(Key(FlatHashKey::Record(field_names)))
                 }
-                FlatType::Tuple(_elems, _ext) => {
-                    todo!();
+                FlatType::Tuple(elems, ext) => {
+                    let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
+
+                    check_derivable_ext_var(subs, ext, |ext| {
+                        matches!(ext, Content::Structure(FlatType::EmptyTuple))
+                    })?;
+
+                    Ok(Key(FlatHashKey::Tuple(elems_iter.count() as _)))
                 }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
                     // The recursion var doesn't matter, because the derived implementation will only

@@ -30,6 +30,7 @@ use crate::{synth_var, util::Env, DerivedBody};
 pub(crate) fn derive_hash(env: &mut Env<'_>, key: FlatHashKey, def_symbol: Symbol) -> DerivedBody {
     let (body_type, body) = match key {
         FlatHashKey::Record(fields) => hash_record(env, def_symbol, fields),
+        FlatHashKey::Tuple(_fields) => todo!(),
         FlatHashKey::TagUnion(tags) => {
             if tags.len() == 1 {
                 hash_newtype_tag_union(env, def_symbol, tags.into_iter().next().unwrap())
