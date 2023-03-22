@@ -1531,11 +1531,12 @@ define_builtins! {
         20 DECODE_STRING: "string"
         21 DECODE_LIST: "list"
         22 DECODE_RECORD: "record"
-        23 DECODE_CUSTOM: "custom"
-        24 DECODE_DECODE_WITH: "decodeWith"
-        25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
-        26 DECODE_FROM_BYTES: "fromBytes"
-        27 DECODE_MAP_RESULT: "mapResult"
+        23 DECODE_TUPLE: "tuple"
+        24 DECODE_CUSTOM: "custom"
+        25 DECODE_DECODE_WITH: "decodeWith"
+        26 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
+        27 DECODE_FROM_BYTES: "fromBytes"
+        28 DECODE_MAP_RESULT: "mapResult"
     }
     13 HASH: "Hash" => {
         0 HASH_HASH_ABILITY: "Hash" exposed_type=true
