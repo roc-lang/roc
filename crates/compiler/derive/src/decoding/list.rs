@@ -12,7 +12,7 @@ use crate::decoding::wrap_in_decode_custom_decode_with;
 use crate::synth_var;
 use crate::util::Env;
 
-pub fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable) {
+pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable) {
     // Build
     //
     //   def_symbol : Decoder (List elem) fmt | elem has Decoding, fmt has DecoderFormatting

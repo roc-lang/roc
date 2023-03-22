@@ -52,7 +52,11 @@ use super::wrap_in_decode_custom_decode_with;
 ///             Err NoField -> Err TooShort
 ///
 ///     Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
-pub fn decoder(env: &mut Env, _def_symbol: Symbol, fields: Vec<Lowercase>) -> (Expr, Variable) {
+pub(crate) fn decoder(
+    env: &mut Env,
+    _def_symbol: Symbol,
+    fields: Vec<Lowercase>,
+) -> (Expr, Variable) {
     // The decoded type of each field in the record, e.g. {first: a, second: b}.
     let mut field_vars = Vec::with_capacity(fields.len());
     // The type of each field in the decoding state, e.g. {first: Result a [NoField], second: Result b [NoField]}

@@ -175,3 +175,59 @@ fn record_2_fields() {
         )
     })
 }
+
+#[test]
+fn tuple_2_fields() {
+    derive_test(Decoder, v!((v!(STR), v!(U8),)), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for ( Str, U8 )*
+        # Decoder ( val, val1 )* fmt | fmt has DecoderFormatting, val has Decoding, val1 has Decoding
+        # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok ( val, val1 )a] } | fmt has DecoderFormatting, val has Decoding, val1 has Decoding
+        # Specialization lambda sets:
+        #   @<1>: [[custom(22)]]
+        #Derived.decoder_(arity:2) =
+          custom
+            \#Derived.bytes3, #Derived.fmt3 ->
+              decodeWith
+                #Derived.bytes3
+                (tuple
+                  { e1: Err NoElem, e0: Err NoElem }
+                  \#Derived.stateRecord2, #Derived.index ->
+                    when #Derived.index is
+                      0 ->
+                        Next (custom
+                          \#Derived.bytes, #Derived.fmt ->
+                            when decodeWith #Derived.bytes decoder #Derived.fmt is
+                              #Derived.rec ->
+                                {
+                                  result: when #Derived.rec.result is
+                                      Ok #Derived.val ->
+                                        Ok { stateRecord2 & e0: Ok #Derived.val }
+                                      Err #Derived.err -> Err #Derived.err,
+                                  rest: #Derived.rec.rest
+                                })
+                      1 ->
+                        Next (custom
+                          \#Derived.bytes2, #Derived.fmt2 ->
+                            when decodeWith #Derived.bytes2 decoder #Derived.fmt2 is
+                              #Derived.rec2 ->
+                                {
+                                  result: when #Derived.rec2.result is
+                                      Ok #Derived.val2 ->
+                                        Ok { stateRecord2 & e1: Ok #Derived.val2 }
+                                      Err #Derived.err2 -> Err #Derived.err2,
+                                  rest: #Derived.rec2.rest
+                                })
+                      _ -> TooLong
+                  \#Derived.stateRecord ->
+                    when #Derived.stateRecord.e0 is
+                      Ok #Derived.0 ->
+                        when #Derived.stateRecord.e1 is
+                          Ok #Derived.1 -> Ok ( #Derived.0, #Derived.1 )
+                          _ -> Err TooShort
+                      _ -> Err TooShort)
+                #Derived.fmt3
+        "###
+        )
+    })
+}
