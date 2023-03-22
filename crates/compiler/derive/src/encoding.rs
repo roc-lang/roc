@@ -14,7 +14,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
     Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-    RedundantMark, SubsSlice, TagExt, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    RedundantMark, SubsSlice, TagExt, TupleElems, UnionLambdas, UnionTags, Variable,
+    VariableSubsSlice,
 };
 use roc_types::types::RecordField;
 
@@ -30,7 +31,6 @@ pub(crate) fn derive_to_encoder(
         FlatEncodableKey::List() => to_encoder_list(env, def_symbol),
         FlatEncodableKey::Set() => todo!(),
         FlatEncodableKey::Dict() => todo!(),
-        FlatEncodableKey::Tuple(_arity) => todo!(),
         FlatEncodableKey::Record(fields) => {
             // Generalized record var so we can reuse this impl between many records:
             // if fields = { a, b }, this is { a: t1, b: t2 } for fresh t1, t2.
@@ -50,6 +50,21 @@ pub(crate) fn derive_to_encoder(
             );
 
             to_encoder_record(env, record_var, fields, def_symbol)
+        }
+        FlatEncodableKey::Tuple(arity) => {
+            // Generalized tuple var so we can reuse this impl between many tuples:
+            // if arity = n, this is (t1, ..., tn) for fresh t1, ..., tn.
+            let flex_elems = (0..arity)
+                .into_iter()
+                .map(|idx| (idx as usize, env.subs.fresh_unnamed_flex_var()))
+                .collect::<Vec<_>>();
+            let elems = TupleElems::insert_into_subs(env.subs, flex_elems);
+            let tuple_var = synth_var(
+                env.subs,
+                Content::Structure(FlatType::Tuple(elems, Variable::EMPTY_TUPLE)),
+            );
+
+            to_encoder_tuple(env, tuple_var, elems, def_symbol)
         }
         FlatEncodableKey::TagUnion(tags) => {
             // Generalized tag union var so we can reuse this impl between many unions:
@@ -484,6 +499,189 @@ fn to_encoder_record(
             record_var,
             AnnotatedMark::known_exhaustive(),
             Loc::at_zero(Pattern::Identifier(rcd_sym)),
+        )],
+        loc_body: Box::new(Loc::at_zero(body)),
+    });
+
+    (clos, fn_var)
+}
+
+fn to_encoder_tuple(
+    env: &mut Env<'_>,
+    tuple_var: Variable,
+    elems: TupleElems,
+    fn_name: Symbol,
+) -> (Expr, Variable) {
+    // Suppose tup = (t1, t2). Build
+    //
+    // \tup -> Encode.tuple [
+    //      Encode.toEncoder tup.0,
+    //      Encode.toEncoder tup.1,
+    //   ]
+
+    let tup_sym = env.new_symbol("tup");
+    let whole_encoder_in_list_var = env.subs.fresh_unnamed_flex_var(); // type of the encoder in the list
+
+    use Expr::*;
+
+    let elem_encoders_list = elems
+        .iter_all()
+        .map(|(elem_index, elem_var_index)| {
+            let index = env.subs[elem_index];
+            let elem_var = env.subs[elem_var_index];
+            let elem_var_slice = VariableSubsSlice::new(elem_var_index.index, 1);
+
+            // tup.0
+            let tuple_access = TupleAccess {
+                tuple_var,
+                ext_var: env.subs.fresh_unnamed_flex_var(),
+                elem_var,
+                loc_expr: Box::new(Loc::at_zero(Var(
+                    tup_sym,
+                    env.subs.fresh_unnamed_flex_var(),
+                ))),
+                index,
+            };
+
+            // build `toEncoder tup.0` type
+            // val -[uls]-> Encoder fmt | fmt has EncoderFormatting
+            let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
+
+            // (typeof tup.0) -[clos]-> t1
+            let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+            let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
+            let this_to_encoder_fn_var = synth_var(
+                env.subs,
+                Content::Structure(FlatType::Func(
+                    elem_var_slice,
+                    to_encoder_clos_var,
+                    encoder_var,
+                )),
+            );
+
+            //   val            -[uls]->  Encoder fmt | fmt has EncoderFormatting
+            // ~ (typeof tup.0) -[clos]-> t1
+            env.unify(to_encoder_fn_var, this_to_encoder_fn_var);
+
+            // toEncoder : (typeof tup.0) -[clos]-> Encoder fmt | fmt has EncoderFormatting
+            let to_encoder_var = AbilityMember(Symbol::ENCODE_TO_ENCODER, None, to_encoder_fn_var);
+            let to_encoder_fn = Box::new((
+                to_encoder_fn_var,
+                Loc::at_zero(to_encoder_var),
+                to_encoder_clos_var,
+                encoder_var,
+            ));
+
+            // toEncoder tup.0
+            let to_encoder_call = Call(
+                to_encoder_fn,
+                vec![(elem_var, Loc::at_zero(tuple_access))],
+                CalledVia::Space,
+            );
+
+            // NOTE: must be done to unify the lambda sets under `encoder_var`
+            env.unify(encoder_var, whole_encoder_in_list_var);
+
+            Loc::at_zero(to_encoder_call)
+        })
+        .collect::<Vec<_>>();
+
+    // typeof [ toEncoder tup.0, toEncoder tup.1 ]
+    let whole_encoder_in_list_var_slice =
+        VariableSubsSlice::insert_into_subs(env.subs, once(whole_encoder_in_list_var));
+    let elem_encoders_list_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Apply(
+            Symbol::LIST_LIST,
+            whole_encoder_in_list_var_slice,
+        )),
+    );
+
+    // [ toEncoder tup.0, toEncoder tup.1 ]
+    let elem_encoders_list = List {
+        elem_var: whole_encoder_in_list_var,
+        loc_elems: elem_encoders_list,
+    };
+
+    // build `Encode.tuple [ toEncoder tup.0, toEncoder tup.1 ]` type
+    // List (Encoder fmt) -[uls]-> Encoder fmt | fmt has EncoderFormatting
+    let encode_tuple_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TUPLE);
+
+    // elem_encoders_list_var -[clos]-> t1
+    let elem_encoders_list_var_slice =
+        VariableSubsSlice::insert_into_subs(env.subs, once(elem_encoders_list_var));
+    let encode_tuple_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+    let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let this_encode_tuple_fn_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Func(
+            elem_encoders_list_var_slice,
+            encode_tuple_clos_var,
+            encoder_var,
+        )),
+    );
+
+    //   List (Encoder fmt)     -[uls]->  Encoder fmt | fmt has EncoderFormatting
+    // ~ elem_encoders_list_var -[clos]-> t1
+    env.unify(encode_tuple_fn_var, this_encode_tuple_fn_var);
+
+    // Encode.tuple : elem_encoders_list_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
+    let encode_tuple_var = AbilityMember(Symbol::ENCODE_TUPLE, None, encode_tuple_fn_var);
+    let encode_tuple_fn = Box::new((
+        encode_tuple_fn_var,
+        Loc::at_zero(encode_tuple_var),
+        encode_tuple_clos_var,
+        encoder_var,
+    ));
+
+    // Encode.tuple [ { key: .., value: .. }, .. ]
+    let encode_tuple_call = Call(
+        encode_tuple_fn,
+        vec![(elem_encoders_list_var, Loc::at_zero(elem_encoders_list))],
+        CalledVia::Space,
+    );
+
+    // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.tuple_var ..) fmt
+    let (body, this_encoder_var) =
+        wrap_in_encode_custom(env, encode_tuple_call, encoder_var, tup_sym, tuple_var);
+
+    // Create fn_var for ambient capture; we fix it up below.
+    let fn_var = synth_var(env.subs, Content::Error);
+
+    // -[fn_name]->
+    let fn_name_labels = UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![])));
+    let fn_clos_var = synth_var(
+        env.subs,
+        Content::LambdaSet(LambdaSet {
+            solved: fn_name_labels,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
+        }),
+    );
+    // typeof tup -[fn_name]-> (typeof Encode.tuple [ .. ] = Encoder fmt)
+    let tuple_var_slice = SubsSlice::insert_into_subs(env.subs, once(tuple_var));
+    env.subs.set_content(
+        fn_var,
+        Content::Structure(FlatType::Func(
+            tuple_var_slice,
+            fn_clos_var,
+            this_encoder_var,
+        )),
+    );
+
+    // \tup -[fn_name]-> Encode.tuple [ { key: .., value: .. }, .. ]
+    let clos = Closure(ClosureData {
+        function_type: fn_var,
+        closure_type: fn_clos_var,
+        return_type: this_encoder_var,
+        name: fn_name,
+        captured_symbols: vec![],
+        recursive: Recursive::NotRecursive,
+        arguments: vec![(
+            tuple_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(tup_sym)),
         )],
         loc_body: Box::new(Loc::at_zero(body)),
     });

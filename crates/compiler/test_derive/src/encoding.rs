@@ -274,6 +274,29 @@ fn two_field_record() {
 }
 
 #[test]
+fn two_field_tuple() {
+    derive_test(ToEncoder, v!((v!(U8), v!(STR),)), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for ( U8, Str )*
+        # ( val, val1 )* -[[toEncoder_(arity:2)(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # ( val, val1 )a -[[toEncoder_(arity:2)(0)]]-> (List U8, fmt -[[custom(2) ( val, val1 )a]]-> List U8) | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_(arity:2)(0)]]
+        #   @<2>: [[custom(2) ( val, val1 )*]] | val has Encoding, val1 has Encoding
+        #Derived.toEncoder_(arity:2) =
+          \#Derived.tup ->
+            custom
+              \#Derived.bytes, #Derived.fmt ->
+                appendWith
+                  #Derived.bytes
+                  (tuple [toEncoder #Derived.tup.0, toEncoder #Derived.tup.1])
+                  #Derived.fmt
+        "###
+        )
+    })
+}
+
+#[test]
 #[ignore = "NOTE: this would never actually happen, because [] is uninhabited, and hence toEncoder can never be called with a value of []!
 Rightfully it induces broken assertions in other parts of the compiler, so we ignore it."]
 fn empty_tag_union() {
