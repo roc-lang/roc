@@ -1268,3 +1268,15 @@ fn enum_tag_union_in_list() {
         r#"[E, F, G, H] : List [E, F, G, H]"#,
     );
 }
+
+#[test]
+fn tuple() {
+    expect_success(
+        indoc!(
+            r#"
+            ("a", 2u32)
+            "#
+        ),
+        r#"("a", 2) : ( Str, U32 )*"#,
+    );
+}

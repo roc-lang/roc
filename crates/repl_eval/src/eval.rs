@@ -18,7 +18,7 @@ use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    Content, FlatType, GetSubsSlice, RecordFields, Subs, TagExt, UnionTags, Variable,
+    Content, FlatType, GetSubsSlice, RecordFields, Subs, TagExt, TupleElems, UnionTags, Variable,
 };
 
 use crate::{ReplApp, ReplAppMemory};
@@ -431,6 +431,9 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 }
                 Content::Structure(FlatType::EmptyRecord) => {
                     struct_to_ast(env, mem, addr, RecordFields::empty())
+                }
+                Content::Structure(FlatType::Tuple(elems, _)) => {
+                    struct_to_ast_tuple(env, mem, addr, *elems)
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
@@ -1125,6 +1128,72 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
 
         Expr::Record(Collection::with_items(output))
     }
+}
+
+fn struct_to_ast_tuple<'a, 'env, M: ReplAppMemory>(
+    env: &mut Env<'a, 'env>,
+    mem: &'a M,
+    addr: usize,
+    tuple_elems: TupleElems,
+) -> Expr<'a> {
+    let arena = env.arena;
+    let subs = env.subs;
+    let mut output = Vec::with_capacity_in(tuple_elems.len(), arena);
+
+    debug_assert!(tuple_elems.len() > 1);
+
+    // We'll advance this as we iterate through the fields
+    let mut field_addr = addr;
+
+    // the type checker stores tuple elements in alphabetical order
+    let alphabetical_fields: Vec<_> = tuple_elems
+        .sorted_iterator(subs, Variable::EMPTY_TUPLE)
+        .map(|(l, elem)| {
+            let layout = env.layout_cache.from_var(arena, elem, env.subs).unwrap();
+
+            (l, elem, layout)
+        })
+        .collect_in(arena);
+
+    // but the memory representation sorts first by size (and uses field name as a tie breaker)
+    let mut in_memory_fields = alphabetical_fields;
+    in_memory_fields.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
+        cmp_fields(
+            &env.layout_cache.interner,
+            label1,
+            *layout1,
+            label2,
+            *layout2,
+            env.target_info,
+        )
+    });
+
+    for (label, elem_var, elem_layout) in in_memory_fields {
+        let loc_expr = &*arena.alloc(Loc {
+            value: addr_to_ast(
+                env,
+                mem,
+                field_addr,
+                elem_layout,
+                WhenRecursive::Unreachable,
+                elem_var,
+            ),
+            region: Region::zero(),
+        });
+
+        output.push((label, loc_expr));
+
+        // Advance the field pointer to the next field.
+        field_addr += env.layout_cache.interner.stack_size(elem_layout) as usize;
+    }
+
+    // to the user we want to present the fields in alphabetical order again, so re-sort
+    output.sort_by(|a, b| (a.0).cmp(&b.0));
+    let output = env
+        .arena
+        .alloc_slice_fill_iter(output.into_iter().map(|(_, expr)| expr));
+
+    Expr::Tuple(Collection::with_items(output))
 }
 
 fn unpack_single_element_tag_union(subs: &Subs, tags: UnionTags) -> (&TagName, &[Variable]) {
