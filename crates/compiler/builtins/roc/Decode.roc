@@ -78,6 +78,13 @@ DecoderFormatting has
     bool : Decoder Bool fmt | fmt has DecoderFormatting
     string : Decoder Str fmt | fmt has DecoderFormatting
     list : Decoder elem fmt -> Decoder (List elem) fmt | fmt has DecoderFormatting
+
+    ## `record state stepField finalizer` decodes a record field-by-field.
+    ##
+    ## `stepField` returns a decoder for the given field in the record, or
+    ## `Skip` if the field is not a part of the decoded record.
+    ##
+    ## `finalizer` should produce the record value from the decoded `state`.
     record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state -> Result val DecodeError) -> Decoder val fmt | fmt has DecoderFormatting
 
     ## `tuple state stepElem finalizer` decodes a tuple element-by-element.
