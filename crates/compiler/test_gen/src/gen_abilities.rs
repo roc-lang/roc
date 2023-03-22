@@ -788,6 +788,52 @@ fn encode_derived_record_with_many_types() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derived_tuple_two_fields() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, Json]
+                provides [main] to "./platform"
+
+            main =
+                tup = ("foo", 10u8)
+                result = Str.fromUtf8 (Encode.toBytes tup Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"["foo",10]"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derived_tuple_of_tuples() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, Json]
+                provides [main] to "./platform"
+
+            main =
+                tup = ( ("foo", 10u8), (23u8, "bar", 15u8) )
+                result = Str.fromUtf8 (Encode.toBytes tup Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"[["foo",10],[23,"bar",15]]"#),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
 fn encode_derived_generic_record_with_different_field_types() {
     assert_evals_to!(
