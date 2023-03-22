@@ -174,8 +174,110 @@ rocNapiH =
     #include <stddef.h>
     #include <string.h>
     #include <unistd.h>
-    #include "roc_std.h"
+    #include <math.h>
     #include <node_api.h>
+    #include "roc_std.h"
+
+    // Numbers
+
+    // TODO convert Roc 128-bit integers to Node BigInts using
+    // https://nodejs.org/api/n-api.html#napi_create_bigint_words
+
+    napi_status roc_i64_to_bigint(napi_env env, int64_t roc_num, napi_value* out) {
+        return napi_create_bigint_int64(env, roc_num, out);
+    }
+
+    napi_status roc_u64_to_bigint(napi_env env, uint64_t roc_num, napi_value* out) {
+        return napi_create_bigint_uint64(env, roc_num, out);
+    }
+
+    napi_status bigint_to_roc_i64(napi_env env, napi_value bigint, int64_t* out, bool* lossless) {
+        return napi_get_value_bigint_int64(env, bigint, out, lossless);
+    }
+
+    napi_status bigint_to_roc_u64(napi_env env, napi_value bigint, uint64_t* out, bool* lossless) {
+        return napi_get_value_bigint_uint64(env, bigint, out, lossless);
+    }
+
+    napi_status roc_i32_to_number(napi_env env, int32_t roc_num, napi_value* out) {
+        return napi_create_int32(env, roc_num, out);
+    }
+
+    napi_status roc_u32_to_number(napi_env env, uint32_t roc_num, napi_value* out) {
+        return napi_create_uint32(env, roc_num, out);
+    }
+
+    // Node's functions to convert to raw integers silently swallow errors (by just setting
+    // the answer to 0) such as the number having a fractional component or being non-finite.
+    // So we do our own conversion, and throw a JS RangeError if the conversion fails.
+    napi_status number_to_roc_u32(napi_env env, napi_value number, uint32_t* out) {
+        napi_status status;
+        double num_double;
+
+        // Turn the Node number into a double.
+        status = napi_get_value_double(env, number, &num_double);
+
+        // This can fail if the value we got wasn't a Node number.
+        if (status != napi_ok) {
+            return status;
+        }
+
+        // Convert the double to an u32, and check if the conversion was lossy.
+        uint32_t rounded = (uint32_t)num_double;
+
+        if (num_double != (double)rounded) {
+            // There were decimal values lost when rounding, or else the double was non-finite.
+            return napi_throw_range_error(env, NULL, "Conversion from Node number to plain integer was lossy.");
+        }
+
+        *out = rounded;
+
+        return napi_ok;
+    }
+
+    // Node's functions to convert to raw integers silently swallow errors (by just setting
+    // the answer to 0) such as the number having a fractional component or being non-finite.
+    // So we do our own conversion, and throw a JS RangeError if the conversion fails.
+    napi_status number_to_roc_i32(napi_env env, napi_value number, int32_t* out) {
+        napi_status status;
+        double num_double;
+
+        // Turn the Node number into a double.
+        status = napi_get_value_double(env, number, &num_double);
+
+        // This can fail if the value we got wasn't a Node number.
+        if (status != napi_ok) {
+            return status;
+        }
+
+        // Convert the double to an i32, and check if the conversion was lossy.
+        int32_t rounded = (int32_t)num_double;
+
+        if (num_double != (double)rounded) {
+            // There were decimal values lost when rounding, or else the double was non-finite.
+            return napi_throw_range_error(env, NULL, "Conversion from Node number to plain integer was lossy.");
+        }
+
+        *out = rounded;
+
+        return napi_ok;
+    }
+
+    napi_status roc_i16_to_number(napi_env env, int16_t roc_num, napi_value* out) {
+        return napi_create_int32(env, (int32_t)roc_num, out);
+    }
+
+    napi_status roc_u16_to_number(napi_env env, uint16_t roc_num, napi_value* out) {
+        return napi_create_uint32(env, (uint32_t)roc_num, out);
+    }
+
+    napi_status roc_i8_to_number(napi_env env, int8_t roc_num, napi_value* out) {
+        return napi_create_int32(env, (int32_t)roc_num, out);
+    }
+
+    napi_status roc_u8_to_number(napi_env env, uint8_t roc_num, napi_value* out) {
+        return napi_create_uint32(env, (uint32_t)roc_num, out);
+    }
 
     // Turn the given Node string into a RocStr and return it
     napi_status node_string_into_roc_str(napi_env env, napi_value node_string, struct RocStr *roc_str)
@@ -244,19 +346,26 @@ rocNapiH =
     }
 
     // Consume the given RocStr (decrement its refcount) after creating a Node string from it.
-    napi_value roc_str_into_node_string(napi_env env, struct RocStr roc_str)
-    {
+    napi_value roc_str_into_node_string(napi_env env, struct RocStr roc_str) {
         bool is_small = is_small_str(roc_str);
-        char *roc_str_contents;
+
+        // First, decrement the refcount of the RocStr because we're going to consume it.
+        // (Do this first in case there are errors later on; the Str will still have been consumed.)
+        if (!is_small)
+        {
+            decref_large_str(roc_str);
+        }
+
+        char* roc_str_contents;
 
         if (is_small)
         {
             // In a small string, the string itself contains its contents.
-            roc_str_contents = (char *)&roc_str;
+            roc_str_contents = (char*)&roc_str;
         }
         else
         {
-            roc_str_contents = (char *)roc_str.bytes;
+            roc_str_contents = (char*)roc_str.bytes;
         }
 
         napi_status status;
@@ -269,30 +378,23 @@ rocNapiH =
             answer = NULL;
         }
 
-        // Decrement the RocStr because we consumed it.
-        if (!is_small)
-        {
-            decref_large_str(roc_str);
-        }
-
         return answer;
     }
 
     // Create a Node string from the given RocStr.
     // Don't decrement the RocStr's refcount. (To decrement it, use roc_str_into_node_string instead.)
-    napi_value roc_str_as_node_string(napi_env env, struct RocStr roc_str)
-    {
+    napi_value roc_str_as_node_string(napi_env env, struct RocStr roc_str) {
         bool is_small = is_small_str(roc_str);
-        char *roc_str_contents;
+        char* roc_str_contents;
 
         if (is_small)
         {
             // In a small string, the string itself contains its contents.
-            roc_str_contents = (char *)&roc_str;
+            roc_str_contents = (char*)&roc_str;
         }
         else
         {
-            roc_str_contents = (char *)roc_str.bytes;
+            roc_str_contents = (char*)roc_str.bytes;
         }
 
         napi_status status;
@@ -325,6 +427,8 @@ rocStdH =
     #include <stddef.h>
     #include <string.h>
     #include <unistd.h>
+
+    const size_t REFCOUNT_ALIGN = __alignof__(size_t);
 
     // Reference counting operations need to know these types.
     void *roc_alloc(size_t size, unsigned int alignment);
@@ -381,44 +485,59 @@ rocStdH =
         }
     }
 
-    // RocBytes (List U8)
+    // RocList
 
-    struct RocBytes
+    struct RocList
     {
-        uint8_t *bytes;
+        void *elems;
         size_t len;
         size_t capacity;
     };
 
-    struct RocBytes empty_rocbytes()
+    struct RocList empty_list()
     {
-        struct RocBytes ret = {
+        struct RocList ret = {
             .len = 0,
-            .bytes = NULL,
+            .elems = NULL,
             .capacity = 0,
         };
 
         return ret;
     }
 
-    struct RocBytes init_rocbytes(uint8_t *bytes, size_t len)
+    // The refcount might take up more bytes if we need alignment padding due to
+    // the elements having a larger alignment than the refcount.
+    size_t list_refcount_size(size_t elem_align) {
+        // C99 does not have a max() function, so we do this manually.
+        return (REFCOUNT_ALIGN > elem_align) ? REFCOUNT_ALIGN : elem_align;
+    }
+
+    void *list_get(struct RocList list, size_t index, size_t elem_size, size_t elem_align)
+    {
+        return list.elems + list_refcount_size(elem_align) + (index * elem_size);
+    }
+
+    struct RocList init_list(void *elems, size_t elem_size, size_t elem_align, size_t len)
     {
         if (len == 0)
         {
-            return empty_rocbytes();
+            return empty_list();
         }
         else
         {
-            struct RocBytes ret;
-            size_t refcount_size = sizeof(size_t);
-            uint8_t *new_refcount = (uint8_t *)roc_alloc(len + refcount_size, __alignof__(size_t));
-            uint8_t *new_content = new_refcount + refcount_size;
+            size_t refcount_size = list_refcount_size(elem_align);
+
+            // Allocate enough space for the refcount plus the elements
+            size_t *new_refcount = (size_t *)roc_alloc(len + refcount_size, __alignof__(size_t));
+            void *new_elems = new_refcount + refcount_size;
 
             ((ssize_t *)new_refcount)[0] = REFCOUNT_ONE;
 
-            memcpy(new_content, bytes, len);
+            memcpy(new_elems, elems, len);
 
-            ret.bytes = new_content;
+            struct RocList ret;
+
+            ret.elems = new_elems;
             ret.len = len;
             ret.capacity = len;
 
@@ -447,8 +566,7 @@ rocStdH =
     }
 
     // Record the small string's length in the last byte of the given stack allocation
-    void write_small_str_len(size_t len, struct RocStr *str)
-    {
+    void write_small_str_len(size_t len, struct RocStr *str) {
         ((uint8_t *)str)[sizeof(struct RocStr) - 1] = (uint8_t)len | 0b10000000;
     }
 
@@ -470,13 +588,13 @@ rocStdH =
 
     struct RocStr roc_str_init_large(uint8_t *bytes, size_t len, size_t capacity)
     {
-        // A large RocStr is the same as a List U8 (aka RocBytes) in memory.
-        struct RocBytes roc_bytes = init_rocbytes(bytes, len);
+        // A large RocStr is the same as a List U8  in memory.
+        struct RocList list = init_list(bytes, sizeof(uint8_t), __alignof__(uint8_t), len);
 
         struct RocStr ret = {
-            .len = roc_bytes.len,
-            .bytes = roc_bytes.bytes,
-            .capacity = roc_bytes.capacity,
+            .len = list.len,
+            .bytes = list.elems,
+            .capacity = list.capacity,
         };
 
         return ret;
@@ -509,12 +627,12 @@ rocStdH =
 
     void decref_large_str(struct RocStr str)
     {
-        uint8_t *bytes;
+        uint8_t* bytes;
 
         if ((ssize_t)str.len < 0)
         {
             // This is a seamless slice, so the bytes are located in the capacity slot.
-            bytes = (uint8_t *)(str.capacity << 1);
+            bytes = (uint8_t*)(str.capacity << 1);
         }
         else
         {
