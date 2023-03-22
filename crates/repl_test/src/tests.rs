@@ -1280,3 +1280,15 @@ fn str_to_dec() {
         r#"Ok 1234.1234 : Result Dec [InvalidNumStr]"#,
     );
 }
+
+#[test]
+fn tuple() {
+    expect_success(
+        indoc!(
+            r#"
+            ("a", 2u32)
+            "#
+        ),
+        r#"("a", 2) : ( Str, U32 )*"#,
+    );
+}
