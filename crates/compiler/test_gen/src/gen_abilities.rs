@@ -1494,6 +1494,35 @@ mod hash {
         }
 
         #[test]
+        fn tuple_of_u8_and_str() {
+            assert_evals_to!(
+                &build_test(r#"(15u8, "bc")"#),
+                RocList::from_slice(&[15, 98, 99]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn tuple_of_tuples() {
+            assert_evals_to!(
+                &build_test(r#"( (15u8, "bc"), (23u8, "ef") )"#),
+                RocList::from_slice(&[15, 98, 99, 23, 101, 102]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn tuple_of_list_of_tuples() {
+            assert_evals_to!(
+                &build_test(
+                    r#"( [ ( 15u8, 32u8 ), ( 23u8, 41u8 ) ], [ (45u8, 63u8), (58u8, 73u8) ] )"#
+                ),
+                RocList::from_slice(&[15, 32, 23, 41, 45, 63, 58, 73]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
         fn hash_singleton_union() {
             assert_evals_to!(
                 &format!(
