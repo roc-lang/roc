@@ -1791,6 +1791,22 @@ mod eq {
     use roc_std::RocStr;
 
     #[test]
+    fn eq_tuple() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    ("a", "b") == ("a", "b")
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+
+    #[test]
     fn custom_eq_impl() {
         assert_evals_to!(
             indoc!(
