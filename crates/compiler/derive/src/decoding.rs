@@ -28,6 +28,7 @@ pub(crate) fn derive_decoder(
     let (body, body_type) = match key {
         FlatDecodableKey::List() => decoder_list(env, def_symbol),
         FlatDecodableKey::Record(fields) => decoder_record(env, def_symbol, fields),
+        FlatDecodableKey::Tuple(_arity) => todo!(),
     };
 
     let specialization_lambda_sets =

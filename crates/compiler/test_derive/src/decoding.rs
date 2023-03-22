@@ -28,6 +28,11 @@ test_key_eq! {
     explicit_empty_record_and_implicit_empty_record:
         v!(EMPTY_RECORD), v!({})
 
+    same_tuple:
+        v!((v!(U8), v!(U16),)), v!((v!(U8), v!(U16),))
+    same_tuple_fields_diff_types:
+        v!((v!(U8), v!(U16),)), v!((v!(U32), v!(U64),))
+
     list_list_diff_types:
         v!(Symbol::LIST_LIST v!(STR)), v!(Symbol::LIST_LIST v!(U8))
     str_str:
@@ -41,6 +46,9 @@ test_key_neq! {
         v!({ a: v!(U8), }), v!({ b: v!(U8), })
     record_empty_vs_nonempty:
         v!(EMPTY_RECORD), v!({ a: v!(U8), })
+
+    different_tuple_arities:
+        v!((v!(U8), v!(U16),)), v!((v!(U8), v!(U16), v!(U32),))
 }
 
 #[test]
