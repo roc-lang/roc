@@ -1279,6 +1279,50 @@ fn decode_record_of_record() {
     )
 }
 
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_tuple_two_elements() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[\"ab\",10]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok ("ab", 10u8) -> "abcd"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_tuple_of_tuples() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[[\"ab\",10],[\"cd\",25]]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok ( ("ab", 10u8), ("cd", 25u8) ) -> "abcd"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 mod hash {
     #[cfg(feature = "gen-llvm")]
