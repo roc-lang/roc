@@ -382,8 +382,9 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
-    fn abs_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
-        todo!("abs_reg64_reg64 for AArch64");
+    fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
+        cmp_reg64_imm12(buf, src, 0);
+        cneg_reg64_reg64_cond(buf, dst, src, ConditionCode::MI);
     }
 
     #[inline(always)]
@@ -822,8 +823,8 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         }
     }
     #[inline(always)]
-    fn neg_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
-        todo!("neg for AArch64");
+    fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
+        neg_reg64_reg64(buf, dst, src);
     }
 
     #[inline(always)]
@@ -853,42 +854,46 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn eq_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers equality for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::EQ);
     }
 
     #[inline(always)]
     fn neq_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers non-equality for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::NE);
     }
 
     #[inline(always)]
     fn ilt_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers signed less than for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::LT);
     }
 
     #[inline(always)]
     fn ult_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers unsigned less than for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::CCLO);
     }
 
     #[inline(always)]
@@ -905,22 +910,24 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn igt_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers signed greater than for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::GT);
     }
 
     #[inline(always)]
     fn ugt_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers unsigned greater than for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::HI);
     }
 
     #[inline(always)]
@@ -959,24 +966,27 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("registers to float for AArch64");
     }
 
+    // TODO: This next two are signed. Should they be?
     #[inline(always)]
     fn lte_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers less than or equal for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::LE);
     }
 
     #[inline(always)]
     fn gte_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers greater than or equal for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::GE);
     }
 
     fn set_if_overflow(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg) {
@@ -989,69 +999,69 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     fn and_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("bitwise and for AArch64")
+        and_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn or_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("bitwise or for AArch64")
+        orr_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn xor_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("bitwise xor for AArch64")
+        eor_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("shl for AArch64")
+        lsl_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("shr for AArch64")
+        lsr_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("sar for AArch64")
+        asr_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn sqrt_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
