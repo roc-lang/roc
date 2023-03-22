@@ -1,7 +1,7 @@
 use roc_can::expr::{
     AnnotatedMark, ClosureData, Expr, Field, IntValue, Recursive, WhenBranch, WhenBranchPattern,
 };
-use roc_can::num::IntBound;
+use roc_can::num::{IntBound, IntLitWidth};
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
 use roc_module::called_via::CalledVia;
@@ -635,11 +635,11 @@ fn step_elem(
             WhenBranch {
                 patterns: vec![WhenBranchPattern {
                     pattern: Loc::at_zero(Pattern::IntLiteral(
-                        env.subs.fresh_unnamed_flex_var(),
-                        env.subs.fresh_unnamed_flex_var(),
+                        Variable::NAT,
+                        Variable::NATURAL,
                         index.to_string().into_boxed_str(),
                         IntValue::I128((index as i128).to_ne_bytes()),
-                        IntBound::None,
+                        IntBound::Exact(IntLitWidth::Nat),
                     )),
                     degenerate: false,
                 }],
