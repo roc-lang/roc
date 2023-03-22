@@ -2537,6 +2537,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     let compare_wrapper = build_compare_wrapper(
                         env,
                         layout_interner,
+                        layout_ids,
                         function,
                         closure_layout,
                         element_layout,
