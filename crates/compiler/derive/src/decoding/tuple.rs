@@ -202,7 +202,7 @@ fn step_elem(
     };
 
     for (((index, state_field), &index_var), &result_index_var) in state_fields
-        .into_iter()
+        .iter()
         .enumerate()
         .zip(index_vars)
         .zip(state_field_vars)
