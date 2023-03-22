@@ -1672,6 +1672,32 @@ fn b_imm26(buf: &mut Vec<'_, u8>, imm26: i32) {
 }
 
 #[inline(always)]
+fn cmp_reg64_imm12(buf: &mut Vec<'_, u8>, src: AArch64GeneralReg, imm12: u16) {
+    subs_reg64_reg64_imm12(buf, AArch64GeneralReg::ZRSP, src, imm12);
+}
+
+#[inline(always)]
+fn cneg_reg64_reg64_cond(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+    cond: ConditionCode,
+) {
+    csneg_reg64_reg64_reg64_cond(buf, dst, src, src, cond.invert());
+}
+
+#[inline(always)]
+fn cset_reg64_cond(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, cond: ConditionCode) {
+    csinc_reg64_reg64_reg64_cond(
+        buf,
+        dst,
+        AArch64GeneralReg::ZRSP,
+        AArch64GeneralReg::ZRSP,
+        cond.invert(),
+    );
+}
+
+#[inline(always)]
 fn csinc_reg64_reg64_reg64_cond(
     buf: &mut Vec<'_, u8>,
     dst: AArch64GeneralReg,
@@ -1789,6 +1815,11 @@ fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
     let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
 
     buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
+    sub_reg64_reg64_reg64(buf, dst, AArch64GeneralReg::ZRSP, src);
 }
 
 #[inline(always)]
@@ -2030,6 +2061,68 @@ mod tests {
     }
 
     #[test]
+    fn test_cmp_reg64_imm12() {
+        disassembler_test!(
+            cmp_reg64_imm12,
+            |reg1: AArch64GeneralReg, imm| format!(
+                "cmp {}, #0x{:x}",
+                reg1.capstone_string(UsesSP),
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            [0x123]
+        );
+    }
+
+    #[test]
+    fn test_cneg_reg64_reg64_cond() {
+        disassembler_test!(
+            cneg_reg64_reg64_cond,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, cond: ConditionCode| {
+                if cond == ConditionCode::AL {
+                    format!(
+                        "csneg {}, {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        cond.invert()
+                    )
+                } else {
+                    format!(
+                        "cneg {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        cond
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_CONDITIONS
+        );
+    }
+
+    #[test]
+    fn test_cset() {
+        disassembler_test!(
+            cset_reg64_cond,
+            |reg1: AArch64GeneralReg, cond: ConditionCode| {
+                if cond == ConditionCode::AL {
+                    format!(
+                        "csinc {}, xzr, xzr, {}",
+                        reg1.capstone_string(UsesZR),
+                        cond.invert()
+                    )
+                } else {
+                    format!("cset {}, {}", reg1.capstone_string(UsesZR), cond)
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_CONDITIONS
+        );
+    }
+
+    #[test]
     fn test_csinc() {
         disassembler_test!(
             csinc_reg64_reg64_reg64_cond,
@@ -2213,6 +2306,20 @@ mod tests {
             ALL_GENERAL_REGS,
             [TEST_U16],
             [0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn test_neg_reg64_reg64() {
+        disassembler_test!(
+            neg_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "neg {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 
