@@ -485,6 +485,25 @@ mod encode_immediate {
         )
     }
 
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn ranged_number() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Encode, Json] provides [main] to "./platform"
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] Json.toUtf8) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from(r"[1,2,3]"),
+            RocStr
+        )
+    }
+
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
@@ -957,6 +976,28 @@ mod decode_immediate {
             ),
             RocStr::from("foo"),
             RocStr
+        )
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn ranged_number() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Json] provides [main] to "./platform"
+
+                main =
+                    input = Str.toUtf8 "[1,2,3]"
+                    expected = [1,2,3]
+
+                    actual = Decode.fromBytes input Json.fromUtf8 |> Result.withDefault []
+
+                    actual == expected
+                "#
+            ),
+            true,
+            bool
         )
     }
 
