@@ -5,7 +5,6 @@ platform "jvm-interop"
     imports []
     provides [programForHost]
 
-
 programForHost : {
     interpolateString : (Str -> Str) as InterpolateString,
     mulArrByScalar : (List I32, I32 -> List I32) as MulArrByScalar,

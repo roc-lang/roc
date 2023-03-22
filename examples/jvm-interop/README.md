@@ -107,7 +107,7 @@ Finally in main we test it out with some inputs.
 [nix-shell:~/dev/roc/examples/jvm-interop]$ ./build.sh && java javaSource.Greeter
 Hello from Roc Brendan!!!🤘🤘🤘
 
-[10, 20, 30, 40] multipled by 3 results in [30, 60, 90, 120]
+[10, 20, 30, 40] multiplied by 3 results in [30, 60, 90, 120]
 
 Factorial of 5 is 120
 ```
@@ -117,7 +117,7 @@ Let's also see what happens if in the code above we define n to be -1:
 [nix-shell:~/dev/roc/examples/jvm-interop]$ ./build.sh && java javaSource.Greeter
 Hello from Roc Brendan!!!🤘🤘🤘
 
-[10, 20, 30, 40] multipled by 3 results in [30, 60, 90, 120]
+[10, 20, 30, 40] multiplied by 3 results in [30, 60, 90, 120]
 
 Exception in thread "main" java.lang.RuntimeException: No negatives here!!!
 	at javaSource.Demo.factorial(Native Method)

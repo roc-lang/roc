@@ -3,15 +3,13 @@ app "rocdemo"
     imports []
     provides [program] to pf
 
-
 interpolateString : Str -> Str
 interpolateString = \name ->
     "Hello from Roc \(name)!!!🤘🤘🤘"
 
-
 # jint is i32
 mulArrByScalar : List I32, I32 -> List I32
-mulArrByScalar  = \arr, scalar ->
+mulArrByScalar = \arr, scalar ->
     List.map arr \x -> x * scalar
 
 # java doesn't have unsigned numbers so we cope with long
@@ -24,6 +22,5 @@ factorial = \n ->
         1
     else
         n * (factorial (n - 1))
-
 
 program = { interpolateString, factorial, mulArrByScalar }
