@@ -210,6 +210,23 @@ fn two_field_record() {
 }
 
 #[test]
+fn two_element_tuple() {
+    derive_test(Hash, v!((v!(U8), v!(STR),)), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for ( U8, Str )*
+        # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_(arity:2)(0)]]
+        #Derived.hash_(arity:2) =
+          \#Derived.hasher, #Derived.tup ->
+            hash (hash #Derived.hasher #Derived.tup.0) #Derived.tup.1
+        "###
+        )
+    })
+}
+
+#[test]
 fn tag_one_label_no_payloads() {
     derive_test(Hash, v!([A]), |golden| {
         assert_snapshot!(golden, @r###"
