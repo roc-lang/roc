@@ -643,7 +643,8 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
 
                 Spaced::Item(entry)
             }
-        ),
+        )
+        .trace("normal_import"),
         map!(
             and!(
                 and!(
@@ -651,7 +652,13 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                     // TODO: str literal allows for multiline strings. We probably don't want that for file names.
                     specialize(|_, pos| EImports::StrLiteral(pos), parse_str_literal()),
                     // e.g. as
-                    word2(b'a', b's', EImports::AsKeyword)
+                    and!(
+                        and!(
+                            space0_e(EImports::AsKeyword),
+                            word2(b'a', b's', EImports::AsKeyword)
+                        ),
+                        space0_e(EImports::AsKeyword)
+                    )
                 ),
                 // e.g. file : Str
                 specialize(|_, pos| EImports::TypedIdent(pos), typed_ident())
@@ -660,6 +667,7 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                 Spaced::Item(ImportsEntry::IngestedFile(file_name, typed_ident))
             }
         )
+        .trace("ingest_file_import")
     )
     .trace("imports_entry")
 }
