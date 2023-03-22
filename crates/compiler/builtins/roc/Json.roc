@@ -96,6 +96,7 @@ Json := {} has [
              string: encodeString,
              list: encodeList,
              record: encodeRecord,
+             tuple: encodeTuple,
              tag: encodeTag,
          },
          DecoderFormatting {
@@ -206,6 +207,25 @@ encodeRecord = \fields ->
         { buffer: bytesWithRecord } = List.walk fields { buffer: bytesHead, fieldsLeft: List.len fields } writeRecord
 
         List.append bytesWithRecord (Num.toU8 '}')
+
+encodeTuple = \elems ->
+    Encode.custom \bytes, @Json {} ->
+        writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
+            bufferWithElem =
+                appendWith buffer elemEncoder (@Json {})
+
+            bufferWithSuffix =
+                if elemsLeft > 1 then
+                    List.append bufferWithElem (Num.toU8 ',')
+                else
+                    bufferWithElem
+
+            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
+
+        bytesHead = List.append bytes (Num.toU8 '[')
+        { buffer: bytesWithRecord } = List.walk elems { buffer: bytesHead, elemsLeft: List.len elems } writeTuple
+
+        List.append bytesWithRecord (Num.toU8 ']')
 
 encodeTag = \name, payload ->
     Encode.custom \bytes, @Json {} ->
