@@ -862,6 +862,15 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
     fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
@@ -964,6 +973,15 @@ impl DerivableVisitor for DeriveDecoding {
             }
         }
 
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
@@ -1074,6 +1092,15 @@ impl DerivableVisitor for DeriveHash {
     }
 
     #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
     fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
@@ -1175,6 +1202,15 @@ impl DerivableVisitor for DeriveEq {
             }
         }
 
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
