@@ -30,6 +30,7 @@ pub(crate) fn derive_to_encoder(
         FlatEncodableKey::List() => to_encoder_list(env, def_symbol),
         FlatEncodableKey::Set() => todo!(),
         FlatEncodableKey::Dict() => todo!(),
+        FlatEncodableKey::Tuple(_arity) => todo!(),
         FlatEncodableKey::Record(fields) => {
             // Generalized record var so we can reuse this impl between many records:
             // if fields = { a, b }, this is { a: t1, b: t2 } for fresh t1, t2.

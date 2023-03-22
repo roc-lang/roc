@@ -33,6 +33,11 @@ test_key_eq! {
         v!({ a: v!(U8), b: v!(U8), }),
         v!({ ?a: v!(U8), ?b: v!(U8), })
 
+    same_tuple:
+        v!((v!(U8), v!(U16),)), v!((v!(U8), v!(U16),))
+    same_tuple_fields_diff_types:
+        v!((v!(U8), v!(U16),)), v!((v!(U32), v!(U64),))
+
     same_tag_union:
         v!([ A v!(U8) v!(STR), B v!(STR) ]), v!([ A v!(U8) v!(STR), B v!(STR) ])
     same_tag_union_tags_diff_types:
@@ -77,6 +82,9 @@ test_key_neq! {
         v!({ a: v!(U8), }), v!({ b: v!(U8), })
     record_empty_vs_nonempty:
         v!(EMPTY_RECORD), v!({ a: v!(U8), })
+
+    different_tuple_arities:
+        v!((v!(U8), v!(U16),)), v!((v!(U8), v!(U16), v!(U32),))
 
     different_tag_union_tags:
         v!([ A v!(U8) ]), v!([ B v!(U8) ])
