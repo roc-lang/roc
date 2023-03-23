@@ -1254,6 +1254,7 @@ impl ArithmeticShifted {
 
 // ARM manual section C1.2.4
 #[derive(Copy, Clone, PartialEq)]
+#[allow(dead_code)]
 enum ConditionCode {
     EQ = 0b0000,
     NE = 0b0001,
