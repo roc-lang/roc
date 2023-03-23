@@ -533,8 +533,14 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn jmp_imm32(_buf: &mut Vec<'_, u8>, _offset: i32) -> usize {
-        todo!("jump instructions for AArch64");
+    fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
+        if offset >= -(1 << 27) && offset < (1 << 27) {
+            b_imm26(buf, offset);
+        } else {
+            todo!("jump offsets over 27 bits for AArch64: {:#x}", offset);
+        }
+
+        buf.len()
     }
 
     #[inline(always)]
@@ -545,12 +551,27 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn jne_reg64_imm64_imm32(
-        _buf: &mut Vec<'_, u8>,
-        _reg: AArch64GeneralReg,
-        _imm: u64,
-        _offset: i32,
+        buf: &mut Vec<'_, u8>,
+        reg: AArch64GeneralReg,
+        imm: u64,
+        offset: i32,
     ) -> usize {
-        todo!("jump not equal instructions for AArch64");
+        if imm < (1 << 12) {
+            cmp_reg64_imm12(buf, reg, imm as u16);
+        } else {
+            todo!(
+                "cmp immediate with value over 12 bits for AArch64: {:#x}",
+                imm
+            );
+        }
+
+        if offset >= -(1 << 20) && offset < (1 << 20) {
+            b_cond_imm19(buf, ConditionCode::NE, offset);
+        } else {
+            todo!("jump offsets over 20 bits for AArch64: {:#x}", offset);
+        }
+
+        buf.len()
     }
 
     #[inline(always)]
@@ -1647,7 +1668,7 @@ fn and_reg64_reg64_reg64(
 
 /// TODO
 #[inline(always)]
-fn b_cond(buf: &mut Vec<'_, u8>, cond: ConditionCode, imm19: i32) {
+fn b_cond_imm19(buf: &mut Vec<'_, u8>, cond: ConditionCode, imm19: i32) {
     debug_assert!(imm19 & 0b11 == 0, "branch location must be 4-byte aligned");
     let shifted = imm19 >> 2;
     let unsigned = shifted as u32;
@@ -2069,9 +2090,9 @@ mod tests {
     }
 
     #[test]
-    fn test_b_cond() {
+    fn test_b_cond_imm19() {
         disassembler_test!(
-            b_cond,
+            b_cond_imm19,
             |cond: ConditionCode, imm: i32| format!("b.{} #0x{:x}", cond, imm as i64),
             ALL_CONDITIONS,
             [0x120, -0x120, (1 << 20) - 4, -(1 << 20)]
