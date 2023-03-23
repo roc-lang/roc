@@ -5582,7 +5582,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
+    let mut parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
         Ok((_, success, _state)) => success,
         Err((_, fail)) => {
             return Err(LoadingProblem::ParsingFailed(
@@ -5590,6 +5590,10 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
             ));
         }
     };
+    for value in header.defined_values.into_iter() {
+        // TODO: should these have a region?
+        parsed_defs.push_value_def(value, Region::zero(), &[], &[]);
+    }
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
@@ -5691,8 +5695,7 @@ fn value_def_from_imports<'a>(
                 ann_type: arena.alloc(typed_ident.ann),
                 comment: None,
                 body_pattern: ident,
-                // This should load the file, not just use the file name.
-                body_expr: arena.alloc(entry.with_value(Expr::Str(file_name.to_owned()))),
+                body_expr: arena.alloc(entry.with_value(Expr::IngestedFile(file_name.to_owned()))),
             })
         }
     }

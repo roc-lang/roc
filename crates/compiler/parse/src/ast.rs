@@ -263,6 +263,9 @@ pub enum Expr<'a> {
 
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
+    // The name of a file to be ingested directly into a variable.
+    IngestedFile(StrLiteral<'a>),
+
     // Lookups
     Var {
         module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
@@ -1468,6 +1471,9 @@ impl<'a> Malformed for Expr<'a> {
             Crash => false,
 
             Str(inner) => inner.is_malformed(),
+
+            // TODO: what is the scope of Malformed? Would this not being a real file make it malformed?
+            IngestedFile(inner) => inner.is_malformed(),
 
             RecordAccess(inner, _) |
             TupleAccess(inner, _) => inner.is_malformed(),

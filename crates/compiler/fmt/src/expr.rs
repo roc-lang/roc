@@ -44,6 +44,7 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
+            | IngestedFile(_)
             | Crash => false,
 
             // These expressions always have newlines
@@ -477,6 +478,7 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
+            IngestedFile(_) => {}
         }
     }
 }

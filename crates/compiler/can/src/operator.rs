@@ -138,6 +138,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | PrecedenceConflict { .. }
         | Tag(_)
         | OpaqueRef(_)
+        | IngestedFile(_)
         | Crash => loc_expr,
 
         TupleAccess(sub_expr, paths) => {
