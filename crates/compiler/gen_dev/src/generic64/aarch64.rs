@@ -1326,24 +1326,6 @@ impl std::fmt::Display for ConditionCode {
     }
 }
 
-const ALL_CONDITIONS: &'static [ConditionCode] = &[
-    ConditionCode::EQ,
-    ConditionCode::NE,
-    ConditionCode::CSHS,
-    ConditionCode::CCLO,
-    ConditionCode::MI,
-    ConditionCode::PL,
-    ConditionCode::VS,
-    ConditionCode::VC,
-    ConditionCode::HI,
-    ConditionCode::LS,
-    ConditionCode::GE,
-    ConditionCode::LT,
-    ConditionCode::GT,
-    ConditionCode::LE,
-    ConditionCode::AL,
-];
-
 #[derive(PackedStruct)]
 #[packed_struct(endian = "msb")]
 pub struct ConditionalBranchImmediate {
@@ -2010,6 +1992,24 @@ mod tests {
         AArch64GeneralReg::FP,
         AArch64GeneralReg::LR,
         AArch64GeneralReg::ZRSP,
+    ];
+
+    const ALL_CONDITIONS: &'static [ConditionCode] = &[
+        ConditionCode::EQ,
+        ConditionCode::NE,
+        ConditionCode::CSHS,
+        ConditionCode::CCLO,
+        ConditionCode::MI,
+        ConditionCode::PL,
+        ConditionCode::VS,
+        ConditionCode::VC,
+        ConditionCode::HI,
+        ConditionCode::LS,
+        ConditionCode::GE,
+        ConditionCode::LT,
+        ConditionCode::GT,
+        ConditionCode::LE,
+        ConditionCode::AL,
     ];
 
     fn setup_capstone_and_arena<T>(
