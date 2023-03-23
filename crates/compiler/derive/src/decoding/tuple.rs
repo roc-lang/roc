@@ -21,10 +21,13 @@ use super::wrap_in_decode_custom_decode_with;
 
 /// Implements decoding of a tuple. For example, for
 ///
+/// ```text
 ///   (a, b)
+/// ```
 ///
 /// we'd like to generate an impl like
 ///
+/// ```roc
 /// decoder : Decoder (a, b) fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
 /// decoder =
 ///     initialState : {e0: Result a [NoElem], e1: Result b [NoElem]}
@@ -53,6 +56,7 @@ use super::wrap_in_decode_custom_decode_with;
 ///             Err NoElem -> Err TooShort
 ///
 ///     Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.tuple initialState stepElem finalizer) fmt
+/// ```
 pub(crate) fn decoder(env: &mut Env, _def_symbol: Symbol, arity: u32) -> (Expr, Variable) {
     // The decoded type of each index in the tuple, e.g. (a, b).
     let mut index_vars = Vec::with_capacity(arity as _);

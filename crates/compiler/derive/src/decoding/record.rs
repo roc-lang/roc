@@ -20,10 +20,13 @@ use super::wrap_in_decode_custom_decode_with;
 
 /// Implements decoding of a record. For example, for
 ///
+/// ```text
 ///   {first: a, second: b}
+/// ```
 ///
 /// we'd like to generate an impl like
 ///
+/// ```roc
 /// decoder : Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
 /// decoder =
 ///     initialState : {f0: Result a [NoField], f1: Result b [NoField]}
@@ -52,6 +55,7 @@ use super::wrap_in_decode_custom_decode_with;
 ///             Err NoField -> Err TooShort
 ///
 ///     Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
+/// ```
 pub(crate) fn decoder(
     env: &mut Env,
     _def_symbol: Symbol,
