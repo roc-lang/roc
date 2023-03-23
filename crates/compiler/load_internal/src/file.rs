@@ -40,7 +40,8 @@ use roc_mono::layout::{
 };
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{
-    self, CommentOrNewline, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation,
+    self, CommentOrNewline, Defs, Expr, ExtractSpaces, Pattern, Spaced, StrLiteral, TypeAnnotation,
+    ValueDef,
 };
 use roc_parse::header::{
     ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
@@ -691,6 +692,7 @@ struct ModuleHeader<'a> {
     header_comments: &'a [CommentOrNewline<'a>],
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
+    defined_values: Vec<ValueDef<'a>>,
 }
 
 #[derive(Debug)]
@@ -3767,6 +3769,7 @@ fn load_builtin_module<'a>(
     let (info, parse_state) = load_builtin_module_help(arena, module_name, src_bytes);
 
     let (module_id, _, header) = build_header(
+        arena,
         info,
         parse_state,
         module_ids,
@@ -4047,6 +4050,7 @@ fn parse_header<'a>(
             };
 
             let (module_id, module_name, header) = build_header(
+                arena,
                 info,
                 parse_state.clone(),
                 module_ids,
@@ -4101,6 +4105,7 @@ fn parse_header<'a>(
             };
 
             let (module_id, _, header) = build_header(
+                arena,
                 info,
                 parse_state,
                 module_ids,
@@ -4162,6 +4167,7 @@ fn parse_header<'a>(
             };
 
             let (module_id, _, resolved_header) = build_header(
+                arena,
                 info,
                 parse_state,
                 module_ids.clone(),
@@ -4429,6 +4435,7 @@ struct HeaderInfo<'a> {
 }
 
 fn build_header<'a>(
+    arena: &'a Bump,
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
@@ -4489,13 +4496,16 @@ fn build_header<'a>(
         Vec::with_capacity(imports.len());
     let mut scope_size = 0;
 
+    let mut defined_values = vec![];
     for loc_entry in imports {
-        let (qualified_module_name, exposed) =
-            exposed_from_import(&loc_entry.value, &declared_name);
+        if let Some((qualified_module_name, exposed)) = exposed_from_import(&loc_entry.value) {
+            scope_size += num_exposes;
 
-        scope_size += num_exposes;
-
-        imported.push((qualified_module_name, exposed, loc_entry.region));
+            imported.push((qualified_module_name, exposed, loc_entry.region));
+        }
+        if let Some(value) = value_def_from_imports(arena, loc_entry) {
+            defined_values.push(value);
+        }
     }
 
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
@@ -4741,6 +4751,7 @@ fn build_header<'a>(
             header_type,
             header_comments,
             module_timing,
+            defined_values,
         },
     )
 }
@@ -5299,6 +5310,7 @@ fn build_package_header<'a>(
     };
 
     build_header(
+        arena,
         info,
         parse_state,
         module_ids,
@@ -5364,6 +5376,7 @@ fn build_platform_header<'a>(
     };
 
     build_header(
+        arena,
         info,
         parse_state,
         module_ids,
@@ -5623,8 +5636,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 
 fn exposed_from_import<'a>(
     entry: &ImportsEntry<'a>,
-    current_module: &ModuleName,
-) -> (QualifiedModuleName<'a>, Vec<Loc<Ident>>) {
+) -> Option<(QualifiedModuleName<'a>, Vec<Loc<Ident>>)> {
     use roc_parse::header::ImportsEntry::*;
 
     match entry {
@@ -5640,7 +5652,7 @@ fn exposed_from_import<'a>(
                 module: module_name.as_str().into(),
             };
 
-            (qualified_module_name, exposed)
+            Some((qualified_module_name, exposed))
         }
 
         Package(package_name, module_name, exposes) => {
@@ -5655,22 +5667,33 @@ fn exposed_from_import<'a>(
                 module: module_name.as_str().into(),
             };
 
-            (qualified_module_name, exposed)
+            Some((qualified_module_name, exposed))
         }
 
-        IngestedFile(_, typed_ident) => {
-            let exposed = vec![typed_ident
-                .extract_spaces()
-                .item
-                .ident
-                .map(|&ident_str| Ident(ident_str.into()))];
+        IngestedFile(_, _) => None,
+    }
+}
 
-            let qualified_module_name = QualifiedModuleName {
-                opt_package: None,
-                module: current_module.to_owned(),
-            };
+fn value_def_from_imports<'a>(
+    arena: &'a Bump,
+    entry: &Loc<ImportsEntry<'a>>,
+) -> Option<ValueDef<'a>> {
+    use roc_parse::header::ImportsEntry::*;
 
-            (qualified_module_name, exposed)
+    match entry.value {
+        Module(_, _) => None,
+        Package(_, _, _) => None,
+        IngestedFile(file_name, typed_ident) => {
+            let typed_ident = typed_ident.extract_spaces().item;
+            let ident = arena.alloc(typed_ident.ident.map_owned(Pattern::Identifier));
+            Some(ValueDef::AnnotatedBody {
+                ann_pattern: ident,
+                ann_type: arena.alloc(typed_ident.ann),
+                comment: None,
+                body_pattern: ident,
+                // This should load the file, not just use the file name.
+                body_expr: arena.alloc(entry.with_value(Expr::Str(file_name.to_owned()))),
+            })
         }
     }
 }
