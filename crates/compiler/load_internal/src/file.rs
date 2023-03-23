@@ -4503,7 +4503,7 @@ fn build_header<'a>(
 
             imported.push((qualified_module_name, exposed, loc_entry.region));
         }
-        if let Some(value) = value_def_from_imports(arena, loc_entry)? {
+        if let Some(value) = value_def_from_imports(arena, &filename, loc_entry)? {
             defined_values.push(value);
         }
     }
@@ -5680,6 +5680,7 @@ fn exposed_from_import<'a>(
 
 fn value_def_from_imports<'a>(
     arena: &'a Bump,
+    header_path: &Path,
     entry: &Loc<ImportsEntry<'a>>,
 ) -> Result<Option<ValueDef<'a>>, LoadingProblem<'a>> {
     use roc_parse::header::ImportsEntry::*;
@@ -5688,22 +5689,22 @@ fn value_def_from_imports<'a>(
         Module(_, _) => None,
         Package(_, _, _) => None,
         IngestedFile(file_name, typed_ident) => {
-            if let StrLiteral::PlainLine(file_name) = file_name {
-                // TODO: This check should be relative to the current module location.
-                let file_path = Path::new(file_name);
-                match fs::metadata(file_path) {
+            let file_path = if let StrLiteral::PlainLine(filename) = file_name {
+                let file_path = header_path.to_path_buf().with_file_name(filename);
+                match fs::metadata(&file_path) {
                     Ok(md) => {
                         if !md.is_file() {
                             // TODO: is there a better loading problem to return when not a file.
                             return Err(LoadingProblem::FileProblem {
-                                filename: file_path.to_path_buf(),
+                                filename: file_path,
                                 error: io::ErrorKind::InvalidInput,
                             });
                         }
+                        file_path
                     }
                     Err(e) => {
                         return Err(LoadingProblem::FileProblem {
-                            filename: file_path.to_path_buf(),
+                            filename: file_path,
                             error: e.kind(),
                         });
                     }
@@ -5712,15 +5713,17 @@ fn value_def_from_imports<'a>(
                 todo!(
                     "Only plain strings are supported. Other cases should be made impossible here"
                 );
-            }
+            };
             let typed_ident = typed_ident.extract_spaces().item;
             let ident = arena.alloc(typed_ident.ident.map_owned(Pattern::Identifier));
+            let ann_type = arena.alloc(typed_ident.ann);
             Some(ValueDef::AnnotatedBody {
                 ann_pattern: ident,
-                ann_type: arena.alloc(typed_ident.ann),
+                ann_type,
                 comment: None,
                 body_pattern: ident,
-                body_expr: arena.alloc(entry.with_value(Expr::IngestedFile(file_name.to_owned()))),
+                body_expr: arena
+                    .alloc(entry.with_value(Expr::IngestedFile(arena.alloc(file_path), ann_type))),
             })
         }
     };

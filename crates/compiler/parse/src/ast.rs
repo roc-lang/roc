@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::path::Path;
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
 use crate::ident::Accessor;
@@ -264,7 +265,7 @@ pub enum Expr<'a> {
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
     // The name of a file to be ingested directly into a variable.
-    IngestedFile(StrLiteral<'a>),
+    IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
 
     // Lookups
     Var {
@@ -1468,13 +1469,12 @@ impl<'a> Malformed for Expr<'a> {
             Tag(_) |
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
+            IngestedFile(_, _) |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),
 
             // TODO: what is the scope of Malformed? Would this not being a real file make it malformed?
-            IngestedFile(inner) => inner.is_malformed(),
-
             RecordAccess(inner, _) |
             TupleAccess(inner, _) => inner.is_malformed(),
 

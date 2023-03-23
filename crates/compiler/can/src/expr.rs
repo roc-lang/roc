@@ -730,7 +730,10 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
 
         // TODO: is this where we should finally load the file?
-        ast::Expr::IngestedFile(literal) => flatten_str_literal(env, var_store, scope, literal),
+        ast::Expr::IngestedFile(file_path, _) => (
+            Expr::Str(file_path.to_str().unwrap().into()),
+            Output::default(),
+        ),
 
         ast::Expr::SingleQuote(string) => {
             let mut it = string.chars().peekable();

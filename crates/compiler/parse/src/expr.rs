@@ -1906,7 +1906,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             is_negative,
         },
         // These would not have parsed as patterns
-        Expr::IngestedFile(_)
+        Expr::IngestedFile(_, _)
         | Expr::AccessorFunction(_)
         | Expr::RecordAccess(_, _)
         | Expr::TupleAccess(_, _)

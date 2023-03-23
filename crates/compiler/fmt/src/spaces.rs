@@ -658,7 +658,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 is_negative,
             },
             Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
-            Expr::IngestedFile(a) => Expr::Str(a.remove_spaces(arena)),
+            Expr::IngestedFile(a, b) => Expr::IngestedFile(a, b),
             Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.remove_spaces(arena)), b),
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.remove_spaces(arena)), b),
