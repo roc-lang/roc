@@ -310,39 +310,81 @@ impl VariableUsage {
                     // Functions always take their arguments as owned.
                     // (Except lowlevels, but those are wrapped in functions that take their arguments as owned and perform rc.)
 
-                    // TODO do something with these variables. I think there should be only one argument for the closure.
-                    let closure_arguments = &arguments[operator.function_index()..];
-
                     // This should always be true, not sure where this could be set to false.
-                    // debug_assert!(passed_function.owns_captured_environment);
+                    debug_assert!(passed_function.owns_captured_environment);
 
                     match operator {
-                        crate::low_level::HigherOrder::ListMap { xs } => VariableUsage {
-                            owned: Self::owned_usages(variable_rc_types, [*xs].into_iter()),
-                            borrowed: MutSet::default(),
-                        },
-                        crate::low_level::HigherOrder::ListMap2 { xs, ys } => VariableUsage {
-                            owned: Self::owned_usages(variable_rc_types, [*xs, *ys].into_iter()),
-                            borrowed: MutSet::default(),
-                        },
-                        crate::low_level::HigherOrder::ListMap3 { xs, ys, zs } => VariableUsage {
-                            owned: Self::owned_usages(
-                                variable_rc_types,
-                                [*xs, *ys, *zs].into_iter(),
-                            ),
-                            borrowed: MutSet::default(),
-                        },
+                        crate::low_level::HigherOrder::ListMap { xs } => {
+                            if let [_xs_symbol, _function_symboll, closure_symbol] = &arguments {
+                                VariableUsage {
+                                    owned: Self::owned_usages(
+                                        variable_rc_types,
+                                        [*xs, *closure_symbol].into_iter(),
+                                    ),
+                                    borrowed: MutSet::default(),
+                                }
+                            } else {
+                                panic!("ListMap should have 3 arguments");
+                            }
+                        }
+                        crate::low_level::HigherOrder::ListMap2 { xs, ys } => {
+                            if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
+                                &arguments
+                            {
+                                VariableUsage {
+                                    owned: Self::owned_usages(
+                                        variable_rc_types,
+                                        [*xs, *ys, *closure_symbol].into_iter(),
+                                    ),
+                                    borrowed: MutSet::default(),
+                                }
+                            } else {
+                                panic!("ListMap2 should have 4 arguments");
+                            }
+                        }
+                        crate::low_level::HigherOrder::ListMap3 { xs, ys, zs } => {
+                            if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
+                                &arguments
+                            {
+                                VariableUsage {
+                                    owned: Self::owned_usages(
+                                        variable_rc_types,
+                                        [*xs, *ys, *zs, *closure_symbol].into_iter(),
+                                    ),
+                                    borrowed: MutSet::default(),
+                                }
+                            } else {
+                                panic!("ListMap3 should have 5 arguments");
+                            }
+                        }
                         crate::low_level::HigherOrder::ListMap4 { xs, ys, zs, ws } => {
-                            VariableUsage {
-                                owned: Self::owned_usages(
-                                    variable_rc_types,
-                                    [*xs, *ys, *zs, *ws].into_iter(),
-                                ),
-                                borrowed: MutSet::default(),
+                            if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
+                                &arguments
+                            {
+                                VariableUsage {
+                                    owned: Self::owned_usages(
+                                        variable_rc_types,
+                                        [*xs, *ys, *zs, *ws, *closure_symbol].into_iter(),
+                                    ),
+                                    borrowed: MutSet::default(),
+                                }
+                            } else {
+                                panic!("ListMap4 should have 6 arguments");
                             }
                         }
                         crate::low_level::HigherOrder::ListSortWith { xs } => {
-                            todo!()
+                            // TODO if non-unique, elements have been consumed, must still consume the list itself
+                            if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
+                                VariableUsage {
+                                    owned: Self::owned_usages(
+                                        variable_rc_types,
+                                        [*xs, *closure_symbol].into_iter(),
+                                    ),
+                                    borrowed: MutSet::default(),
+                                }
+                            } else {
+                                panic!("ListSortWith should have 3 arguments");
+                            }
                         }
                     }
                 }

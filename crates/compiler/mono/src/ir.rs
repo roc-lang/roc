@@ -5423,7 +5423,7 @@ pub fn with_hole<'a>(
                                     let passed_function = PassedFunction {
                                         name: lambda_name,
                                         captured_environment: closure_data_symbol,
-                                        owns_captured_environment: false,
+                                        owns_captured_environment: true,
                                         specialization_id,
                                         argument_layouts: arg_layouts,
                                         return_layout: ret_layout,
