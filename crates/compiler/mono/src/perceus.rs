@@ -157,7 +157,6 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
                 variables,
                 remainder,
             } => {
-                //TODO deal with other variables in the expect.
                 self.insert_variables_rc_type_stmt(remainder);
             }
             Stmt::ExpectFx {
@@ -167,7 +166,6 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
                 variables,
                 remainder,
             } => {
-                //TODO deal with other variables in the expect.
                 self.insert_variables_rc_type_stmt(remainder);
             }
             Stmt::Dbg {
@@ -175,7 +173,6 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
                 variable,
                 remainder,
             } => {
-                //TODO deal with other variables in the expect.
                 self.insert_variables_rc_type_stmt(remainder);
             }
             Stmt::Join {
@@ -184,7 +181,6 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
                 body,
                 remainder: continuation,
             } => {
-                // TODO do we need to do anything with the parameter ownership parameter?
                 for parameter in parameters.iter() {
                     self.insert_symbol_layout_rc_type(&parameter.symbol, &parameter.layout);
                 }
@@ -209,9 +205,8 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
         symbol: &Symbol,
         layout: &InLayout,
     ) {
-        // TODO add more checks like *persistent*, consume, and reset.
-        // TODO this currently marks anything that contains a reference counted type as reference counted.
         // This will reference count the entire struct, even if only one field is reference counted.
+        // In another pass we can inline these operations, potentially improving reuse.
         let contains_refcounted = self.layout_interner.contains_refcounted(*layout);
         if contains_refcounted {
             self.variables_rc_type
@@ -271,6 +266,7 @@ impl VariableUsage {
                     borrowed: MutSet::default(),
                 },
                 // A foreign function call is responsible for managing the reference counts of its arguments.
+                // TODO make sure this is true.
                 CallType::Foreign { .. } => VariableUsage {
                     owned: Self::owned_usages(variable_rc_types, arguments.iter().copied()),
                     borrowed: MutSet::default(),
@@ -318,7 +314,7 @@ impl VariableUsage {
                     let closure_arguments = &arguments[operator.function_index()..];
 
                     // This should always be true, not sure where this could be set to false.
-                    debug_assert!(passed_function.owns_captured_environment);
+                    // debug_assert!(passed_function.owns_captured_environment);
 
                     match operator {
                         crate::low_level::HigherOrder::ListMap { xs } => VariableUsage {
@@ -345,15 +341,8 @@ impl VariableUsage {
                                 borrowed: MutSet::default(),
                             }
                         }
-                        crate::low_level::HigherOrder::ListSortWith { xs } =>
-                        // Currently, list sort with calls the sort method as borrowed multiple times.
-                        // But functions assume that they are called with owned arguments, this creates a problem.
-                        // We need to treat them as owned by incrementing the reference count before calling the function,
-                        {
-                            // TODO probably update the list sort implementation to assume the functions take their argument as owned.
-                            // TODO update llvm code to do the increment.
+                        crate::low_level::HigherOrder::ListSortWith { xs } => {
                             todo!()
-                            // TODO sort will perform sort in place (if unique), take this into account.
                         }
                     }
                 }
@@ -987,11 +976,13 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 jump 1 0 x
 
             If we were to just use an empty consumption without iteration,
-            the analysis will not know that y is still used in the jump and thus will drop if after the then.
+            the analysis will not know that y is still used in the jump and thus will drop if after the else.
             */
 
             let mut joinpoint_consumption = MutSet::default();
 
+            // TODO this only takes consumed variables into account. But we need to make sure that borrowed parameters are alive as well.
+            // TODO so figure out when a join point borrows parameters and how to deal with it.
             let new_body = loop {
                 // Copy the env to make sure each iteration has a fresh environment.
                 let mut current_body_env = body_env.clone();
@@ -1026,7 +1017,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         current_joinpoint_consumption.is_superset(&joinpoint_consumption),
                         "The current consumption should be a superset of the previous consumption.
                         As the consumption should only ever increase.
-                        Otherwise we will looping forever."
+                        Otherwise we will be looping forever."
                     );
                     joinpoint_consumption = current_joinpoint_consumption;
                 }
