@@ -599,6 +599,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 F64 => helper!(deref_f64, f64),
             }
         }
+        (_, Layout::Builtin(Builtin::Decimal)) => {
+            helper!(deref_dec, RocDec)
+        }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
             let elem_addr = mem.deref_usize(addr);
             let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
@@ -882,12 +885,6 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (_, Layout::Boxed(_)) => {
             unreachable!("Box layouts can only be behind a `Box.Box` application")
-        }
-        other => {
-            todo!(
-                "TODO add support for rendering pointer to {:?} in the REPL",
-                other
-            );
         }
     };
     apply_newtypes(env, newtype_containers.into_bump_slice(), expr)

@@ -1270,6 +1270,18 @@ fn enum_tag_union_in_list() {
 }
 
 #[test]
+fn str_to_dec() {
+    expect_success(
+        indoc!(
+            r#"
+            Str.toDec "1234.1234"
+            "#
+        ),
+        r#"Ok 1234.1234 : Result Dec [InvalidNumStr]"#,
+    );
+}
+
+#[test]
 fn tuple() {
     expect_success(
         indoc!(
