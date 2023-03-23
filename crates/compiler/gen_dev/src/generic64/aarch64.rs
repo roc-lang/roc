@@ -2100,7 +2100,7 @@ mod tests {
             [0x123]
         );
     }
-    
+
     #[test]
     fn test_cmp_reg64_reg64() {
         disassembler_test!(
@@ -2474,7 +2474,7 @@ mod tests {
             [0x123]
         );
     }
-    
+
     #[test]
     fn test_subs_reg64_reg64_reg64() {
         disassembler_test!(
