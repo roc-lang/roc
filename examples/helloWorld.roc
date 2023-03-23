@@ -4,4 +4,4 @@ app "helloWorld"
     provides [main] to pf
 
 main =
-    Stdout.line file
+    Stdout.line "Hello, World!"

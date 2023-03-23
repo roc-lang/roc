@@ -3636,7 +3636,7 @@ fn load_package_from_disk<'a>(
                         &header,
                         comments,
                         pkg_module_timing,
-                    );
+                    )?;
 
                     Ok(Msg::Header(package_module_msg))
                 }
@@ -3667,7 +3667,7 @@ fn load_package_from_disk<'a>(
                         &header,
                         comments,
                         pkg_module_timing,
-                    );
+                    )?;
 
                     Ok(Msg::Header(platform_module_msg))
                 }
@@ -3763,7 +3763,7 @@ fn load_builtin_module<'a>(
     module_timing: ModuleTiming,
     module_id: ModuleId,
     module_name: &str,
-) -> (ModuleId, Msg<'a>) {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let src_bytes = module_source(module_id);
 
     let (info, parse_state) = load_builtin_module_help(arena, module_name, src_bytes);
@@ -3775,8 +3775,8 @@ fn load_builtin_module<'a>(
         module_ids,
         ident_ids_by_module,
         module_timing,
-    );
-    (module_id, Msg::Header(header))
+    )?;
+    Ok((module_id, Msg::Header(header)))
 }
 
 /// Load a module by its module name, rather than by its filename
@@ -3812,7 +3812,7 @@ fn load_module<'a>(
                         module_timing,
                         $module_id,
                         concat!($name, ".roc")
-                    );
+                    )?;
 
                     return Ok(HeaderOutput { module_id, msg, opt_platform_shorthand: None });
                 }
@@ -4056,7 +4056,7 @@ fn parse_header<'a>(
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
-            );
+            )?;
 
             if let Some(expected_module_name) = opt_expected_module_name {
                 if expected_module_name != module_name {
@@ -4111,7 +4111,7 @@ fn parse_header<'a>(
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
-            );
+            )?;
 
             Ok(HeaderOutput {
                 module_id,
@@ -4173,7 +4173,7 @@ fn parse_header<'a>(
                 module_ids.clone(),
                 ident_ids_by_module.clone(),
                 module_timing,
-            );
+            )?;
 
             let mut messages = Vec::with_capacity(packages.len() + 1);
 
@@ -4232,7 +4232,7 @@ fn parse_header<'a>(
                 &header,
                 comments,
                 module_timing,
-            );
+            )?;
 
             Ok(HeaderOutput {
                 module_id,
@@ -4267,7 +4267,7 @@ fn parse_header<'a>(
                 &header,
                 comments,
                 module_timing,
-            );
+            )?;
 
             Ok(HeaderOutput {
                 module_id,
@@ -4441,7 +4441,7 @@ fn build_header<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
-) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
+) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
     let HeaderInfo {
         filename,
         is_root_module,
@@ -4503,7 +4503,7 @@ fn build_header<'a>(
 
             imported.push((qualified_module_name, exposed, loc_entry.region));
         }
-        if let Some(value) = value_def_from_imports(arena, loc_entry) {
+        if let Some(value) = value_def_from_imports(arena, loc_entry)? {
             defined_values.push(value);
         }
     }
@@ -4732,7 +4732,7 @@ fn build_header<'a>(
         }
     };
 
-    (
+    Ok((
         home,
         name,
         ModuleHeader {
@@ -4753,7 +4753,7 @@ fn build_header<'a>(
             module_timing,
             defined_values,
         },
-    )
+    ))
 }
 
 impl<'a> BuildTask<'a> {
@@ -5280,7 +5280,7 @@ fn build_package_header<'a>(
     header: &PackageHeader<'a>,
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
-) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
+) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
     let exposes = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
@@ -5331,7 +5331,7 @@ fn build_platform_header<'a>(
     header: &PlatformHeader<'a>,
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
-) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
+) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
     // If we have an app module, then it's the root module;
     // otherwise, we must be the root.
     let is_root_module = opt_app_module_id.is_none();
@@ -5681,13 +5681,38 @@ fn exposed_from_import<'a>(
 fn value_def_from_imports<'a>(
     arena: &'a Bump,
     entry: &Loc<ImportsEntry<'a>>,
-) -> Option<ValueDef<'a>> {
+) -> Result<Option<ValueDef<'a>>, LoadingProblem<'a>> {
     use roc_parse::header::ImportsEntry::*;
 
-    match entry.value {
+    let value = match entry.value {
         Module(_, _) => None,
         Package(_, _, _) => None,
         IngestedFile(file_name, typed_ident) => {
+            if let StrLiteral::PlainLine(file_name) = file_name {
+                // TODO: This check should be relative to the current module location.
+                let file_path = Path::new(file_name);
+                match fs::metadata(file_path) {
+                    Ok(md) => {
+                        if !md.is_file() {
+                            // TODO: is there a better loading problem to return when not a file.
+                            return Err(LoadingProblem::FileProblem {
+                                filename: file_path.to_path_buf(),
+                                error: io::ErrorKind::InvalidInput,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        return Err(LoadingProblem::FileProblem {
+                            filename: file_path.to_path_buf(),
+                            error: e.kind(),
+                        });
+                    }
+                }
+            } else {
+                todo!(
+                    "Only plain strings are supported. Other cases should be made impossible here"
+                );
+            }
             let typed_ident = typed_ident.extract_spaces().item;
             let ident = arena.alloc(typed_ident.ident.map_owned(Pattern::Identifier));
             Some(ValueDef::AnnotatedBody {
@@ -5698,7 +5723,9 @@ fn value_def_from_imports<'a>(
                 body_expr: arena.alloc(entry.with_value(Expr::IngestedFile(file_name.to_owned()))),
             })
         }
-    }
+    };
+
+    Ok(value)
 }
 
 fn ident_from_exposed(entry: &Spaced<'_, ExposedName<'_>>) -> Ident {
