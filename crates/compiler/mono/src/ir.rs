@@ -944,6 +944,16 @@ pub struct ProcsBase<'a> {
     pub imported_module_thunks: &'a [Symbol],
 }
 
+impl<'a> ProcsBase<'a> {
+    pub fn get_host_exposed_symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.host_specializations
+            .symbol_or_lambdas
+            .iter()
+            .copied()
+            .map(|n| n.name())
+    }
+}
+
 /// The current set of functions under specialization. They form a stack where the latest
 /// specialization to be seen is at the head of the stack.
 #[derive(Clone, Debug)]
@@ -962,14 +972,16 @@ impl<'a> SpecializationStack<'a> {
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
-    pub imported_module_thunks: &'a [Symbol],
-    pub module_thunks: &'a [Symbol],
     pending_specializations: PendingSpecializations<'a>,
     specialized: Specialized<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
     symbol_specializations: SymbolSpecializations<'a>,
     specialization_stack: SpecializationStack<'a>,
+
+    pub imported_module_thunks: &'a [Symbol],
+    pub module_thunks: &'a [Symbol],
+    pub host_exposed_symbols: &'a [Symbol],
 }
 
 impl<'a> Procs<'a> {
@@ -977,14 +989,16 @@ impl<'a> Procs<'a> {
         Self {
             partial_procs: PartialProcs::new_in(arena),
             ability_member_aliases: AbilityAliases::new_in(arena),
-            imported_module_thunks: &[],
-            module_thunks: &[],
             pending_specializations: PendingSpecializations::Finding(Suspended::new_in(arena)),
             specialized: Specialized::default(),
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
             symbol_specializations: Default::default(),
             specialization_stack: SpecializationStack(Vec::with_capacity_in(16, arena)),
+
+            imported_module_thunks: &[],
+            module_thunks: &[],
+            host_exposed_symbols: &[],
         }
     }
 
@@ -3002,15 +3016,8 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, variable, host_exposed_aliases) in it {
-        specialize_external_help(
-            env,
-            procs,
-            layout_cache,
-            symbol,
-            offset_variable(variable),
-            &host_exposed_aliases,
-        )
+    for (symbol, variable, _host_exposed_aliases) in it {
+        specialize_external_help(env, procs, layout_cache, symbol, offset_variable(variable))
     }
 }
 
@@ -3035,7 +3042,7 @@ fn specialize_external_specializations<'a>(
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            specialize_external_help(env, procs, layout_cache, symbol, imported_variable, &[])
+            specialize_external_help(env, procs, layout_cache, symbol, imported_variable)
         }
     }
 }
@@ -3046,7 +3053,6 @@ fn specialize_external_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     name: LambdaName<'a>,
     variable: Variable,
-    host_exposed_aliases: &[(Symbol, Variable)],
 ) {
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
@@ -3066,7 +3072,7 @@ fn specialize_external_help<'a>(
                 debug_assert!(top_level.arguments.is_empty());
             }
 
-            if !host_exposed_aliases.is_empty() {
+            if procs.host_exposed_symbols.contains(&proc.name.name()) {
                 // layouts that are (transitively) used in the type of `mainForHost`.
                 let mut host_exposed_layouts: Vec<_> = top_level
                     .arguments
@@ -3079,7 +3085,6 @@ fn specialize_external_help<'a>(
                 host_exposed_layouts.sort();
                 host_exposed_layouts.dedup();
 
-                // TODO: In the future, we will generate glue procs here
                 for in_layout in host_exposed_layouts {
                     let layout = layout_cache.interner.get(in_layout);
 
@@ -3093,9 +3098,19 @@ fn specialize_external_help<'a>(
 
                     // for now, getters are not processed here
                     let GlueProcs {
-                        getters: _,
+                        getters,
                         extern_names,
                     } = all_glue_procs;
+
+                    for (_layout, glue_procs) in getters {
+                        for glue_proc in glue_procs {
+                            procs.specialized.insert_specialized(
+                                glue_proc.proc.name.name(),
+                                glue_proc.proc_layout,
+                                glue_proc.proc,
+                            );
+                        }
+                    }
 
                     let mut aliases = BumpMap::default();
 
@@ -3103,6 +3118,7 @@ fn specialize_external_help<'a>(
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
 
+                        // fix the recursion in the rocLovesRust example
                         if false {
                             raw_function_layout = match raw_function_layout {
                                 RawFunctionLayout::Function(a, mut lambda_set, _) => {
@@ -3135,37 +3151,6 @@ fn specialize_external_help<'a>(
                         };
 
                         aliases.insert(key, hels);
-                    }
-
-                    // pre-glue: generate named callers for as-exposed aliases
-                    for (alias_name, variable) in host_exposed_aliases {
-                        let raw_function_layout = layout_cache
-                            .raw_from_var(env.arena, *variable, env.subs)
-                            .unwrap();
-
-                        let symbol = env.unique_symbol();
-                        let lambda_name = LambdaName::no_niche(symbol);
-
-                        let (proc_name, (proc_layout, proc)) = generate_host_exposed_function(
-                            env,
-                            procs,
-                            layout_cache,
-                            lambda_name,
-                            raw_function_layout,
-                        );
-
-                        procs
-                            .specialized
-                            .insert_specialized(proc_name, proc_layout, proc);
-
-                        let hels = HostExposedLambdaSet {
-                            id: LambdaSetId::default(),
-                            symbol: proc_name,
-                            proc_layout,
-                            raw_function_layout,
-                        };
-
-                        aliases.insert(*alias_name, hels);
                     }
 
                     match &mut proc.host_exposed_layouts {
@@ -11178,12 +11163,14 @@ where
     }
 }
 
+#[derive(Debug, Default)]
 pub struct GlueLayouts<'a> {
     pub getters: std::vec::Vec<(Symbol, ProcLayout<'a>)>,
 }
 
 type GlueProcId = u16;
 
+#[derive(Debug)]
 pub struct GlueProc<'a> {
     pub name: Symbol,
     pub proc_layout: ProcLayout<'a>,
@@ -11203,10 +11190,6 @@ impl LambdaSetId {
     pub fn next(self) -> Self {
         debug_assert!(self.0 < u32::MAX);
         Self(self.0 + 1)
-    }
-
-    pub const fn invalid() -> Self {
-        Self(u32::MAX)
     }
 }
 
@@ -11230,34 +11213,8 @@ where
     let mut stack: Vec<'a, Layout<'a>> = Vec::from_iter_in([*layout], arena);
     let mut next_unique_id = 0;
 
-    macro_rules! handle_struct_field_layouts {
-        ($field_layouts: expr) => {{
-            if $field_layouts.iter().any(|l| {
-                layout_interner
-                    .get(*l)
-                    .has_varying_stack_size(layout_interner, arena)
-            }) {
-                let procs = generate_glue_procs_for_struct_fields(
-                    layout_interner,
-                    home,
-                    &mut next_unique_id,
-                    ident_ids,
-                    arena,
-                    layout,
-                    $field_layouts,
-                );
-
-                answer.getters.push((*layout, procs));
-            }
-
-            for in_layout in $field_layouts.iter().rev() {
-                stack.push(layout_interner.get(*in_layout));
-            }
-        }};
-    }
-
     macro_rules! handle_tag_field_layouts {
-        ($tag_id:expr, $union_layout:expr, $field_layouts: expr) => {{
+        ($tag_id:expr, $layout:expr, $union_layout:expr, $field_layouts: expr) => {{
             if $field_layouts.iter().any(|l| {
                 layout_interner
                     .get(*l)
@@ -11270,12 +11227,12 @@ where
                     ident_ids,
                     arena,
                     $tag_id,
-                    layout,
+                    &$layout,
                     $union_layout,
                     $field_layouts,
                 );
 
-                answer.getters.push((*layout, procs));
+                answer.getters.push(($layout, procs));
             }
 
             for in_layout in $field_layouts.iter().rev() {
@@ -11295,7 +11252,27 @@ where
                 Builtin::List(element) => stack.push(layout_interner.get(element)),
             },
             Layout::Struct { field_layouts, .. } => {
-                handle_struct_field_layouts!(field_layouts);
+                if field_layouts.iter().any(|l| {
+                    layout_interner
+                        .get(*l)
+                        .has_varying_stack_size(layout_interner, arena)
+                }) {
+                    let procs = generate_glue_procs_for_struct_fields(
+                        layout_interner,
+                        home,
+                        &mut next_unique_id,
+                        ident_ids,
+                        arena,
+                        &layout,
+                        field_layouts,
+                    );
+
+                    answer.getters.push((layout, procs));
+                }
+
+                for in_layout in field_layouts.iter().rev() {
+                    stack.push(layout_interner.get(*in_layout));
+                }
             }
             Layout::Boxed(boxed) => {
                 stack.push(layout_interner.get(boxed));
@@ -11312,7 +11289,7 @@ where
                     }
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    handle_tag_field_layouts!(0, union_layout, field_layouts);
+                    handle_tag_field_layouts!(0, layout, union_layout, field_layouts);
                 }
                 UnionLayout::NullableWrapped {
                     other_tags,
@@ -11321,7 +11298,7 @@ where
                     let tag_ids =
                         (0..nullable_id).chain(nullable_id + 1..other_tags.len() as u16 + 1);
                     for (i, field_layouts) in tag_ids.zip(other_tags) {
-                        handle_tag_field_layouts!(i, union_layout, *field_layouts);
+                        handle_tag_field_layouts!(i, layout, union_layout, *field_layouts);
                     }
                 }
                 UnionLayout::NullableUnwrapped { other_fields, .. } => {
@@ -11357,8 +11334,8 @@ fn generate_glue_procs_for_struct_fields<'a, 'i, I>(
     next_unique_id: &mut GlueProcId,
     ident_ids: &mut IdentIds,
     arena: &'a Bump,
-    unboxed_struct_layout: &'a Layout<'a>,
-    field_layouts: &'a [InLayout<'a>],
+    unboxed_struct_layout: &Layout<'a>,
+    field_layouts: &[InLayout<'a>],
 ) -> Vec<'a, GlueProc<'a>>
 where
     I: LayoutInterner<'a>,
@@ -11367,6 +11344,17 @@ where
     let boxed_struct_layout = Layout::Boxed(interned_unboxed_struct_layout);
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
+
+    let field_layouts = match layout_interner.get(interned_unboxed_struct_layout) {
+        Layout::Struct { field_layouts, .. } => field_layouts,
+        other => {
+            unreachable!(
+                "{:?} {:?}",
+                layout_interner.dbg(interned_unboxed_struct_layout),
+                other
+            )
+        }
+    };
 
     for (index, field) in field_layouts.iter().enumerate() {
         let proc_layout = ProcLayout {
@@ -11443,7 +11431,8 @@ fn unique_glue_symbol(
     let _result = write!(&mut string, "roc__getter_{}_{}", module_name, unique_id);
     debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
 
-    let ident_id = ident_ids.get_or_insert(string.into_bump_str());
+    let bump_string = string.into_bump_str();
+    let ident_id = ident_ids.get_or_insert(bump_string);
 
     Symbol::new(home, ident_id)
 }
@@ -11456,7 +11445,7 @@ fn generate_glue_procs_for_tag_fields<'a, 'i, I>(
     ident_ids: &mut IdentIds,
     arena: &'a Bump,
     tag_id: TagIdIntType,
-    unboxed_struct_layout: &'a Layout<'a>,
+    unboxed_struct_layout: &Layout<'a>,
     union_layout: UnionLayout<'a>,
     field_layouts: &'a [InLayout<'a>],
 ) -> Vec<'a, GlueProc<'a>>

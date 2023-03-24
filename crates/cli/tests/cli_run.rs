@@ -474,6 +474,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn hello_world() {
         test_roc_app_slim(
@@ -834,7 +835,7 @@ mod cli_run {
             &[],
             &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
             &[],
-            "Processed 3 files with 3 successes and 0 errors\n",
+            "Processed 4 files with 3 successes and 0 errors\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -879,6 +880,7 @@ mod cli_run {
 
     #[test]
     #[serial(parser_package)]
+    #[serial(basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(

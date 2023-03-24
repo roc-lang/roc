@@ -5,8 +5,10 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.so
 *.obj
 *.dll
+*.dylib
 *.lib
 *.def
 *.tmp
@@ -26,7 +28,6 @@ vgcore.*
 *.rm*
 preprocessedhost
 metadata
-roc-cheaty-lib.so
 
 #editors
 .idea/

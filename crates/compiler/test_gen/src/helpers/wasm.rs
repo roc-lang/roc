@@ -114,10 +114,10 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         ..
     } = loaded;
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
+    debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
 
     let exposed_to_host = exposed_to_host
-        .values
+        .top_level_values
         .keys()
         .copied()
         .collect::<MutSet<_>>();

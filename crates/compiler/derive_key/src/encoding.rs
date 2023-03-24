@@ -131,7 +131,9 @@ impl FlatEncodable {
                 // by the backend, and the backend treats opaques like structural aliases.
                 _ => Self::from_var(subs, real_var),
             },
-            Content::RangedNumber(_) => Err(Underivable),
+            Content::RangedNumber(range) => {
+                Self::from_var(subs, range.default_compilation_variable())
+            }
             //
             Content::RecursionVar { .. } => Err(Underivable),
             Content::Error => Err(Underivable),
