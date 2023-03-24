@@ -1885,9 +1885,9 @@ mod test {
         assert_eq!("Hello foo\n", windows_test(test_internal_relocations))
     }
 
-    #[ignore]
-    #[serial(zig_build)]
     #[test]
+    #[serial(zig_build)]
+    #[ignore]
     fn app_internal_relocations_wine() {
         assert_eq!("Hello foo\n", wine_test(test_internal_relocations))
     }
