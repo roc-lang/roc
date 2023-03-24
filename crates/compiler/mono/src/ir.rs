@@ -7098,6 +7098,18 @@ fn substitute_in_exprs<'a>(arena: &'a Bump, stmt: &mut Stmt<'a>, from: Symbol, t
     }
 }
 
+pub(crate) fn substitute_in_exprs_many<'a>(
+    arena: &'a Bump,
+    stmt: &mut Stmt<'a>,
+    subs: BumpMap<Symbol, Symbol>,
+) {
+    // TODO clean this up
+    let ref_stmt = arena.alloc(stmt.clone());
+    if let Some(new) = substitute_in_stmt_help(arena, ref_stmt, &subs) {
+        *stmt = new.clone();
+    }
+}
+
 fn substitute_in_stmt_help<'a>(
     arena: &'a Bump,
     stmt: &'a Stmt<'a>,
