@@ -48,22 +48,22 @@ jobs:
           7z x roc_nightly-windowsTESTING_x86_64.zip
     
       - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc
           
       - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc
           
       - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc
           
       - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc
 
       - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc
 
       - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc
 
       - run: |
-          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc
