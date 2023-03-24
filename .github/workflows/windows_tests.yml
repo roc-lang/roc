@@ -46,6 +46,62 @@ jobs:
       - run: |
           curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-windowsTESTING_x86_64.zip
           7z x roc_nightly-windowsTESTING_x86_64.zip
+          
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe build .\examples\platform-switching\rocLovesRust.roc
+
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+          
+      - run: |
+          .\examples\platform-switching\rocLovesRust.exe
+
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+    
+      
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+    
+      
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
+
+      - run: |
+          .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc --prebuilt-platform=true
     
       - run: |
           .\roc_nightly-windowsTESTING_x86_64\roc.exe run .\examples\platform-switching\rocLovesRust.roc
