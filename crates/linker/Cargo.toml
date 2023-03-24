@@ -36,3 +36,4 @@ tempfile.workspace = true
 [dev-dependencies]
 indoc.workspace = true
 libc.workspace = true
+serial_test.workspace = true

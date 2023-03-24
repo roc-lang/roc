@@ -3502,6 +3502,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "serde",
+ "serial_test",
  "target-lexicon",
  "tempfile",
 ]
