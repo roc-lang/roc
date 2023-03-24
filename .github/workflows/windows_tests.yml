@@ -49,4 +49,12 @@ jobs:
         run: cargo test --locked --release --no-run -p roc_cli || cargo test --locked --release --no-run -p roc_cli
 
       - name: Actually run the tests.
-        run: cargo test --locked --release -p roc_cli -- --test-threads=1
+        run: cargo test --locked --release -p roc_cli platform_switching_rust
+        
+      - run: cargo test --locked --release -p roc_cli platform_switching_rust
+      
+      - run: cargo test --locked --release -p roc_cli platform_switching_rust
+      
+      - run: cargo test --locked --release -p roc_cli platform_switching_rust
+      
+      - run: cargo test --locked --release -p roc_cli platform_switching_rust
