@@ -306,7 +306,7 @@ table { defaultConfig | height = 800, width = 600 }
 
 This way, as the caller I'm specifying only the `height` and `width` fields,
 and leaving the others to whatever is inside `defaultConfig`. Perhaps it also
-has the fields `x` and `y`.
+has the fields `title` and `description`.
 
 In Roc, you can do this like so:
 
@@ -314,7 +314,7 @@ In Roc, you can do this like so:
 table { height: 800, width: 600 }
 ```
 
-...and the `table` function will fill in its default values for `x` and `y`.
+...and the `table` function will fill in its default values for `title` and `description`.
 There is no need to use a `defaultConfig` record.
 
 Here's how that `table` function would be implemented in Roc:
