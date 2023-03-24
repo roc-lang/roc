@@ -9491,6 +9491,62 @@ impl<'a> Pattern<'a> {
 
         false
     }
+
+    // TODO: vast majority of the time, the patterns will be singleton or empty.
+    // We should introduce a smallvec optimized for the singleton case.
+    pub fn collect_symbols(&self, layout: InLayout<'a>) -> std::vec::Vec<(Symbol, InLayout<'a>)> {
+        let mut stack = vec![(self, layout)];
+        let mut collected = std::vec::Vec::with_capacity(1);
+
+        while let Some((pattern, layout)) = stack.pop() {
+            match pattern {
+                Pattern::Identifier(symbol) => {
+                    collected.push((*symbol, layout));
+                }
+                Pattern::Underscore => {}
+                Pattern::As(subpattern, symbol) => {
+                    collected.push((*symbol, layout));
+                    stack.push((subpattern, layout));
+                }
+                Pattern::IntLiteral(_, _)
+                | Pattern::FloatLiteral(_, _)
+                | Pattern::DecimalLiteral(_)
+                | Pattern::BitLiteral { .. }
+                | Pattern::EnumLiteral { .. }
+                | Pattern::StrLiteral(_) => {}
+                Pattern::RecordDestructure(destructs, _) => {
+                    for destruct in destructs {
+                        match &destruct.typ {
+                            DestructType::Required(symbol) => {
+                                collected.push((*symbol, destruct.layout));
+                            }
+                            DestructType::Guard(pattern) => {
+                                stack.push((pattern, destruct.layout));
+                            }
+                        }
+                    }
+                }
+                Pattern::TupleDestructure(destructs, _) => {
+                    for destruct in destructs {
+                        stack.push((&destruct.pat, destruct.layout));
+                    }
+                }
+                Pattern::NewtypeDestructure { arguments, .. } => {
+                    stack.extend(arguments.iter().map(|(t, l)| (t, *l)))
+                }
+                Pattern::Voided { .. } => {}
+                Pattern::AppliedTag { arguments, .. } => {
+                    stack.extend(arguments.iter().map(|(t, l)| (t, *l)))
+                }
+                Pattern::OpaqueUnwrap { argument, .. } => stack.push((&argument.0, argument.1)),
+                Pattern::List { elements, .. } => {
+                    stack.extend(elements.iter().map(|t| (t, layout)))
+                }
+            }
+        }
+
+        collected
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
