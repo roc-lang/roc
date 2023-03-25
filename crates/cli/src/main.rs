@@ -94,7 +94,7 @@ fn main() -> io::Result<()> {
             if !output_path.exists() || output_path.is_dir() {
                 roc_glue::generate(input_path, output_path, spec_path)
             } else {
-                eprintln!("`roc glue` requries that the output is a directory. The individual implementations might generate multiple files.");
+                eprintln!("`roc glue` must be given a directory to output into, because the glue might generate multiple files.");
 
                 Ok(1)
             }
