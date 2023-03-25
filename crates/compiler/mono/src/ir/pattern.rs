@@ -150,7 +150,7 @@ impl<'r, 'a> Iterator for PatternBindingIter<'r, 'a> {
                     }
                     Underscore => None,
                     As(pat, symbol) => {
-                        *self = One(&**pat, layout);
+                        *self = One(pat, layout);
                         (*symbol, layout).into()
                     }
                     RecordDestructure(destructs, _) => {
