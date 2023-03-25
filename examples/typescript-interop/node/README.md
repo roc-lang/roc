@@ -8,7 +8,15 @@ All of these commands should be run from the same directory as this README file.
 
 ## Building
 
-First, `cd` into this directory and run this in your terminal:
+First, `cd` into this directory's `platform/` subdirectory and run this in your terminal:
+
+```
+roc glue roc-to-node.roc glue/
+```
+
+This will generate the bindings between Node and Roc, as well as TypeScript type definitions.
+
+Next, `cd ..` to get to the parent directory of `platform/` and then run:
 
 ```
 roc build --lib
@@ -16,13 +24,13 @@ roc build --lib
 
 This compiles your Roc code into a shared library in the current directory. The library's filename will be `libhello` plus an OS-specific extension (e.g. `libhello.dylib` on macOS).
 
-Next, run this to install Node dependencies. (You should only need to run this once.)
+Finally, run this to install Node dependencies and build the behind-the-scenes C bindings.
 
 ```
 npm install
 ```
 
-You can verify that TypeScript sees the correct types with:
+You can verify that TypeScript now sees the correct types with:
 
 ```
 npx tsc hello.ts
@@ -39,7 +47,7 @@ npx ts-node hello.ts
 To change the bindings between Roc and TypeScript, `cd` into `platform/` and run:
 
 ```
-roc glue roc-to-node.roc glue/
+rm -rf glue/ && roc glue roc-to-node.roc glue/
 ```
 
 Then `cd` back into the parent directory and rebuild with:

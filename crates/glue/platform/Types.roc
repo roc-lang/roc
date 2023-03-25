@@ -1,5 +1,5 @@
 interface Types
-    exposes [Types, shape]
+    exposes [Types, shape, target]
     imports [Shape.{ Shape }, TypeId.{ TypeId }, InternalTypeId, Target.{ Target }]
 
 # TODO use real tuples here when doing so doesn't crash the compiler
@@ -21,6 +21,9 @@ Types := {
     deps : List Tuple2,
     target : Target,
 }
+
+target : Types -> Target
+target = \@Types types -> types.target
 
 shape : Types, TypeId -> Shape
 shape = \@Types types, id ->

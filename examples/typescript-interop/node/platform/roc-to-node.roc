@@ -1,27 +1,54 @@
 app "roc-to-node"
     packages { pf: "../../../../crates/glue/platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.File.{ File }]
+    imports [pf.Types.{ Types }, pf.File.{ File }, pf.Target.{ Architecture }]
     provides [makeGlue] to pf
 
 makeGlue : List Types -> Result (List File) Str
-makeGlue = \_types ->
-    Ok [
-        # TODO make a .c file for each target architecture
-        { name: "demo.c", content: "\(cFileStart)\n\n\(cFileEnd)" },
-        { name: "addon.d.ts", content: "export function hello(arg: string): string;" }
-    ]
+makeGlue = \typesByArch ->
+    typesByArch
+    |> List.joinMap \types ->
+        # We need to generate separate .h and .d.ts files because of Nat.
+        # The TS type for Nat on 64-bit targets is `BigInt`, but on 32-bit systems it's `number`.
+        arch = (Types.target types).architecture
 
-cFileStart : Str
-cFileStart =
+        [
+            { name: cFileName arch, content: cFileContent types },
+            { name: tsFileName arch, content: tsTypeDefs types },
+        ]
+    |> List.concat [
+        { name: "demo.c", content: cFile },
+        { name: "roc_std.h", content: rocStdH },
+        { name: "roc_napi.h", content: rocNapiH },
+    ]
+    |> Ok
+
+tsTypeDefs : Types -> Str
+tsTypeDefs = \_types ->
+    "export function hello(arg: string): string;"
+
+cFileName : Architecture -> Str
+cFileName = \arch ->
+    when arch is
+        Aarch32 -> "arm.h"
+        Aarch64 -> "aarch64.h"
+        Wasm32 -> "wasm32.h"
+        X86x32 -> "x86_32.h"
+        X86x64 -> "x86_64.h"
+
+tsFileName : Architecture -> Str
+tsFileName = \arch ->
+    when arch is
+        Aarch32 -> "arm.d.ts"
+        Aarch64 -> "arm64.d.ts"
+        Wasm32 -> "wasm32.d.ts" # TODO: NodeJS's os.arch() never returns "wasm32", so this won't work!
+        X86x32 -> "ia32.d.ts"
+        X86x64 -> "x64.d.ts"
+
+cFileContent : Types -> Str
+cFileContent = \_types ->
     """
-    #include <errno.h>
-    #include <stdbool.h>
-    #include <stdio.h>
-    #include <stdlib.h>
-    #include <stddef.h>
-    #include <string.h>
-    #include <unistd.h>
-    #include <node_api.h>
+    #include "roc_std.h"
+    #include "roc_napi.h"
 
     napi_env napi_global_env;
 
@@ -43,6 +70,266 @@ cFileStart =
         napi_throw_error(napi_global_env, NULL, (char *)ptr);
     }
 
+    extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
+
+    // Receive a string value from Node and pass it to Roc as a RocStr, then get a RocStr
+    // back from Roc and convert it into a Node string.
+    napi_value call_roc(napi_env env, napi_callback_info info)
+    {
+        napi_status status;
+
+        // roc_panic needs a napi_env in order to throw a Node exception, so we provide this
+        // one globally in case roc_panic gets called during the execution of our Roc function.
+        //
+        // According do the docs - https://nodejs.org/api/n-api.html#napi_env -
+        // it's very important that the napi_env that was passed into "the initial
+        // native function" is the one that's "passed to any subsequent nested Node-API calls,"
+        // so we must override this every time we call this function (as opposed to, say,
+        // setting it once during init).
+        napi_global_env = env;
+
+        // Get the argument passed to the Node function
+        size_t argc = 1;
+        napi_value argv[1];
+
+        status = napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+        if (status != napi_ok)
+        {
+            return NULL;
+        }
+
+        napi_value node_arg = argv[0];
+
+        struct RocStr roc_arg;
+
+        status = node_string_into_roc_str(env, node_arg, &roc_arg);
+
+        if (status != napi_ok)
+        {
+            return NULL;
+        }
+
+        struct RocStr roc_ret;
+        // Call the Roc function to populate `roc_ret`'s bytes.
+        roc__mainForHost_1_exposed_generic(&roc_ret, &roc_arg);
+
+        // Consume the RocStr to create the Node string.
+        return roc_str_into_node_string(env, roc_ret);
+    }
+
+    napi_value init(napi_env env, napi_value exports)
+    {
+        napi_status status;
+        napi_value fn;
+
+        status = napi_create_function(env, NULL, 0, call_roc, NULL, &fn);
+
+        if (status != napi_ok)
+        {
+            return NULL;
+        }
+
+        status = napi_set_named_property(env, exports, "hello", fn);
+
+        if (status != napi_ok)
+        {
+            return NULL;
+        }
+
+        return exports;
+    }
+    """
+
+cFile : Str
+cFile =
+    """
+    #include <node_api.h>
+
+    #if defined(__x86_64__)
+    #include "x86_64.h"
+    #elif defined(__i386__)
+    #include "x86_32.h"
+    #elif defined(__arm__)
+    #include "aarch32.h"
+    #elif defined(__aarch64__)
+    #include "aarch64.h"
+    #elif defined(__wasm__)
+    #include "wasm32.h"
+    #endif
+
+    NAPI_MODULE(NODE_GYP_MODULE_NAME, init)
+    """
+
+rocNapiH : Str
+rocNapiH =
+    """
+    #ifndef ROC_NAPI_H
+    #define ROC_NAPI_H
+
+    #include <errno.h>
+    #include <stdbool.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <stddef.h>
+    #include <string.h>
+    #include <unistd.h>
+    #include "roc_std.h"
+    #include <node_api.h>
+
+    // Turn the given Node string into a RocStr and return it
+    napi_status node_string_into_roc_str(napi_env env, napi_value node_string, struct RocStr *roc_str)
+    {
+        size_t len;
+        napi_status status;
+
+        // Passing NULL for a buffer (and size 0) will make it write the length of the string into `len`.
+        // https://nodejs.org/api/n-api.html#napi_get_value_string_utf8
+        status = napi_get_value_string_utf8(env, node_string, NULL, 0, &len);
+
+        if (status != napi_ok)
+        {
+            return status;
+        }
+
+        // Node's "write a string into this buffer" function always writes a null terminator,
+        // so capacity will need to be length + 1.
+        // https://nodejs.org/api/n-api.html#napi_get_value_string_utf8
+        size_t capacity = len + 1;
+
+        // Create a RocStr and write it into the out param
+        if (capacity < sizeof(struct RocStr))
+        {
+            // If it can fit in a small string, use the string itself as the buffer.
+            // First, zero out those bytes; small strings need to have zeroes for any bytes
+            // that are not part of the string, or else comparisons between small strings might fail.
+            *roc_str = empty_roc_str();
+
+            // This writes the actual number of bytes copied into len. Theoretically they should be the same,
+            // but it could be different if the buffer was somehow smaller. This way we guarantee that
+            // the RocStr does not present any memory garbage to the user.
+            status = napi_get_value_string_utf8(env, node_string, (char *)roc_str, sizeof(struct RocStr), &len);
+
+            if (status != napi_ok)
+            {
+                return status;
+            }
+
+            // We have to write the length into the buffer *after* Node copies its bytes in,
+            // because Node will have written a null terminator, which we may need to overwrite.
+            write_small_str_len(len, roc_str);
+        }
+        else
+        {
+            // capacity was too big for a small string, so make a heap allocation and write into that.
+            uint8_t *buf = (uint8_t *)roc_alloc(capacity, __alignof__(char));
+
+            // This writes the actual number of bytes copied into len. Theoretically they should be the same,
+            // but it could be different if the buffer was somehow smaller. This way we guarantee that
+            // the RocStr does not present any memory garbage to the user.
+            status = napi_get_value_string_utf8(env, node_string, (char *)buf, capacity, &len);
+
+            if (status != napi_ok)
+            {
+                // Something went wrong, so free the bytes we just allocated before returning.
+                roc_dealloc((void *)&buf, __alignof__(char *));
+
+                return status;
+            }
+
+            *roc_str = roc_str_init_large(buf, len, capacity);
+        }
+
+        return status;
+    }
+
+    // Consume the given RocStr (decrement its refcount) after creating a Node string from it.
+    napi_value roc_str_into_node_string(napi_env env, struct RocStr roc_str)
+    {
+        bool is_small = is_small_str(roc_str);
+        char *roc_str_contents;
+
+        if (is_small)
+        {
+            // In a small string, the string itself contains its contents.
+            roc_str_contents = (char *)&roc_str;
+        }
+        else
+        {
+            roc_str_contents = (char *)roc_str.bytes;
+        }
+
+        napi_status status;
+        napi_value answer;
+
+        status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_str), &answer);
+
+        if (status != napi_ok)
+        {
+            answer = NULL;
+        }
+
+        // Decrement the RocStr because we consumed it.
+        if (!is_small)
+        {
+            decref_large_str(roc_str);
+        }
+
+        return answer;
+    }
+
+    // Create a Node string from the given RocStr.
+    // Don't decrement the RocStr's refcount. (To decrement it, use roc_str_into_node_string instead.)
+    napi_value roc_str_as_node_string(napi_env env, struct RocStr roc_str)
+    {
+        bool is_small = is_small_str(roc_str);
+        char *roc_str_contents;
+
+        if (is_small)
+        {
+            // In a small string, the string itself contains its contents.
+            roc_str_contents = (char *)&roc_str;
+        }
+        else
+        {
+            roc_str_contents = (char *)roc_str.bytes;
+        }
+
+        napi_status status;
+        napi_value answer;
+
+        status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_str), &answer);
+
+        if (status != napi_ok)
+        {
+            return NULL;
+        }
+
+        // Do not decrement the RocStr's refcount because we did not consume it.
+
+        return answer;
+    }
+
+    #endif // ROC_NAPI_H
+    """
+
+rocStdH : Str
+rocStdH =
+    """
+    #ifndef ROC_STD_H
+    #define ROC_STD_H
+
+    #include <errno.h>
+    #include <stdbool.h>
+    #include <stdlib.h>
+    #include <stddef.h>
+    #include <string.h>
+    #include <unistd.h>
+
+    // Reference counting operations need to know these types.
+    void *roc_alloc(size_t size, unsigned int alignment);
+    void roc_dealloc(void *ptr, unsigned int alignment);
+
     void *roc_memcpy(void *dest, const void *src, size_t n)
     {
         return memcpy(dest, src, n);
@@ -62,28 +349,31 @@ cFileStart =
     // Increment reference count, given a pointer to the first element in a collection.
     // We don't need to check for overflow because in order to overflow a usize worth of refcounts,
     // you'd need to somehow have more pointers in memory than the OS's virtual address space can hold.
-    void incref(uint8_t* bytes, uint32_t alignment)
+    void incref(uint8_t *bytes, uint32_t alignment)
     {
         ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
         ssize_t refcount = *refcount_ptr;
 
-        if (refcount != REFCOUNT_READONLY) {
+        if (refcount != REFCOUNT_READONLY)
+        {
             *refcount_ptr = refcount + 1;
         }
     }
 
     // Decrement reference count, given a pointer to the first byte of a collection's elements.
     // Then call roc_dealloc if nothing is referencing this collection anymore.
-    void decref_heap_bytes(uint8_t* bytes, uint32_t alignment)
+    void decref_heap_bytes(uint8_t *bytes, uint32_t alignment)
     {
         size_t extra_bytes = (sizeof(size_t) >= (size_t)alignment) ? sizeof(size_t) : (size_t)alignment;
         ssize_t *refcount_ptr = ((ssize_t *)bytes) - 1;
         ssize_t refcount = *refcount_ptr;
 
-        if (refcount != REFCOUNT_READONLY) {
+        if (refcount != REFCOUNT_READONLY)
+        {
             *refcount_ptr = refcount - 1;
 
-            if (refcount == REFCOUNT_ONE) {
+            if (refcount == REFCOUNT_ONE)
+            {
                 void *original_allocation = (void *)(refcount_ptr - (extra_bytes - sizeof(size_t)));
 
                 roc_dealloc(original_allocation, alignment);
@@ -157,7 +447,8 @@ cFileStart =
     }
 
     // Record the small string's length in the last byte of the given stack allocation
-    void write_small_str_len(size_t len, struct RocStr *str) {
+    void write_small_str_len(size_t len, struct RocStr *str)
+    {
         ((uint8_t *)str)[sizeof(struct RocStr) - 1] = (uint8_t)len | 0b10000000;
     }
 
@@ -218,12 +509,12 @@ cFileStart =
 
     void decref_large_str(struct RocStr str)
     {
-        uint8_t* bytes;
+        uint8_t *bytes;
 
         if ((ssize_t)str.len < 0)
         {
             // This is a seamless slice, so the bytes are located in the capacity slot.
-            bytes = (uint8_t*)(str.capacity << 1);
+            bytes = (uint8_t *)(str.capacity << 1);
         }
         else
         {
@@ -233,208 +524,5 @@ cFileStart =
         decref_heap_bytes(bytes, __alignof__(uint8_t));
     }
 
-
-    // Turn the given Node string into a RocStr and return it
-    napi_status node_string_into_roc_str(napi_env env, napi_value node_string, struct RocStr *roc_str) {
-        size_t len;
-        napi_status status;
-
-        // Passing NULL for a buffer (and size 0) will make it write the length of the string into `len`.
-        // https://nodejs.org/api/n-api.html#napi_get_value_string_utf8
-        status = napi_get_value_string_utf8(env, node_string, NULL, 0, &len);
-
-        if (status != napi_ok)
-        {
-            return status;
-        }
-
-        // Node's "write a string into this buffer" function always writes a null terminator,
-        // so capacity will need to be length + 1.
-        // https://nodejs.org/api/n-api.html#napi_get_value_string_utf8
-        size_t capacity = len + 1;
-
-        // Create a RocStr and write it into the out param
-        if (capacity < sizeof(struct RocStr))
-        {
-            // If it can fit in a small string, use the string itself as the buffer.
-            // First, zero out those bytes; small strings need to have zeroes for any bytes
-            // that are not part of the string, or else comparisons between small strings might fail.
-            *roc_str = empty_roc_str();
-
-            // This writes the actual number of bytes copied into len. Theoretically they should be the same,
-            // but it could be different if the buffer was somehow smaller. This way we guarantee that
-            // the RocStr does not present any memory garbage to the user.
-            status = napi_get_value_string_utf8(env, node_string, (char*)roc_str, sizeof(struct RocStr), &len);
-
-            if (status != napi_ok)
-            {
-                return status;
-            }
-
-            // We have to write the length into the buffer *after* Node copies its bytes in,
-            // because Node will have written a null terminator, which we may need to overwrite.
-            write_small_str_len(len, roc_str);
-        }
-        else
-        {
-            // capacity was too big for a small string, so make a heap allocation and write into that.
-            uint8_t *buf = (uint8_t*)roc_alloc(capacity, __alignof__(char));
-
-            // This writes the actual number of bytes copied into len. Theoretically they should be the same,
-            // but it could be different if the buffer was somehow smaller. This way we guarantee that
-            // the RocStr does not present any memory garbage to the user.
-            status = napi_get_value_string_utf8(env, node_string, (char*)buf, capacity, &len);
-
-            if (status != napi_ok)
-            {
-                // Something went wrong, so free the bytes we just allocated before returning.
-                roc_dealloc((void *)&buf, __alignof__(char *));
-
-                return status;
-            }
-
-            *roc_str = roc_str_init_large(buf, len, capacity);
-        }
-
-        return status;
-    }
-
-    // Consume the given RocStr (decrement its refcount) after creating a Node string from it.
-    napi_value roc_str_into_node_string(napi_env env, struct RocStr roc_str) {
-        bool is_small = is_small_str(roc_str);
-        char* roc_str_contents;
-
-        if (is_small)
-        {
-            // In a small string, the string itself contains its contents.
-            roc_str_contents = (char*)&roc_str;
-        }
-        else
-        {
-            roc_str_contents = (char*)roc_str.bytes;
-        }
-
-        napi_status status;
-        napi_value answer;
-
-        status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_str), &answer);
-
-        if (status != napi_ok)
-        {
-            answer = NULL;
-        }
-
-        // Decrement the RocStr because we consumed it.
-        if (!is_small)
-        {
-            decref_large_str(roc_str);
-        }
-
-        return answer;
-    }
-
-    // Create a Node string from the given RocStr.
-    // Don't decrement the RocStr's refcount. (To decrement it, use roc_str_into_node_string instead.)
-    napi_value roc_str_as_node_string(napi_env env, struct RocStr roc_str) {
-        bool is_small = is_small_str(roc_str);
-        char* roc_str_contents;
-
-        if (is_small)
-        {
-            // In a small string, the string itself contains its contents.
-            roc_str_contents = (char*)&roc_str;
-        }
-        else
-        {
-            roc_str_contents = (char*)roc_str.bytes;
-        }
-
-        napi_status status;
-        napi_value answer;
-
-        status = napi_create_string_utf8(env, roc_str_contents, roc_str_len(roc_str), &answer);
-
-        if (status != napi_ok)
-        {
-            return NULL;
-        }
-
-        // Do not decrement the RocStr's refcount because we did not consume it.
-
-        return answer;
-    }
-
-    extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
-
-    // Receive a string value from Node and pass it to Roc as a RocStr, then get a RocStr
-    // back from Roc and convert it into a Node string.
-    napi_value call_roc(napi_env env, napi_callback_info info) {
-        napi_status status;
-
-        // roc_panic needs a napi_env in order to throw a Node exception, so we provide this
-        // one globally in case roc_panic gets called during the execution of our Roc function.
-        //
-        // According do the docs - https://nodejs.org/api/n-api.html#napi_env -
-        // it's very important that the napi_env that was passed into "the initial
-        // native function" is the one that's "passed to any subsequent nested Node-API calls,"
-        // so we must override this every time we call this function (as opposed to, say,
-        // setting it once during init).
-        napi_global_env = env;
-
-        // Get the argument passed to the Node function
-        size_t argc = 1;
-        napi_value argv[1];
-
-        status = napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
-
-        if (status != napi_ok)
-        {
-            return NULL;
-        }
-
-        napi_value node_arg = argv[0];
-
-        struct RocStr roc_arg;
-
-        status = node_string_into_roc_str(env, node_arg, &roc_arg);
-
-        if (status != napi_ok)
-        {
-            return NULL;
-        }
-
-        struct RocStr roc_ret;
-        // Call the Roc function to populate `roc_ret`'s bytes.
-        roc__mainForHost_1_exposed_generic(&roc_ret, &roc_arg);
-
-        // Consume the RocStr to create the Node string.
-        return roc_str_into_node_string(env, roc_ret);
-    }
-
-    napi_value init(napi_env env, napi_value exports) {
-        napi_status status;
-        napi_value fn;
-
-        status = napi_create_function(env, NULL, 0, call_roc, NULL, &fn);
-
-        if (status != napi_ok)
-        {
-            return NULL;
-        }
-
-        status = napi_set_named_property(env, exports, "hello", fn);
-
-        if (status != napi_ok)
-        {
-            return NULL;
-        }
-
-        return exports;
-    }
+    #endif // ROC_STD_H
     """
-
-cFileEnd : Str
-cFileEnd =
-        """
-        NAPI_MODULE(NODE_GYP_MODULE_NAME, init)
-        """

@@ -6,6 +6,6 @@
     "typescript": "^4.9.5"
   },
   "scripts": {
-    "postinstall": "cp platform/glue/addon.d.ts build/Release/"
+    "postinstall": "node platform/postinstall.js"
   }
 }
