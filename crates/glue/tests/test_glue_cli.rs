@@ -192,9 +192,9 @@ mod glue_cli_run {
             // converting these all to String avoids lifetime issues
             std::iter::once("glue".to_string()).chain(
                 args.into_iter().map(|arg| arg.to_string()).chain([
-                    platform_module_path.to_str().unwrap().to_string(),
-                    glue_dir.to_str().unwrap().to_string(),
                     rust_glue_spec.to_str().unwrap().to_string(),
+                    glue_dir.to_str().unwrap().to_string(),
+                    platform_module_path.to_str().unwrap().to_string(),
                 ]),
             ),
         );
