@@ -330,7 +330,11 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         } => expr(c, AppArg, f, &loc_expr.value)
             .append(f.text(format!(".{}", field.as_str())))
             .group(),
-        TupleAccess { .. } => todo!(),
+        TupleAccess {
+            loc_expr, index, ..
+        } => expr(c, AppArg, f, &loc_expr.value)
+            .append(f.text(format!(".{index}")))
+            .group(),
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
             f.text(format!("@{}", opaque_name.as_str(c.interns)))
         }

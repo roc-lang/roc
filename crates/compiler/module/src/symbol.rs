@@ -1500,11 +1500,12 @@ define_builtins! {
         18 ENCODE_STRING: "string"
         19 ENCODE_LIST: "list"
         20 ENCODE_RECORD: "record"
-        21 ENCODE_TAG: "tag"
-        22 ENCODE_CUSTOM: "custom"
-        23 ENCODE_APPEND_WITH: "appendWith"
-        24 ENCODE_APPEND: "append"
-        25 ENCODE_TO_BYTES: "toBytes"
+        21 ENCODE_TUPLE: "tuple"
+        22 ENCODE_TAG: "tag"
+        23 ENCODE_CUSTOM: "custom"
+        24 ENCODE_APPEND_WITH: "appendWith"
+        25 ENCODE_APPEND: "append"
+        26 ENCODE_TO_BYTES: "toBytes"
     }
     12 DECODE: "Decode" => {
         0 DECODE_DECODE_ERROR: "DecodeError" exposed_type=true
@@ -1530,11 +1531,12 @@ define_builtins! {
         20 DECODE_STRING: "string"
         21 DECODE_LIST: "list"
         22 DECODE_RECORD: "record"
-        23 DECODE_CUSTOM: "custom"
-        24 DECODE_DECODE_WITH: "decodeWith"
-        25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
-        26 DECODE_FROM_BYTES: "fromBytes"
-        27 DECODE_MAP_RESULT: "mapResult"
+        23 DECODE_TUPLE: "tuple"
+        24 DECODE_CUSTOM: "custom"
+        25 DECODE_DECODE_WITH: "decodeWith"
+        26 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
+        27 DECODE_FROM_BYTES: "fromBytes"
+        28 DECODE_MAP_RESULT: "mapResult"
     }
     13 HASH: "Hash" => {
         0 HASH_HASH_ABILITY: "Hash" exposed_type=true

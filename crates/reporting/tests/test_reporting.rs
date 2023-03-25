@@ -11177,6 +11177,55 @@ I recommend using camelCase. It's the standard style in Roc code!
     "###
     );
 
+    test_no_problem!(
+        derive_hash_for_tuple,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo ("", 1)
+             "#
+        )
+    );
+
+    test_report!(
+        cannot_hash_tuple_with_non_hash_element,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo ("", \{} -> {})
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo ("", \{} -> {})
+                   ^^^^^^^^^^^^^^^
+
+    I can't generate an implementation of the `Hash` ability for
+
+        (
+            Str,
+            {}a -> {},
+        )a
+
+    In particular, an implementation for
+
+        {}a -> {}
+
+    cannot be generated.
+
+    Note: `Hash` cannot be generated for functions.
+    "###
+    );
+
     test_report!(
         shift_by_negative,
         indoc!(
@@ -11556,6 +11605,58 @@ I recommend using camelCase. It's the standard style in Roc code!
         a -> a
 
     Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_no_problem!(
+        derive_eq_for_tuple,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo ("", 1)
+             "#
+        )
+    );
+
+    test_report!(
+        cannot_eq_tuple_with_non_eq_element,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo ("", 1.0f64)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo ("", 1.0f64)
+                   ^^^^^^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        (
+            Str,
+            F64,
+        )a
+
+    In particular, an implementation for
+
+        F64
+
+    cannot be generated.
+
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
     "###
     );
 
@@ -13124,6 +13225,90 @@ I recommend using camelCase. It's the standard style in Roc code!
     cannot be generated.
 
     Tip: `Natural` does not implement `Encoding`.
+    "###
+    );
+
+    test_no_problem!(
+        derive_decoding_for_tuple,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (U32, Str) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        )
+    );
+
+    test_report!(
+        cannot_decode_tuple_with_non_decode_element,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (U32, {} -> {}) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    I can't generate an implementation of the `Decoding` ability for
+
+        U32, {} -> {}
+
+    Note: `Decoding` cannot be generated for functions.
+    "###
+    );
+
+    test_no_problem!(
+        derive_encoding_for_tuple,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : (U32, Str)
+
+            main = Encode.toEncoder x
+            "#
+        )
+    );
+
+    test_report!(
+        cannot_encode_tuple_with_non_encode_element,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : (U32, {} -> {})
+
+            main = Encode.toEncoder x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = Encode.toEncoder x
+                                ^
+
+    I can't generate an implementation of the `Encoding` ability for
+
+        U32, {} -> {}
+
+    Note: `Encoding` cannot be generated for functions.
     "###
     );
 
