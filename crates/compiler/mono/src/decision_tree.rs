@@ -1460,14 +1460,14 @@ pub(crate) fn optimize_when<'a>(
                     branch,
                 );
 
-                join_params = env.arena.alloc([]);
-                jump_pattern_param_symbols = env.arena.alloc([]);
+                join_params = &[];
+                jump_pattern_param_symbols = &[];
             }
             (true, true) => {
                 // Nothing more to do - the patterns will be bound when the guard is evaluated in
                 // `decide_to_branching`.
-                join_params = env.arena.alloc([]);
-                jump_pattern_param_symbols = env.arena.alloc([]);
+                join_params = &[];
+                jump_pattern_param_symbols = &[];
             }
             (true, false) => {
                 // The patterns will be bound when the guard is evaluated, and then we need to get
