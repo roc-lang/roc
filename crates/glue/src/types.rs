@@ -46,7 +46,7 @@ impl TypeId {
     const MAX: Self = Self(Self::PENDING.0 - 1);
 }
 
-// TODO: remove this and instade generate directly into roc_type::Types
+// TODO: remove this and instead generate directly into roc_type::Types
 // Probably want to fix roc_std::RocDict and update roc_type::Types to use it first.
 #[derive(Debug, Clone)]
 pub struct Types {
