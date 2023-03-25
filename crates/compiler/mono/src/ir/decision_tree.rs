@@ -1,8 +1,8 @@
+use super::pattern::{build_list_index_probe, store_pattern, DestructType, ListIndex, Pattern};
 use crate::borrow::Ownership;
 use crate::ir::{
-    build_list_index_probe, substitute_in_exprs_many, BranchInfo, Call, CallType,
-    CompiledGuardStmt, DestructType, Env, Expr, GuardStmtSpec, JoinPointId, ListIndex, Literal,
-    Param, Pattern, Procs, Stmt,
+    substitute_in_exprs_many, BranchInfo, Call, CallType, CompiledGuardStmt, Env, Expr,
+    GuardStmtSpec, JoinPointId, Literal, Param, Procs, Stmt,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, TagIdIntType,
@@ -1451,14 +1451,7 @@ pub(crate) fn optimize_when<'a>(
         match (has_guard, should_inline) {
             (false, _) => {
                 // Bind the fields referenced in the pattern.
-                branch = crate::ir::store_pattern(
-                    env,
-                    procs,
-                    layout_cache,
-                    &pattern,
-                    cond_symbol,
-                    branch,
-                );
+                branch = store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch);
 
                 join_params = &[];
                 jump_pattern_param_symbols = &[];
@@ -2125,7 +2118,7 @@ fn decide_to_branching<'a>(
                 remainder: arena.alloc(stmt),
             };
 
-            crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, join)
+            store_pattern(env, procs, layout_cache, &pattern, cond_symbol, join)
         }
         Chain {
             test_chain,
