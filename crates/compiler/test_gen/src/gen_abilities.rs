@@ -504,6 +504,25 @@ mod encode_immediate {
         )
     }
 
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn bool() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Encode, Json] provides [main] to "./platform"
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes Bool.false Json.toUtf8) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from(r"false"),
+            RocStr
+        )
+    }
+
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
@@ -997,6 +1016,25 @@ mod decode_immediate {
                 "#
             ),
             true,
+            bool
+        )
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn bool() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Json] provides [main] to "./platform"
+
+                main =
+                    when Str.toUtf8 "false" |> Decode.fromBytes Json.fromUtf8 is
+                        Ok s -> s
+                        _ -> Bool.true
+                "#
+            ),
+            false,
             bool
         )
     }

@@ -24,7 +24,10 @@ use roc_types::{
 };
 use roc_unify::unify::{unify, Env as UEnv, Mode, MustImplementConstraints};
 
-use crate::solve::{deep_copy_var_in, introduce, Pools};
+use crate::{
+    ability::builtin_module_with_unlisted_ability_impl,
+    solve::{deep_copy_var_in, introduce, Pools},
+};
 
 /// What phase in the compiler is reaching out to specialize lambda sets?
 /// This is important to distinguish subtle differences in the behavior of the solving algorithm.
@@ -625,7 +628,9 @@ fn make_specialization_decision<P: Phase>(
     use Content::*;
     use SpecializationTypeKey::*;
     match subs.get_content_without_compacting(var) {
-        Alias(opaque, _, _, AliasKind::Opaque) if opaque.module_id() != ModuleId::NUM => {
+        Alias(opaque, _, _, AliasKind::Opaque)
+            if !builtin_module_with_unlisted_ability_impl(opaque.module_id()) =>
+        {
             if P::IS_LATE {
                 SpecializeDecision::Specialize(Opaque(*opaque))
             } else {

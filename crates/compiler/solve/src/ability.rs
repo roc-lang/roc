@@ -4,8 +4,9 @@ use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_UNDERIVABLE;
+use roc_derive_key::{DeriveError, Derived};
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
@@ -369,7 +370,20 @@ impl ObligationCache {
         }
 
         let ImplKey { opaque, ability } = impl_key;
+
         let has_declared_impl = abilities_store.has_declared_implementation(opaque, ability);
+
+        // Some builtins, like Float32 and Bool, would have a cyclic dependency on Encode/Decode/etc.
+        // if their Roc implementations explicitly defined some abilities they support.
+        let builtin_opaque_impl_ok = || match ability {
+            DeriveEncoding::ABILITY => DeriveEncoding::is_derivable_builtin_opaque(opaque),
+            DeriveDecoding::ABILITY => DeriveDecoding::is_derivable_builtin_opaque(opaque),
+            DeriveEq::ABILITY => DeriveEq::is_derivable_builtin_opaque(opaque),
+            DeriveHash::ABILITY => DeriveHash::is_derivable_builtin_opaque(opaque),
+            _ => false,
+        };
+
+        let has_declared_impl = has_declared_impl || builtin_opaque_impl_ok();
 
         let obligation_result = if !has_declared_impl {
             Err(Unfulfilled::OpaqueDoesNotImplement {
@@ -491,6 +505,11 @@ fn is_builtin_number_alias(symbol: Symbol) -> bool {
         || is_builtin_nat_alias(symbol)
         || is_builtin_float_alias(symbol)
         || is_builtin_dec_alias(symbol)
+}
+
+#[inline(always)]
+fn is_builtin_bool_alias(symbol: Symbol) -> bool {
+    matches!(symbol, Symbol::BOOL_BOOL)
 }
 
 struct NotDerivable {
@@ -829,7 +848,8 @@ impl DerivableVisitor for DeriveEncoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol)
+        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -924,7 +944,8 @@ impl DerivableVisitor for DeriveDecoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol)
+        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1030,7 +1051,7 @@ impl DerivableVisitor for DeriveHash {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol)
+        is_builtin_number_alias(symbol) || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1132,6 +1153,7 @@ impl DerivableVisitor for DeriveEq {
         is_builtin_fixed_int_alias(symbol)
             || is_builtin_nat_alias(symbol)
             || is_builtin_dec_alias(symbol)
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1276,12 +1298,12 @@ pub fn type_implementing_specialization(
 }
 
 /// Result of trying to resolve an ability specialization.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Resolved {
     /// A user-defined specialization should be used.
     Specialization(Symbol),
-    /// A specialization must be generated for the given type variable.
-    NeedsGenerated(Variable),
+    /// A specialization must be generated with the given derive key.
+    Derive(Derived),
 }
 
 /// An [`AbilityResolver`] is a shell of an abilities store that answers questions needed for
@@ -1324,12 +1346,32 @@ impl AbilityResolver for AbilitiesStore {
     }
 }
 
+/// Whether this a module whose types' ability implementations should be checked via derive_key,
+/// because they do not explicitly list ability implementations due to circular dependencies.
+#[inline]
+pub(crate) fn builtin_module_with_unlisted_ability_impl(module_id: ModuleId) -> bool {
+    matches!(module_id, ModuleId::NUM | ModuleId::BOOL)
+}
+
+#[derive(Debug)]
+pub enum ResolveError {
+    NonDerivableAbility(Symbol),
+    DeriveError(DeriveError),
+    NoTypeImplementingSpecialization,
+}
+
+impl From<DeriveError> for ResolveError {
+    fn from(e: DeriveError) -> Self {
+        Self::DeriveError(e)
+    }
+}
+
 pub fn resolve_ability_specialization<R: AbilityResolver>(
     subs: &mut Subs,
     resolver: &R,
     ability_member: Symbol,
     specialization_var: Variable,
-) -> Option<Resolved> {
+) -> Result<Resolved, ResolveError> {
     use roc_unify::unify::{unify, Mode};
 
     let (parent_ability, signature_var) = resolver
@@ -1353,29 +1395,51 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
 
     subs.rollback_to(snapshot);
 
-    let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)?;
+    use ResolveError::*;
+
+    let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)
+        .ok_or(NoTypeImplementingSpecialization)?;
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
-            let impl_key = roc_can::abilities::ImplKey {
-                opaque: symbol,
-                ability_member,
-            };
+            if builtin_module_with_unlisted_ability_impl(symbol.module_id()) {
+                let derive_key = roc_derive_key::Derived::builtin_with_builtin_symbol(
+                    ability_member.try_into().map_err(NonDerivableAbility)?,
+                    symbol,
+                )?;
 
-            match resolver.get_implementation(impl_key)? {
-                roc_types::types::MemberImpl::Impl(spec_symbol) => {
-                    Resolved::Specialization(spec_symbol)
+                Resolved::Derive(derive_key)
+            } else {
+                let impl_key = roc_can::abilities::ImplKey {
+                    opaque: symbol,
+                    ability_member,
+                };
+
+                match resolver
+                    .get_implementation(impl_key)
+                    .ok_or(NoTypeImplementingSpecialization)?
+                {
+                    roc_types::types::MemberImpl::Impl(spec_symbol) => {
+                        Resolved::Specialization(spec_symbol)
+                    }
+                    // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
+                    // which will make this simpler.
+                    roc_types::types::MemberImpl::Error => {
+                        Resolved::Specialization(Symbol::UNDERSCORE)
+                    }
                 }
-                // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
-                // which will make this simpler.
-                roc_types::types::MemberImpl::Error => Resolved::Specialization(Symbol::UNDERSCORE),
             }
         }
         Obligated::Adhoc(variable) => {
-            // TODO: more rules need to be validated here, like is this a builtin ability?
-            Resolved::NeedsGenerated(variable)
+            let derive_key = roc_derive_key::Derived::builtin(
+                ability_member.try_into().map_err(NonDerivableAbility)?,
+                subs,
+                variable,
+            )?;
+
+            Resolved::Derive(derive_key)
         }
     };
 
-    Some(resolved)
+    Ok(resolved)
 }

@@ -5331,7 +5331,7 @@ pub fn with_hole<'a>(
 
                                     let resolved_proc = match resolved_proc {
                                         Resolved::Specialization(symbol) => symbol,
-                                        Resolved::NeedsGenerated(_) => {
+                                        Resolved::Derive(_) => {
                                             todo_abilities!("Generate impls for structural types")
                                         }
                                     };
@@ -5813,14 +5813,7 @@ fn late_resolve_ability_specialization<'a>(
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
-            Resolved::NeedsGenerated(var) => {
-                let derive_key = roc_derive_key::Derived::builtin(
-                    member.try_into().expect("derived symbols must be builtins"),
-                    env.subs,
-                    var,
-                )
-                .expect("specialization var not derivable!");
-
+            Resolved::Derive(derive_key) => {
                 match derive_key {
                     roc_derive_key::Derived::Immediate(imm)
                     | roc_derive_key::Derived::SingleLambdaSetImmediate(imm) => {

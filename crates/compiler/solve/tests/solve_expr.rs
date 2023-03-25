@@ -8806,4 +8806,52 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn derive_decoder_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main : Decoder Bool _
+                main = Decode.custom \bytes, fmt ->
+                    Decode.decodeWith bytes Decode.decoder fmt
+                #                           ^^^^^^^^^^^^^^
+                "#
+            ),
+            @"Decoding#Decode.decoder(4) : List U8, fmt -[[] + fmt:Decode.bool(19):1]-> { rest : List U8, result : [Err [TooShort], Ok [False, True]] } | fmt has DecoderFormatting"
+            print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn derive_to_encoder_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Encode.toEncoder Bool.true
+                #      ^^^^^^^^^^^^^^^^
+                "#
+            ),
+            @"Encoding#Encode.toEncoder(2) : Bool -[[] + fmt:Encode.bool(17):1]-> Encoder fmt | fmt has EncoderFormatting"
+        );
+    }
+
+    #[test]
+    fn derive_eq_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Bool.isEq Bool.true Bool.false
+                #      ^^^^^^^^^
+                "#
+            ),
+            @"Eq#Bool.isEq(9) : Bool, Bool -[[Bool.structuralEq(11)]]-> Bool"
+        );
+    }
 }

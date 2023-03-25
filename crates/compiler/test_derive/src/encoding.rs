@@ -57,17 +57,17 @@ test_key_eq! {
         v!(Symbol::STR_STR), v!(Symbol::STR_STR)
 
     alias_eq_real_type:
-        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!([False, True])
+        v!(Symbol::ATTR_ATTR => v!([ True, False ])), v!([False, True])
     diff_alias_same_real_type:
-        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
+        v!(Symbol::ATTR_ATTR => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
 
     opaque_eq_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!([False, True])
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!([False, True])
     diff_opaque_same_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([False, True]))
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([False, True]))
 
     opaque_real_type_eq_alias_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
 }
 
 test_key_neq! {
@@ -86,14 +86,14 @@ test_key_neq! {
         v!([ Nil, Cons v!(^lst) ] as lst), v!([ Nil, Next v!(^lst) ] as lst)
 
     same_alias_diff_real_type:
-        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::BOOL_BOOL => v!([ False, True, Maybe ]))
+        v!(Symbol::ATTR_ATTR => v!([ True, False ])), v!(Symbol::ATTR_ATTR => v!([ False, True, Maybe ]))
     diff_alias_diff_real_type:
-        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
+        v!(Symbol::ATTR_ATTR => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
 
     same_opaque_diff_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::BOOL_BOOL => v!([ False, True, Maybe ]))
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!(@Symbol::ATTR_ATTR => v!([ False, True, Maybe ]))
     diff_opaque_diff_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
 }
 
 // }}} hash tests
