@@ -3918,7 +3918,23 @@ fn adjust_rank_content(
         Alias(_, args, real_var, _) => {
             let mut rank = Rank::toplevel();
 
-            for var_index in args.all_variables() {
+            // Avoid visiting lambda set variables stored in the type variables of the alias
+            // independently.
+            //
+            // Why? Lambda set variables on the alias are not truly type arguments to the alias,
+            // and instead are links to the lambda sets that appear in functions under the real
+            // type of the alias. If their ranks are adjusted independently, we end up looking at
+            // function types "inside-out" - when the whole point of rank-adjustment is to look
+            // from the outside-in to determine at what rank a type lies!
+            //
+            // So, just wait to adjust their ranks until we visit the function types that contain
+            // them. If they should be generalized (or pulled to a lower rank) that will happen
+            // then; otherwise, we risk generalizing a lambda set too early, when its enclosing
+            // function type should not be.
+            let adjustable_variables =
+                (args.type_variables().into_iter()).chain(args.infer_ext_in_output_variables());
+
+            for var_index in adjustable_variables {
                 let var = subs[var_index];
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
