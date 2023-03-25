@@ -273,6 +273,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 );
                 reuse_tokens.truncate(*min_reuse_tokens)
             }
+            // And remove any layouts that are no longer used.
+            environment
+                .reuse_tokens
+                .retain(|_, reuse_tokens| !reuse_tokens.is_empty());
 
             arena.alloc(Stmt::Switch {
                 cond_symbol: *cond_symbol,
