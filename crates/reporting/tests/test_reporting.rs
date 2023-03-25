@@ -13355,4 +13355,17 @@ I recommend using camelCase. It's the standard style in Roc code!
     I would have to crash if I saw one of those! Add branches for them!
     "###
     );
+
+    test_no_problem!(
+        openness_constraint_opens_under_tuple,
+        indoc!(
+            r#"
+              x : [A, B, C]
+              when (x, 1u8) is
+                (A, _) -> Bool.true
+                (B, _) -> Bool.true
+                _ -> Bool.true
+            "#
+        )
+    );
 }

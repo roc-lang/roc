@@ -1845,6 +1845,11 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
                 stack.extend(subs.get_subs_slice(fields.variables()));
             }
 
+            Structure(Tuple(elems, _)) => {
+                // Open up all nested tag unions.
+                stack.extend(subs.get_subs_slice(elems.variables()));
+            }
+
             Structure(Apply(Symbol::LIST_LIST, args)) => {
                 // Open up nested tag unions.
                 stack.extend(subs.get_subs_slice(args));
