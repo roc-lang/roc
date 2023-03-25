@@ -1,7 +1,8 @@
 use crate::borrow::Ownership;
 use crate::ir::{
-    build_list_index_probe, substitute_in_exprs_many, BranchInfo, Call, CallType, DestructType,
-    Env, Expr, JoinPointId, ListIndex, Literal, Param, Pattern, Procs, Stmt,
+    build_list_index_probe, substitute_in_exprs_many, BranchInfo, Call, CallType,
+    CompiledGuardStmt, DestructType, Env, Expr, GuardStmtSpec, JoinPointId, ListIndex, Literal,
+    Param, Pattern, Procs, Stmt,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, TagIdIntType,
@@ -42,14 +43,13 @@ fn compile<'a>(
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Guard<'a> {
+pub(crate) enum Guard<'a> {
     NoGuard,
     Guard {
         /// pattern
         pattern: Pattern<'a>,
-        /// after assigning to symbol, the stmt jumps to this label
-        id: JoinPointId,
-        stmt: Stmt<'a>,
+        /// How to compile the guard statement.
+        stmt_spec: GuardStmtSpec,
     },
 }
 
@@ -81,10 +81,8 @@ enum GuardedTest<'a> {
     GuardedNoTest {
         /// pattern
         pattern: Pattern<'a>,
-        /// after assigning to symbol, the stmt jumps to this label
-        id: JoinPointId,
-        /// body
-        stmt: Stmt<'a>,
+        /// How to compile the guard body.
+        stmt_spec: GuardStmtSpec,
     },
     // e.g. `<pattern> -> ...`
     TestNotGuarded {
@@ -194,9 +192,9 @@ impl<'a> Hash for Test<'a> {
 impl<'a> Hash for GuardedTest<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            GuardedTest::GuardedNoTest { id, .. } => {
+            GuardedTest::GuardedNoTest { stmt_spec, .. } => {
                 state.write_u8(1);
-                id.hash(state);
+                stmt_spec.hash(state);
             }
             GuardedTest::TestNotGuarded { test } => {
                 state.write_u8(0);
@@ -238,8 +236,8 @@ fn to_decision_tree<'a>(
             match first.guard {
                 Guard::NoGuard => unreachable!(),
 
-                Guard::Guard { id, stmt, pattern } => {
-                    let guarded_test = GuardedTest::GuardedNoTest { id, stmt, pattern };
+                Guard::Guard { pattern, stmt_spec } => {
+                    let guarded_test = GuardedTest::GuardedNoTest { pattern, stmt_spec };
 
                     // the guard test does not have a path
                     let path = vec![];
@@ -1366,10 +1364,10 @@ fn small_branching_factor(branches: &[Branch], path: &[PathInstruction]) -> usiz
 enum Decider<'a, T> {
     Leaf(T),
     Guarded {
-        /// after assigning to symbol, the stmt jumps to this label
-        id: JoinPointId,
-        stmt: Stmt<'a>,
         pattern: Pattern<'a>,
+
+        /// The guard expression and how to compile it.
+        stmt_spec: GuardStmtSpec,
 
         success: Box<Decider<'a, T>>,
         failure: Box<Decider<'a, T>>,
@@ -1405,7 +1403,7 @@ struct JumpSpec<'a> {
     join_body: Stmt<'a>,
 }
 
-pub fn optimize_when<'a>(
+pub(crate) fn optimize_when<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -2068,9 +2066,8 @@ fn decide_to_branching<'a>(
         }
         Leaf(Inline(expr)) => expr,
         Guarded {
-            id,
-            stmt,
             pattern,
+            stmt_spec,
             success,
             failure,
         } => {
@@ -2116,8 +2113,13 @@ fn decide_to_branching<'a>(
                 ownership: Ownership::Owned,
             };
 
+            let CompiledGuardStmt {
+                join_point_id,
+                stmt,
+            } = stmt_spec.generate_guard_and_join(env, procs, layout_cache);
+
             let join = Stmt::Join {
-                id,
+                id: join_point_id,
                 parameters: arena.alloc([param]),
                 body: arena.alloc(decide),
                 remainder: arena.alloc(stmt),
@@ -2593,14 +2595,13 @@ fn chain_decider<'a>(
     success_tree: DecisionTree<'a>,
 ) -> Decider<'a, u64> {
     match guarded_test {
-        GuardedTest::GuardedNoTest { id, stmt, pattern } => {
+        GuardedTest::GuardedNoTest { pattern, stmt_spec } => {
             let failure = Box::new(tree_to_decider(failure_tree));
             let success = Box::new(tree_to_decider(success_tree));
 
             Decider::Guarded {
-                id,
-                stmt,
                 pattern,
+                stmt_spec,
                 success,
                 failure,
             }
@@ -2709,15 +2710,13 @@ fn insert_choices<'a>(
         }
 
         Guarded {
-            id,
-            stmt,
             pattern,
+            stmt_spec,
             success,
             failure,
         } => Guarded {
-            id,
-            stmt,
             pattern,
+            stmt_spec,
             success: Box::new(insert_choices(choice_dict, *success)),
             failure: Box::new(insert_choices(choice_dict, *failure)),
         },

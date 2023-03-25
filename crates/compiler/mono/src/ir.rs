@@ -7030,26 +7030,16 @@ fn from_can_when<'a>(
 
             use crate::decision_tree::Guard;
             let result = if let Some(loc_expr) = opt_guard {
-                let id = JoinPointId(env.unique_symbol());
-                let symbol = env.unique_symbol();
-                let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
-
-                let guard_stmt = with_hole(
-                    env,
-                    loc_expr.value,
-                    Variable::BOOL,
-                    procs,
-                    layout_cache,
-                    symbol,
-                    jump,
-                );
+                let guard_spec = GuardStmtSpec {
+                    guard_expr: loc_expr.value,
+                    identity: env.next_call_specialization_id(),
+                };
 
                 (
                     pattern.clone(),
                     Guard::Guard {
-                        id,
                         pattern,
-                        stmt: guard_stmt,
+                        stmt_spec: guard_spec,
                     },
                     branch_stmt,
                 )
@@ -7075,6 +7065,83 @@ fn from_can_when<'a>(
         ret_layout,
         mono_branches,
     )
+}
+
+/// A functor to generate IR for a guard under a `when` branch.
+/// Used in the decision tree compiler, after building a decision tree and converting into IR.
+///
+/// A guard might appear more than once in various places in the compiled decision tree, so the
+/// functor here may be called more than once. As such, it implements clone, which duplicates the
+/// guard AST for subsequent IR-regeneration. This is a bit wasteful, but in practice, guard ASTs
+/// are quite small. Moreoever, they must be generated on a per-case basis, since the guard may
+/// have calls or joins, whose specialization IDs and joinpoint IDs, respectively, must be unique.
+#[derive(Debug, Clone)]
+pub(crate) struct GuardStmtSpec {
+    guard_expr: roc_can::expr::Expr,
+
+    /// Unique id to indentity identical guard statements, even across clones.
+    /// Needed so that we can implement [PartialEq] on this type. Re-uses call specialization IDs,
+    /// since the identity is kind of irrelevant.
+    identity: CallSpecId,
+}
+
+impl PartialEq for GuardStmtSpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+}
+
+impl std::hash::Hash for GuardStmtSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity.id.hash(state);
+    }
+}
+
+impl GuardStmtSpec {
+    /// Generates IR for the guard, and the joinpoint that the guard will jump to with the
+    /// calculated guard boolean value.
+    ///
+    /// The caller should create a joinpoint with the given joinpoint ID and decide how to branch
+    /// after the guard has been evaluated.
+    ///
+    /// The compiled guard statement expects the pattern before the guard to be destructed before the
+    /// returned statement. The caller should layer on the pattern destructuring, as bound from the
+    /// `when` condition value.
+    pub(crate) fn generate_guard_and_join<'a>(
+        self,
+        env: &mut Env<'a, '_>,
+        procs: &mut Procs<'a>,
+        layout_cache: &mut LayoutCache<'a>,
+    ) -> CompiledGuardStmt<'a> {
+        let Self {
+            guard_expr,
+            identity: _,
+        } = self;
+
+        let join_point_id = JoinPointId(env.unique_symbol());
+        let symbol = env.unique_symbol();
+        let jump = env.arena.alloc(Stmt::Jump(join_point_id, env.arena.alloc([symbol])));
+
+        let stmt = with_hole(
+            env,
+            guard_expr,
+            Variable::BOOL,
+            procs,
+            layout_cache,
+            symbol,
+            jump,
+        );
+
+        CompiledGuardStmt {
+            join_point_id,
+            stmt,
+        }
+    }
+}
+
+pub(crate) struct CompiledGuardStmt<'a> {
+    pub join_point_id: JoinPointId,
+    pub stmt: Stmt<'a>,
 }
 
 fn substitute(substitutions: &BumpMap<Symbol, Symbol>, s: Symbol) -> Option<Symbol> {
