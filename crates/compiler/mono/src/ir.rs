@@ -4963,9 +4963,6 @@ pub fn with_hole<'a>(
                 _ => arena.alloc([record_layout]),
             };
 
-            debug_assert_eq!(field_layouts.len(), symbols.len());
-            debug_assert_eq!(fields.len(), symbols.len());
-
             if symbols.len() == 1 {
                 // TODO we can probably special-case this more, skippiing the generation of
                 // UpdateExisting
