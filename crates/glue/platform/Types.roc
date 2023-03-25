@@ -1,10 +1,6 @@
 interface Types
     exposes [Types, shape, target]
-    imports [Shape.{ Shape }, TypeId.{ TypeId }, InternalTypeId, Target.{ Target }]
-
-# TODO use real tuples here when doing so doesn't crash the compiler
-Tuple1 : [T Str TypeId]
-Tuple2 : [T TypeId (List TypeId)]
+    imports [Shape.{ Shape }, TypeId.{ TypeId }, InternalTypeId, Target.{ Target }, InternalTypeId]
 
 Types := {
     # These are all indexed by TypeId
@@ -29,4 +25,11 @@ shape : Types, TypeId -> Shape
 shape = \@Types types, id ->
     when List.get types.shapes (InternalTypeId.toNat id) is
         Ok answer -> answer
-        Err _ -> crash "unreachable"
+        Err OutOfBounds ->
+            idStr = Num.toStr (InternalTypeId.toNat id)
+
+            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+
+# TODO use real tuples here when doing so doesn't crash the compiler
+Tuple1 : [T Str TypeId]
+Tuple2 : [T TypeId (List TypeId)]
