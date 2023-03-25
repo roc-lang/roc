@@ -18,7 +18,7 @@ use core::{
 };
 
 #[cfg(feature = "std")]
-use core::ffi::{CStr, CString};
+use std::ffi::{CStr, CString};
 
 use crate::RocList;
 
