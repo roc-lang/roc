@@ -1023,8 +1023,6 @@ fn insert_refcount_operations_stmt<'v, 'a>(
 
             let mut joinpoint_consumption = MutSet::default();
 
-            // TODO this only takes consumed variables into account. But we need to make sure that borrowed parameters are alive as well.
-            // TODO so figure out when a join point borrows parameters and how to deal with it.
             let new_body = loop {
                 // Copy the env to make sure each iteration has a fresh environment.
                 let mut current_body_env = body_env.clone();
