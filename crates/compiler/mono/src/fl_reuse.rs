@@ -481,18 +481,46 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             // Or evaluate the remainder first, see what is available at each jump to this join point. And then reuse those available from all jumps. (would require fixed point over the whole remainder...).
             // And we need to pass the parameter to the join point as well, so we can reuse it.
 
+            // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
+            let mut body_environment = ReuseEnvironment {
+                layout_tags: environment.layout_tags.clone(),
+                reuse_tokens: ReuseTokens::default(),
+                symbol_layouts: environment.symbol_layouts.clone(),
+                joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
+                jump_reuse_tokens: environment.jump_reuse_tokens.clone(),
+            };
+
+            let new_body = insert_reset_reuse_operations_stmt(
+                arena,
+                layout_interner,
+                home,
+                ident_ids,
+                update_mode_ids,
+                &mut body_environment,
+                body,
+            );
+
+            let new_remainder = insert_reset_reuse_operations_stmt(
+                arena,
+                layout_interner,
+                home,
+                ident_ids,
+                update_mode_ids,
+                environment,
+                remainder,
+            );
+
             arena.alloc(Stmt::Join {
                 id: *id,
                 parameters: parameters.clone(),
-                body: *body,
-                // remainder: new_remainder,
-                remainder,
+                body: new_body,
+                remainder: new_remainder,
             })
         }
         Stmt::Jump(id, arguments) => {
             environment.add_jump_reuse_tokens(*id, environment.reuse_tokens.clone());
 
-            let reuse_token_amount = environment.get_joinpoint_reuse_tokens(*id);
+            // let reuse_token_amount = environment.get_joinpoint_reuse_tokens(*id);
             // TODO pop the amount of reuse tokens so code above knows they are consumed.
             // TODO pass the popped tokens to the jump as argument so it can reuse them.
             // TODO if token amount is below max tokens, pass fresh allocation token instead.
@@ -736,7 +764,7 @@ fn drop_unused_reuse_tokens<'a>(
 ) -> &'a Stmt<'a> {
     unused_tokens.fold(continuation, |continuation, reuse_token| {
         arena.alloc(Stmt::Refcounting(
-            ModifyRc::Dec(reuse_token.symbol),
+            ModifyRc::DecRef(reuse_token.symbol),
             continuation,
         ))
     })
