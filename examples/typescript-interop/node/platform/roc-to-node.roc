@@ -47,28 +47,9 @@ tsFileName = \arch ->
 cFileContent : Types -> Str
 cFileContent = \_types ->
     """
+    #include <node_api.h>
     #include "roc_std.h"
     #include "roc_napi.h"
-
-    napi_env napi_global_env;
-
-    void *roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
-
-    void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
-                    unsigned int alignment)
-    {
-        return realloc(ptr, new_size);
-    }
-
-    void roc_dealloc(void *ptr, unsigned int alignment) { free(ptr); }
-
-    void roc_panic(void *ptr, unsigned int alignment)
-    {
-        // WARNING: If roc_panic is called before napi_global_env is set,
-        // the result will be undefined behavior. So never call any Roc
-        // functions before setting napi_global_env!
-        napi_throw_error(napi_global_env, NULL, (char *)ptr);
-    }
 
     extern void roc__mainForHost_1_exposed_generic(struct RocStr *ret, struct RocStr *arg);
 
@@ -96,6 +77,7 @@ cFileContent = \_types ->
 
         if (status != napi_ok)
         {
+            // TODO throw an exception here instead
             return NULL;
         }
 
@@ -107,6 +89,7 @@ cFileContent = \_types ->
 
         if (status != napi_ok)
         {
+            // TODO throw an exception here instead
             return NULL;
         }
 
@@ -139,13 +122,14 @@ cFileContent = \_types ->
 
         return exports;
     }
+
+    NAPI_MODULE(NODE_GYP_MODULE_NAME, init)
     """
 
 cFile : Str
 cFile =
     """
-    #include <node_api.h>
-
+    // Continue with the appropriate architecture-specific glue.
     #if defined(__x86_64__)
     #include "x86_64.h"
     #elif defined(__i386__)
@@ -157,8 +141,6 @@ cFile =
     #elif defined(__wasm__)
     #include "wasm32.h"
     #endif
-
-    NAPI_MODULE(NODE_GYP_MODULE_NAME, init)
     """
 
 rocNapiH : Str
@@ -177,6 +159,26 @@ rocNapiH =
     #include <math.h>
     #include <node_api.h>
     #include "roc_std.h"
+
+    napi_env napi_global_env;
+
+    void *roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
+
+    void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
+                    unsigned int alignment)
+    {
+        return realloc(ptr, new_size);
+    }
+
+    void roc_dealloc(void *ptr, unsigned int alignment) { free(ptr); }
+
+    void roc_panic(void *ptr, unsigned int alignment)
+    {
+        // WARNING: If roc_panic is called before napi_global_env is set,
+        // the result will be undefined behavior. So never call any Roc
+        // functions before setting napi_global_env!
+        napi_throw_error(napi_global_env, NULL, (char *)ptr);
+    }
 
     // Numbers
 
