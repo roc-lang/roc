@@ -10,6 +10,7 @@ use crate::layout::{
 };
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
+use roc_collections::BumpMap;
 use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId, Union};
 use roc_module::ident::TagName;
@@ -1474,12 +1475,12 @@ pub(crate) fn optimize_when<'a>(
                 // updating.
                 let pattern_bindings = pattern.collect_symbols(cond_layout);
 
-                let mut parameters_buf =
-                    bumpalo::collections::Vec::with_capacity_in(pattern_bindings.len(), env.arena);
+                let mut parameters_buf = bumpalo::collections::Vec::with_capacity_in(1, env.arena);
                 let mut pattern_symbols_buf =
-                    bumpalo::collections::Vec::with_capacity_in(pattern_bindings.len(), env.arena);
+                    bumpalo::collections::Vec::with_capacity_in(1, env.arena);
+                let mut substitutions = BumpMap::default();
 
-                for &(pattern_symbol, layout) in pattern_bindings.iter() {
+                for (pattern_symbol, layout) in pattern_bindings {
                     let param_symbol = env.unique_symbol();
                     parameters_buf.push(Param {
                         symbol: param_symbol,
@@ -1487,16 +1488,12 @@ pub(crate) fn optimize_when<'a>(
                         ownership: Ownership::Owned,
                     });
                     pattern_symbols_buf.push(pattern_symbol);
+                    substitutions.insert(pattern_symbol, param_symbol);
                 }
 
                 join_params = parameters_buf.into_bump_slice();
                 jump_pattern_param_symbols = pattern_symbols_buf.into_bump_slice();
 
-                let substitutions = pattern_bindings
-                    .iter()
-                    .zip(join_params.iter())
-                    .map(|((pat, _), param)| (*pat, param.symbol))
-                    .collect();
                 substitute_in_exprs_many(env.arena, &mut branch, substitutions);
             }
         }
