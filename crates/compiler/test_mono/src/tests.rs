@@ -2789,3 +2789,21 @@ fn recursive_closure_with_transiently_used_capture() {
         "#
     )
 }
+
+#[mono_test]
+fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        go : U8 -> U8
+        go = \byte ->
+            when byte is
+                15 if Bool.true -> 1
+                b if Bool.true -> b + 2
+                _ -> 3
+
+        main = go '.'
+        "#
+    )
+}

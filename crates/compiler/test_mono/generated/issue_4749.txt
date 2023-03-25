@@ -70,6 +70,7 @@ procedure Decode.27 (Decode.107, Decode.108):
         let Decode.123 : [C [C List U8, C ], C Str] = TagId(0) Decode.124;
         ret Decode.123;
 
+<<<<<<< HEAD
 procedure Json.160 (Json.570, Json.571):
     joinpoint Json.508 Json.505 Json.159:
         let Json.162 : List U8 = StructAtIndex 0 Json.505;
@@ -97,6 +98,35 @@ procedure Json.160 (Json.570, Json.571):
                 let Json.521 : List U8 = CallByName List.4 Json.522 Json.164;
                 let Json.518 : {List U8, List U8} = Struct {Json.520, Json.521};
                 jump Json.508 Json.518 Json.159;
+=======
+procedure Json.144 (Json.512, Json.513):
+    joinpoint Json.450 Json.447 Json.143:
+        let Json.146 : List U8 = StructAtIndex 0 Json.447;
+        inc Json.146;
+        let Json.145 : List U8 = StructAtIndex 1 Json.447;
+        inc Json.145;
+        dec Json.447;
+        joinpoint Json.488:
+            let Json.485 : {List U8, List U8} = Struct {Json.146, Json.145};
+            ret Json.485;
+        in
+        let Json.496 : U64 = lowlevel ListLen Json.146;
+        let Json.497 : U64 = 2i64;
+        let Json.498 : Int1 = lowlevel NumGte Json.496 Json.497;
+        if Json.498 then
+            let Json.487 : U64 = 0i64;
+            let Json.147 : U8 = lowlevel ListGetUnsafe Json.146 Json.487;
+            let Json.486 : U64 = 1i64;
+            let Json.148 : U8 = lowlevel ListGetUnsafe Json.146 Json.486;
+            let Json.458 : Int1 = CallByName Json.22 Json.147 Json.148;
+            if Json.458 then
+                let Json.465 : U64 = 2i64;
+                let Json.462 : List U8 = CallByName List.29 Json.146 Json.465;
+                let Json.464 : List U8 = CallByName List.4 Json.145 Json.147;
+                let Json.463 : List U8 = CallByName List.4 Json.464 Json.148;
+                let Json.460 : {List U8, List U8} = Struct {Json.462, Json.463};
+                jump Json.450 Json.460 Json.143;
+>>>>>>> 93414ed07 (Update mono tests)
             else
                 let Json.510 : Int1 = CallByName Json.305 Json.163;
                 if Json.510 then
@@ -108,6 +138,7 @@ procedure Json.160 (Json.570, Json.571):
                     let Json.509 : {List U8, List U8} = Struct {Json.162, Json.161};
                     ret Json.509;
         else
+<<<<<<< HEAD
             let Json.551 : U64 = lowlevel ListLen Json.162;
             let Json.552 : U64 = 1i64;
             let Json.553 : Int1 = lowlevel NumGte Json.551 Json.552;
@@ -127,6 +158,27 @@ procedure Json.160 (Json.570, Json.571):
                 jump Json.543 Json.544;
             else
                 jump Json.548;
+=======
+            let Json.493 : U64 = lowlevel ListLen Json.146;
+            let Json.494 : U64 = 1i64;
+            let Json.495 : Int1 = lowlevel NumGte Json.493 Json.494;
+            if Json.495 then
+                let Json.492 : U64 = 0i64;
+                let Json.149 : U8 = lowlevel ListGetUnsafe Json.146 Json.492;
+                joinpoint Json.490 Json.489:
+                    if Json.489 then
+                        let Json.483 : List U8 = CallByName List.38 Json.146;
+                        let Json.484 : List U8 = CallByName List.4 Json.145 Json.149;
+                        let Json.481 : {List U8, List U8} = Struct {Json.483, Json.484};
+                        jump Json.450 Json.481 Json.143;
+                    else
+                        jump Json.488;
+                in
+                let Json.491 : Int1 = CallByName Json.289 Json.149;
+                jump Json.490 Json.491;
+            else
+                jump Json.488;
+>>>>>>> 93414ed07 (Update mono tests)
     in
     jump Json.508 Json.570 Json.571;
 
