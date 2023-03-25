@@ -149,11 +149,8 @@ rocNapiH =
     #ifndef ROC_NAPI_H
     #define ROC_NAPI_H
 
-    #include <errno.h>
     #include <stdbool.h>
-    #include <stdio.h>
     #include <stdlib.h>
-    #include <stddef.h>
     #include <string.h>
     #include <unistd.h>
     #include <math.h>
@@ -423,8 +420,6 @@ rocStdH =
     #ifndef ROC_STD_H
     #define ROC_STD_H
 
-    #include <errno.h>
-    #include <stdbool.h>
     #include <stdlib.h>
     #include <stddef.h>
     #include <string.h>
