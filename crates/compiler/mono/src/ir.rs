@@ -7120,7 +7120,9 @@ impl GuardStmtSpec {
 
         let join_point_id = JoinPointId(env.unique_symbol());
         let symbol = env.unique_symbol();
-        let jump = env.arena.alloc(Stmt::Jump(join_point_id, env.arena.alloc([symbol])));
+        let jump = env
+            .arena
+            .alloc(Stmt::Jump(join_point_id, env.arena.alloc([symbol])));
 
         let stmt = with_hole(
             env,
