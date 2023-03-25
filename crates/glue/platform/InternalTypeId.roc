@@ -3,13 +3,7 @@ interface InternalTypeId
     imports []
 
 InternalTypeId := Nat
-     has [ Eq { isEq }, Hash { hash } ]
-
-isEq : InternalTypeId, InternalTypeId -> Bool
-isEq = \@InternalTypeId lhs, @InternalTypeId rhs -> lhs == rhs
-
-hash : hasher, InternalTypeId -> hasher | hasher has Hasher
-hash = \hasher, @InternalTypeId id -> Hash.hash hasher id
+     has [ Eq, Hash ]
 
 toNat : InternalTypeId -> Nat
 toNat = \@InternalTypeId nat -> nat
