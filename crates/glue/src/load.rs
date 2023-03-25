@@ -120,9 +120,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
 
                     let make_glue: libloading::Symbol<MakeGlue> = unsafe {
                         lib.get("roc__makeGlueForHost_1_exposed_generic".as_bytes())
-                            .ok()
-                            .ok_or(format!("Unable to load glue function"))
-                            .expect("errored")
+                            .unwrap_or_else(|_| panic!("Unable to load glue function"))
                     };
                     let roc_types: roc_std::RocList<roc_type::Types> =
                         types.iter().map(|x| x.into()).collect();
@@ -150,7 +148,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                         }
                         let full_path = output_path.join(name.as_str());
                         if let Some(dir_path) = full_path.parent() {
-                            std::fs::create_dir_all(&dir_path).unwrap_or_else(|err| {
+                            std::fs::create_dir_all(dir_path).unwrap_or_else(|err| {
                                 eprintln!(
                                     "Unable to create output directory {} - {:?}",
                                     dir_path.display(),

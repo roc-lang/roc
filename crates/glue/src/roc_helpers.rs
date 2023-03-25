@@ -38,11 +38,15 @@ pub static ROC_MEMCPY: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> 
 #[used]
 pub static ROC_MEMSET: unsafe extern "C" fn(*mut c_void, i32, usize) -> *mut c_void = roc_memset;
 
+/// # Safety
+/// This just delegates to libc::malloc, so it's equally safe.
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     libc::malloc(size)
 }
 
+/// # Safety
+/// This just delegates to libc::realloc, so it's equally safe.
 #[no_mangle]
 pub unsafe extern "C" fn roc_realloc(
     c_ptr: *mut c_void,
@@ -53,13 +57,15 @@ pub unsafe extern "C" fn roc_realloc(
     libc::realloc(c_ptr, new_size)
 }
 
+/// # Safety
+/// This just delegates to libc::free, so it's equally safe.
 #[no_mangle]
 pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
     libc::free(c_ptr)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_panic(msg: &RocStr, tag_id: u32) {
+pub extern "C" fn roc_panic(msg: &RocStr, tag_id: u32) {
     match tag_id {
         0 => {
             eprintln!("Roc crashed with:\n\n\t{}\n", msg.as_str());
@@ -73,16 +79,23 @@ pub unsafe extern "C" fn roc_panic(msg: &RocStr, tag_id: u32) {
             print_backtrace();
             std::process::exit(1);
         }
-        _ => todo!(),
+        code => {
+            eprintln!("Roc crashed with error code:\n\n\t{}\n", code);
+
+            print_backtrace();
+            std::process::exit(1);
+        }
     }
 }
 
 #[cfg(unix)]
 #[no_mangle]
-pub unsafe extern "C" fn roc_getppid() -> pid_t {
-    libc::getppid()
+pub extern "C" fn roc_getppid() -> pid_t {
+    unsafe { libc::getppid() }
 }
 
+/// # Safety
+/// This just delegates to libc::mmap, and so is equally safe.
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn roc_mmap(
@@ -96,6 +109,8 @@ pub unsafe extern "C" fn roc_mmap(
     libc::mmap(addr, len, prot, flags, fd, offset)
 }
 
+/// # Safety
+/// This just delegates to libc::shm_open, and so is equally safe.
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn roc_shm_open(name: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
@@ -121,9 +136,10 @@ fn print_backtrace() {
                 let fn_name = fn_name.to_string();
 
                 if should_show_in_backtrace(&fn_name) {
-                    let mut entry: Entry = Default::default();
-
-                    entry.fn_name = format_fn_name(&fn_name);
+                    let mut entry: Entry = Entry {
+                        fn_name: format_fn_name(&fn_name),
+                        ..Default::default()
+                    };
 
                     if let Some(path) = symbol.filename() {
                         entry.filename = Some(path.to_string_lossy().into_owned());
@@ -170,7 +186,7 @@ fn should_show_in_backtrace(fn_name: &str) -> bool {
 fn format_fn_name(fn_name: &str) -> String {
     // e.g. convert "_Num_sub_a0c29024d3ec6e3a16e414af99885fbb44fa6182331a70ab4ca0886f93bad5"
     // to ["Num", "sub", "a0c29024d3ec6e3a16e414af99885fbb44fa6182331a70ab4ca0886f93bad5"]
-    let mut pieces_iter = fn_name.split("_");
+    let mut pieces_iter = fn_name.split('_');
 
     if let (_, Some(module_name), Some(name)) =
         (pieces_iter.next(), pieces_iter.next(), pieces_iter.next())
@@ -197,11 +213,15 @@ fn display_roc_fn(module_name: &str, fn_name: &str) -> String {
     format!("\u{001B}[36m{module_name}\u{001B}[39m.{fn_name}")
 }
 
+/// # Safety
+/// This just delegates to libc::memcpy, so it's equally safe.
 #[no_mangle]
 pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
     libc::memcpy(dst, src, n)
 }
 
+/// # Safety
+/// This just delegates to libc::memset, so it's equally safe.
 #[no_mangle]
 pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
     libc::memset(dst, c, n)
