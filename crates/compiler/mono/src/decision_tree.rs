@@ -77,7 +77,7 @@ enum DecisionTree<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum GuardedTest<'a> {
-    // e.g. `_ if True -> ...`
+    // e.g. `x if True -> ...`
     GuardedNoTest {
         /// pattern
         pattern: Pattern<'a>,
