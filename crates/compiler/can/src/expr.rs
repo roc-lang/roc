@@ -27,6 +27,8 @@ use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
+use std::fs::File;
+use std::io::Read;
 use std::{char, u32};
 
 /// Derives that an opaque type has claimed, to checked and recorded after solving.
@@ -729,11 +731,53 @@ pub fn canonicalize_expr<'a>(
 
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
 
-        // TODO: is this where we should finally load the file?
-        ast::Expr::IngestedFile(file_path, _) => (
-            Expr::Str(file_path.to_str().unwrap().into()),
-            Output::default(),
-        ),
+        ast::Expr::IngestedFile(file_path, type_ann) => {
+            use ast::TypeAnnotation::Apply;
+
+            if let Apply("", "Str", &[]) = type_ann.value {
+                match std::fs::read_to_string(file_path) {
+                    Ok(data) => (Expr::Str(data.into_boxed_str()), Output::default()),
+                    // TODO: Also handle when it returns an error converting to UTF8 explicitly.
+                    Err(e) => todo!("Handle err case of loading a string from a file: {:?}", e),
+                }
+            } else if let Apply(
+                "",
+                "List",
+                &[Loc {
+                    value: Apply("", "U8", &[]),
+                    ..
+                }],
+            ) = type_ann.value
+            {
+                let mut file =
+                    File::open(file_path).expect("file should exist due to earlier check");
+                let mut bytes = vec![];
+                match file.read_to_end(&mut bytes) {
+                    Ok(_) => (
+                        Expr::List {
+                            elem_var: Variable::U8,
+                            loc_elems: bytes
+                                .iter()
+                                .map(|b| {
+                                    Loc::at_zero(Expr::Int(
+                                        Variable::U8,
+                                        Variable::U8,
+                                        b.to_string().into_boxed_str(),
+                                        IntValue::U128((*b as u128).to_ne_bytes()),
+                                        IntBound::None,
+                                    ))
+                                })
+                                .collect(),
+                        },
+                        Output::default(),
+                    ),
+                    Err(e) => todo!("Handle err case of loading bytes from a file: {:?}", e),
+                }
+            } else {
+                // env.problems.push(Problem::BadTypeArguments)
+                todo!("properly return a type error")
+            }
+        }
 
         ast::Expr::SingleQuote(string) => {
             let mut it = string.chars().peekable();
