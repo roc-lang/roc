@@ -4331,7 +4331,7 @@ fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
             main = go '.'
             "#
         ),
-        '.' as u8 + 2,
+        b'.' + 2,
         u8
     )
 }
