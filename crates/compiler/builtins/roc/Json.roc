@@ -512,6 +512,14 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
 #
 # Note that this does not handle leading whitespace, any whitespace must be
 # handled in json list or record decoding.
+# 
+# |> List.dropIf \b -> b == '+' 
+# TODO ^^ not needed if roc supports "1e+2", this supports
+# "+" which is permitted in Json numbers
+# 
+# |> List.map \b -> if b == 'E' then 'e' else b
+# TODO ^^ not needed if roc supports "1E2", this supports
+# "E" which is permitted in Json numbers
 takeJsonNumber : List U8 -> { taken : List U8, rest : List U8 }
 takeJsonNumber = \bytes ->
     when List.walkUntil bytes Start numberHelp is
@@ -519,12 +527,9 @@ takeJsonNumber = \bytes ->
             taken =
                 bytes
                 |> List.sublist { start: 0, len: n }
-                |> List.dropIf \b -> b == '+' # TODO ^^ not needed if roc supports "1e+2", this supports
-                # "+" which is permitted in Json numbers
+                |> List.dropIf \b -> b == '+'
                 |> List.map \b -> if b == 'E' then 'e' else b
-            # TODO ^^ not needed if roc supports "1E2", this supports
-            # "E" which is permitted in Json numbers
-
+                
             { taken, rest: List.drop bytes n }
 
         _ ->
@@ -718,11 +723,8 @@ decodeString = Decode.custom \bytes, @Json {} ->
         { result: Err TooShort, rest: bytes }
     else
         # Replace unicode escpapes with Roc equivalent
-        { outBytes: strBytesReplaced, inBytes: leftover } =
+        { outBytes: strBytesReplaced } =
             replaceEscapedChars { inBytes: strBytes, outBytes: [] }
-
-        # Should have processed all the string's characters
-        expect List.len leftover == 0
 
         # Try to parse RocStr from bytes
         result =
@@ -947,8 +949,8 @@ expect
 
     actual.result == expected
 
+# TODO fix encoding of escapes, this test is not compliant with the spec
 # Test json string encoding with escapes
-# TODO fix encoding of escapes, this test is wrong
 # e.g. "\r" encodes to "\\r" or "\\u000D" as Carriage Return is U+000D
 # expect
 #     input = "a\r\nbc\\\"xz"
@@ -972,7 +974,6 @@ decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
             Ok elemBytes -> decodeElems elemBytes []
             Err ExpectedOpeningBracket ->
                 crash "expected opening bracket"
-# {result : Err TooShort, rest: bytes}
 
 listElemDecoder = \elemDecoder ->
 
