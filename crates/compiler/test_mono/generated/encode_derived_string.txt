@@ -2,33 +2,33 @@ procedure Encode.23 (Encode.98):
     ret Encode.98;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.111 : List U8 = CallByName Json.102 Encode.99 Encode.101 Encode.107;
+    let Encode.111 : List U8 = CallByName Json.139 Encode.99 Encode.101 Encode.107;
     ret Encode.111;
 
 procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
-    let Encode.110 : Str = CallByName Json.18 Encode.105;
+    let Encode.110 : Str = CallByName Json.22 Encode.105;
     let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
     ret Encode.108;
 
 procedure Json.1 ():
-    let Json.483 : {} = Struct {};
-    ret Json.483;
+    let Json.816 : {} = Struct {};
+    ret Json.816;
 
-procedure Json.102 (Json.103, Json.486, Json.101):
-    let Json.495 : I64 = 34i64;
-    let Json.494 : U8 = CallByName Num.127 Json.495;
-    let Json.492 : List U8 = CallByName List.4 Json.103 Json.494;
-    let Json.493 : List U8 = CallByName Str.12 Json.101;
-    let Json.489 : List U8 = CallByName List.8 Json.492 Json.493;
-    let Json.491 : I64 = 34i64;
-    let Json.490 : U8 = CallByName Num.127 Json.491;
-    let Json.488 : List U8 = CallByName List.4 Json.489 Json.490;
-    ret Json.488;
+procedure Json.139 (Json.140, Json.819, Json.138):
+    let Json.828 : I64 = 34i64;
+    let Json.827 : U8 = CallByName Num.127 Json.828;
+    let Json.825 : List U8 = CallByName List.4 Json.140 Json.827;
+    let Json.826 : List U8 = CallByName Str.12 Json.138;
+    let Json.822 : List U8 = CallByName List.8 Json.825 Json.826;
+    let Json.824 : I64 = 34i64;
+    let Json.823 : U8 = CallByName Num.127 Json.824;
+    let Json.821 : List U8 = CallByName List.4 Json.822 Json.823;
+    ret Json.821;
 
-procedure Json.18 (Json.101):
-    let Json.484 : Str = CallByName Encode.23 Json.101;
-    ret Json.484;
+procedure Json.22 (Json.138):
+    let Json.817 : Str = CallByName Encode.23 Json.138;
+    ret Json.817;
 
 procedure List.4 (List.107, List.108):
     let List.503 : U64 = 1i64;
