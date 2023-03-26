@@ -3571,7 +3571,8 @@ fn diff_tag_union<'b>(
     // We've removed all the tags that they had in common, so the remaining entries in tags2
     // are ones that appear on the right only.
     let tags_in_right_only = tags2;
-
+    let any_tags_in_common =
+        !same_tags_different_payloads.is_empty() || same_tags_same_payloads > 0;
     let both = same_tags_different_payloads
         .into_iter()
         .map(to_overlap_docs);
@@ -3623,17 +3624,38 @@ fn diff_tag_union<'b>(
         tags_diff.right_able.extend(diff.right_able);
     }
 
-    let mut left_tags_omitted = same_tags_same_payloads;
-    let mut right_tags_omitted = same_tags_same_payloads;
+    let left_tags_omitted;
+    let right_tags_omitted;
 
-    if !all_tags_shared {
+    if !any_tags_in_common {
+        // If they have no tags in common, we shouldn't omit any tags,
+        // because that would result in an unhelpful diff of
+        // […] on one side and another […] on the other side!
+
+        left_tags_omitted = 0;
+        right_tags_omitted = 0;
+
+        for (tag, tag_doc, args, able) in left {
+            tags_diff.left.push((tag, tag_doc, args));
+            tags_diff.left_able.extend(able);
+        }
+
+        for (tag, tag_doc, args, able) in right {
+            tags_diff.right.push((tag, tag_doc, args));
+            tags_diff.right_able.extend(able);
+        }
+
+        tags_diff.status.merge(Status::Different(Vec::new()));
+    } else if !all_tags_shared {
         // If either tag union is open, omit the tags in the other. In other words,
         // if one tag union is a pattern match which has _ ->, don't list the tags
         // which fall under that catch-all pattern because they won't be helpful.
         // By omitting them, we'll only show the tags that are actually matched.
         if ext2_is_open {
-            left_tags_omitted += left.len();
+            left_tags_omitted = same_tags_same_payloads + left.len();
         } else {
+            left_tags_omitted = same_tags_same_payloads;
+
             for (tag, tag_doc, args, able) in left {
                 tags_diff.left.push((tag, tag_doc, args));
                 tags_diff.left_able.extend(able);
@@ -3641,8 +3663,10 @@ fn diff_tag_union<'b>(
         }
 
         if ext1_is_open {
-            right_tags_omitted += right.len();
+            right_tags_omitted = same_tags_same_payloads + right.len();
         } else {
+            right_tags_omitted = same_tags_same_payloads;
+
             for (tag, tag_doc, args, able) in right {
                 tags_diff.right.push((tag, tag_doc, args));
                 tags_diff.right_able.extend(able);
@@ -3650,6 +3674,9 @@ fn diff_tag_union<'b>(
         }
 
         tags_diff.status.merge(Status::Different(Vec::new()));
+    } else {
+        left_tags_omitted = same_tags_same_payloads;
+        right_tags_omitted = same_tags_same_payloads;
     }
 
     tags_diff.left.sort_by(|a, b| a.0.cmp(&b.0));
@@ -4056,8 +4083,8 @@ mod report_text {
                 alloc.text("[]")
             } else {
                 alloc
-                    .text("[ ")
-                    .append(alloc.ellipsis().append(alloc.text(" ]")))
+                    .text("[")
+                    .append(alloc.ellipsis().append(alloc.text("]")))
             }
             .append(ext_doc)
         } else if entries.len() == 1 {
