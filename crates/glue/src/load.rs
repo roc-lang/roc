@@ -181,10 +181,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                         });
                     }
 
-                    println!(
-                        "🎉 Generated output from {} in:\n\n\t{}",
-                        output_path.display()
-                    );
+                    println!("🎉 Generated output in:\n\n\t{}", output_path.display());
 
                     Ok(0)
                 }
