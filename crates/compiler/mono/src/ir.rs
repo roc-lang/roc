@@ -5792,12 +5792,17 @@ fn late_resolve_ability_specialization<'a>(
             solved,
             unspecialized,
             recursion_var: _,
-            ambient_function: _,
+            ambient_function,
         } = env.subs.get_lambda_set(*lambda_set);
 
         debug_assert!(unspecialized.is_empty());
         let mut iter_lambda_set = solved.iter_all();
-        debug_assert_eq!(iter_lambda_set.len(), 1);
+        debug_assert_eq!(
+            iter_lambda_set.len(),
+            1,
+            "{:?}",
+            (env.subs.dbg(*lambda_set), env.subs.dbg(ambient_function))
+        );
         let spec_symbol_index = iter_lambda_set.next().unwrap().0;
         env.subs[spec_symbol_index]
     } else {
