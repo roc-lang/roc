@@ -512,11 +512,11 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
 #
 # Note that this does not handle leading whitespace, any whitespace must be
 # handled in json list or record decoding.
-# 
-# |> List.dropIf \b -> b == '+' 
+#
+# |> List.dropIf \b -> b == '+'
 # TODO ^^ not needed if roc supports "1e+2", this supports
 # "+" which is permitted in Json numbers
-# 
+#
 # |> List.map \b -> if b == 'E' then 'e' else b
 # TODO ^^ not needed if roc supports "1E2", this supports
 # "E" which is permitted in Json numbers
@@ -529,7 +529,7 @@ takeJsonNumber = \bytes ->
                 |> List.sublist { start: 0, len: n }
                 |> List.dropIf \b -> b == '+'
                 |> List.map \b -> if b == 'E' then 'e' else b
-                
+
             { taken, rest: List.drop bytes n }
 
         _ ->
@@ -1083,7 +1083,7 @@ expect
 
     actual.result == expected
 
-# Test decode of json strings ignoring whitespace 
+# Test decode of json strings ignoring whitespace
 expect
     input = Str.toUtf8 "\n\t [\n \"one\"\r , \"two\" , \n\"3\"\t]"
 
