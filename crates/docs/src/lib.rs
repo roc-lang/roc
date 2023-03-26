@@ -884,6 +884,9 @@ fn markdown_to_html(
                     }
                 }
             }
+            Event::Html(html) => {
+                docs_parser.push(Event::Text(html));
+            }
             e => {
                 docs_parser.push(e);
             }
