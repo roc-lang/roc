@@ -1,6 +1,6 @@
 app "roc-to-node"
     packages { pf: "../../../../crates/glue/platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.File.{ File }, pf.Target.{ Architecture }]
+    imports [pf.Types.{ Types }, pf.File.{ File }, pf.Target.{ Architecture }, pf.Shape.{ Shape } ]
     provides [makeGlue] to pf
 
 makeGlue : List Types -> Result (List File) Str
@@ -13,7 +13,8 @@ makeGlue = \typesByArch ->
 
         [
             { name: cFileName arch, content: cFileContent types },
-            { name: tsFileName arch, content: tsTypeDefs types },
+            { name: "TODO", content: tsTypeDefs types },
+            { name: tsFileName arch, content: "export function hello(arg: string): string;" },
         ]
     |> List.concat [
         { name: "demo.c", content: cFile },
@@ -23,8 +24,41 @@ makeGlue = \typesByArch ->
     |> Ok
 
 tsTypeDefs : Types -> Str
-tsTypeDefs = \_types ->
-    "export function hello(arg: string): string;"
+tsTypeDefs = \types ->
+    Types.walkShapes types "" \buf, shape, _ ->
+        when shape is
+            Function { functionName } ->
+                fnType = tsType shape
+                Str.concat buf "export function \(functionName)\(fnType);"
+
+            RocSet "string" -> "TODO"
+
+            RocBocks _ -> "TODO"
+
+            _ ->
+                Str.concat buf "TODO"
+                # Str.concat buf "export const \(functionName)\(fnType);"
+
+tsType : Shape -> Str
+tsType = \shape ->
+    when shape is
+        RocStr -> "string"
+        Bool -> "boolean"
+        Num _rocNum -> "TODO"
+        RocResult _okId _errId -> "TODO"
+        RocList _elemId -> "TODO"
+        RocDict _keyId _valId -> "TODO"
+        RocSet _elemId -> "TODO"
+        RocBox _elemId -> "TODO"
+        TagUnion _rocTagUnion -> "TODO"
+        EmptyTagUnion -> "TODO"
+        Struct _ -> "TODO"
+        TagUnionPayload _ -> "TODO"
+        RecursivePointer _ -> "TODO"
+        Function _ -> "TODO"
+        Unit -> "{}"
+        Unsized -> "never"
+
 
 cFileName : Architecture -> Str
 cFileName = \arch ->
