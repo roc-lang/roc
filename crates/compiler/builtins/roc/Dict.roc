@@ -34,7 +34,7 @@ interface Dict
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you
 ## associate keys with values.
 ##
-## ### Inserting
+## ## Inserting
 ##
 ## The most basic way to use a dictionary is to start with an empty one and
 ## then:
@@ -45,16 +45,16 @@ interface Dict
 ##
 ## Here's an example of a dictionary which uses a city's name as the key, and
 ## its population as the associated value.
-##
-##     populationByCity =
-##         Dict.empty {}
-##         |> Dict.insert "London" 8_961_989
-##         |> Dict.insert "Philadelphia" 1_603_797
-##         |> Dict.insert "Shanghai" 24_870_895
-##         |> Dict.insert "Delhi" 16_787_941
-##         |> Dict.insert "Amsterdam" 872_680
-##
-## ### Accessing keys or values
+## ```
+## populationByCity =
+##     Dict.empty {}
+##     |> Dict.insert "London" 8_961_989
+##     |> Dict.insert "Philadelphia" 1_603_797
+##     |> Dict.insert "Shanghai" 24_870_895
+##     |> Dict.insert "Delhi" 16_787_941
+##     |> Dict.insert "Amsterdam" 872_680
+## ```
+## ## Accessing keys or values
 ##
 ## We can use [Dict.keys] and [Dict.values] functions to get only the keys or
 ## only the values.
@@ -63,16 +63,16 @@ interface Dict
 ## order. This will be true if all you ever do is [Dict.insert] and [Dict.get] operations
 ## on the dictionary, but [Dict.remove] operations can change this order.
 ##
-## ### Removing
+## ## Removing
 ##
 ## We can remove an element from the dictionary, like so:
-##
-##     populationByCity
-##         |> Dict.remove "Philadelphia"
-##         |> Dict.keys
-##         ==
-##         ["London", "Amsterdam", "Shanghai", "Delhi"]
-##
+## ```
+## populationByCity
+##     |> Dict.remove "Philadelphia"
+##     |> Dict.keys
+##     ==
+##     ["London", "Amsterdam", "Shanghai", "Delhi"]
+## ```
 ## Notice that the order has changed. Philadelphia was not only removed from the
 ## list, but Amsterdam - the last entry we inserted - has been moved into the
 ## spot where Philadelphia was previously. This is exactly what [Dict.remove]
@@ -100,6 +100,9 @@ Dict k v := {
 } | k has Hash & Eq
 
 ## Return an empty dictionary.
+## ```
+## emptyDict = Dict.empty {}
+## ```
 empty : {} -> Dict k v | k has Hash & Eq
 empty = \{} ->
     @Dict {
@@ -110,6 +113,13 @@ empty = \{} ->
     }
 
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
+## ```
+## foodDict =
+##           Dict.empty {}
+##           |> Dict.insert "apple" "fruit"
+##
+## capacityOfDict = Dict.capacity foodDict
+## ```
 capacity : Dict k v -> Nat | k has Hash & Eq
 capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
@@ -125,41 +135,55 @@ withCapacity = \_ ->
     empty {}
 
 ## Returns a dictionary containing the key and value provided as input.
-##
-##     expect
-##         Dict.single "A" "B"
-##         |> Bool.isEq (Dict.insert (Dict.empty {}) "A" "B")
+## ```
+## expect
+##     Dict.single "A" "B"
+##     |> Bool.isEq (Dict.insert (Dict.empty {}) "A" "B")
+## ```
 single : k, v -> Dict k v | k has Hash & Eq
 single = \k, v ->
     insert (empty {}) k v
 
 ## Returns dictionary with the keys and values specified by the input [List].
-##
-##     expect
-##         Dict.single 1 "One"
-##         |> Dict.insert 2 "Two"
-##         |> Dict.insert 3 "Three"
-##         |> Dict.insert 4 "Four"
-##         |> Bool.isEq (Dict.fromList [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"])
+## ```
+## expect
+##     Dict.single 1 "One"
+##     |> Dict.insert 2 "Two"
+##     |> Dict.insert 3 "Three"
+##     |> Dict.insert 4 "Four"
+##     |> Bool.isEq (Dict.fromList [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"])
+## ```
 fromList : List (T k v) -> Dict k v | k has Hash & Eq
 fromList = \data ->
     # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
     List.walk data (empty {}) (\dict, T k v -> insert dict k v)
 
 ## Returns the number of values in the dictionary.
-##
-##     expect
-##         Dict.empty {}
-##         |> Dict.insert "One" "A Song"
-##         |> Dict.insert "Two" "Candy Canes"
-##         |> Dict.insert "Three" "Boughs of Holly"
-##         |> Dict.len
-##         |> Bool.isEq 3
+## ```
+## expect
+##     Dict.empty {}
+##     |> Dict.insert "One" "A Song"
+##     |> Dict.insert "Two" "Candy Canes"
+##     |> Dict.insert "Three" "Boughs of Holly"
+##     |> Dict.len
+##     |> Bool.isEq 3
+## ```
 len : Dict k v -> Nat | k has Hash & Eq
 len = \@Dict { size } ->
     size
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
+## ```
+## songs =
+##        Dict.empty {}
+##        |> Dict.insert "One" "A Song"
+##        |> Dict.insert "Two" "Candy Canes"
+##        |> Dict.insert "Three" "Boughs of Holly"
+##
+## clearSongs = Dict.clear songs
+##
+## expect Dict.len clearSongs == 0
+## ```
 clear : Dict k v -> Dict k v | k has Hash & Eq
 clear = \@Dict { metadata, dataIndices, data } ->
     cap = List.len dataIndices
@@ -180,13 +204,14 @@ clear = \@Dict { metadata, dataIndices, data } ->
 ## Iterate through the keys and values in the dictionary and call the provided
 ## function with signature `state, k, v -> state` for each value, with an
 ## initial `state` value provided for the first call.
-##
-##     expect
-##         Dict.empty {}
-##         |> Dict.insert "Apples" 12
-##         |> Dict.insert "Orange" 24
-##         |> Dict.walk 0 (\count, _, qty -> count + qty)
-##         |> Bool.isEq 36
+## ```
+## expect
+##     Dict.empty {}
+##     |> Dict.insert "Apples" 12
+##     |> Dict.insert "Orange" 24
+##     |> Dict.walk 0 (\count, _, qty -> count + qty)
+##     |> Bool.isEq 36
+## ```
 walk : Dict k v, state, (state, k, v -> state) -> state | k has Hash & Eq
 walk = \@Dict { data }, initialState, transform ->
     List.walk data initialState (\state, T k v -> transform state k v)
@@ -202,20 +227,38 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ## As such, it is typically better for performance to use this over [Dict.walk]
 ## if returning `Break` earlier than the last element is expected to be common.
+## ```
+## people =
+##     Dict.empty {}
+##     |> Dict.insert "Alice" 17
+##     |> Dict.insert "Bob" 18
+##     |> Dict.insert "Charlie" 19
+##
+## isAdult = \_, _, age ->
+##         if age >= 18 then
+##             Break Bool.true
+##         else
+##             Continue Bool.false
+##
+## someoneIsAnAdult = Dict.walkUntil people Bool.false isAdult
+##
+## expect someoneIsAnAdult == Bool.true
+## ```
 walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
     List.walkUntil data initialState (\state, T k v -> transform state k v)
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
+## ```
+## dictionary =
+##     Dict.empty {}
+##     |> Dict.insert 1 "Apple"
+##     |> Dict.insert 2 "Orange"
 ##
-##     dictionary =
-##         Dict.empty {}
-##         |> Dict.insert 1 "Apple"
-##         |> Dict.insert 2 "Orange"
-##
-##     expect Dict.get dictionary 1 == Ok "Apple"
-##     expect Dict.get dictionary 2000 == Err KeyNotFound
+## expect Dict.get dictionary 1 == Ok "Apple"
+## expect Dict.get dictionary 2000 == Err KeyNotFound
+## ```
 get : Dict k v, k -> Result v [KeyNotFound] | k has Hash & Eq
 get = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
@@ -237,12 +280,13 @@ get = \@Dict { metadata, dataIndices, data }, key ->
             Err KeyNotFound
 
 ## Check if the dictionary has a value for a specified key.
-##
-##     expect
-##         Dict.empty {}
-##         |> Dict.insert 1234 "5678"
-##         |> Dict.contains 1234
-##         |> Bool.isEq Bool.true
+## ```
+## expect
+##     Dict.empty {}
+##     |> Dict.insert 1234 "5678"
+##     |> Dict.contains 1234
+##     |> Bool.isEq Bool.true
+## ```
 contains : Dict k v, k -> Bool | k has Hash & Eq
 contains = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
@@ -261,12 +305,13 @@ contains = \@Dict { metadata, dataIndices, data }, key ->
             Bool.false
 
 ## Insert a value into the dictionary at a specified key.
-##
-##     expect
-##         Dict.empty {}
-##         |> Dict.insert "Apples" 12
-##         |> Dict.get "Apples"
-##         |> Bool.isEq (Ok 12)
+## ```
+## expect
+##     Dict.empty {}
+##     |> Dict.insert "Apples" 12
+##     |> Dict.get "Apples"
+##     |> Bool.isEq (Ok 12)
+## ```
 insert : Dict k v, k, v -> Dict k v | k has Hash & Eq
 insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
     hashKey =
@@ -305,13 +350,14 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
             insertNotFoundHelper rehashedDict key value h1Key h2Key
 
 ## Remove a value from the dictionary for a specified key.
-##
-##     expect
-##         Dict.empty {}
-##         |> Dict.insert "Some" "Value"
-##         |> Dict.remove "Some"
-##         |> Dict.len
-##         |> Bool.isEq 0
+## ```
+## expect
+##     Dict.empty {}
+##     |> Dict.insert "Some" "Value"
+##     |> Dict.remove "Some"
+##     |> Dict.len
+##     |> Bool.isEq 0
+## ```
 remove : Dict k v, k -> Dict k v | k has Hash & Eq
 remove = \@Dict { metadata, dataIndices, data, size }, key ->
     # TODO: change this from swap remove to tombstone and test is performance is still good.
@@ -345,16 +391,17 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
 ## performance optimisation for the use case of providing a default when a value
 ## is missing. This is more efficient than doing both a `Dict.get` and then a
 ## `Dict.insert` call, and supports being piped.
+## ```
+## alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
+## alterValue = \possibleValue ->
+##     when possibleValue is
+##         Missing -> Present Bool.false
+##         Present value -> if value then Missing else Present Bool.true
 ##
-##     alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
-##     alterValue = \possibleValue ->
-##         when possibleValue is
-##             Missing -> Present Bool.false
-##             Present value -> if value then Missing else Present Bool.true
-##
-##     expect Dict.update (Dict.empty {}) "a" alterValue == Dict.single "a" Bool.false
-##     expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
-##     expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty {}
+## expect Dict.update (Dict.empty {}) "a" alterValue == Dict.single "a" Bool.false
+## expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
+## expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty {}
+## ```
 update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Hash & Eq
 update = \dict, key, alter ->
     # TODO: look into optimizing by merging substeps and reducing lookups.
@@ -369,42 +416,45 @@ update = \dict, key, alter ->
 
 ## Returns the keys and values of a dictionary as a [List].
 ## This requires allocating a temporary list, prefer using [Dict.toList] or [Dict.walk] instead.
-##
-##     expect
-##         Dict.single 1 "One"
-##         |> Dict.insert 2 "Two"
-##         |> Dict.insert 3 "Three"
-##         |> Dict.insert 4 "Four"
-##         |> Dict.toList
-##         |> Bool.isEq [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"]
+## ```
+## expect
+##     Dict.single 1 "One"
+##     |> Dict.insert 2 "Two"
+##     |> Dict.insert 3 "Three"
+##     |> Dict.insert 4 "Four"
+##     |> Dict.toList
+##     |> Bool.isEq [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"]
+## ```
 toList : Dict k v -> List (T k v) | k has Hash & Eq
 toList = \@Dict { data } ->
     data
 
 ## Returns the keys of a dictionary as a [List].
 ## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
-##
-##     expect
-##         Dict.single 1 "One"
-##         |> Dict.insert 2 "Two"
-##         |> Dict.insert 3 "Three"
-##         |> Dict.insert 4 "Four"
-##         |> Dict.keys
-##         |> Bool.isEq [1,2,3,4]
+## ```
+## expect
+##     Dict.single 1 "One"
+##     |> Dict.insert 2 "Two"
+##     |> Dict.insert 3 "Three"
+##     |> Dict.insert 4 "Four"
+##     |> Dict.keys
+##     |> Bool.isEq [1,2,3,4]
+## ```
 keys : Dict k v -> List k | k has Hash & Eq
 keys = \@Dict { data } ->
     List.map data (\T k _ -> k)
 
 ## Returns the values of a dictionary as a [List].
 ## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
-##
-##     expect
-##         Dict.single 1 "One"
-##         |> Dict.insert 2 "Two"
-##         |> Dict.insert 3 "Three"
-##         |> Dict.insert 4 "Four"
-##         |> Dict.values
-##         |> Bool.isEq ["One","Two","Three","Four"]
+## ```
+## expect
+##     Dict.single 1 "One"
+##     |> Dict.insert 2 "Two"
+##     |> Dict.insert 3 "Three"
+##     |> Dict.insert 4 "Four"
+##     |> Dict.values
+##     |> Bool.isEq ["One","Two","Three","Four"]
+## ```
 values : Dict k v -> List v | k has Hash & Eq
 values = \@Dict { data } ->
     List.map data (\T _ v -> v)
@@ -414,24 +464,25 @@ values = \@Dict { data } ->
 ## both dictionaries will be combined. Note that where there are pairs
 ## with the same key, the value contained in the second input will be
 ## retained, and the value in the first input will be removed.
+## ```
+## first =
+##     Dict.single 1 "Not Me"
+##     |> Dict.insert 2 "And Me"
 ##
-##     first =
-##         Dict.single 1 "Not Me"
-##         |> Dict.insert 2 "And Me"
+## second =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 3 "Me Too"
+##     |> Dict.insert 4 "And Also Me"
 ##
-##     second =
-##         Dict.single 1 "Keep Me"
-##         |> Dict.insert 3 "Me Too"
-##         |> Dict.insert 4 "And Also Me"
+## expected =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 2 "And Me"
+##     |> Dict.insert 3 "Me Too"
+##     |> Dict.insert 4 "And Also Me"
 ##
-##     expected =
-##         Dict.single 1 "Keep Me"
-##         |> Dict.insert 2 "And Me"
-##         |> Dict.insert 3 "Me Too"
-##         |> Dict.insert 4 "And Also Me"
-##
-##     expect
-##         Dict.insertAll first second == expected
+## expect
+##     Dict.insertAll first second == expected
+## ```
 insertAll : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
 insertAll = \xs, ys ->
     walk ys xs insert
@@ -441,18 +492,19 @@ insertAll = \xs, ys ->
 ## that are in both dictionaries. Note that where there are pairs with
 ## the same key, the value contained in the first input will be retained,
 ## and the value in the second input will be removed.
+## ```
+## first =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 2 "And Me"
 ##
-##     first =
-##         Dict.single 1 "Keep Me"
-##         |> Dict.insert 2 "And Me"
+## second =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 2 "And Me"
+##     |> Dict.insert 3 "But Not Me"
+##     |> Dict.insert 4 "Or Me"
 ##
-##     second =
-##         Dict.single 1 "Keep Me"
-##         |> Dict.insert 2 "And Me"
-##         |> Dict.insert 3 "But Not Me"
-##         |> Dict.insert 4 "Or Me"
-##
-##     expect Dict.keepShared first second == first
+## expect Dict.keepShared first second == first
+## ```
 keepShared : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
 keepShared = \xs, ys ->
     walk
@@ -469,21 +521,22 @@ keepShared = \xs, ys ->
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
 ## of the values. This means that we will be left with only those pairs that
 ## are in the first dictionary and whose keys are not in the second.
+## ```
+## first =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 2 "And Me"
+##     |> Dict.insert 3 "Remove Me"
 ##
-##     first =
-##         Dict.single 1 "Keep Me"
-##         |> Dict.insert 2 "And Me"
-##         |> Dict.insert 3 "Remove Me"
+## second =
+##     Dict.single 3 "Remove Me"
+##     |> Dict.insert 4 "I do nothing..."
 ##
-##     second =
-##         Dict.single 3 "Remove Me"
-##         |> Dict.insert 4 "I do nothing..."
+## expected =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 2 "And Me"
 ##
-##     expected =
-##         Dict.single 1 "Keep Me"
-##         |> Dict.insert 2 "And Me"
-##
-##     expect Dict.removeAll first second == expected
+## expect Dict.removeAll first second == expected
+## ```
 removeAll : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
 removeAll = \xs, ys ->
     walk ys xs (\state, k, _ -> remove state k)
@@ -1220,3 +1273,25 @@ expect
         |> complete
 
     hash1 != hash2
+
+expect
+    empty {}
+    |> len
+    |> Bool.isEq 0
+
+expect
+    empty {}
+    |> insert "One" "A Song"
+    |> insert "Two" "Candy Canes"
+    |> insert "Three" "Boughs of Holly"
+    |> clear
+    |> len
+    |> Bool.isEq 0
+
+expect
+    Dict.empty {}
+    |> Dict.insert "Alice" 17
+    |> Dict.insert "Bob" 18
+    |> Dict.insert "Charlie" 19
+    |> Dict.walkUntil Bool.false (\_, _, age -> if age >= 18 then Break Bool.true else Continue Bool.false)
+    |> Bool.isEq Bool.true

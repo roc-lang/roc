@@ -4459,6 +4459,7 @@ pub struct StorageSubs {
 struct StorageSubsOffsets {
     utable: u32,
     variables: u32,
+    tuple_elem_indices: u32,
     tag_names: u32,
     symbol_names: u32,
     field_names: u32,
@@ -4542,6 +4543,7 @@ impl StorageSubs {
         let self_offsets = StorageSubsOffsets {
             utable: self.subs.utable.len() as u32,
             variables: self.subs.variables.len() as u32,
+            tuple_elem_indices: self.subs.tuple_elem_indices.len() as u32,
             tag_names: self.subs.tag_names.len() as u32,
             symbol_names: self.subs.symbol_names.len() as u32,
             field_names: self.subs.field_names.len() as u32,
@@ -4553,6 +4555,7 @@ impl StorageSubs {
         let offsets = StorageSubsOffsets {
             utable: (target.utable.len() - Variable::NUM_RESERVED_VARS) as u32,
             variables: target.variables.len() as u32,
+            tuple_elem_indices: target.tuple_elem_indices.len() as u32,
             tag_names: target.tag_names.len() as u32,
             symbol_names: target.symbol_names.len() as u32,
             field_names: target.field_names.len() as u32,
@@ -4593,6 +4596,10 @@ impl StorageSubs {
                 .map(|v| Self::offset_variable(&offsets, *v)),
         );
 
+        target
+            .tuple_elem_indices
+            .extend(self.subs.tuple_elem_indices);
+
         target.variable_slices.extend(
             self.subs
                 .variable_slices
@@ -4611,6 +4618,11 @@ impl StorageSubs {
         debug_assert_eq!(
             target.utable.len(),
             (self_offsets.utable + offsets.utable) as usize
+        );
+
+        debug_assert_eq!(
+            target.tuple_elem_indices.len(),
+            (self_offsets.tuple_elem_indices + offsets.tuple_elem_indices) as usize
         );
 
         debug_assert_eq!(
@@ -4756,6 +4768,7 @@ impl StorageSubs {
     }
 
     fn offset_tuple_elems(offsets: &StorageSubsOffsets, mut tuple_elems: TupleElems) -> TupleElems {
+        tuple_elems.elem_index_start += offsets.tuple_elem_indices;
         tuple_elems.variables_start += offsets.variables;
 
         tuple_elems

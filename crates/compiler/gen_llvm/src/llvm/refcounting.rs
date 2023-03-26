@@ -5,13 +5,16 @@ use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
     FAST_CALL_CONV,
 };
-use crate::llvm::build_list::{incrementing_elem_loop, list_capacity, load_list};
+use crate::llvm::build_list::{
+    incrementing_elem_loop, list_capacity_or_ref_ptr, list_refcount_ptr, load_list,
+};
+use crate::llvm::build_str::str_refcount_ptr;
 use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
@@ -71,16 +74,6 @@ impl<'ctx> PointerToRefcount<'ctx> {
         Self {
             value: refcount_ptr,
         }
-    }
-
-    fn from_list_wrapper(env: &Env<'_, 'ctx, '_>, list_wrapper: StructValue<'ctx>) -> Self {
-        let data_ptr = env
-            .builder
-            .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
-            .unwrap()
-            .into_pointer_value();
-
-        Self::from_ptr_to_data(env, data_ptr)
     }
 
     pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
@@ -691,22 +684,23 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
 
-    let len = list_capacity(builder, original_wrapper);
+    // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
+    let capacity = list_capacity_or_ref_ptr(builder, original_wrapper);
 
     let is_non_empty = builder.build_int_compare(
         IntPredicate::UGT,
-        len,
+        capacity,
         env.ptr_int().const_zero(),
-        "len > 0",
+        "cap > 0",
     );
 
     // build blocks
-    let modification_block = ctx.append_basic_block(parent, "modification_block");
+    let modification_list_block = ctx.append_basic_block(parent, "modification_list_block");
     let cont_block = ctx.append_basic_block(parent, "modify_rc_list_cont");
 
-    builder.build_conditional_branch(is_non_empty, modification_block, cont_block);
+    builder.build_conditional_branch(is_non_empty, modification_list_block, cont_block);
 
-    builder.position_at_end(modification_block);
+    builder.position_at_end(modification_list_block);
 
     if layout_interner.contains_refcounted(element_layout) {
         let ptr_type = basic_type_from_layout(env, layout_interner, element_layout)
@@ -737,7 +731,8 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
         );
     }
 
-    let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
+    let refcount_ptr =
+        PointerToRefcount::from_ptr_to_data(env, list_refcount_ptr(env, original_wrapper));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env, layout_interner);
 
@@ -811,9 +806,9 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
-    let arg_val =
+    let str_type = zig_str_type(env);
+    let str_wrapper =
         if Layout::Builtin(Builtin::Str).is_passed_by_reference(layout_interner, env.target_info) {
-            let str_type = zig_str_type(env);
             env.builder
                 .new_build_load(str_type, arg_val.into_pointer_value(), "load_str_to_stack")
         } else {
@@ -821,7 +816,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
             debug_assert!(arg_val.is_struct_value());
             arg_val
         };
-    let str_wrapper = arg_val.into_struct_value();
+    let str_wrapper = str_wrapper.into_struct_value();
 
     let capacity = builder
         .build_extract_value(str_wrapper, Builtin::WRAPPER_CAPACITY, "read_str_capacity")
@@ -844,7 +839,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.build_conditional_branch(is_big_and_non_empty, modification_block, cont_block);
     builder.position_at_end(modification_block);
 
-    let refcount_ptr = PointerToRefcount::from_list_wrapper(env, str_wrapper);
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, str_refcount_ptr(env, arg_val));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env, layout_interner);
 

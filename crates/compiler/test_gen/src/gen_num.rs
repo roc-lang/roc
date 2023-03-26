@@ -19,11 +19,11 @@ fn nat_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : Num.Nat
-                    i = 1
+            i : Num.Nat
+            i = 1
 
-                    i
-                "#
+            i
+            "#
         ),
         1,
         usize
@@ -31,16 +31,16 @@ fn nat_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn i128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : I128
-                    i = 128
+            i : I128
+            i = 128
 
-                    i
-                "#
+            i
+            "#
         ),
         128,
         i128
@@ -71,11 +71,11 @@ fn i32_signed_int_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-                    i : I32
-                    i = 32
+            i : I32
+            i = 32
 
-                    i
-                "#
+            i
+            "#
         ),
         32,
         i32
@@ -115,7 +115,7 @@ fn i8_signed_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn i128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -196,7 +196,7 @@ fn i8_hex_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn u128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -277,7 +277,7 @@ fn u8_signed_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn u128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -418,7 +418,7 @@ fn character_literal_new_line() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn dec_float_alias() {
     assert_evals_to!(
         indoc!(
@@ -451,7 +451,7 @@ fn f64_float_alias() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn f32_float_alias() {
     assert_evals_to!(
         indoc!(
@@ -468,112 +468,51 @@ fn f32_float_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn f64_sqrt() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    when Num.sqrtChecked 100 is
-                        Ok val -> val
-                        Err _ -> -1
-                "#
-        ),
-        10.0,
-        f64
-    );
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_sqrt_100() {
+    assert_evals_to!("Num.sqrt 100", 10.0, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_sqrt_checked_0() {
+    assert_evals_to!("Num.sqrt 0", 0.0, f64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn f64_log() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    Num.log 7.38905609893
-                "#
-        ),
-        1.999999999999912,
-        f64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn f64_log_checked_one() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    when Num.logChecked 1 is
-                        Ok val -> val
-                        Err _ -> -1
-                "#
-        ),
-        0.0,
-        f64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn f64_sqrt_zero() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    when Num.sqrtChecked 0 is
-                        Ok val -> val
-                        Err _ -> -1
-                "#
-        ),
-        0.0,
-        f64
-    );
+fn f64_sqrt_checked_positive() {
+    assert_evals_to!("Num.sqrtChecked 100", RocResult::ok(10.0), RocResult<f64, ()>);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_sqrt_checked_negative() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    when Num.sqrtChecked -1 is
-                        Err _ -> 42
-                        Ok val -> val
-                "#
-        ),
-        42.0,
-        f64
-    );
+    assert_evals_to!("Num.sqrtChecked -1f64", RocResult::err(()), RocResult<f64, ()>);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_log() {
+    assert_evals_to!("Num.log 7.38905609893", 1.999999999999912, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn f64_log_checked_one() {
+    assert_evals_to!("Num.logChecked 1", RocResult::ok(0.0), RocResult<f64, ()>);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_checked_zero() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    when Num.logChecked 0 is
-                        Err _ -> 42
-                        Ok val -> val
-                "#
-        ),
-        42.0,
-        f64
-    );
+    assert_evals_to!("Num.logChecked 0", RocResult::err(()), RocResult<f64, ()>);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_negative() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    Num.log -1
-                "#
-        ),
-        true,
-        f64,
-        |f: f64| f.is_nan()
-    );
+    assert_evals_to!("Num.log -1", true, f64, |f: f64| f.is_nan());
 }
 
 #[test]
@@ -890,16 +829,20 @@ fn gen_int_neq() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn gen_int_less_than() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    4 < 5
-                "#
-        ),
-        true,
-        bool
-    );
+fn int_less_than() {
+    assert_evals_to!("4 < 5", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn float_less_than() {
+    assert_evals_to!("4.0 < 5.0", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn float_greater_than() {
+    assert_evals_to!("5.0 > 4.0", true, bool);
 }
 
 #[test]
@@ -2865,6 +2808,74 @@ fn bytes_to_u32_subtly_out_of_bounds() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_clearly_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU64 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        1,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_subtly_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bytes = Str.toUtf8 "hello world"
+                when Num.bytesToU64 bytes 4 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        1,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_clearly_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU128 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        1,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_subtly_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bytes = Str.toUtf8 "hello world!!!!!!"
+                when Num.bytesToU128 bytes 2 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        1,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_max_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2956,6 +2967,102 @@ fn bytes_to_u32_random_u8s() {
         ),
         2_038_463_740,
         u32
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_min_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU64 [0, 0, 0, 0, 0, 0, 0, 0] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        0,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_max_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU64 [255, 255, 255, 255, 255, 255, 255, 255] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        18_446_744_073_709_551_615,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u64_random_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU64 [252, 124, 128, 121, 1, 32, 177, 211] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        15_254_008_603_586_100_476,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_min_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU128 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        0,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_max_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU128 [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        340_282_366_920_938_463_463_374_607_431_768_211_455,
+        u128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bytes_to_u128_random_u8s() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Num.bytesToU128 [252, 124, 128, 121, 1, 32, 177, 211, 3, 57, 203, 122, 95, 164, 23, 145] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+        ),
+        192_860_816_096_412_392_720_639_456_393_488_792_828,
+        u128
     );
 }
 
@@ -3863,4 +3970,31 @@ fn condition_polymorphic_num_becomes_float() {
         10.,
         f32
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_count_leading_zero_bits() {
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u8"#, 2, usize);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u16"#, 10, usize);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u32"#, 26, usize);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u64"#, 58, usize);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_count_trailing_zero_bits() {
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1000u8"#, 3, usize);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_0000u16"#, 5, usize);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0u32"#, 32, usize);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1111u64"#, 0, usize);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_count_one_bits() {
+    assert_evals_to!(r#"Num.countOneBits 0b0010_1000u8"#, 2, usize);
+    assert_evals_to!(r#"Num.countOneBits 0b0010_0000u16"#, 1, usize);
+    assert_evals_to!(r#"Num.countOneBits 0u32"#, 0, usize);
+    assert_evals_to!(r#"Num.countOneBits 0b0010_1111u64"#, 5, usize);
 }

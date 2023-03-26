@@ -1,47 +1,47 @@
-procedure List.2 (List.95, List.96):
-    let List.500 : U64 = CallByName List.6 List.95;
-    let List.497 : Int1 = CallByName Num.22 List.96 List.500;
-    if List.497 then
-        let List.499 : I64 = CallByName List.66 List.95 List.96;
-        let List.498 : [C {}, C I64] = TagId(1) List.499;
-        ret List.498;
+procedure List.2 (List.96, List.97):
+    let List.516 : U64 = CallByName List.6 List.96;
+    let List.513 : Int1 = CallByName Num.22 List.97 List.516;
+    if List.513 then
+        let List.515 : I64 = CallByName List.66 List.96 List.97;
+        let List.514 : [C {}, C I64] = TagId(1) List.515;
+        ret List.514;
     else
-        let List.496 : {} = Struct {};
-        let List.495 : [C {}, C I64] = TagId(0) List.496;
-        ret List.495;
+        let List.512 : {} = Struct {};
+        let List.511 : [C {}, C I64] = TagId(0) List.512;
+        ret List.511;
 
-procedure List.3 (List.103, List.104, List.105):
-    let List.487 : {List I64, I64} = CallByName List.64 List.103 List.104 List.105;
-    let List.486 : List I64 = StructAtIndex 0 List.487;
-    inc List.486;
-    dec List.487;
-    ret List.486;
+procedure List.3 (List.104, List.105, List.106):
+    let List.503 : {List I64, I64} = CallByName List.64 List.104 List.105 List.106;
+    let List.502 : List I64 = StructAtIndex 0 List.503;
+    inc List.502;
+    dec List.503;
+    ret List.502;
 
 procedure List.6 (#Attr.2):
-    let List.485 : U64 = lowlevel ListLen #Attr.2;
-    ret List.485;
+    let List.501 : U64 = lowlevel ListLen #Attr.2;
+    ret List.501;
 
-procedure List.64 (List.100, List.101, List.102):
-    let List.484 : U64 = CallByName List.6 List.100;
-    let List.481 : Int1 = CallByName Num.22 List.101 List.484;
-    if List.481 then
-        let List.482 : {List I64, I64} = CallByName List.67 List.100 List.101 List.102;
-        ret List.482;
+procedure List.64 (List.101, List.102, List.103):
+    let List.500 : U64 = CallByName List.6 List.101;
+    let List.497 : Int1 = CallByName Num.22 List.102 List.500;
+    if List.497 then
+        let List.498 : {List I64, I64} = CallByName List.67 List.101 List.102 List.103;
+        ret List.498;
     else
-        let List.480 : {List I64, I64} = Struct {List.100, List.102};
-        ret List.480;
+        let List.496 : {List I64, I64} = Struct {List.101, List.103};
+        ret List.496;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.493 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.493;
+    let List.509 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.509;
 
 procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
-    let List.483 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
-    ret List.483;
+    let List.499 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
+    ret List.499;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.258 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.258;
+    let Num.277 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.277;
 
 procedure Test.1 (Test.2, Test.3, Test.4):
     let Test.29 : [C {}, C I64] = CallByName List.2 Test.4 Test.3;

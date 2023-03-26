@@ -3307,8 +3307,44 @@ fn box_str() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn box_and_unbox_num() {
+fn box_and_unbox_u64() {
     assert_evals_to!("Box.unbox (Box.box (123u64))", 123, u64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u32() {
+    assert_evals_to!("Box.unbox (Box.box (123u32))", 123, u32)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u16() {
+    assert_evals_to!("Box.unbox (Box.box (123u16))", 123, u16)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u8() {
+    assert_evals_to!("Box.unbox (Box.box (123u8))", 123, u8)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_bool() {
+    assert_evals_to!("Box.unbox (Box.box (Bool.true))", true, bool)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_f64() {
+    assert_evals_to!("Box.unbox (Box.box (123.0f64))", 123.0, f64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_f32() {
+    assert_evals_to!("Box.unbox (Box.box (123.0f32))", 123.0, f32)
 }
 
 #[test]
@@ -4275,4 +4311,27 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         30,
         u8
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            go : U8 -> U8
+            go = \byte ->
+                when byte is
+                    15 if Bool.true -> 1
+                    b if Bool.true -> b + 2
+                    _ -> 3
+
+            main = go '.'
+            "#
+        ),
+        b'.' + 2,
+        u8
+    )
 }

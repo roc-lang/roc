@@ -605,7 +605,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 // get the borrow signature
                 let ps = self
                     .param_map
-                    .get_symbol(name.name(), top_level)
+                    .get_symbol(self.layout_interner, name.name(), top_level)
                     .expect("function is defined");
 
                 let v = Expr::Call(crate::ir::Call {
@@ -653,10 +653,11 @@ impl<'a, 'i> Context<'a, 'i> {
             niche: passed_function.name.niche(),
         };
 
-        let function_ps = match self
-            .param_map
-            .get_symbol(passed_function.name.name(), function_layout)
-        {
+        let function_ps = match self.param_map.get_symbol(
+            self.layout_interner,
+            passed_function.name.name(),
+            function_layout,
+        ) {
             Some(function_ps) => function_ps,
             None => unreachable!(),
         };
@@ -671,14 +672,14 @@ impl<'a, 'i> Context<'a, 'i> {
                     match ownership {
                         DataOwnedFunctionOwns | DataBorrowedFunctionOwns => {
                             // elements have been consumed, must still consume the list itself
-                            let rest = self.arena.alloc($stmt);
+                            let rest = self.arena.alloc(stmt);
                             let rc = Stmt::Refcounting(ModifyRc::DecRef(argument), rest);
 
                             stmt = self.arena.alloc(rc);
                         }
                         DataOwnedFunctionBorrows => {
                             // must consume list and elements
-                            let rest = self.arena.alloc($stmt);
+                            let rest = self.arena.alloc(stmt);
                             let rc = Stmt::Refcounting(ModifyRc::Dec(argument), rest);
 
                             stmt = self.arena.alloc(rc);
@@ -1510,19 +1511,28 @@ pub fn visit_procs<'a, 'i>(
     };
 
     for (key, proc) in procs.iter_mut() {
-        visit_proc(arena, &mut codegen, param_map, &ctx, proc, key.1);
+        visit_proc(
+            arena,
+            layout_interner,
+            &mut codegen,
+            param_map,
+            &ctx,
+            proc,
+            key.1,
+        );
     }
 }
 
 fn visit_proc<'a, 'i>(
     arena: &'a Bump,
+    interner: &STLayoutInterner<'a>,
     codegen: &mut CodegenTools<'i>,
     param_map: &'a ParamMap<'a>,
     ctx: &Context<'a, 'i>,
     proc: &mut Proc<'a>,
     layout: ProcLayout<'a>,
 ) {
-    let params = match param_map.get_symbol(proc.name.name(), layout) {
+    let params = match param_map.get_symbol(interner, proc.name.name(), layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(
             proc.args.iter().cloned().map(|(layout, symbol)| Param {

@@ -4,9 +4,12 @@ use crate::{
     single_register_layouts, Relocation,
 };
 use bumpalo::collections::Vec;
+use roc_builtins::bitcode::FloatWidth;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
+
+use super::CompareOperation;
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.
@@ -261,59 +264,22 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         args: &'a [(InLayout<'a>, Symbol)],
         ret_layout: &InLayout<'a>,
     ) {
-        let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
-        let mut general_i = 0;
-        let mut float_i = 0;
-        if X86_64SystemV::returns_via_arg_pointer(layout_interner, ret_layout) {
-            storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
-            general_i += 1;
+        let returns_via_pointer =
+            X86_64SystemV::returns_via_arg_pointer(layout_interner, ret_layout);
+
+        let mut state = X64_64SystemVLoadArgs {
+            general_i: usize::from(returns_via_pointer),
+            float_i: 0,
+            // 16 is the size of the pushed return address and base pointer.
+            argument_offset: X86_64SystemV::SHADOW_SPACE_SIZE as i32 + 16,
+        };
+
+        if returns_via_pointer {
+            storage_manager.ret_pointer_arg(X86_64SystemV::GENERAL_PARAM_REGS[0]);
         }
+
         for (in_layout, sym) in args.iter() {
-            let stack_size = layout_interner.stack_size(*in_layout);
-            match *in_layout {
-                single_register_integers!() => {
-                    if general_i < Self::GENERAL_PARAM_REGS.len() {
-                        storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[general_i]);
-                        general_i += 1;
-                    } else {
-                        storage_manager.primitive_stack_arg(sym, arg_offset);
-                        arg_offset += 8;
-                    }
-                }
-                single_register_floats!() => {
-                    if float_i < Self::FLOAT_PARAM_REGS.len() {
-                        storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[float_i]);
-                        float_i += 1;
-                    } else {
-                        storage_manager.primitive_stack_arg(sym, arg_offset);
-                        arg_offset += 8;
-                    }
-                }
-                _ if stack_size == 0 => {
-                    storage_manager.no_data_arg(sym);
-                }
-                _ if stack_size > 16 => {
-                    // TODO: Double check this.
-                    storage_manager.complex_stack_arg(sym, arg_offset, stack_size);
-                    arg_offset += stack_size as i32;
-                }
-                other => match layout_interner.get(other) {
-                    Layout::Boxed(_) => {
-                        // boxed layouts are pointers, which we treat as 64-bit integers
-                        if general_i < Self::GENERAL_PARAM_REGS.len() {
-                            storage_manager
-                                .general_reg_arg(sym, Self::GENERAL_PARAM_REGS[general_i]);
-                            general_i += 1;
-                        } else {
-                            storage_manager.primitive_stack_arg(sym, arg_offset);
-                            arg_offset += 8;
-                        }
-                    }
-                    _ => {
-                        todo!("Loading args with layout {:?}", layout_interner.dbg(other));
-                    }
-                },
-            }
+            state.load_arg(storage_manager, layout_interner, *sym, *in_layout);
         }
     }
 
@@ -334,9 +300,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
-        let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         let mut general_i = 0;
-        let mut float_i = 0;
+
         if Self::returns_via_arg_pointer(layout_interner, ret_layout) {
             // Save space on the stack for the result we will be return.
             let base_offset =
@@ -352,110 +317,17 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             );
         }
 
-        for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
-            match *layout {
-                single_register_integers!() => {
-                    if general_i < Self::GENERAL_PARAM_REGS.len() {
-                        storage_manager.load_to_specified_general_reg(
-                            buf,
-                            sym,
-                            Self::GENERAL_PARAM_REGS[general_i],
-                        );
-                        general_i += 1;
-                    } else {
-                        // Copy to stack using return reg as buffer.
-                        storage_manager.load_to_specified_general_reg(
-                            buf,
-                            sym,
-                            Self::GENERAL_RETURN_REGS[0],
-                        );
-                        X86_64Assembler::mov_stack32_reg64(
-                            buf,
-                            tmp_stack_offset,
-                            Self::GENERAL_RETURN_REGS[0],
-                        );
-                        tmp_stack_offset += 8;
-                    }
-                }
-                single_register_floats!() => {
-                    if float_i < Self::FLOAT_PARAM_REGS.len() {
-                        storage_manager.load_to_specified_float_reg(
-                            buf,
-                            sym,
-                            Self::FLOAT_PARAM_REGS[float_i],
-                        );
-                        float_i += 1;
-                    } else {
-                        // Copy to stack using return reg as buffer.
-                        storage_manager.load_to_specified_float_reg(
-                            buf,
-                            sym,
-                            Self::FLOAT_RETURN_REGS[0],
-                        );
-                        X86_64Assembler::mov_stack32_freg64(
-                            buf,
-                            tmp_stack_offset,
-                            Self::FLOAT_RETURN_REGS[0],
-                        );
-                        tmp_stack_offset += 8;
-                    }
-                }
-                x if layout_interner.stack_size(x) == 0 => {}
-                x if layout_interner.stack_size(x) > 16 => {
-                    // TODO: Double check this.
-                    // Just copy onto the stack.
-                    // Use return reg as buffer because it will be empty right now.
-                    let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
-                    debug_assert_eq!(base_offset % 8, 0);
-                    for i in (0..size as i32).step_by(8) {
-                        X86_64Assembler::mov_reg64_base32(
-                            buf,
-                            Self::GENERAL_RETURN_REGS[0],
-                            base_offset + i,
-                        );
-                        X86_64Assembler::mov_stack32_reg64(
-                            buf,
-                            tmp_stack_offset + i,
-                            Self::GENERAL_RETURN_REGS[0],
-                        );
-                    }
-                    tmp_stack_offset += size as i32;
-                }
-                other => {
-                    // look at the layout in more detail
-                    match layout_interner.get(other) {
-                        Layout::Boxed(_) => {
-                            // treat boxed like a 64-bit integer
-                            if general_i < Self::GENERAL_PARAM_REGS.len() {
-                                storage_manager.load_to_specified_general_reg(
-                                    buf,
-                                    sym,
-                                    Self::GENERAL_PARAM_REGS[general_i],
-                                );
-                                general_i += 1;
-                            } else {
-                                // Copy to stack using return reg as buffer.
-                                storage_manager.load_to_specified_general_reg(
-                                    buf,
-                                    sym,
-                                    Self::GENERAL_RETURN_REGS[0],
-                                );
-                                X86_64Assembler::mov_stack32_reg64(
-                                    buf,
-                                    tmp_stack_offset,
-                                    Self::GENERAL_RETURN_REGS[0],
-                                );
-                                tmp_stack_offset += 8;
-                            }
-                        }
-                        _ => {
-                            todo!("calling with arg type, {:?}", layout_interner.dbg(other));
-                        }
-                    }
-                }
-            }
+        let mut state = X64_64SystemVStoreArgs {
+            general_i,
+            float_i: 0,
+            tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
+        };
+
+        for (sym, in_layout) in args.iter().zip(arg_layouts.iter()) {
+            state.store_arg(buf, storage_manager, layout_interner, *sym, *in_layout);
         }
-        storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
+
+        storage_manager.update_fn_call_stack_size(state.tmp_stack_offset as u32);
     }
 
     fn return_complex_symbol<'a, 'r>(
@@ -558,6 +430,225 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 // That means the value is already loaded onto the stack area we allocated before the call.
                 // Nothing to do.
             }
+        }
+    }
+}
+
+struct X64_64SystemVStoreArgs {
+    general_i: usize,
+    float_i: usize,
+    tmp_stack_offset: i32,
+}
+
+impl X64_64SystemVStoreArgs {
+    const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] = X86_64SystemV::GENERAL_PARAM_REGS;
+    const GENERAL_RETURN_REGS: &'static [X86_64GeneralReg] = X86_64SystemV::GENERAL_RETURN_REGS;
+
+    const FLOAT_PARAM_REGS: &'static [X86_64FloatReg] = X86_64SystemV::FLOAT_PARAM_REGS;
+    const FLOAT_RETURN_REGS: &'static [X86_64FloatReg] = X86_64SystemV::FLOAT_RETURN_REGS;
+
+    fn store_arg<'a, 'r>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: Symbol,
+        in_layout: InLayout<'a>,
+    ) {
+        match in_layout {
+            single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
+            single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
+            x if layout_interner.stack_size(x) == 0 => {}
+            x if layout_interner.stack_size(x) > 16 => {
+                // TODO: Double check this.
+                // Just copy onto the stack.
+                // Use return reg as buffer because it will be empty right now.
+                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
+                debug_assert_eq!(base_offset % 8, 0);
+                for i in (0..size as i32).step_by(8) {
+                    X86_64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset + i,
+                    );
+                    X86_64Assembler::mov_stack32_reg64(
+                        buf,
+                        self.tmp_stack_offset + i,
+                        Self::GENERAL_RETURN_REGS[0],
+                    );
+                }
+                self.tmp_stack_offset += size as i32;
+            }
+            other => {
+                // look at the layout in more detail
+                match layout_interner.get(other) {
+                    Layout::Boxed(_) => {
+                        // treat boxed like a 64-bit integer
+                        self.store_arg_general(buf, storage_manager, sym)
+                    }
+                    Layout::LambdaSet(lambda_set) => self.store_arg(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        lambda_set.runtime_representation(),
+                    ),
+                    Layout::Struct { .. } => {
+                        // for now, just also store this on the stack
+                        let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
+                        debug_assert_eq!(base_offset % 8, 0);
+                        for i in (0..size as i32).step_by(8) {
+                            X86_64Assembler::mov_reg64_base32(
+                                buf,
+                                Self::GENERAL_RETURN_REGS[0],
+                                base_offset + i,
+                            );
+                            X86_64Assembler::mov_stack32_reg64(
+                                buf,
+                                self.tmp_stack_offset + i,
+                                Self::GENERAL_RETURN_REGS[0],
+                            );
+                        }
+                        self.tmp_stack_offset += size as i32;
+                    }
+                    _ => {
+                        todo!("calling with arg type, {:?}", layout_interner.dbg(other));
+                    }
+                }
+            }
+        }
+    }
+
+    fn store_arg_general<'a, 'r>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        sym: Symbol,
+    ) {
+        if self.general_i < Self::GENERAL_PARAM_REGS.len() {
+            storage_manager.load_to_specified_general_reg(
+                buf,
+                &sym,
+                Self::GENERAL_PARAM_REGS[self.general_i],
+            );
+            self.general_i += 1;
+        } else {
+            // Copy to stack using return reg as buffer.
+            storage_manager.load_to_specified_general_reg(buf, &sym, Self::GENERAL_RETURN_REGS[0]);
+            X86_64Assembler::mov_stack32_reg64(
+                buf,
+                self.tmp_stack_offset,
+                Self::GENERAL_RETURN_REGS[0],
+            );
+            self.tmp_stack_offset += 8;
+        }
+    }
+
+    fn store_arg_float<'a, 'r>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        sym: Symbol,
+    ) {
+        if self.float_i < Self::FLOAT_PARAM_REGS.len() {
+            storage_manager.load_to_specified_float_reg(
+                buf,
+                &sym,
+                Self::FLOAT_PARAM_REGS[self.float_i],
+            );
+            self.float_i += 1;
+        } else {
+            // Copy to stack using return reg as buffer.
+            storage_manager.load_to_specified_float_reg(buf, &sym, Self::FLOAT_RETURN_REGS[0]);
+            X86_64Assembler::mov_stack32_freg64(
+                buf,
+                self.tmp_stack_offset,
+                Self::FLOAT_RETURN_REGS[0],
+            );
+            self.tmp_stack_offset += 8;
+        }
+    }
+}
+
+struct X64_64SystemVLoadArgs {
+    general_i: usize,
+    float_i: usize,
+    argument_offset: i32,
+}
+
+type X86_64StorageManager<'a, 'r, CallConv> =
+    StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, X86_64Assembler, CallConv>;
+
+impl X64_64SystemVLoadArgs {
+    fn load_arg<'a, 'r>(
+        &mut self,
+        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: Symbol,
+        in_layout: InLayout<'a>,
+    ) {
+        let stack_size = layout_interner.stack_size(in_layout);
+        match in_layout {
+            single_register_integers!() => self.load_arg_general(storage_manager, sym),
+            single_register_floats!() => self.load_arg_float(storage_manager, sym),
+            _ if stack_size == 0 => {
+                storage_manager.no_data_arg(&sym);
+            }
+            _ if stack_size > 16 => {
+                // TODO: Double check this.
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            other => match layout_interner.get(other) {
+                Layout::Boxed(_) => {
+                    // boxed layouts are pointers, which we treat as 64-bit integers
+                    self.load_arg_general(storage_manager, sym)
+                }
+                Layout::LambdaSet(lambda_set) => self.load_arg(
+                    storage_manager,
+                    layout_interner,
+                    sym,
+                    lambda_set.runtime_representation(),
+                ),
+                Layout::Struct { .. } => {
+                    // for now, just also store this on the stack
+                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                    self.argument_offset += stack_size as i32;
+                }
+                _ => {
+                    todo!("Loading args with layout {:?}", layout_interner.dbg(other));
+                }
+            },
+        }
+    }
+
+    fn load_arg_general<'a, 'r>(
+        &mut self,
+        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        sym: Symbol,
+    ) {
+        if self.general_i < X86_64SystemV::GENERAL_PARAM_REGS.len() {
+            let reg = X86_64SystemV::GENERAL_PARAM_REGS[self.general_i];
+            storage_manager.general_reg_arg(&sym, reg);
+            self.general_i += 1;
+        } else {
+            storage_manager.primitive_stack_arg(&sym, self.argument_offset);
+            self.argument_offset += 8;
+        }
+    }
+
+    fn load_arg_float<'a, 'r>(
+        &mut self,
+        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        sym: Symbol,
+    ) {
+        if self.general_i < X86_64SystemV::GENERAL_PARAM_REGS.len() {
+            let reg = X86_64SystemV::FLOAT_PARAM_REGS[self.general_i];
+            storage_manager.float_reg_arg(&sym, reg);
+            self.float_i += 1;
+        } else {
+            storage_manager.primitive_stack_arg(&sym, self.argument_offset);
+            self.argument_offset += 8;
         }
     }
 }
@@ -705,14 +796,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     #[inline(always)]
     fn load_args<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<
-            'a,
-            'r,
-            X86_64GeneralReg,
-            X86_64FloatReg,
-            X86_64Assembler,
-            X86_64WindowsFastcall,
-        >,
+        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64WindowsFastcall>,
         layout_interner: &mut STLayoutInterner<'a>,
         args: &'a [(InLayout<'a>, Symbol)],
         ret_layout: &InLayout<'a>,
@@ -1271,17 +1355,54 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
         movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
     }
+
     #[inline(always)]
     fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
         mov_reg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
     }
     #[inline(always)]
+    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
+        mov_reg32_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
+    }
+    #[inline(always)]
+    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
+        mov_reg16_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
+    }
+    #[inline(always)]
+    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
+        mov_reg8_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
+    }
+
+    #[inline(always)]
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64FloatReg) {
         movsd_base64_offset32_freg64(buf, X86_64GeneralReg::RBP, offset, src)
     }
+
+    #[inline(always)]
+    fn movesd_mem64_offset32_freg64(
+        buf: &mut Vec<'_, u8>,
+        ptr: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64FloatReg,
+    ) {
+        movsd_base64_offset32_freg64(buf, ptr, offset, src)
+    }
+
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
         mov_base64_offset32_reg64(buf, X86_64GeneralReg::RBP, offset, src)
+    }
+    #[inline(always)]
+    fn mov_base32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
+        mov_base32_offset32_reg32(buf, X86_64GeneralReg::RBP, offset, src)
+    }
+    #[inline(always)]
+    fn mov_base32_reg16(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
+        mov_base16_offset32_reg16(buf, X86_64GeneralReg::RBP, offset, src)
+    }
+    #[inline(always)]
+    fn mov_base32_reg8(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
+        mov_base8_offset32_reg8(buf, X86_64GeneralReg::RBP, offset, src)
     }
 
     #[inline(always)]
@@ -1294,6 +1415,32 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_base64_offset32(buf, dst, src, offset)
     }
     #[inline(always)]
+    fn mov_reg32_mem32_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        mov_reg32_base32_offset32(buf, dst, src, offset)
+    }
+    fn mov_reg16_mem16_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        mov_reg16_base16_offset32(buf, dst, src, offset)
+    }
+    fn mov_reg8_mem8_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        mov_reg8_base8_offset32(buf, dst, src, offset)
+    }
+
+    #[inline(always)]
     fn mov_mem64_offset32_reg64(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -1304,11 +1451,43 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn mov_mem32_offset32_reg32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base32_offset32_reg32(buf, dst, offset, src)
+    }
+
+    #[inline(always)]
+    fn mov_mem16_offset32_reg16(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base16_offset32_reg16(buf, dst, offset, src)
+    }
+
+    #[inline(always)]
+    fn mov_mem8_offset32_reg8(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base8_offset32_reg8(buf, dst, offset, src)
+    }
+
+    #[inline(always)]
     fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
         debug_assert!(size <= 8);
         match size {
             8 => Self::mov_reg64_base32(buf, dst, offset),
-            4 | 2 | 1 => todo!("sign extending {size} byte values"),
+            4 => movsx_reg64_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            2 => movsx_reg64_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            1 => movsx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
             _ => internal_error!("Invalid size for sign extension: {size}"),
         }
     }
@@ -1317,7 +1496,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         debug_assert!(size <= 8);
         match size {
             8 => Self::mov_reg64_base32(buf, dst, offset),
-            4 | 2 => todo!("zero extending {size} byte values"),
+            4 => {
+                // The Intel documentation (3.4.1.1 General-Purpose Registers in 64-Bit Mode in manual Basic Architecture))
+                // 32-bit operands generate a 32-bit result, zero-extended to a 64-bit result in the destination general-purpose register.
+                Self::mov_reg64_base32(buf, dst, offset)
+            }
+            2 => movzx_reg64_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
             1 => movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
             _ => internal_error!("Invalid size for zero extension: {size}"),
         }
@@ -1409,6 +1593,33 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     ) {
         cmp_reg64_reg64(buf, src1, src2);
         setb_reg64(buf, dst);
+    }
+
+    #[inline(always)]
+    fn cmp_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+        width: FloatWidth,
+        operation: CompareOperation,
+    ) {
+        use CompareOperation::*;
+
+        let (arg1, arg2) = match operation {
+            LessThan | LessThanOrEqual => (src1, src2),
+            GreaterThan | GreaterThanOrEqual => (src2, src1),
+        };
+
+        match width {
+            FloatWidth::F32 => cmp_freg32_freg32(buf, arg2, arg1),
+            FloatWidth::F64 => cmp_freg64_freg64(buf, arg2, arg1),
+        }
+
+        match operation {
+            LessThan | GreaterThan => seta_reg64(buf, dst),
+            LessThanOrEqual | GreaterThanOrEqual => setae_reg64(buf, dst),
+        };
     }
 
     #[inline(always)]
@@ -1534,6 +1745,14 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     {
         shift_reg64_reg64_reg64(buf, storage_manager, sar_reg64_reg64, dst, src1, src2)
     }
+
+    fn sqrt_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+        sqrtsd_freg64_freg64(buf, dst, src)
+    }
+
+    fn sqrt_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+        sqrtss_freg32_freg32(buf, dst, src)
+    }
 }
 
 fn shift_reg64_reg64_reg64<'a, 'r, ASM, CC>(
@@ -1585,12 +1804,16 @@ impl X86_64Assembler {
         push_reg64(buf, reg);
     }
 }
+
+const GRP_4: u8 = 0x66;
+
 const REX: u8 = 0x40;
 
 // see https://wiki.osdev.org/X86-64_Instruction_Encoding#Encoding
 /// If set, 64-bit operand size is used
 const REX_PREFIX_W: u8 = 0b1000;
 /// Extension to the MODRM.reg
+/// Permits access to additional registers
 const REX_PREFIX_R: u8 = 0b0100;
 #[allow(unused)]
 /// Extension to the SIB.index field
@@ -1598,7 +1821,7 @@ const REX_PREFIX_X: u8 = 0b0010;
 /// Extension to the MODRM.rm
 const REX_PREFIX_B: u8 = 0b0001;
 
-/// Wide REX
+/// Wide REX (64-bit)
 const REX_W: u8 = REX | REX_PREFIX_W;
 
 #[inline(always)]
@@ -1900,6 +2123,90 @@ fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
     binop_reg64_reg64(0x39, buf, dst, src);
 }
 
+#[inline(always)]
+fn cmp_freg64_freg64(buf: &mut Vec<'_, u8>, src1: X86_64FloatReg, src2: X86_64FloatReg) {
+    let src1_high = src1 as u8 > 7;
+    let src1_mod = src1 as u8 % 8;
+
+    let src2_high = src2 as u8 > 7;
+    let src2_mod = src2 as u8 % 8;
+
+    if src1_high || src2_high {
+        buf.extend([
+            0x66,
+            0x40 | ((src1_high as u8) << 2) | (src2_high as u8),
+            0x0F,
+            0x2E,
+            0xC0 | (src1_mod << 3) | (src2_mod),
+        ])
+    } else {
+        buf.extend([0x66, 0x0F, 0x2E, 0xC0 | (src1_mod << 3) | (src2_mod)])
+    }
+}
+
+#[inline(always)]
+fn cmp_freg32_freg32(buf: &mut Vec<'_, u8>, src1: X86_64FloatReg, src2: X86_64FloatReg) {
+    let src1_high = src1 as u8 > 7;
+    let src1_mod = src1 as u8 % 8;
+
+    let src2_high = src2 as u8 > 7;
+    let src2_mod = src2 as u8 % 8;
+
+    if src1_high || src2_high {
+        buf.extend([
+            0x65,
+            0x40 | ((src1_high as u8) << 2) | (src2_high as u8),
+            0x0F,
+            0x2E,
+            0xC0 | (src1_mod << 3) | (src2_mod),
+        ])
+    } else {
+        buf.extend([0x65, 0x0F, 0x2E, 0xC0 | (src1_mod << 3) | (src2_mod)])
+    }
+}
+
+#[inline(always)]
+fn sqrtsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        buf.extend([
+            0xF2,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x51,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend([0xF2, 0x0F, 0x51, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+#[inline(always)]
+fn sqrtss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        buf.extend([
+            0xF3,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x51,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend([0xF3, 0x0F, 0x51, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
 /// `TEST r/m64,r64` -> AND r64 with r/m64; set SF, ZF, PF according to result.
 #[allow(dead_code)]
 #[inline(always)]
@@ -2049,6 +2356,117 @@ fn mov_base64_offset32_reg64(
     buf.extend(offset.to_le_bytes());
 }
 
+/// `MOV r/m32,r32` -> Move r32 to r/m32, where m32 references a base + offset.
+#[inline(always)]
+fn mov_base32_offset32_reg32(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(base, REX);
+    let rex = add_reg_extension(src, rex);
+    let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+    buf.extend([rex, 0x89, 0x80 | src_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOV r/m16,r16` -> Move r16 to r/m16, where m16 references a base + offset.
+#[inline(always)]
+fn mov_base16_offset32_reg16(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(base, REX);
+    let rex = add_reg_extension(src, rex);
+    let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+    buf.extend([GRP_4, rex, 0x89, 0x80 | src_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOV r/m8,r8` -> Move r8 to r/m8, where m8 references a base + offset.
+#[inline(always)]
+fn mov_base8_offset32_reg8(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(base, REX);
+    let rex = add_reg_extension(src, rex);
+    let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+    buf.extend([rex, 0x88, 0x80 | src_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+enum RegisterWidth {
+    W8,
+    W16,
+    W32,
+    W64,
+}
+
+#[inline(always)]
+fn mov_reg_base_offset32(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    use RegisterWidth::*;
+
+    let rex = match register_width {
+        W64 => REX_W,
+        _ => REX,
+    };
+
+    let rex = add_rm_extension(base, rex);
+    let rex = add_reg_extension(dst, rex);
+
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    let operands = 0x80 | dst_mod | base_mod;
+
+    buf.reserve(8);
+
+    let instruction = match register_width {
+        W8 => 0x8A,
+        W16 | W32 | W64 => 0x8B,
+    };
+
+    match register_width {
+        W16 => buf.extend([GRP_4, rex, instruction, operands]),
+        _ => buf.extend([rex, instruction, operands]),
+    };
+
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
 /// `MOV r64,r/m64` -> Move r/m64 to r64, where m64 references a base + offset.
 #[inline(always)]
 fn mov_reg64_base64_offset32(
@@ -2057,12 +2475,115 @@ fn mov_reg64_base64_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
+    mov_reg_base_offset32(buf, RegisterWidth::W64, dst, base, offset)
+}
+
+/// `MOV r/m32,r32` -> Move r32 to r/m32.
+#[inline(always)]
+fn mov_reg32_base32_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    mov_reg_base_offset32(buf, RegisterWidth::W32, dst, base, offset)
+}
+
+/// `MOV r/m16,r16` -> Move r16 to r/m16.
+#[inline(always)]
+fn mov_reg16_base16_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    mov_reg_base_offset32(buf, RegisterWidth::W16, dst, base, offset)
+}
+
+/// `MOV r/m8,r8` -> Move r8 to r/m8.
+#[inline(always)]
+fn mov_reg8_base8_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    mov_reg_base_offset32(buf, RegisterWidth::W8, dst, base, offset)
+}
+
+#[inline(always)]
+fn movsx_reg64_base_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+    opcode: &[u8],
+) {
     let rex = add_rm_extension(base, REX_W);
     let rex = add_reg_extension(dst, rex);
     let dst_mod = (dst as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
-    buf.reserve(8);
-    buf.extend([rex, 0x8B, 0x80 | dst_mod | base_mod]);
+    buf.reserve(9);
+
+    // our output is a 64-bit value, so rex is always needed
+    buf.push(rex);
+    buf.extend(opcode);
+    buf.push(0x80 | dst_mod | base_mod);
+
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOVSX r64,r/m32` -> Move r/m32 with sign extention to r64, where m32 references a base + offset.
+#[inline(always)]
+fn movsx_reg64_base32_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    movsx_reg64_base_offset32(buf, dst, base, offset, &[0x63])
+}
+
+/// `MOVSX r64,r/m16` -> Move r/m16 with sign extention to r64, where m16 references a base + offset.
+#[inline(always)]
+fn movsx_reg64_base16_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    movsx_reg64_base_offset32(buf, dst, base, offset, &[0x0F, 0xBF])
+}
+
+/// `MOVSX r64,r/m8` -> Move r/m8 with sign extention to r64, where m8 references a base + offset.
+#[inline(always)]
+fn movsx_reg64_base8_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    movsx_reg64_base_offset32(buf, dst, base, offset, &[0x0F, 0xBE])
+}
+
+#[inline(always)]
+fn movzx_reg64_base_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+    opcode: u8,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(9);
+    buf.extend([rex, 0x0F, opcode, 0x80 | dst_mod | base_mod]);
     // Using RSP or R12 requires a secondary index byte.
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
         buf.push(0x24);
@@ -2078,17 +2599,18 @@ fn movzx_reg64_base8_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
-    let rex = add_rm_extension(base, REX_W);
-    let rex = add_reg_extension(dst, rex);
-    let dst_mod = (dst as u8 % 8) << 3;
-    let base_mod = base as u8 % 8;
-    buf.reserve(9);
-    buf.extend([rex, 0x0F, 0xB6, 0x80 | dst_mod | base_mod]);
-    // Using RSP or R12 requires a secondary index byte.
-    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-        buf.push(0x24);
-    }
-    buf.extend(offset.to_le_bytes());
+    movzx_reg64_base_offset32(buf, dst, base, offset, 0xB6)
+}
+
+/// `MOVZX r64,r/m16` -> Move r/m16 with zero extention to r64, where m16 references a base + offset.
+#[inline(always)]
+fn movzx_reg64_base16_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    movzx_reg64_base_offset32(buf, dst, base, offset, 0xB7)
 }
 
 /// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
@@ -2357,6 +2879,12 @@ fn seta_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x97, buf, reg);
 }
 
+/// `SETAE r/m64` -> Set byte if above or equal (CF=0).
+#[inline(always)]
+fn setae_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x93, buf, reg);
+}
+
 /// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF≠ OF).
 #[inline(always)]
 fn setle_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
@@ -2431,6 +2959,50 @@ mod tests {
     use capstone::prelude::*;
 
     impl X86_64GeneralReg {
+        #[allow(dead_code)]
+        fn low_32bits_string(&self) -> &str {
+            match self {
+                X86_64GeneralReg::RAX => "eax",
+                X86_64GeneralReg::RBX => "ebx",
+                X86_64GeneralReg::RCX => "ecx",
+                X86_64GeneralReg::RDX => "edx",
+                X86_64GeneralReg::RBP => "ebp",
+                X86_64GeneralReg::RSP => "esp",
+                X86_64GeneralReg::RDI => "edi",
+                X86_64GeneralReg::RSI => "esi",
+                X86_64GeneralReg::R8 => "r8d",
+                X86_64GeneralReg::R9 => "r9d",
+                X86_64GeneralReg::R10 => "r10d",
+                X86_64GeneralReg::R11 => "r11d",
+                X86_64GeneralReg::R12 => "r12d",
+                X86_64GeneralReg::R13 => "r13d",
+                X86_64GeneralReg::R14 => "r14d",
+                X86_64GeneralReg::R15 => "r15d",
+            }
+        }
+
+        #[allow(dead_code)]
+        fn low_16bits_string(&self) -> &str {
+            match self {
+                X86_64GeneralReg::RAX => "ax",
+                X86_64GeneralReg::RBX => "bx",
+                X86_64GeneralReg::RCX => "cx",
+                X86_64GeneralReg::RDX => "dx",
+                X86_64GeneralReg::RBP => "bp",
+                X86_64GeneralReg::RSP => "sp",
+                X86_64GeneralReg::RDI => "di",
+                X86_64GeneralReg::RSI => "si",
+                X86_64GeneralReg::R8 => "r8w",
+                X86_64GeneralReg::R9 => "r9w",
+                X86_64GeneralReg::R10 => "r10w",
+                X86_64GeneralReg::R11 => "r11w",
+                X86_64GeneralReg::R12 => "r12w",
+                X86_64GeneralReg::R13 => "r13w",
+                X86_64GeneralReg::R14 => "r14w",
+                X86_64GeneralReg::R15 => "r15w",
+            }
+        }
+
         #[allow(dead_code)]
         fn low_8bits_string(&self) -> &str {
             match self {
@@ -2811,6 +3383,54 @@ mod tests {
     }
 
     #[test]
+    fn test_mov_reg32_base32_offset32() {
+        disassembler_test!(
+            mov_reg32_base32_offset32,
+            |reg1, reg2, imm| format!(
+                "mov {}, dword ptr [{} + 0x{:x}]",
+                X86_64GeneralReg::low_32bits_string(&reg1),
+                reg2,
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_mov_reg16_base16_offset32() {
+        disassembler_test!(
+            mov_reg16_base16_offset32,
+            |reg1, reg2, imm| format!(
+                "mov {}, word ptr [{} + 0x{:x}]",
+                X86_64GeneralReg::low_16bits_string(&reg1),
+                reg2,
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_mov_reg8_base8_offset32() {
+        disassembler_test!(
+            mov_reg8_base8_offset32,
+            |reg1, reg2, imm| format!(
+                "mov {}, byte ptr [{} + 0x{:x}]",
+                X86_64GeneralReg::low_8bits_string(&reg1),
+                reg2,
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
     fn test_mov_base64_offset32_reg64() {
         disassembler_test!(
             mov_base64_offset32_reg64,
@@ -2818,6 +3438,98 @@ mod tests {
             ALL_GENERAL_REGS,
             [TEST_I32],
             ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mov_base32_offset32_reg32() {
+        disassembler_test!(
+            mov_base32_offset32_reg32,
+            |reg1, imm, reg2| format!(
+                "mov dword ptr [{} + 0x{:x}], {}",
+                reg1,
+                imm,
+                X86_64GeneralReg::low_32bits_string(&reg2),
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mov_base16_offset32_reg16() {
+        disassembler_test!(
+            mov_base16_offset32_reg16,
+            |reg1, imm, reg2| format!(
+                "mov word ptr [{} + 0x{:x}], {}",
+                reg1,
+                imm,
+                X86_64GeneralReg::low_16bits_string(&reg2),
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mov_base8_offset32_reg8() {
+        disassembler_test!(
+            mov_base8_offset32_reg8,
+            |reg1, imm, reg2| format!(
+                "mov byte ptr [{} + 0x{:x}], {}",
+                reg1,
+                imm,
+                X86_64GeneralReg::low_8bits_string(&reg2),
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_movsx_reg64_base32_offset32() {
+        disassembler_test!(
+            movsx_reg64_base32_offset32,
+            |reg1, reg2, imm| format!("movsxd {}, dword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movsx_reg64_base16_offset32() {
+        disassembler_test!(
+            movsx_reg64_base16_offset32,
+            |reg1, reg2, imm| format!("movsx {}, word ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movsx_reg64_base8_offset32() {
+        disassembler_test!(
+            movsx_reg64_base8_offset32,
+            |reg1, reg2, imm| format!("movsx {}, byte ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movzx_reg64_base16_offset32() {
+        disassembler_test!(
+            movzx_reg64_base16_offset32,
+            |reg1, reg2, imm| format!("movzx {}, word ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
         );
     }
 
@@ -2938,5 +3650,25 @@ mod tests {
     #[test]
     fn test_push_reg64() {
         disassembler_test!(push_reg64, |reg| format!("push {}", reg), ALL_GENERAL_REGS);
+    }
+
+    #[test]
+    fn test_sqrt_freg64_freg64() {
+        disassembler_test!(
+            sqrtsd_freg64_freg64,
+            |dst, src| format!("sqrtsd {dst}, {src}"),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_sqrt_freg32_freg32() {
+        disassembler_test!(
+            sqrtss_freg32_freg32,
+            |dst, src| format!("sqrtss {dst}, {src}"),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 }

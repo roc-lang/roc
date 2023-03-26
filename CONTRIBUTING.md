@@ -50,17 +50,31 @@ This command will generate the documentation in the [`generated-docs`](generated
 - You can find good first issues [here][good-first-issues]. Once you have gained some experience you can take a look at the [intermediate issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22intermediate+issue%22).
 - [Fork](https://github.com/roc-lang/roc/fork) the repo so that you can apply your changes first on your own copy of the roc repo.
 - It's a good idea to open a draft pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give feedback sooner rather than later if they notice a problem in the direction things are going. Click the button "ready for review" when it's ready.
+
+### Commit signing
+
 - All your commits need to be signed [to prevent impersonation](https://dev.to/martiliones/how-i-got-linus-torvalds-in-my-contributors-on-github-3k4g):
-  - If you don't have signing set up on your device and you only want to change a single file, it will be easier to use [github's edit button](https://docs.github.com/en/repositories/working-with-files/managing-files/editing-files). This will sign your commit automatically.
-  - For multi-file or complex changes you will want to set up signing on your device:
-    1. If you have a Yubikey, follow [guide 1](https://dev.to/paulmicheli/using-your-yubikey-to-get-started-with-gpg-3h4k), [guide 2](https://dev.to/paulmicheli/using-your-yubikey-for-signed-git-commits-4l73) and skip the steps below.
-    2. [Make a key to sign your commits.](https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key)
-    3. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
-    4. Make git sign your commits automatically:
+- If you don't have signing set up on your device and you only want to change a single file, it will be easier to use [github's edit button](https://docs.github.com/en/repositories/working-with-files/managing-files/editing-files). This will sign your commit automatically.
+- For multi-file or complex changes you will want to set up signing on your device:
+  1. If you have a Yubikey, follow [guide 1](https://dev.to/paulmicheli/using-your-yubikey-to-get-started-with-gpg-3h4k), [guide 2](https://dev.to/paulmicheli/using-your-yubikey-for-signed-git-commits-4l73) and skip the steps below.
+  2. [Make a key to sign your commits.](https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key)
+  3. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
+  4. Make git sign your commits automatically:
 
      ```sh
      git config --global commit.gpgsign true
      ```
+
+#### Commit signing on NixOS
+
+On NixOS pinentry can cause problems, the following setup works well for those with a KDE desktop. From `/etc/nixos/configuration.nix`:
+```
+programs.gnupg.agent = {
+    enable = true;
+    pinentryFlavor = "qt";
+    enableSSHSupport = true;
+  };
+```
 
 ### Forgot to sign commits?
 

@@ -1,35 +1,34 @@
 [package]
 name = "test_derive"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Tests Roc's auto-derivers."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [[test]]
 name = "test_derive"
 path = "src/tests.rs"
 
 [dev-dependencies]
-roc_collections = { path = "../collections" }
-roc_module = { path = "../module" }
 roc_builtins = { path = "../builtins" }
-roc_load_internal = { path = "../load_internal" }
 roc_can = { path = "../can" }
-roc_derive_key = { path = "../derive_key" }
+roc_collections = { path = "../collections" }
+roc_constrain = { path = "../constrain" }
+roc_debug_flags = { path = "../debug_flags" }
 roc_derive = { path = "../derive", features = ["debug-derived-symbols", "open-extension-vars"] }
+roc_derive_key = { path = "../derive_key" }
+roc_load_internal = { path = "../load_internal" }
+roc_module = { path = "../module" }
+roc_packaging = { path = "../../packaging" }
+roc_region = { path = "../region" }
+roc_reporting = { path = "../../reporting" }
+roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
 roc_types = { path = "../types" }
-roc_packaging = { path = "../../packaging" }
-roc_reporting = { path = "../../reporting" }
-roc_constrain = { path = "../constrain" }
-roc_region = { path = "../region" }
-roc_solve = { path = "../solve" }
-roc_debug_flags = { path = "../debug_flags" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 
 bumpalo.workspace = true
-indoc.workspace = true
-pretty_assertions.workspace = true
 insta.workspace = true

@@ -114,7 +114,7 @@ pub export fn main() i32 {
     // stdout the result
     stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
 
-    callresult.deinit();
+    callresult.decref();
 
     stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 

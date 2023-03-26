@@ -18,7 +18,9 @@ fn basic_type_from_record<'a, 'ctx, 'env>(
     let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
 
     for field_layout in fields.iter() {
-        field_types.push(basic_type_from_layout(env, layout_interner, *field_layout));
+        let typ = basic_type_from_layout(env, layout_interner, *field_layout);
+
+        field_types.push(typ);
     }
 
     env.context

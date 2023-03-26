@@ -5,6 +5,7 @@ use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
+use roc_command_utils::zig;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
@@ -12,7 +13,6 @@ use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
-use roc_utils::zig;
 use target_lexicon::Triple;
 
 #[cfg(feature = "gen-llvm-wasm")]

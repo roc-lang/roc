@@ -1,6 +1,6 @@
 //! The `roc` binary that brings together all functionality in the Roc toolset.
 use roc_build::link::LinkType;
-use roc_cli::build::check_file;
+use roc_build::program::check_file;
 use roc_cli::{
     build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
     CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST,

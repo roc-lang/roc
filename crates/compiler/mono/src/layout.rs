@@ -1313,6 +1313,14 @@ impl<'a> Niche<'a> {
             ]),
         }
     }
+
+    pub fn dbg_deep<'r, I: LayoutInterner<'a>>(
+        &'r self,
+        interner: &'r I,
+    ) -> crate::layout::intern::dbg::DbgFields<'a, 'r, I> {
+        let NichePriv::Captures(caps) = &self.0;
+        interner.dbg_deep_iter(caps)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -2717,6 +2725,60 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn has_varying_stack_size<I>(self, interner: &I, arena: &bumpalo::Bump) -> bool
+    where
+        I: LayoutInterner<'a>,
+    {
+        let mut stack: Vec<Layout> = bumpalo::collections::Vec::new_in(arena);
+
+        stack.push(self);
+
+        while let Some(layout) = stack.pop() {
+            match layout {
+                Layout::Builtin(builtin) => match builtin {
+                    Builtin::Int(_)
+                    | Builtin::Float(_)
+                    | Builtin::Bool
+                    | Builtin::Decimal
+                    | Builtin::Str
+                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                    | Builtin::List(_) => { /* do nothing */ }
+                },
+                // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                Layout::Struct { field_layouts, .. } => {
+                    stack.extend(field_layouts.iter().map(|interned| interner.get(*interned)))
+                }
+                Layout::Union(tag_union) => match tag_union {
+                    UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                        for tag in tags {
+                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                        }
+                    }
+                    UnionLayout::NonNullableUnwrapped(fields) => {
+                        stack.extend(fields.iter().map(|interned| interner.get(*interned)));
+                    }
+                    UnionLayout::NullableWrapped { other_tags, .. } => {
+                        for tag in other_tags {
+                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                        }
+                    }
+                    UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                        stack.extend(other_fields.iter().map(|interned| interner.get(*interned)));
+                    }
+                },
+                Layout::LambdaSet(_) => return true,
+                Layout::Boxed(_) => {
+                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                }
+                Layout::RecursivePointer(_) => {
+                    /* do nothing, we've already generated for this type through the Union(_) */
+                }
+            }
+        }
+
+        false
+    }
+
     /// Used to build a `Layout::Struct` where the field name order is irrelevant.
     pub fn struct_no_name_order(field_layouts: &'a [InLayout]) -> Self {
         if field_layouts.is_empty() {
@@ -2799,6 +2861,18 @@ impl<'a> Layout<'a> {
             // dec int literal bounded by i128, so fit it into an i128
             Dec => Layout::DEC,
         }
+    }
+
+    pub fn is_recursive_tag_union(self) -> bool {
+        matches!(
+            self,
+            Layout::Union(
+                UnionLayout::NullableUnwrapped { .. }
+                    | UnionLayout::Recursive(_)
+                    | UnionLayout::NullableWrapped { .. }
+                    | UnionLayout::NonNullableUnwrapped { .. },
+            )
+        )
     }
 }
 
@@ -3535,18 +3609,6 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
-fn is_recursive_tag_union(layout: &Layout) -> bool {
-    matches!(
-        layout,
-        Layout::Union(
-            UnionLayout::NullableUnwrapped { .. }
-                | UnionLayout::Recursive(_)
-                | UnionLayout::NullableWrapped { .. }
-                | UnionLayout::NonNullableUnwrapped { .. },
-        )
-    )
-}
-
 fn union_sorted_non_recursive_tags_help<'a, L>(
     env: &mut Env<'a, '_>,
     tags_list: &[(&'_ L, &[Variable])],
@@ -3839,7 +3901,7 @@ where
                                     == env
                                         .subs
                                         .get_root_key_without_compacting(opt_rec_var.unwrap())
-                                && is_recursive_tag_union(&layout);
+                                && layout.is_recursive_tag_union();
 
                             let arg_layout = if self_recursion {
                                 Layout::NAKED_RECURSIVE_PTR
