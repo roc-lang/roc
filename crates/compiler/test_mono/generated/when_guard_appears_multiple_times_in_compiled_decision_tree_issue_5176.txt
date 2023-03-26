@@ -1,0 +1,51 @@
+procedure Bool.2 ():
+    let Bool.25 : Int1 = true;
+    ret Bool.25;
+
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.275 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.275;
+
+procedure Test.1 (Test.2):
+    joinpoint Test.12:
+        let Test.9 : U8 = 3i64;
+        ret Test.9;
+    in
+    joinpoint Test.11 Test.10:
+        let Test.8 : U8 = 2i64;
+        let Test.7 : U8 = CallByName Num.19 Test.10 Test.8;
+        ret Test.7;
+    in
+    let Test.22 : U8 = 15i64;
+    let Test.23 : Int1 = lowlevel Eq Test.22 Test.2;
+    if Test.23 then
+        joinpoint Test.17 Test.13:
+            if Test.13 then
+                let Test.6 : U8 = 1i64;
+                ret Test.6;
+            else
+                joinpoint Test.15 Test.14:
+                    if Test.14 then
+                        jump Test.11 Test.2;
+                    else
+                        jump Test.12;
+                in
+                let Test.16 : Int1 = CallByName Bool.2;
+                jump Test.15 Test.16;
+        in
+        let Test.18 : Int1 = CallByName Bool.2;
+        jump Test.17 Test.18;
+    else
+        joinpoint Test.20 Test.19:
+            if Test.19 then
+                jump Test.11 Test.2;
+            else
+                jump Test.12;
+        in
+        let Test.21 : Int1 = CallByName Bool.2;
+        jump Test.20 Test.21;
+
+procedure Test.0 ():
+    let Test.5 : U8 = 46i64;
+    let Test.4 : U8 = CallByName Test.1 Test.5;
+    ret Test.4;

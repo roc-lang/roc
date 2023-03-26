@@ -4312,3 +4312,26 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         u8
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            go : U8 -> U8
+            go = \byte ->
+                when byte is
+                    15 if Bool.true -> 1
+                    b if Bool.true -> b + 2
+                    _ -> 3
+
+            main = go '.'
+            "#
+        ),
+        b'.' + 2,
+        u8
+    )
+}
