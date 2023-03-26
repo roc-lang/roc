@@ -255,45 +255,6 @@ encodeTag = \name, payload ->
         List.append bytesWithPayload (Num.toU8 ']')
         |> List.append (Num.toU8 '}')
 
-# isEscapeSequence : U8, U8 -> Bool
-# isEscapeSequence = \a, b ->
-#     when P a b is
-#         P '\\' 'b' -> Bool.true # Backspace
-#         P '\\' 'f' -> Bool.true # Form feed
-#         P '\\' 'n' -> Bool.true # Newline
-#         P '\\' 'r' -> Bool.true # Carriage return
-#         P '\\' 't' -> Bool.true # Tab
-#         P '\\' '"' -> Bool.true # Double quote
-#         P '\\' '\\' -> Bool.true # Backslash
-#         _ -> Bool.false
-
-# takeWhile = \list, predicate ->
-#     helper = \{ taken, rest } ->
-#         when rest is
-#             [a, b, ..] ->
-#                 if isEscapeSequence a b then
-#                     helper {
-#                         taken: taken |> List.append a |> List.append b,
-#                         rest: List.drop rest 2,
-#                     }
-#                 else if predicate a then
-#                     helper {
-#                         taken: List.append taken a,
-#                         rest: List.dropFirst rest,
-#                     }
-#                 else
-#                     { taken, rest }
-
-#             [a, ..] if predicate a ->
-#                 helper {
-#                     taken: List.append taken a,
-#                     rest: List.dropFirst rest,
-#                 }
-
-#             _ -> { taken, rest }
-
-#     helper { taken: [], rest: list }
-
 decodeU8 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
 
@@ -443,68 +404,6 @@ decodeBool = Decode.custom \bytes, @Json {} ->
         ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.false, rest: List.drop bytes 4 }
         _ -> { result: Err TooShort, rest: bytes }
 
-# jsonString : List U8 -> DecodeResult Str
-# jsonString = \bytes ->
-#     { before, others: afterStartingQuote } = List.split bytes 1
-
-#     if
-#         before == ['"']
-#     then
-#         { taken: strSequence, rest } = takeWhile afterStartingQuote \n -> n != '"'
-
-#         when Str.fromUtf8 strSequence is
-#             Ok s ->
-#                 { others: afterEndingQuote } = List.split rest 1
-
-#                 { result: Ok s, rest: afterEndingQuote }
-
-#             Err _ -> { result: Err TooShort, rest }
-#     else
-#         { result: Err TooShort, rest: bytes }
-
-# decodeString = Decode.custom \bytes, @Json {} ->
-#     jsonString bytes
-
-# decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
-
-#         decodeElems = \chunk, accum ->
-#             { result, rest } = Decode.decodeWith chunk elemDecoder (@Json {})
-
-#             when result is
-#                 Err e -> Errored e rest
-#                 Ok val ->
-#                     restWithoutWhitespace = eatWhitespace rest
-#                     when restWithoutWhitespace is
-#                         [',', ..] ->
-#                             restWithoutWhitespace
-#                             |> List.dropFirst
-#                             |> eatWhitespace
-#                             |> decodeElems (List.append accum val)
-
-#                         _ ->
-#                             Done (List.append accum val) restWithoutWhitespace
-
-#         when eatWhitespace bytes is
-#             ['[', ']'] -> { result: Ok [], rest: List.drop bytes 2 }
-#             ['[', ..] ->
-#                 bytesWithoutWhitespace = eatWhitespace (List.dropFirst bytes)
-#                 when bytesWithoutWhitespace is
-#                     [']', ..] ->
-#                         { result: Ok [], rest: List.dropFirst bytesWithoutWhitespace }
-
-#                     _ ->
-#                         when decodeElems bytesWithoutWhitespace [] is
-#                             Errored e rest ->
-#                                 { result: Err e, rest }
-
-#                             Done vals rest ->
-#                                 when rest is
-#                                     [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }
-#                                     _ -> { result: Err TooShort, rest }
-
-#             _ ->
-#                 { result: Err TooShort, rest: bytes }
-
 decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \initialBytes, @Json {} ->
         # NB: the stepper function must be passed explicitly until #2894 is resolved.
         decodeElems = \stepper, state, index, bytes ->
@@ -560,9 +459,6 @@ openBracket = \bytes -> parseExactChar bytes '['
 closingBracket : List U8 -> DecodeResult {}
 closingBracket = \bytes -> parseExactChar bytes ']'
 
-# recordKey : List U8 -> DecodeResult Str
-# recordKey = \bytes -> jsonStr bytes
-
 anything : List U8 -> DecodeResult {}
 anything = \bytes -> { result: Err TooShort, rest: bytes }
 
@@ -609,23 +505,6 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
         when finalizer endStateResult is
             Ok val -> { result: Ok val, rest: afterRecordBytes }
             Err e -> { result: Err e, rest: afterRecordBytes }
-
-# Helper to eat leading Json whitespace characters
-eatWhitespace = \input ->
-    when input is
-        [' ', ..] -> eatWhitespace (List.dropFirst input)
-        ['\n', ..] -> eatWhitespace (List.dropFirst input)
-        ['\r', ..] -> eatWhitespace (List.dropFirst input)
-        ['\t', ..] -> eatWhitespace (List.dropFirst input)
-        _ -> input
-
-# Test eating Json whitespace
-expect
-    input = Str.toUtf8 " \n\r\tabc"
-    actual = eatWhitespace input
-    expected = Str.toUtf8 "abc"
-
-    actual == expected
 
 # JSON NUMBER PRIMITIVE --------------------------------------------------------
 
@@ -717,6 +596,16 @@ expect
 expect
     actual = "1 " |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
     expected = { result: Ok 1dec, rest: [' '] }
+    actual == expected
+
+expect
+    actual = "2]" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    expected = { result: Ok 2u64, rest: [']'] }
+    actual == expected
+
+expect
+    actual = "30,\n" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    expected = { result: Ok 30i64, rest: [',', '\n'] }
     actual == expected
 
 expect
@@ -815,6 +704,8 @@ expect
     actual.result == expected
 
 # JSON STRING PRIMITIVE --------------------------------------------------------
+
+# TODO add support for 'null' decoding
 
 # Decode a Json string primitive into a RocStr
 #
@@ -1058,7 +949,7 @@ expect
 
 # Test json string encoding with escapes
 # TODO fix encoding of escapes, this test is wrong
-# e.g. "\r" -> "\\r" || "\\u000D" as Carriage Return is U+000D
+# e.g. "\r" encodes to "\\r" or "\\u000D" as Carriage Return is U+000D
 # expect
 #     input = "a\r\nbc\\\"xz"
 #     expected = Str.toUtf8 "\"a\r\nbc\\\"xz\""
@@ -1067,6 +958,86 @@ expect
 #     actual == expected
 
 # JSON LIST PRIMITIVE ----------------------------------------------------------
+
+decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
+
+        decodeElems = listElemDecoder elemDecoder
+
+        result =
+            when List.walkUntil bytes (BeforeOpeningBracket 0) listOpeningHelp is
+                AfterOpeningBracket n -> Ok (List.drop bytes n)
+                _ -> Err ExpectedOpeningBracket
+
+        when result is
+            Ok elemBytes -> decodeElems elemBytes []
+            Err ExpectedOpeningBracket ->
+                crash "expected opening bracket"
+# {result : Err TooShort, rest: bytes}
+
+listElemDecoder = \elemDecoder ->
+
+    decodeElems = \bytes, accum ->
+
+        # Done't need a comma before the first element
+        state =
+            if List.isEmpty accum then
+                BeforeNextElement 0
+            else
+                BeforeNextElemOrClosingBracket 0
+
+        when List.walkUntil bytes state listClosingHelp is
+            AfterClosingBracket n ->
+                # Eat remaining whitespace
+                rest = List.drop bytes n
+
+                # Return List of decoded elements
+                { result: Ok accum, rest }
+
+            BeforeNextElement n ->
+                # Eat any whitespace before element
+                elemBytes = List.drop bytes n
+
+                # Decode current element
+                { result, rest } = Decode.decodeWith elemBytes elemDecoder fromUtf8
+
+                when result is
+                    Ok elem ->
+                        # Accumulate decoded value and walk to next element
+                        # or the end of the list
+                        decodeElems rest (List.append accum elem)
+
+                    Err _ ->
+                        # Unable to decode next element
+                        { result: Err TooShort, rest }
+
+            BeforeNextElemOrClosingBracket _ ->
+                if List.isEmpty accum then
+                    # Handle empty lists
+                    { result: Ok [], rest: bytes }
+                else
+                    # Expected comma or closing bracket after last element
+                    { result: Err TooShort, rest: bytes }
+
+    decodeElems
+
+listOpeningHelp : ListOpeningState, U8 -> [Continue ListOpeningState, Break ListOpeningState]
+listOpeningHelp = \state, byte ->
+    when Pair state byte is
+        Pair (BeforeOpeningBracket n) b if isWhitespace b -> Continue (BeforeOpeningBracket (n + 1))
+        Pair (BeforeOpeningBracket n) b if b == '[' -> Continue (AfterOpeningBracket (n + 1))
+        Pair (AfterOpeningBracket n) b if isWhitespace b -> Continue (AfterOpeningBracket (n + 1))
+        _ -> Break state
+
+listClosingHelp : ListClosingState, U8 -> [Continue ListClosingState, Break ListClosingState]
+listClosingHelp = \state, byte ->
+    when Pair state byte is
+        Pair (BeforeNextElemOrClosingBracket n) b if isWhitespace b -> Continue (BeforeNextElemOrClosingBracket (n + 1))
+        Pair (BeforeNextElemOrClosingBracket n) b if b == ',' -> Continue (BeforeNextElement (n + 1))
+        Pair (BeforeNextElemOrClosingBracket n) b if b == ']' -> Continue (AfterClosingBracket (n + 1))
+        Pair (BeforeNextElement n) b if isWhitespace b -> Continue (BeforeNextElement (n + 1))
+        Pair (BeforeNextElement n) b if b == ']' -> Continue (AfterClosingBracket (n + 1))
+        Pair (AfterClosingBracket n) b if isWhitespace b -> Continue (AfterClosingBracket (n + 1))
+        _ -> Break state
 
 isWhitespace = \b ->
     when b is
@@ -1080,126 +1051,43 @@ expect
 
     actual == expected
 
-# ListState : [
-#     BeforeOpeningBracket Nat,
-#     AfterOpeningBracket Nat,
-#     BeforeNextElemOrClosingBracket Nat,
-#     BeforeNextElement Nat,
-#     AfterClosingBracket Nat,
-# ]
+ListOpeningState : [
+    BeforeOpeningBracket Nat,
+    AfterOpeningBracket Nat,
+]
 
-# listHelp : ListState, U8 -> [Continue ListState, Break ListState]
-# listHelp = \state, byte ->
-#     when Pair state byte is
-#         Pair (BeforeOpeningBracket n) b if isWhitespace b -> Continue (BeforeOpeningBracket (n+1))
-#         Pair (BeforeOpeningBracket n) b if b == '[' -> Continue (AfterOpeningBracket (n+1))
-#         Pair (AfterOpeningBracket n) b if isWhitespace b -> Continue (AfterOpeningBracket (n+1))
-#         Pair (AfterOpeningBracket n) b if b == ']' -> Continue (AfterClosingBracket (n+1))
-#         Pair (BeforeNextElemsOrClosingBracket n) b if isWhitespace b -> Continue (BeforeNextElemsOrClosingBracket (n+1))
-#         Pair (BeforeNextElemsOrClosingBracket n) b if b == ',' -> Continue (BeforeNextElement (n+1))
-#         Pair (BeforeNextElemsOrClosingBracket n) b if b == ']' -> Continue (AfterClosingBracket (n+1))
-#         Pair (BeforeNextElement n) b if isWhitespace b -> Continue (BeforeNextElement (n+1))
-#         Pair (AfterClosingBracket n) b if isWhitespace b -> Continue (AfterClosingBracket (n+1))
-#         _ -> Break state
+ListClosingState : [
+    BeforeNextElemOrClosingBracket Nat,
+    BeforeNextElement Nat,
+    AfterClosingBracket Nat,
+]
 
-# listStartDecoder : DecodeResult {}
-# listStartDecoder = Decode.custom \bytes, @Json {} ->
-#     when List.walkUntil bytes (BeforeOpeningBracket 0) listHelp is
-#         AfterOpeningBracket n -> {result: Ok {}, rest: List.drop bytes n}
-#         AfterClosingBracket n -> {result: Ok {}, rest: List.drop bytes n}
-#         _ -> {result: Err TooShort, rest: bytes}
+# Test decoding an empty list
+expect
+    input = Str.toUtf8 "[ ]"
 
-# decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
-# {result: Err TooShort, rest: bytes}
+    actual : DecodeResult (List U8)
+    actual = Decode.fromBytesPartial input fromUtf8
 
-# listMiddleOrEndDecoder = \chunk, accum ->
-#     when List.walkUntil bytes (BeforeNextElemsOrClosingBracket 0) listHelp is
-#         BeforeNextElement n ->
-#             {result, rest } = Decode.decodeWith chunk decodeElem fromBytes
+    actual.result == Ok []
 
-#             when result is
-#                 Ok elem -> listMiddleOrEndDecoder (List.drop rest n) (List.append accum elem)
-#                 Err _ -> {result: Err TooShort, rest: bytes}
+# Test decode of json numbers with whitespace
+expect
+    input = Str.toUtf8 "\n[\t 1 , 2  , 3]"
 
-#         AfterClosingBracket n ->
-#             {result: Ok accum, rest: List.drop bytes n}
+    actual : DecodeResult (List U64)
+    actual = Decode.fromBytesPartial input fromUtf8
 
-#         _ ->
-#             {result: Err TooShort, rest: bytes}
+    expected = Ok [1, 2, 3]
 
-# { rest : elemBytes } <- bytes |> Decode.decodeWith listStartDecoder fromBytes |> tryDecode
+    actual.result == expected
 
-# listMiddleOrEndDecoder elemBytes []
+# Test decode of json strings ignoring whitespace 
+expect
+    input = Str.toUtf8 "\n\t [\n \"one\"\r , \"two\" , \n\"3\"\t]"
 
-decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
+    actual : DecodeResult (List Str)
+    actual = Decode.fromBytesPartial input fromUtf8
+    expected = Ok ["one", "two", "3"]
 
-        decodeElems = \chunk, accum ->
-            when Decode.decodeWith chunk decodeElem (@Json {}) is
-                { result, rest } ->
-                    when result is
-                        Err e -> Errored e rest
-                        Ok val ->
-                            restWithoutWhitespace = eatWhitespace rest
-                            when restWithoutWhitespace is
-                                [',', ..] -> decodeElems (eatWhitespace (List.dropFirst restWithoutWhitespace)) (List.append accum val)
-                                _ -> Done (List.append accum val) restWithoutWhitespace
-
-        when bytes is
-            ['[', ']'] -> { result: Ok [], rest: List.drop bytes 2 }
-            ['[', ..] ->
-                bytesWithoutWhitespace = eatWhitespace (List.dropFirst bytes)
-                when bytesWithoutWhitespace is
-                    [']', ..] ->
-                        { result: Ok [], rest: List.dropFirst bytesWithoutWhitespace }
-
-                    _ ->
-                        when decodeElems bytesWithoutWhitespace [] is
-                            Errored e rest ->
-                                { result: Err e, rest }
-
-                            Done vals rest ->
-                                when rest is
-                                    [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }
-                                    _ -> { result: Err TooShort, rest }
-
-            _ ->
-                { result: Err TooShort, rest: bytes }
-
-# Test json array decoding into integers
-# decodeU64
-# expect
-#     input = Str.toUtf8 "[1,2,3]"
-
-#     actual : DecodeResult (List U64)
-#     actual = Decode.fromBytesPartial input fromUtf8
-
-#     expected = Ok [1,2,3]
-
-#     actual.result == expected
-
-# Test json array decode empty list
-# expect
-#     input = Str.toUtf8 "[ ]"
-#     actual : Result (List U8) _
-#     actual = Decode.fromBytes input fromUtf8
-#     expected = Ok []
-
-#     actual == expected
-
-# Test json array decoding into strings ignoring whitespace around values
-# expect
-#     input = Str.toUtf8 "[\"one\",\"two\",\"3\"]"
-
-#     actual : DecodeResult (List Str)
-#     actual = Decode.fromBytesPartial input fromUtf8
-#     expected = Ok ["one", "two", "3"]
-
-#     actual.result == expected
-# expect
-#     input = Str.toUtf8 "[\"one\"]"
-
-#     actual : DecodeResult (List Str)
-#     actual = Decode.fromBytesPartial input fromUtf8
-#     expected = Ok ["one"]
-
-#     actual.result == expected
+    actual.result == expected
