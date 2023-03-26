@@ -540,6 +540,9 @@ fn type_annotation_to_html(
             type_annotation_to_html(indent_level, buf, extension, true);
         }
         TypeAnnotation::Function { args, output } => {
+            if needs_parens {
+                buf.push('(');
+            }
             let mut peekable_args = args.iter().peekable();
             while let Some(arg) = peekable_args.next() {
                 if is_multiline {
@@ -549,7 +552,11 @@ fn type_annotation_to_html(
                     indent(buf, indent_level + 1);
                 }
 
-                type_annotation_to_html(indent_level, buf, arg, false);
+                let child_needs_parens = match arg {
+                    TypeAnnotation::Function { args: _, output: _ } => true,
+                    _ => false,
+                };
+                type_annotation_to_html(indent_level, buf, arg, child_needs_parens);
 
                 if peekable_args.peek().is_some() {
                     buf.push_str(", ");
@@ -570,6 +577,9 @@ fn type_annotation_to_html(
             }
 
             type_annotation_to_html(next_indent_level, buf, output, false);
+            if needs_parens {
+                buf.push(')');
+            }
         }
         TypeAnnotation::Ability { members: _ } => {
             // TODO(abilities): fill me in
