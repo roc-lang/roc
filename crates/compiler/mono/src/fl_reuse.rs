@@ -490,6 +490,11 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 jump_reuse_tokens: environment.jump_reuse_tokens.clone(),
             };
 
+            // Add the parameters to the body environment as well.
+            for param in parameters.iter() {
+                body_environment.add_symbol_layout(param.symbol, &param.layout);
+            }
+
             let new_body = insert_reset_reuse_operations_stmt(
                 arena,
                 layout_interner,
