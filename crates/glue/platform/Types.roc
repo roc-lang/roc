@@ -1,5 +1,5 @@
 interface Types
-    exposes [Types, shape, target]
+    exposes [Types, shape, target, walkShapes]
     imports [Shape.{ Shape }, TypeId.{ TypeId }, InternalTypeId, Target.{ Target }, InternalTypeId]
 
 Types := {
@@ -20,6 +20,14 @@ Types := {
 
 target : Types -> Target
 target = \@Types types -> types.target
+
+walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
+walkShapes = \@Types { shapes }, originalState, update ->
+    List.walk shapes { index: 0, state: originalState } \{ index, state }, elem ->
+        id = InternalTypeId.fromNat index
+
+        { index: index + 1, state: update state elem id }
+    |> .state
 
 shape : Types, TypeId -> Shape
 shape = \@Types types, id ->
