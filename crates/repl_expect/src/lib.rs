@@ -202,9 +202,9 @@ mod test {
                 println!("{}", x);
             }
 
-            assert_eq!(x, expected);
+            assert_eq!(expected, x);
         } else {
-            assert_eq!(actual, expected);
+            assert_eq!(expected, actual);
         }
     }
 
