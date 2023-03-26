@@ -1105,4 +1105,79 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn tag_payloads_of_different_size() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                actual : [Leftover (List U8), TooShort]
+                actual = Leftover [49, 93]
+
+                expect
+                    expected : [Leftover (List U8), TooShort]
+                    expected = TooShort
+
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      expected : [Leftover (List U8), TooShort]
+                 8│>      expected = TooShort
+                 9│>
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                expected : [
+                    Leftover (List U8),
+                    TooShort,
+                ]
+                expected = TooShort
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn extra_offset_in_tag_union() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                actual : Result Str U64
+                actual = Err 1
+
+                expect
+                    expected : Result Str U64
+                    expected = Ok "foobar"
+
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      expected : Result Str U64
+                 8│>      expected = Ok "foobar"
+                 9│>
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                expected : Result Str U64
+                expected = Ok "foobar"
+                "#
+            ),
+        );
+    }
 }
