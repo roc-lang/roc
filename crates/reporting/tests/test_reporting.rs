@@ -13137,11 +13137,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `map` call produces:
 
-        List [One, Two]
+        List [Two, …]
 
     But the type annotation on `main` says it should be:
 
-        List [One]
+        List […]
     "###
     );
 
@@ -13175,11 +13175,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `map` call produces:
 
-        List [One, Two]
+        List [Two, …]
 
     But the type annotation on `main` says it should be:
 
-        List [One]
+        List […]
     "###
     );
 

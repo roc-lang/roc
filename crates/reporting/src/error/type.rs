@@ -3571,35 +3571,43 @@ fn diff_tag_union<'b>(
     // We've removed all the tags that they had in common, so the remaining entries in tags2
     // are ones that appear on the right only.
     let tags_in_right_only = tags2;
-    let any_tags_in_common =
-        !same_tags_different_payloads.is_empty() || same_tags_same_payloads > 0;
+    let no_tags_in_common = same_tags_different_payloads.is_empty() && same_tags_same_payloads == 0;
     let both = same_tags_different_payloads
         .into_iter()
         .map(to_overlap_docs);
+
+    let any_tags_on_one_side_only = !tags_in_left_only.is_empty() || !tags_in_right_only.is_empty();
+
     let mut left = tags_in_left_only
         .iter()
         .map(|(k, v)| to_unknown_docs((k, v)))
         .peekable();
     let mut right = tags_in_right_only.iter().map(to_unknown_docs).peekable();
 
-    let all_tags_shared = left.peek().is_none() && right.peek().is_none();
-
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
         (false, false) => Status::Similar,
         _ => match (left.peek(), right.peek()) {
+            // At least one tag appeared only on the left, and also
+            // at least one tag appeared only on the right. There's a chance this is
+            // because of a typo, so we'll suggest that as a hint.
             (Some((f, _, _, _)), Some(_)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
                 tags_in_right_only.keys().cloned().collect(),
             )]),
+            // At least one tag appeared only on the left, but all of the tags
+            // on the right also appeared on the left. So at least one tag is missing.
             (Some(_), None) => Status::Different(vec![Problem::TagsMissing(
                 left.clone().map(|v| v.0).collect(),
             )]),
+            // At least one tag appeared only on the right, but all of the tags
+            // on the left also appeared on the right. So at least one tag is missing.
             (None, Some(_)) => {
                 let status =
                     Status::Different(vec![Problem::TagsMissing(right.map(|v| v.0).collect())]);
                 right = tags_in_right_only.iter().map(to_unknown_docs).peekable();
                 status
             }
+            // Left and right have the same set of tag names (but may have different payloads).
             (None, None) => Status::Similar,
         },
     };
@@ -3627,7 +3635,7 @@ fn diff_tag_union<'b>(
     let left_tags_omitted;
     let right_tags_omitted;
 
-    if !any_tags_in_common {
+    if no_tags_in_common {
         // If they have no tags in common, we shouldn't omit any tags,
         // because that would result in an unhelpful diff of
         // […] on one side and another […] on the other side!
@@ -3646,12 +3654,18 @@ fn diff_tag_union<'b>(
         }
 
         tags_diff.status.merge(Status::Different(Vec::new()));
-    } else if !all_tags_shared {
-        // If either tag union is open, omit the tags in the other. In other words,
-        // if one tag union is a pattern match which has _ ->, don't list the tags
-        // which fall under that catch-all pattern because they won't be helpful.
-        // By omitting them, we'll only show the tags that are actually matched.
-        if ext2_is_open {
+    } else if any_tags_on_one_side_only {
+        // If either tag union is open but the other is not, then omit the tags in the other.
+        //
+        // In other words, if one tag union is a pattern match which has _ ->,
+        // don't list the tags which fall under that catch-all pattern because
+        // they won't be helpful. By omitting them, we'll only show the tags that
+        // are actually matched.
+        //
+        // We shouldn't do this if they're both open though,
+        // because that would result in an unhelpful diff of
+        // […] on one side and another […] on the other side!
+        if ext2_is_open && !ext1_is_open {
             left_tags_omitted = same_tags_same_payloads + left.len();
         } else {
             left_tags_omitted = same_tags_same_payloads;
@@ -3662,7 +3676,7 @@ fn diff_tag_union<'b>(
             }
         }
 
-        if ext1_is_open {
+        if ext1_is_open && !ext2_is_open {
             right_tags_omitted = same_tags_same_payloads + right.len();
         } else {
             right_tags_omitted = same_tags_same_payloads;
