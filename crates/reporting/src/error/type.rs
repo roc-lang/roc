@@ -2492,6 +2492,7 @@ fn to_doc_help<'b>(
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
                 tag_ext_to_doc(alloc, pol, gen_usages, ext),
+                0, // zero tags omitted, since this isn't a diff
             )
         }
 
@@ -2885,7 +2886,7 @@ fn to_diff<'b>(
         }
 
         (TagUnion(tags1, ext1, pol), TagUnion(tags2, ext2, _)) => {
-            diff_tag_union(alloc, pol, &tags1, ext1, &tags2, ext2)
+            diff_tag_union(alloc, pol, tags1, ext1, tags2, ext2)
         }
 
         (RecursiveTagUnion(_rec1, _tags1, _ext1, _), RecursiveTagUnion(_rec2, _tags2, _ext2, _)) => {
@@ -3225,7 +3226,11 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
                 .any(|(t1, t2)| should_show_diff(t1, t2))
         }
         (Infinite, Infinite) | (Error, Error) => false,
-        (FlexVar(v1), FlexVar(v2)) | (RigidVar(v1), RigidVar(v2)) => v1 != v2,
+        (RigidVar(v1), RigidVar(v2)) => v1 != v2,
+        (FlexVar(_), _) | (_, FlexVar(_)) => {
+            // If either is flex, it will unify to the other type; no diff is needed.
+            false
+        }
         (FlexAbleVar(v1, _set1), FlexAbleVar(v2, _set2))
         | (RigidAbleVar(v1, _set1), RigidAbleVar(v2, _set2)) => {
             #[cfg(debug_assertions)]
@@ -3243,14 +3248,53 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
             v1 != v2
         }
         (Record(fields1, ext1), Record(fields2, ext2)) => {
-            if fields1.len() != fields2.len() || ext1 != ext2 {
+            let is_1_open = matches!(ext1, TypeExt::FlexOpen(_));
+            let is_2_open = matches!(ext2, TypeExt::FlexOpen(_));
+
+            if !is_1_open && !is_2_open && fields1.len() != fields2.len() {
                 return true;
             }
 
-            fields1
-                .iter()
-                .zip(fields2.iter())
-                .any(|((name1, f1), (name2, f2))| name1 != name2 || should_show_field_diff(f1, f2))
+            // Check for diffs in any of the fields1 fields.
+            for (name, f1) in fields1.iter() {
+                match fields2.get(name) {
+                    Some(f2) => {
+                        // If the field is on both records, and the diff should be
+                        // shown, then we should show a diff for the whole record.
+                        if should_show_field_diff(f1, f2) {
+                            return true;
+                        }
+
+                        // (If the field is on both records, but no diff should be
+                        // shown between those fields, continue checking other fields.)
+                    }
+                    None => {
+                        // It's fine for 1 to have a field that the other doesn't have,
+                        // so long as the other one is open.
+                        if !is_2_open {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // At this point we've checked all the fields that are in both records,
+            // as well as all the fields that are in 1 but not 2.
+            // All that remains is to check the fields that are in 2 but not 1,
+            // which we don't care about if 1 is open (because then it's fine
+            // for the other record to have fields it doesn't).
+            if !is_1_open {
+                for name in fields2.keys() {
+                    if !fields1.contains_key(name) {
+                        // fields1 is missing this field, and fields1 is not open,
+                        // therefore this is a relevant diff.
+                        return true;
+                    }
+                }
+            }
+
+            // We haven't early-returned true yet, so we didn't find any relevant diffs!
+            false
         }
         (Tuple(elems1, ext1), Tuple(elems2, ext2)) => {
             if elems1.len() != elems2.len() || ext1 != ext2 {
@@ -3361,8 +3405,6 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
         | (_, Error)
         | (Type(_, _), _)
         | (_, Type(_, _))
-        | (FlexVar(_), _)
-        | (_, FlexVar(_))
         | (RigidVar(_), _)
         | (_, RigidVar(_))
         | (FlexAbleVar(_, _), _)
@@ -3465,28 +3507,28 @@ fn same_tag_name_overlap_diff<'b>(
 fn diff_tag_union<'b>(
     alloc: &'b RocDocAllocator<'b>,
     pol: Polarity,
-    fields1: &SendMap<TagName, Vec<ErrorType>>,
+    tags1: SendMap<TagName, Vec<ErrorType>>,
     ext1: TypeExt,
-    fields2: &SendMap<TagName, Vec<ErrorType>>,
+    mut tags2: SendMap<TagName, Vec<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
     let gen_usages1 = {
         let mut usages = VecMap::default();
-        count_generated_name_usages(&mut usages, fields1.values().flatten());
+        count_generated_name_usages(&mut usages, tags1.values().flatten());
         count_generated_name_usages_in_exts(&mut usages, [(&ext1, false)]);
         usages
     };
     let gen_usages2 = {
         let mut usages = VecMap::default();
-        count_generated_name_usages(&mut usages, fields2.values().flatten());
+        count_generated_name_usages(&mut usages, tags2.values().flatten());
         count_generated_name_usages_in_exts(&mut usages, [(&ext2, false)]);
         usages
     };
 
-    let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
-        same_tag_name_overlap_diff(alloc, field, t1, t2)
+    let to_overlap_docs = |(tag_name, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
+        same_tag_name_overlap_diff(alloc, tag_name, t1, t2)
     };
-    let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| -> (
+    let to_unknown_docs = |(tag_name, args): (&TagName, &Vec<ErrorType>)| -> (
         TagName,
         RocDocBuilder<'b>,
         Vec<RocDocBuilder<'b>>,
@@ -3498,103 +3540,150 @@ fn diff_tag_union<'b>(
                 .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()))
                 .unzip();
         (
-            field.clone(),
-            alloc.tag_name(field.clone()),
+            tag_name.clone(),
+            alloc.tag_name(tag_name.clone()),
             args,
             able.into_iter().flatten().collect(),
         )
     };
-    let shared_keys = fields1
-        .clone()
-        .intersection_with(fields2.clone(), |v1, v2| (v1, v2));
+    let mut same_tags_different_payloads = VecMap::default();
+    let mut tags_in_left_only = Vec::default();
+    let mut same_tags_same_payloads = 0;
 
-    let left_keys = fields1.clone().relative_complement(fields2.clone());
-    let right_keys = fields2.clone().relative_complement(fields1.clone());
+    for (k1, v1) in tags1.into_iter() {
+        match tags2.remove(&k1) {
+            Some(v2) if should_show_payload_diff(&v1, &v2) => {
+                // The tag names are the same but the payload types are different
+                // (or at least should be rendered as different)
+                same_tags_different_payloads.insert(k1.clone(), (v1.clone(), v2));
+            }
+            Some(_) => {
+                // They both have the same tag name as well as the same payload types
+                same_tags_same_payloads += 1;
+            }
+            None => {
+                // Only tags1 has this tag.
+                tags_in_left_only.push((k1, v1));
+            }
+        }
+    }
 
-    let both = shared_keys.into_iter().map(to_overlap_docs);
-    let mut left = left_keys.iter().map(to_unknown_docs).peekable();
-    let mut right = right_keys.iter().map(to_unknown_docs).peekable();
+    // We've removed all the tags that they had in common, so the remaining entries in tags2
+    // are ones that appear on the right only.
+    let tags_in_right_only = tags2;
 
-    let all_fields_shared = left.peek().is_none() && right.peek().is_none();
+    let both = same_tags_different_payloads
+        .into_iter()
+        .map(to_overlap_docs);
+    let mut left = tags_in_left_only
+        .iter()
+        .map(|(k, v)| to_unknown_docs((k, v)))
+        .peekable();
+    let mut right = tags_in_right_only.iter().map(to_unknown_docs).peekable();
+
+    let all_tags_shared = left.peek().is_none() && right.peek().is_none();
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
         (false, false) => Status::Similar,
         _ => match (left.peek(), right.peek()) {
             (Some((f, _, _, _)), Some(_)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
-                fields2.keys().cloned().collect(),
+                tags_in_right_only.keys().cloned().collect(),
             )]),
-            (Some(_), None) => {
-                let status =
-                    Status::Different(vec![Problem::TagsMissing(left.map(|v| v.0).collect())]);
-                left = left_keys.iter().map(to_unknown_docs).peekable();
-                status
-            }
+            (Some(_), None) => Status::Different(vec![Problem::TagsMissing(
+                left.clone().map(|v| v.0).collect(),
+            )]),
             (None, Some(_)) => {
                 let status =
                     Status::Different(vec![Problem::TagsMissing(right.map(|v| v.0).collect())]);
-                right = right_keys.iter().map(to_unknown_docs).peekable();
+                right = tags_in_right_only.iter().map(to_unknown_docs).peekable();
                 status
             }
             (None, None) => Status::Similar,
         },
     };
 
+    let ext1_is_open = matches!(&ext1, TypeExt::FlexOpen(_));
+    let ext2_is_open = matches!(&ext2, TypeExt::FlexOpen(_));
     let ext_diff = tag_ext_to_diff(alloc, pol, ext1, ext2, &gen_usages1, &gen_usages2);
 
-    let mut fields_diff: Diff<Vec<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>> = Diff {
-        left: vec![],
-        right: vec![],
+    let mut tags_diff: Diff<Vec<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>> = Diff {
         status: Status::Similar,
-        left_able: vec![],
-        right_able: vec![],
+        left: Vec::new(),
+        right: Vec::new(),
+        left_able: Vec::new(),
+        right_able: Vec::new(),
     };
 
     for diff in both {
-        fields_diff.left.push(diff.left);
-        fields_diff.right.push(diff.right);
-        fields_diff.status.merge(diff.status);
-        fields_diff.left_able.extend(diff.left_able);
-        fields_diff.right_able.extend(diff.right_able);
+        tags_diff.status.merge(diff.status);
+        tags_diff.left.push(diff.left);
+        tags_diff.right.push(diff.right);
+        tags_diff.left_able.extend(diff.left_able);
+        tags_diff.right_able.extend(diff.right_able);
     }
 
-    if !all_fields_shared {
-        for (tag, tag_doc, args, able) in left {
-            fields_diff.left.push((tag, tag_doc, args));
-            fields_diff.left_able.extend(able);
+    let mut left_tags_omitted = same_tags_same_payloads;
+    let mut right_tags_omitted = same_tags_same_payloads;
+
+    if !all_tags_shared {
+        // If either tag union is open, omit the tags in the other. In other words,
+        // if one tag union is a pattern match which has _ ->, don't list the tags
+        // which fall under that catch-all pattern because they won't be helpful.
+        // By omitting them, we'll only show the tags that are actually matched.
+        if ext2_is_open {
+            left_tags_omitted += left.len();
+        } else {
+            for (tag, tag_doc, args, able) in left {
+                tags_diff.left.push((tag, tag_doc, args));
+                tags_diff.left_able.extend(able);
+            }
         }
-        for (tag, tag_doc, args, able) in right {
-            fields_diff.right.push((tag, tag_doc, args));
-            fields_diff.right_able.extend(able);
+
+        if ext1_is_open {
+            right_tags_omitted += right.len();
+        } else {
+            for (tag, tag_doc, args, able) in right {
+                tags_diff.right.push((tag, tag_doc, args));
+                tags_diff.right_able.extend(able);
+            }
         }
-        fields_diff.status.merge(Status::Different(vec![]));
+
+        tags_diff.status.merge(Status::Different(Vec::new()));
     }
 
-    fields_diff.left.sort_by(|a, b| a.0.cmp(&b.0));
-    fields_diff.right.sort_by(|a, b| a.0.cmp(&b.0));
+    tags_diff.left.sort_by(|a, b| a.0.cmp(&b.0));
+    tags_diff.right.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let lefts = fields_diff
-        .left
-        .into_iter()
-        .map(|(_, a, b)| (a, b))
-        .collect();
-    let rights = fields_diff
+    let lefts = tags_diff.left.into_iter().map(|(_, a, b)| (a, b)).collect();
+    let rights = tags_diff
         .right
         .into_iter()
         .map(|(_, a, b)| (a, b))
         .collect();
 
-    let doc1 = report_text::tag_union(alloc, lefts, ext_diff.left);
-    let doc2 = report_text::tag_union(alloc, rights, ext_diff.right);
+    let doc1 = report_text::tag_union(alloc, lefts, ext_diff.left, left_tags_omitted);
+    let doc2 = report_text::tag_union(alloc, rights, ext_diff.right, right_tags_omitted);
 
-    fields_diff.status.merge(status);
+    tags_diff.status.merge(status);
 
     Diff {
         left: doc1,
         right: doc2,
-        status: fields_diff.status,
-        left_able: fields_diff.left_able,
-        right_able: fields_diff.right_able,
+        status: tags_diff.status,
+        left_able: tags_diff.left_able,
+        right_able: tags_diff.right_able,
+    }
+}
+
+fn should_show_payload_diff(errs1: &[ErrorType], errs2: &[ErrorType]) -> bool {
+    if errs1.len() == errs2.len() {
+        errs1
+            .iter()
+            .zip(errs2.iter())
+            .any(|(err1, err2)| should_show_diff(err1, err2))
+    } else {
+        true
     }
 }
 
@@ -3615,16 +3704,15 @@ fn tag_ext_to_diff<'b>(
             left: ext_doc_1,
             right: ext_doc_2,
             status,
-            left_able: vec![],
-            right_able: vec![],
+            left_able: Vec::new(),
+            right_able: Vec::new(),
         },
         Status::Different(_) => Diff {
-            // NOTE elm colors these differently at this point
             left: ext_doc_1,
             right: ext_doc_2,
             status,
-            left_able: vec![],
-            right_able: vec![],
+            left_able: Vec::new(),
+            right_able: Vec::new(),
         },
     }
 }
@@ -3945,6 +4033,7 @@ mod report_text {
         alloc: &'b RocDocAllocator<'b>,
         entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
+        tags_omitted: usize,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
             t
@@ -3952,30 +4041,62 @@ mod report_text {
             alloc.nil()
         };
 
+        let entry_to_doc = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
+            if arguments.is_empty() {
+                tag_name
+            } else {
+                tag_name
+                    .append(alloc.space())
+                    .append(alloc.intersperse(arguments, alloc.space()))
+            }
+        };
+
         if entries.is_empty() {
-            alloc.text("[]")
-        } else {
-            let entry_to_doc = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
-                if arguments.is_empty() {
-                    tag_name
+            if tags_omitted == 0 {
+                alloc.text("[]")
+            } else {
+                alloc
+                    .text("[ ")
+                    .append(alloc.ellipsis().append(alloc.text(" ]")))
+            }
+            .append(ext_doc)
+        } else if entries.len() == 1 {
+            // Single-tag unions get printed on one line; multi-tag unions get multiple lines
+            alloc
+                .text("[")
+                .append(entry_to_doc(entries.into_iter().next().unwrap()))
+                .append(if tags_omitted == 0 {
+                    alloc.text("")
                 } else {
-                    tag_name
-                        .append(alloc.space())
-                        .append(alloc.intersperse(arguments, alloc.space()))
-                }
+                    alloc.text(", ").append(alloc.ellipsis())
+                })
+                .append(alloc.text("]"))
+                .append(ext_doc)
+        } else {
+            let ending = if tags_omitted == 0 {
+                alloc.reflow("]")
+            } else {
+                alloc.vcat([
+                    alloc.ellipsis().indent(super::TAG_INDENT),
+                    alloc.reflow("]"),
+                ])
             };
 
-            let starts =
-                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
-
-            let entries_doc = alloc.concat(
-                entries
-                    .into_iter()
-                    .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
-            );
-
-            entries_doc.append(alloc.reflow("]")).append(ext_doc)
+            // Multi-tag unions get printed on multiple lines, as do tag unions with tags omitted.
+            alloc
+                .vcat(
+                    std::iter::once(alloc.reflow("[")).chain(
+                        entries
+                            .into_iter()
+                            .map(|entry| {
+                                entry_to_doc(entry)
+                                    .indent(super::TAG_INDENT)
+                                    .append(alloc.reflow(","))
+                            })
+                            .chain(std::iter::once(ending)),
+                    ),
+                )
+                .append(ext_doc)
         }
     }
 
@@ -3985,6 +4106,7 @@ mod report_text {
         entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
+        // TODO
         let ext_doc = if let Some(t) = opt_ext {
             t
         } else {
@@ -4753,6 +4875,7 @@ fn exhaustive_pattern_to_doc<'b>(
 }
 
 const AFTER_TAG_INDENT: &str = "    ";
+const TAG_INDENT: usize = 4;
 const RECORD_FIELD_INDENT: usize = 4;
 
 fn pattern_to_doc_help<'b>(
