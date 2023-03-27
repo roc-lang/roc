@@ -3913,6 +3913,34 @@ fn compose_recursive_lambda_set_productive_inferred() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             compose = \forward -> \f, g ->
+                if forward
+                then \x -> g (f x)
+                else \x -> f (g x)
+
+             identity = \x -> x
+             exclame = \s -> "\(s)!"
+             whisper = \s -> "(\(s))"
+
+             main =
+                 res: Str -> Str
+                 res = List.walk [ exclame, whisper ] identity (compose Bool.false)
+                 res "hello"
+             "#
+        ),
+        RocStr::from("(hello)!"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn local_binding_aliases_function() {
     assert_evals_to!(
         indoc!(

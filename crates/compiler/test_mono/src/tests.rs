@@ -2822,3 +2822,26 @@ fn recursive_lambda_set_resolved_only_upon_specialization() {
         "#
     )
 }
+
+#[mono_test]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    indoc!(
+        r#"
+         app "test" provides [main] to "./platform"
+
+         compose = \forward -> \f, g ->
+            if forward
+            then \x -> g (f x)
+            else \x -> f (g x)
+
+         identity = \x -> x
+         exclame = \s -> "\(s)!"
+         whisper = \s -> "(\(s))"
+
+         main =
+             res: Str -> Str
+             res = List.walk [ exclame, whisper ] identity (compose Bool.true)
+             res "hello"
+         "#
+    )
+}
