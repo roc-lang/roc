@@ -3770,6 +3770,7 @@ dependencies = [
  "distance",
  "indoc",
  "insta",
+ "itertools 0.10.5",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",

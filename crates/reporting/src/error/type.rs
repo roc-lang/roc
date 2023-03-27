@@ -2,6 +2,8 @@
 
 use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
+use itertools::EitherOrBoth;
+use itertools::Itertools;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
@@ -3471,36 +3473,64 @@ fn should_show_field_diff(
 fn same_tag_name_overlap_diff<'b>(
     alloc: &'b RocDocAllocator<'b>,
     field: TagName,
-    args1: Vec<ErrorType>,
-    args2: Vec<ErrorType>,
+    payload_vals1: Vec<ErrorType>,
+    payload_vals2: Vec<ErrorType>,
 ) -> Diff<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)> {
-    if args1.len() == args2.len() {
-        let diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
+    // Render ellipses wherever the payload slots have the same type.
+    let mut left_doc = Vec::with_capacity(payload_vals1.len());
+    let mut left_able = Vec::new();
+    let mut right_doc = Vec::with_capacity(payload_vals2.len());
+    let mut right_able = Vec::new();
 
-        Diff {
-            left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
-            right: (field.clone(), alloc.tag_name(field), diff.right),
-            status: diff.status,
-            left_able: diff.left_able,
-            right_able: diff.right_able,
-        }
-    } else {
-        let (left_doc, left_able): (_, Vec<AbleVariables>) = args1
-            .into_iter()
-            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
-            .unzip();
-        let (right_doc, right_able): (_, Vec<AbleVariables>) = args2
-            .into_iter()
-            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
-            .unzip();
+    // itertools::zip_longest is a zip that can continue past the end of one Vec.
+    // If they both have payload values in a given slot, and both are the same type,
+    // we render ellipsis instead of the actual type - since there's no diff between them.
+    // If one of them doesn't have a payload value in that slot, we always render its type.
+    for either_or_both in payload_vals1
+        .into_iter()
+        .zip_longest(payload_vals2.into_iter())
+    {
+        match either_or_both {
+            // Both tag unions have a payload value in this slot
+            EitherOrBoth::Both(t1, t2) => {
+                if should_show_diff(&t1, &t2) {
+                    {
+                        let (doc, able) = to_doc(alloc, Parens::InTypeParam, t1);
+                        left_doc.push(doc);
+                        left_able.extend(able);
+                    }
 
-        Diff {
-            left: (field.clone(), alloc.tag_name(field.clone()), left_doc),
-            right: (field.clone(), alloc.tag_name(field), right_doc),
-            status: Status::Similar,
-            left_able: left_able.into_iter().flatten().collect(),
-            right_able: right_able.into_iter().flatten().collect(),
+                    {
+                        let (doc, able) = to_doc(alloc, Parens::InTypeParam, t2);
+                        right_doc.push(doc);
+                        right_able.extend(able);
+                    }
+                } else {
+                    left_doc.push(alloc.ellipsis());
+                    right_doc.push(alloc.ellipsis());
+                }
+            }
+            // Only the left tag union has a payload value in this slot
+            EitherOrBoth::Left(t1) => {
+                let (doc, able) = to_doc(alloc, Parens::InTypeParam, t1);
+                left_doc.push(doc);
+                left_able.extend(able);
+            }
+            // Only the right tag union has a payload value in this slot
+            EitherOrBoth::Right(t2) => {
+                let (doc, able) = to_doc(alloc, Parens::InTypeParam, t2);
+                right_doc.push(doc);
+                right_able.extend(able);
+            }
         }
+    }
+
+    Diff {
+        left: (field.clone(), alloc.tag_name(field.clone()), left_doc),
+        right: (field.clone(), alloc.tag_name(field), right_doc),
+        status: Status::Similar,
+        left_able,
+        right_able,
     }
 }
 
@@ -3643,13 +3673,13 @@ fn diff_tag_union<'b>(
         left_tags_omitted = 0;
         right_tags_omitted = 0;
 
-        for (tag, tag_doc, args, able) in left {
-            tags_diff.left.push((tag, tag_doc, args));
+        for (tag, tag_doc, payload_vals, able) in left {
+            tags_diff.left.push((tag, tag_doc, payload_vals));
             tags_diff.left_able.extend(able);
         }
 
-        for (tag, tag_doc, args, able) in right {
-            tags_diff.right.push((tag, tag_doc, args));
+        for (tag, tag_doc, payload_vals, able) in right {
+            tags_diff.right.push((tag, tag_doc, payload_vals));
             tags_diff.right_able.extend(able);
         }
 

@@ -10575,11 +10575,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `u8` value is a:
 
-        [Bad [DecodeProblem], Good (List U8)]
+        [Good …, …]
 
     But the branch patterns have type:
 
-        [Bad [DecodeProblem], Good (List U8) *]
+        [Good … *, …]
 
     The branches must be cases of the `when` condition's type!
     "###
