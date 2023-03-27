@@ -8608,12 +8608,11 @@ mod solve_expr {
 
         v2 = ""
 
-        apply = \fnParser, valParser-> \{} -[9]-> (fnParser {}) valParser
+        apply = \fnParser, valParser -> \{} -[9]-> (fnParser {}) valParser
 
-        map = \simpleParser, transform-> apply \{} -[12]-> transform simpleParser
+        map = \simpleParser, transform -> apply \{} -[12]-> transform simpleParser
 
-        parseInput =
-          \{}->
+        parseInput = \{} ->
           when [
               map v1 \{} -[13]-> "",
               map v2 \s -[14]-> s,

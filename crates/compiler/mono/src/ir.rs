@@ -3506,6 +3506,7 @@ fn specialize_proc_help<'a>(
                                 UnionLayout::NonRecursive(_)
                                     | UnionLayout::Recursive(_)
                                     | UnionLayout::NullableUnwrapped { .. }
+                                    | UnionLayout::NullableWrapped { .. }
                             ));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 

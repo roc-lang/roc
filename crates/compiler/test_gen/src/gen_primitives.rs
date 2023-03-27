@@ -3913,6 +3913,34 @@ fn compose_recursive_lambda_set_productive_inferred() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             compose = \forward -> \f, g ->
+                if forward
+                then \x -> g (f x)
+                else \x -> f (g x)
+
+             identity = \x -> x
+             exclame = \s -> "\(s)!"
+             whisper = \s -> "(\(s))"
+
+             main =
+                 res: Str -> Str
+                 res = List.walk [ exclame, whisper ] identity (compose Bool.false)
+                 res "hello"
+             "#
+        ),
+        RocStr::from("(hello)!"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn local_binding_aliases_function() {
     assert_evals_to!(
         indoc!(
@@ -4334,4 +4362,27 @@ fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
         b'.' + 2,
         u8
     )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn recursive_lambda_set_resolved_only_upon_specialization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            factCPS = \n, cont ->
+                if n == 0 then
+                    cont 1
+                else
+                    factCPS (n - 1) \value -> cont (n * value)
+
+            main =
+                factCPS 5u64 \x -> x
+            "#
+        ),
+        120,
+        u64
+    );
 }

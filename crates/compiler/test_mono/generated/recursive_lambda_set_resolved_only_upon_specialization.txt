@@ -1,0 +1,65 @@
+procedure Bool.11 (#Attr.2, #Attr.3):
+    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.23;
+
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.276 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.276;
+
+procedure Num.21 (#Attr.2, #Attr.3):
+    let Num.275 : U8 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.275;
+
+procedure Test.1 (Test.26, Test.27):
+    joinpoint Test.11 Test.2 Test.3:
+        let Test.24 : U8 = 0i64;
+        let Test.20 : Int1 = CallByName Bool.11 Test.2 Test.24;
+        if Test.20 then
+            let Test.22 : U8 = 1i64;
+            let Test.23 : U8 = GetTagId Test.3;
+            switch Test.23:
+                case 0:
+                    let Test.21 : U8 = CallByName Test.4 Test.22 Test.3;
+                    ret Test.21;
+            
+                default:
+                    dec Test.3;
+                    let Test.21 : U8 = CallByName Test.6 Test.22;
+                    ret Test.21;
+            
+        else
+            let Test.19 : U8 = 1i64;
+            let Test.13 : U8 = CallByName Num.20 Test.2 Test.19;
+            let Test.14 : [<rnu><null>, C *self U8] = TagId(0) Test.3 Test.2;
+            jump Test.11 Test.13 Test.14;
+    in
+    jump Test.11 Test.26 Test.27;
+
+procedure Test.4 (Test.28, Test.29):
+    joinpoint Test.15 Test.5 #Attr.12:
+        let Test.2 : U8 = UnionAtIndex (Id 0) (Index 1) #Attr.12;
+        let Test.3 : [<rnu><null>, C *self U8] = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+        inc Test.3;
+        dec #Attr.12;
+        let Test.17 : U8 = CallByName Num.21 Test.2 Test.5;
+        let Test.18 : U8 = GetTagId Test.3;
+        switch Test.18:
+            case 0:
+                jump Test.15 Test.17 Test.3;
+        
+            default:
+                dec Test.3;
+                let Test.16 : U8 = CallByName Test.6 Test.17;
+                ret Test.16;
+        
+    in
+    jump Test.15 Test.28 Test.29;
+
+procedure Test.6 (Test.7):
+    ret Test.7;
+
+procedure Test.0 ():
+    let Test.9 : U8 = 5i64;
+    let Test.10 : [<rnu><null>, C *self U8] = TagId(1) ;
+    let Test.8 : U8 = CallByName Test.1 Test.9 Test.10;
+    ret Test.8;
