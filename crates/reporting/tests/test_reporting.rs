@@ -3392,7 +3392,10 @@ mod test_reporting {
 
         [
             Cons {} [
-                Cons Str [Cons {} a, Nil]b as a,
+                Cons Str [
+                    Cons {} a,
+                    Nil,
+                ]b as a,
                 Nil,
             ]b,
             Nil,
@@ -3400,7 +3403,10 @@ mod test_reporting {
 
     But the type annotation on `x` says it should be:
 
-        [Cons {} a, Nil] as a
+        [
+            Cons {} a,
+            Nil,
+        ] as a
     "###
     );
 
@@ -3437,8 +3443,10 @@ mod test_reporting {
             ACons (Int Signed64) [
                 BCons (Int Signed64) [
                     ACons Str [
-                        BCons I64 [ACons I64 (BList I64 I64),
-                        ANil]b as ∞,
+                        BCons I64 [
+                            ACons I64 (BList I64 I64),
+                            ANil,
+                        ]b as ∞,
                         BNil,
                     ]c,
                     ANil,
@@ -3450,7 +3458,10 @@ mod test_reporting {
 
     But the type annotation on `x` says it should be:
 
-        [ACons I64 (BList I64 I64), ANil] as a
+        [
+            ACons I64 (BList I64 I64),
+            ANil,
+        ] as a
     "###
     );
 
@@ -10008,7 +10019,10 @@ In roc, functions are always written as a lambda, like{}
 
     This `lst` value is a:
 
-        [Cons {} ∞, Nil] as ∞
+        [
+            Cons {} ∞,
+            Nil,
+        ] as ∞
 
     But the type annotation on `olist` says it should be:
 

@@ -2495,6 +2495,7 @@ fn to_doc_help<'b>(
                     .collect(),
                 tag_ext_to_doc(alloc, pol, gen_usages, ext),
                 0, // zero tags omitted, since this isn't a diff
+                None,
             )
         }
 
@@ -2514,13 +2515,16 @@ fn to_doc_help<'b>(
                 .collect::<Vec<_>>();
             tags.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-            report_text::recursive_tag_union(
+            let rec_doc = to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, *rec_var);
+
+            report_text::tag_union(
                 alloc,
-                to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, *rec_var),
                 tags.into_iter()
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
                 tag_ext_to_doc(alloc, pol, gen_usages, ext),
+                0, // zero tags omitted, since this isn't a diff
+                Some(rec_doc),
             )
         }
 
@@ -2888,21 +2892,11 @@ fn to_diff<'b>(
         }
 
         (TagUnion(tags1, ext1, pol), TagUnion(tags2, ext2, _)) => {
-            diff_tag_union(alloc, pol, tags1, ext1, tags2, ext2)
+            diff_tag_union(alloc, pol, tags1, ext1, None, tags2, ext2, None)
         }
 
-        (RecursiveTagUnion(_rec1, _tags1, _ext1, _), RecursiveTagUnion(_rec2, _tags2, _ext2, _)) => {
-            // TODO do a better job here
-            let (left, left_able) = to_doc(alloc, Parens::Unnecessary, type1);
-            let (right, right_able) = to_doc(alloc, Parens::Unnecessary, type2);
-
-            Diff {
-                left,
-                right,
-                status: Status::Similar,
-                left_able,
-                right_able,
-            }
+        (RecursiveTagUnion(rec1, tags1, ext1, pol), RecursiveTagUnion(rec2, tags2, ext2, _)) => {
+            diff_tag_union(alloc, pol, tags1, ext1, Some(*rec1), tags2, ext2, Some(*rec2))
         }
 
         pair => {
@@ -3539,8 +3533,10 @@ fn diff_tag_union<'b>(
     pol: Polarity,
     tags1: SendMap<TagName, Vec<ErrorType>>,
     ext1: TypeExt,
+    rec1: Option<ErrorType>,
     mut tags2: SendMap<TagName, Vec<ErrorType>>,
     ext2: TypeExt,
+    rec2: Option<ErrorType>,
 ) -> Diff<RocDocBuilder<'b>> {
     let gen_usages1 = {
         let mut usages = VecMap::default();
@@ -3733,8 +3729,38 @@ fn diff_tag_union<'b>(
         .map(|(_, a, b)| (a, b))
         .collect();
 
-    let doc1 = report_text::tag_union(alloc, lefts, ext_diff.left, left_tags_omitted);
-    let doc2 = report_text::tag_union(alloc, rights, ext_diff.right, right_tags_omitted);
+    let doc1 = match rec1 {
+        None => report_text::tag_union(alloc, lefts, ext_diff.left, left_tags_omitted, None),
+        Some(rec) => {
+            let (rec_doc, able) = to_doc(alloc, Parens::Unnecessary, rec);
+
+            tags_diff.left_able.extend(able);
+
+            report_text::tag_union(
+                alloc,
+                lefts,
+                ext_diff.left,
+                left_tags_omitted,
+                Some(rec_doc),
+            )
+        }
+    };
+    let doc2 = match rec2 {
+        None => report_text::tag_union(alloc, rights, ext_diff.right, right_tags_omitted, None),
+        Some(rec) => {
+            let (rec_doc, able) = to_doc(alloc, Parens::Unnecessary, rec);
+
+            tags_diff.right_able.extend(able);
+
+            report_text::tag_union(
+                alloc,
+                rights,
+                ext_diff.right,
+                right_tags_omitted,
+                Some(rec_doc),
+            )
+        }
+    };
 
     tags_diff.status.merge(status);
 
@@ -4105,6 +4131,7 @@ mod report_text {
         entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
         tags_omitted: usize,
+        opt_rec: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
             t
@@ -4122,7 +4149,7 @@ mod report_text {
             }
         };
 
-        if entries.is_empty() {
+        let without_rec = if entries.is_empty() {
             if tags_omitted == 0 {
                 alloc.text("[]")
             } else {
@@ -4168,50 +4195,11 @@ mod report_text {
                     ),
                 )
                 .append(ext_doc)
-        }
-    }
-
-    pub fn recursive_tag_union<'b>(
-        alloc: &'b RocDocAllocator<'b>,
-        rec_var: RocDocBuilder<'b>,
-        entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
-        opt_ext: Option<RocDocBuilder<'b>>,
-    ) -> RocDocBuilder<'b> {
-        // TODO
-        let ext_doc = if let Some(t) = opt_ext {
-            t
-        } else {
-            alloc.nil()
         };
 
-        if entries.is_empty() {
-            alloc.text("[]")
-        } else {
-            let entry_to_doc = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
-                if arguments.is_empty() {
-                    tag_name
-                } else {
-                    tag_name
-                        .append(alloc.space())
-                        .append(alloc.intersperse(arguments, alloc.space()))
-                }
-            };
-
-            let starts =
-                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
-
-            let entries_doc = alloc.concat(
-                entries
-                    .into_iter()
-                    .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
-            );
-
-            entries_doc
-                .append(alloc.reflow("]"))
-                .append(ext_doc)
-                .append(alloc.text(" as "))
-                .append(rec_var)
+        match opt_rec {
+            Some(rec) => without_rec.append(alloc.text(" as ")).append(rec),
+            None => without_rec,
         }
     }
 
