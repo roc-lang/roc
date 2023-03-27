@@ -939,14 +939,14 @@ expect
 
 #     actual == expected
 
-# JSON LIST PRIMITIVE ----------------------------------------------------------
+# JSON ARRAYS ------------------------------------------------------------------
 
 decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
 
-        decodeElems = listElemDecoder elemDecoder
+        decodeElems = arrayElemDecoder elemDecoder
 
         result =
-            when List.walkUntil bytes (BeforeOpeningBracket 0) listOpeningHelp is
+            when List.walkUntil bytes (BeforeOpeningBracket 0) arrayOpeningHelp is
                 AfterOpeningBracket n -> Ok (List.drop bytes n)
                 _ -> Err ExpectedOpeningBracket
 
@@ -955,7 +955,7 @@ decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
             Err ExpectedOpeningBracket ->
                 crash "expected opening bracket"
 
-listElemDecoder = \elemDecoder ->
+arrayElemDecoder = \elemDecoder ->
 
     decodeElems = \bytes, accum ->
 
@@ -966,7 +966,7 @@ listElemDecoder = \elemDecoder ->
             else
                 BeforeNextElemOrClosingBracket 0
 
-        when List.walkUntil bytes state listClosingHelp is
+        when List.walkUntil bytes state arrayClosingHelp is
             AfterClosingBracket n ->
                 # Eat remaining whitespace
                 rest = List.drop bytes n
@@ -1001,16 +1001,16 @@ listElemDecoder = \elemDecoder ->
 
     decodeElems
 
-listOpeningHelp : ListOpeningState, U8 -> [Continue ListOpeningState, Break ListOpeningState]
-listOpeningHelp = \state, byte ->
+arrayOpeningHelp : ArrayOpeningState, U8 -> [Continue ArrayOpeningState, Break ArrayOpeningState]
+arrayOpeningHelp = \state, byte ->
     when (state, byte) is
         (BeforeOpeningBracket n, b) if isWhitespace b -> Continue (BeforeOpeningBracket (n + 1))
         (BeforeOpeningBracket n, b) if b == '[' -> Continue (AfterOpeningBracket (n + 1))
         (AfterOpeningBracket n, b) if isWhitespace b -> Continue (AfterOpeningBracket (n + 1))
         _ -> Break state
 
-listClosingHelp : ListClosingState, U8 -> [Continue ListClosingState, Break ListClosingState]
-listClosingHelp = \state, byte ->
+arrayClosingHelp : ArrayClosingState, U8 -> [Continue ArrayClosingState, Break ArrayClosingState]
+arrayClosingHelp = \state, byte ->
     when (state, byte) is
         (BeforeNextElemOrClosingBracket n, b) if isWhitespace b -> Continue (BeforeNextElemOrClosingBracket (n + 1))
         (BeforeNextElemOrClosingBracket n, b) if b == ',' -> Continue (BeforeNextElement (n + 1))
@@ -1032,18 +1032,18 @@ expect
 
     actual == expected
 
-ListOpeningState : [
+ArrayOpeningState : [
     BeforeOpeningBracket Nat,
     AfterOpeningBracket Nat,
 ]
 
-ListClosingState : [
+ArrayClosingState : [
     BeforeNextElemOrClosingBracket Nat,
     BeforeNextElement Nat,
     AfterClosingBracket Nat,
 ]
 
-# Test decoding an empty list
+# Test decoding an empty array
 expect
     input = Str.toUtf8 "[ ]"
 
@@ -1052,7 +1052,7 @@ expect
 
     actual.result == Ok []
 
-# Test decode of json numbers with whitespace
+# Test decode array of json numbers with whitespace
 expect
     input = Str.toUtf8 "\n[\t 1 , 2  , 3]"
 
@@ -1063,7 +1063,7 @@ expect
 
     actual.result == expected
 
-# Test decode of json strings ignoring whitespace
+# Test decode array of json strings ignoring whitespace
 expect
     input = Str.toUtf8 "\n\t [\n \"one\"\r , \"two\" , \n\"3\"\t]"
 
@@ -1073,7 +1073,7 @@ expect
 
     actual.result == expected
 
-# JSON RECORD PRIMITIVE ----------------------------------------------------------
+# JSON OBJECTS -----------------------------------------------------------------
 
 decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {} ->
         # NB: the stepper function must be passed explicitly until #2894 is resolved.
