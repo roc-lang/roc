@@ -540,9 +540,7 @@ fn type_annotation_to_html(
             type_annotation_to_html(indent_level, buf, extension, true);
         }
         TypeAnnotation::Function { args, output } => {
-            if needs_parens {
-                buf.push('(');
-            }
+            let mut paren_is_open = false;
             let mut peekable_args = args.iter().peekable();
             while let Some(arg) = peekable_args.next() {
                 if is_multiline {
@@ -550,6 +548,10 @@ fn type_annotation_to_html(
                         new_line(buf);
                     }
                     indent(buf, indent_level + 1);
+                }
+                if needs_parens && !paren_is_open {
+                    buf.push('(');
+                    paren_is_open = true;
                 }
 
                 let child_needs_parens = match arg {
@@ -577,7 +579,7 @@ fn type_annotation_to_html(
             }
 
             type_annotation_to_html(next_indent_level, buf, output, false);
-            if needs_parens {
+            if needs_parens && paren_is_open {
                 buf.push(')');
             }
         }
