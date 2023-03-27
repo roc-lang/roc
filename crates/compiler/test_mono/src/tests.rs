@@ -2804,3 +2804,21 @@ fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
         "#
     )
 }
+
+#[mono_test]
+fn recursive_lambda_set_resolved_only_upon_specialization() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        factCPS = \n, cont ->
+            if n == 0u8 then
+                cont 1u8
+            else
+                factCPS (n - 1) \value -> cont (n * value)
+
+        main =
+            factCPS 5 \x -> x
+        "#
+    )
+}
