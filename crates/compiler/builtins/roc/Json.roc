@@ -401,8 +401,20 @@ decodeDec = Decode.custom \bytes, @Json {} ->
 decodeBool = Decode.custom \bytes, @Json {} ->
     when bytes is
         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.drop bytes 5 }
-        ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.false, rest: List.drop bytes 4 }
+        ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.drop bytes 4 }
         _ -> { result: Err TooShort, rest: bytes }
+
+expect
+    actual : DecodeResult Bool
+    actual = "true\n" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    expected = Ok Bool.true
+    actual.result == expected
+
+expect
+    actual : DecodeResult Bool
+    actual = "false ]\n" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    expected = Ok Bool.false
+    actual.result == expected
 
 decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \initialBytes, @Json {} ->
         # NB: the stepper function must be passed explicitly until #2894 is resolved.
