@@ -554,10 +554,8 @@ fn type_annotation_to_html(
                     paren_is_open = true;
                 }
 
-                let child_needs_parens = match arg {
-                    TypeAnnotation::Function { args: _, output: _ } => true,
-                    _ => false,
-                };
+                let child_needs_parens =
+                    matches!(arg, TypeAnnotation::Function { args: _, output: _ });
                 type_annotation_to_html(indent_level, buf, arg, child_needs_parens);
 
                 if peekable_args.peek().is_some() {
