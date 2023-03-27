@@ -8,7 +8,7 @@ Roc is not ready for a 0.1 release yet, but we do have:
 - [frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
 - [Zulip chat](https://roc.zulipchat.com) for help, questions and discussions
 
-If you'd like to get involved in contributing to the language, the Zulip chat is also the best place to get help with [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
+If you'd like to contribute, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22). Don't hesitate to ask for help on our [Zulip chat](https://roc.zulipchat.com), we're friendly!
 
 ## Sponsors
 
