@@ -486,38 +486,6 @@ tryDecode = \{ result, rest }, mapper ->
         Ok val -> mapper { val, rest }
         Err e -> { result: Err e, rest }
 
-decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {} ->
-        # NB: the stepper function must be passed explicitly until #2894 is resolved.
-        decodeFields = \stepper, state, kvBytes ->
-            { val: key, rest } <- (Decode.decodeWith kvBytes decodeString (@Json {})) |> tryDecode
-            { rest: afterColonBytes } <- colon rest |> tryDecode
-            { val: newState, rest: beforeCommaOrBreak } <- tryDecode
-                    (
-                        when stepper state key is
-                            Skip ->
-                                { rest: beforeCommaOrBreak } <- afterColonBytes |> anything |> tryDecode
-                                { result: Ok state, rest: beforeCommaOrBreak }
-
-                            Keep decoder ->
-                                Decode.decodeWith afterColonBytes decoder (@Json {})
-                    )
-
-            { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
-
-            when commaResult is
-                Ok {} -> decodeFields stepField newState nextBytes
-                Err _ -> { result: Ok newState, rest: nextBytes }
-
-        { rest: afterBraceBytes } <- bytes |> openBrace |> tryDecode
-
-        { val: endStateResult, rest: beforeClosingBraceBytes } <- decodeFields stepField initialState afterBraceBytes |> tryDecode
-
-        { rest: afterRecordBytes } <- beforeClosingBraceBytes |> closingBrace |> tryDecode
-
-        when finalizer endStateResult is
-            Ok val -> { result: Ok val, rest: afterRecordBytes }
-            Err e -> { result: Err e, rest: afterRecordBytes }
-
 # JSON NUMBER PRIMITIVE --------------------------------------------------------
 
 # Takes the bytes for a valid Json number primitive into a RocStr
@@ -549,26 +517,26 @@ takeJsonNumber = \bytes ->
 
 numberHelp : NumberState, U8 -> [Continue NumberState, Break NumberState]
 numberHelp = \state, byte ->
-    when Pair state byte is
-        Pair Start b if b == '0' -> Continue (Zero 1)
-        Pair Start b if b == '-' -> Continue (Minus 1)
-        Pair Start b if isDigit1to9 b -> Continue (Integer 1)
-        Pair (Minus n) b if b == '0' -> Continue (Zero (n + 1))
-        Pair (Minus n) b if isDigit1to9 b -> Continue (Integer (n + 1))
-        Pair (Zero n) b if b == '.' -> Continue (FractionA (n + 1))
-        Pair (Zero n) b if isValidEnd b -> Break (Finish n)
-        Pair (Integer n) b if isDigit0to9 b && n <= maxBytes -> Continue (Integer (n + 1))
-        Pair (Integer n) b if b == '.' && n < maxBytes -> Continue (FractionA (n + 1))
-        Pair (Integer n) b if isValidEnd b && n <= maxBytes -> Break (Finish n)
-        Pair (FractionA n) b if isDigit0to9 b && n <= maxBytes -> Continue (FractionB (n + 1))
-        Pair (FractionB n) b if isDigit0to9 b && n <= maxBytes -> Continue (FractionB (n + 1))
-        Pair (FractionB n) b if b == 'e' || b == 'E' && n <= maxBytes -> Continue (ExponentA (n + 1))
-        Pair (FractionB n) b if isValidEnd b && n <= maxBytes -> Break (Finish n)
-        Pair (ExponentA n) b if b == '-' || b == '+' && n <= maxBytes -> Continue (ExponentB (n + 1))
-        Pair (ExponentA n) b if isDigit0to9 b && n <= maxBytes -> Continue (ExponentC (n + 1))
-        Pair (ExponentB n) b if isDigit0to9 b && n <= maxBytes -> Continue (ExponentC (n + 1))
-        Pair (ExponentC n) b if isDigit0to9 b && n <= maxBytes -> Continue (ExponentC (n + 1))
-        Pair (ExponentC n) b if isValidEnd b && n <= maxBytes -> Break (Finish n)
+    when (state, byte) is
+        (Start, b) if b == '0' -> Continue (Zero 1)
+        (Start, b) if b == '-' -> Continue (Minus 1)
+        (Start, b) if isDigit1to9 b -> Continue (Integer 1)
+        (Minus n, b) if b == '0' -> Continue (Zero (n + 1))
+        (Minus n, b) if isDigit1to9 b -> Continue (Integer (n + 1))
+        (Zero n, b) if b == '.' -> Continue (FractionA (n + 1))
+        (Zero n, b) if isValidEnd b -> Break (Finish n)
+        (Integer n, b) if isDigit0to9 b && n <= maxBytes -> Continue (Integer (n + 1))
+        (Integer n, b) if b == '.' && n < maxBytes -> Continue (FractionA (n + 1))
+        (Integer n, b) if isValidEnd b && n <= maxBytes -> Break (Finish n)
+        (FractionA n, b) if isDigit0to9 b && n <= maxBytes -> Continue (FractionB (n + 1))
+        (FractionB n, b) if isDigit0to9 b && n <= maxBytes -> Continue (FractionB (n + 1))
+        (FractionB n, b) if b == 'e' || b == 'E' && n <= maxBytes -> Continue (ExponentA (n + 1))
+        (FractionB n, b) if isValidEnd b && n <= maxBytes -> Break (Finish n)
+        (ExponentA n, b) if b == '-' || b == '+' && n <= maxBytes -> Continue (ExponentB (n + 1))
+        (ExponentA n, b) if isDigit0to9 b && n <= maxBytes -> Continue (ExponentC (n + 1))
+        (ExponentB n, b) if isDigit0to9 b && n <= maxBytes -> Continue (ExponentC (n + 1))
+        (ExponentC n, b) if isDigit0to9 b && n <= maxBytes -> Continue (ExponentC (n + 1))
+        (ExponentC n, b) if isValidEnd b && n <= maxBytes -> Break (Finish n)
         _ -> Break Invalid
 
 NumberState : [
@@ -766,17 +734,17 @@ takeJsonString = \bytes ->
 
 stringHelp : StringState, U8 -> [Continue StringState, Break StringState]
 stringHelp = \state, byte ->
-    when Pair state byte is
-        Pair Start b if b == '"' -> Continue (Chars 1)
-        Pair (Chars n) b if b == '"' -> Break (Finish (n + 1))
-        Pair (Chars n) b if b == '\\' -> Continue (Escaped (n + 1))
-        Pair (Chars n) _ -> Continue (Chars (n + 1))
-        Pair (Escaped n) b if isEscapedChar b -> Continue (Chars (n + 1))
-        Pair (Escaped n) b if b == 'u' -> Continue (UnicodeA (n + 1))
-        Pair (UnicodeA n) b if isHex b -> Continue (UnicodeB (n + 1))
-        Pair (UnicodeB n) b if isHex b -> Continue (UnicodeC (n + 1))
-        Pair (UnicodeC n) b if isHex b -> Continue (UnicodeD (n + 1))
-        Pair (UnicodeD n) b if isHex b -> Continue (Chars (n + 1))
+    when (state, byte) is
+        (Start, b) if b == '"' -> Continue (Chars 1)
+        (Chars n, b) if b == '"' -> Break (Finish (n + 1))
+        (Chars n, b) if b == '\\' -> Continue (Escaped (n + 1))
+        (Chars n, _) -> Continue (Chars (n + 1))
+        (Escaped n, b) if isEscapedChar b -> Continue (Chars (n + 1))
+        (Escaped n, b) if b == 'u' -> Continue (UnicodeA (n + 1))
+        (UnicodeA n, b) if isHex b -> Continue (UnicodeB (n + 1))
+        (UnicodeB n, b) if isHex b -> Continue (UnicodeC (n + 1))
+        (UnicodeC n, b) if isHex b -> Continue (UnicodeD (n + 1))
+        (UnicodeD n, b) if isHex b -> Continue (Chars (n + 1))
         _ -> Break (Invalid)
 
 StringState : [
@@ -1035,21 +1003,21 @@ listElemDecoder = \elemDecoder ->
 
 listOpeningHelp : ListOpeningState, U8 -> [Continue ListOpeningState, Break ListOpeningState]
 listOpeningHelp = \state, byte ->
-    when Pair state byte is
-        Pair (BeforeOpeningBracket n) b if isWhitespace b -> Continue (BeforeOpeningBracket (n + 1))
-        Pair (BeforeOpeningBracket n) b if b == '[' -> Continue (AfterOpeningBracket (n + 1))
-        Pair (AfterOpeningBracket n) b if isWhitespace b -> Continue (AfterOpeningBracket (n + 1))
+    when (state, byte) is
+        (BeforeOpeningBracket n, b) if isWhitespace b -> Continue (BeforeOpeningBracket (n + 1))
+        (BeforeOpeningBracket n, b) if b == '[' -> Continue (AfterOpeningBracket (n + 1))
+        (AfterOpeningBracket n, b) if isWhitespace b -> Continue (AfterOpeningBracket (n + 1))
         _ -> Break state
 
 listClosingHelp : ListClosingState, U8 -> [Continue ListClosingState, Break ListClosingState]
 listClosingHelp = \state, byte ->
-    when Pair state byte is
-        Pair (BeforeNextElemOrClosingBracket n) b if isWhitespace b -> Continue (BeforeNextElemOrClosingBracket (n + 1))
-        Pair (BeforeNextElemOrClosingBracket n) b if b == ',' -> Continue (BeforeNextElement (n + 1))
-        Pair (BeforeNextElemOrClosingBracket n) b if b == ']' -> Continue (AfterClosingBracket (n + 1))
-        Pair (BeforeNextElement n) b if isWhitespace b -> Continue (BeforeNextElement (n + 1))
-        Pair (BeforeNextElement n) b if b == ']' -> Continue (AfterClosingBracket (n + 1))
-        Pair (AfterClosingBracket n) b if isWhitespace b -> Continue (AfterClosingBracket (n + 1))
+    when (state, byte) is
+        (BeforeNextElemOrClosingBracket n, b) if isWhitespace b -> Continue (BeforeNextElemOrClosingBracket (n + 1))
+        (BeforeNextElemOrClosingBracket n, b) if b == ',' -> Continue (BeforeNextElement (n + 1))
+        (BeforeNextElemOrClosingBracket n, b) if b == ']' -> Continue (AfterClosingBracket (n + 1))
+        (BeforeNextElement n, b) if isWhitespace b -> Continue (BeforeNextElement (n + 1))
+        (BeforeNextElement n, b) if b == ']' -> Continue (AfterClosingBracket (n + 1))
+        (AfterClosingBracket n, b) if isWhitespace b -> Continue (AfterClosingBracket (n + 1))
         _ -> Break state
 
 isWhitespace = \b ->
@@ -1104,3 +1072,46 @@ expect
     expected = Ok ["one", "two", "3"]
 
     actual.result == expected
+
+# JSON RECORD PRIMITIVE ----------------------------------------------------------
+
+decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {} ->
+        # NB: the stepper function must be passed explicitly until #2894 is resolved.
+        decodeFields = \stepper, state, kvBytes ->
+            { val: key, rest } <- (Decode.decodeWith kvBytes decodeString (@Json {})) |> tryDecode
+            { rest: afterColonBytes } <- colon rest |> tryDecode
+            { val: newState, rest: beforeCommaOrBreak } <- tryDecode
+                    (
+                        when stepper state key is
+                            Skip ->
+                                { rest: beforeCommaOrBreak } <- afterColonBytes |> anything |> tryDecode
+                                { result: Ok state, rest: beforeCommaOrBreak }
+
+                            Keep decoder ->
+                                Decode.decodeWith afterColonBytes decoder (@Json {})
+                    )
+
+            { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
+
+            when commaResult is
+                Ok {} -> decodeFields stepField newState nextBytes
+                Err _ -> { result: Ok newState, rest: nextBytes }
+
+        { rest: afterBraceBytes } <- bytes |> openBrace |> tryDecode
+
+        { val: endStateResult, rest: beforeClosingBraceBytes } <- decodeFields stepField initialState afterBraceBytes |> tryDecode
+
+        { rest: afterRecordBytes } <- beforeClosingBraceBytes |> closingBrace |> tryDecode
+
+        when finalizer endStateResult is
+            Ok val -> { result: Ok val, rest: afterRecordBytes }
+            Err e -> { result: Err e, rest: afterRecordBytes }
+
+# # Test decode of simple Json Object into Roc Record
+# expect
+#     input = Str.toUtf8 "{\"fruit\":2}"
+
+#     actual = Decode.fromBytesPartial input fromUtf8
+#     expected = Ok { fruit: 2 }
+
+#     actual.result == expected
