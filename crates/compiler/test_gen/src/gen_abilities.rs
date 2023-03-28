@@ -1488,6 +1488,24 @@ mod hash {
         use roc_std::RocList;
 
         #[test]
+        fn bool_false() {
+            assert_evals_to!(
+                &build_test("Bool.false"),
+                RocList::from_slice(&[0]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn bool_true() {
+            assert_evals_to!(
+                &build_test("Bool.true"),
+                RocList::from_slice(&[1]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
         fn i8() {
             assert_evals_to!(
                 &build_test("-2i8"),
