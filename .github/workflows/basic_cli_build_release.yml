@@ -155,14 +155,19 @@ jobs:
 
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
+        
+      # for debugging  
+      - run: sudo apt install -y tree
 
       - if: contains(env.ARCHIVE_FORMAT, 'gz')
-        run: cd basic-cli-platform && ls | grep "tar" | xargs tar -xzf
+        run: |
+          cd basic-cli-platform && ls | grep "tar" | xargs tar -xzf
+          tree
 
       - if: contains(env.ARCHIVE_FORMAT, 'br')
         run: |
-          sudo apt install brotli
           cd basic-cli-platform && ls | grep "tar" | xargs brotli -d
+          tree
 
       - name: prep testing http-get.roc
         run: |
