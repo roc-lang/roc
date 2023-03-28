@@ -35,7 +35,10 @@ pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String
             DeclarationTag::Expectation => todo!(),
             DeclarationTag::ExpectationFx => todo!(),
             DeclarationTag::Destructure(_) => todo!(),
-            DeclarationTag::MutualRecursion { .. } => todo!(),
+            DeclarationTag::MutualRecursion { .. } => {
+                // the defs will be printed next
+                continue;
+            }
         };
 
         defs.push(def);
@@ -123,9 +126,10 @@ fn toplevel_function<'a>(
         .append(f.line())
         .append(f.text("\\"))
         .append(f.intersperse(args, f.text(", ")))
-        .append(f.text("->"))
+        .append(f.text(" ->"))
+        .group()
         .append(f.line())
-        .append(expr(c, EPrec::Free, f, body))
+        .append(expr(c, EPrec::Free, f, body).group())
         .nest(2)
         .group()
 }
@@ -330,7 +334,11 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         } => expr(c, AppArg, f, &loc_expr.value)
             .append(f.text(format!(".{}", field.as_str())))
             .group(),
-        TupleAccess { .. } => todo!(),
+        TupleAccess {
+            loc_expr, index, ..
+        } => expr(c, AppArg, f, &loc_expr.value)
+            .append(f.text(format!(".{index}")))
+            .group(),
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
             f.text(format!("@{}", opaque_name.as_str(c.interns)))
         }

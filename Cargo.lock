@@ -2034,7 +2034,8 @@ dependencies = [
 name = "morphic_lib"
 version = "0.1.0"
 dependencies = [
- "sha2",
+ "blake3",
+ "roc_collections",
  "smallvec",
  "thiserror",
  "typed-arena",
@@ -3506,6 +3507,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "serde",
+ "serial_test",
  "target-lexicon",
  "tempfile",
 ]
@@ -3773,6 +3775,7 @@ dependencies = [
  "distance",
  "indoc",
  "insta",
+ "itertools 0.10.5",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",

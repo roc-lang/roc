@@ -96,6 +96,7 @@ Json := {} has [
              string: encodeString,
              list: encodeList,
              record: encodeRecord,
+             tuple: encodeTuple,
              tag: encodeTag,
          },
          DecoderFormatting {
@@ -116,6 +117,7 @@ Json := {} has [
              string: decodeString,
              list: decodeList,
              record: decodeRecord,
+             tuple: decodeTuple,
          },
      ]
 
@@ -206,6 +208,25 @@ encodeRecord = \fields ->
         { buffer: bytesWithRecord } = List.walk fields { buffer: bytesHead, fieldsLeft: List.len fields } writeRecord
 
         List.append bytesWithRecord (Num.toU8 '}')
+
+encodeTuple = \elems ->
+    Encode.custom \bytes, @Json {} ->
+        writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
+            bufferWithElem =
+                appendWith buffer elemEncoder (@Json {})
+
+            bufferWithSuffix =
+                if elemsLeft > 1 then
+                    List.append bufferWithElem (Num.toU8 ',')
+                else
+                    bufferWithElem
+
+            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
+
+        bytesHead = List.append bytes (Num.toU8 '[')
+        { buffer: bytesWithRecord } = List.walk elems { buffer: bytesHead, elemsLeft: List.len elems } writeTuple
+
+        List.append bytesWithRecord (Num.toU8 ']')
 
 encodeTag = \name, payload ->
     Encode.custom \bytes, @Json {} ->
@@ -477,6 +498,12 @@ openBrace = \bytes -> parseExactChar bytes '{'
 closingBrace : List U8 -> DecodeResult {}
 closingBrace = \bytes -> parseExactChar bytes '}'
 
+openBracket : List U8 -> DecodeResult {}
+openBracket = \bytes -> parseExactChar bytes '['
+
+closingBracket : List U8 -> DecodeResult {}
+closingBracket = \bytes -> parseExactChar bytes ']'
+
 recordKey : List U8 -> DecodeResult Str
 recordKey = \bytes -> jsonString bytes
 
@@ -526,6 +553,36 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
         when finalizer endStateResult is
             Ok val -> { result: Ok val, rest: afterRecordBytes }
             Err e -> { result: Err e, rest: afterRecordBytes }
+
+decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \initialBytes, @Json {} ->
+        # NB: the stepper function must be passed explicitly until #2894 is resolved.
+        decodeElems = \stepper, state, index, bytes ->
+            { val: newState, rest: beforeCommaOrBreak } <- tryDecode
+                    (
+                        when stepper state index is
+                            TooLong ->
+                                { rest: beforeCommaOrBreak } <- bytes |> anything |> tryDecode
+                                { result: Ok state, rest: beforeCommaOrBreak }
+
+                            Next decoder ->
+                                Decode.decodeWith bytes decoder (@Json {})
+                    )
+
+            { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
+
+            when commaResult is
+                Ok {} -> decodeElems stepElem newState (index + 1) nextBytes
+                Err _ -> { result: Ok newState, rest: nextBytes }
+
+        { rest: afterBracketBytes } <- initialBytes |> openBracket |> tryDecode
+
+        { val: endStateResult, rest: beforeClosingBracketBytes } <- decodeElems stepElem initialState 0 afterBracketBytes |> tryDecode
+
+        { rest: afterTupleBytes } <- beforeClosingBracketBytes |> closingBracket |> tryDecode
+
+        when finalizer endStateResult is
+            Ok val -> { result: Ok val, rest: afterTupleBytes }
+            Err e -> { result: Err e, rest: afterTupleBytes }
 
 # Helper to eat leading Json whitespace characters
 eatWhitespace = \input ->

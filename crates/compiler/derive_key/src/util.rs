@@ -43,6 +43,10 @@ pub(crate) fn debug_name_record(fields: &[Lowercase]) -> String {
     str
 }
 
+pub(crate) fn debug_name_tuple(arity: u32) -> String {
+    format!("(arity:{arity})")
+}
+
 pub(crate) fn debug_name_tag(tags: &[(TagName, u16)]) -> String {
     let mut str = String::from('[');
     tags.iter().enumerate().for_each(|(i, (tag, arity))| {

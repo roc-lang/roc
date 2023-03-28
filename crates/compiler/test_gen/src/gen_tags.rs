@@ -2235,3 +2235,29 @@ fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_5162_recast_nested_nullable_unwrapped_layout() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            Concept : [
+                AtomicConcept,
+                ExistentialRestriction { role : Str, concept : Concept }
+            ]
+
+            bottom : Concept
+            bottom = AtomicConcept
+
+            main =
+                when Dict.single bottom 0 is
+                    _ -> Bool.true
+            "###
+        ),
+        true,
+        bool
+    );
+}

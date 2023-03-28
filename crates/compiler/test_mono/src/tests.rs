@@ -2087,10 +2087,7 @@ fn match_list() {
 }
 
 #[mono_test]
-#[ignore = "https://github.com/roc-lang/roc/issues/4561"]
 fn recursive_function_and_union_with_inference_hole() {
-    let _tracing_guards = roc_tracing::setup_tracing!();
-
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
@@ -2767,5 +2764,84 @@ fn inline_return_joinpoints_in_union_lambda_set() {
                 B -> \n -> n + x
             (caller A) (x + 1)
         "#
+    )
+}
+
+#[mono_test]
+fn recursive_closure_with_transiently_used_capture() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        thenDo = \x, callback ->
+            callback x
+
+        f = \{} ->
+            code = 10u16
+
+            bf = \{} ->
+                thenDo code \_ -> bf {}
+
+            bf {}
+        "#
+    )
+}
+
+#[mono_test]
+fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        go : U8 -> U8
+        go = \byte ->
+            when byte is
+                15 if Bool.true -> 1
+                b if Bool.true -> b + 2
+                _ -> 3
+
+        main = go '.'
+        "#
+    )
+}
+
+#[mono_test]
+fn recursive_lambda_set_resolved_only_upon_specialization() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        factCPS = \n, cont ->
+            if n == 0u8 then
+                cont 1u8
+            else
+                factCPS (n - 1) \value -> cont (n * value)
+
+        main =
+            factCPS 5 \x -> x
+        "#
+    )
+}
+
+#[mono_test]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    indoc!(
+        r#"
+         app "test" provides [main] to "./platform"
+
+         compose = \forward -> \f, g ->
+            if forward
+            then \x -> g (f x)
+            else \x -> f (g x)
+
+         identity = \x -> x
+         exclame = \s -> "\(s)!"
+         whisper = \s -> "(\(s))"
+
+         main =
+             res: Str -> Str
+             res = List.walk [ exclame, whisper ] identity (compose Bool.true)
+             res "hello"
+         "#
     )
 }

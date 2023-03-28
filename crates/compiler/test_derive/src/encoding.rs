@@ -33,6 +33,11 @@ test_key_eq! {
         v!({ a: v!(U8), b: v!(U8), }),
         v!({ ?a: v!(U8), ?b: v!(U8), })
 
+    same_tuple:
+        v!((v!(U8), v!(U16),)), v!((v!(U8), v!(U16),))
+    same_tuple_fields_diff_types:
+        v!((v!(U8), v!(U16),)), v!((v!(U32), v!(U64),))
+
     same_tag_union:
         v!([ A v!(U8) v!(STR), B v!(STR) ]), v!([ A v!(U8) v!(STR), B v!(STR) ])
     same_tag_union_tags_diff_types:
@@ -57,17 +62,17 @@ test_key_eq! {
         v!(Symbol::STR_STR), v!(Symbol::STR_STR)
 
     alias_eq_real_type:
-        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!([False, True])
+        v!(Symbol::ATTR_ATTR => v!([ True, False ])), v!([False, True])
     diff_alias_same_real_type:
-        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
+        v!(Symbol::ATTR_ATTR => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
 
     opaque_eq_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!([False, True])
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!([False, True])
     diff_opaque_same_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([False, True]))
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([False, True]))
 
     opaque_real_type_eq_alias_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
 }
 
 test_key_neq! {
@@ -78,6 +83,9 @@ test_key_neq! {
     record_empty_vs_nonempty:
         v!(EMPTY_RECORD), v!({ a: v!(U8), })
 
+    different_tuple_arities:
+        v!((v!(U8), v!(U16),)), v!((v!(U8), v!(U16), v!(U32),))
+
     different_tag_union_tags:
         v!([ A v!(U8) ]), v!([ B v!(U8) ])
     tag_union_empty_vs_nonempty:
@@ -86,14 +94,14 @@ test_key_neq! {
         v!([ Nil, Cons v!(^lst) ] as lst), v!([ Nil, Next v!(^lst) ] as lst)
 
     same_alias_diff_real_type:
-        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::BOOL_BOOL => v!([ False, True, Maybe ]))
+        v!(Symbol::ATTR_ATTR => v!([ True, False ])), v!(Symbol::ATTR_ATTR => v!([ False, True, Maybe ]))
     diff_alias_diff_real_type:
-        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
+        v!(Symbol::ATTR_ATTR => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
 
     same_opaque_diff_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::BOOL_BOOL => v!([ False, True, Maybe ]))
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!(@Symbol::ATTR_ATTR => v!([ False, True, Maybe ]))
     diff_opaque_diff_real_type:
-        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
+        v!(@Symbol::ATTR_ATTR => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
 }
 
 // }}} hash tests
@@ -259,6 +267,29 @@ fn two_field_record() {
                       { value: toEncoder #Derived.rcd.a, key: "a" },
                       { value: toEncoder #Derived.rcd.b, key: "b" },
                     ])
+                  #Derived.fmt
+        "###
+        )
+    })
+}
+
+#[test]
+fn two_field_tuple() {
+    derive_test(ToEncoder, v!((v!(U8), v!(STR),)), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for ( U8, Str )*
+        # ( val, val1 )* -[[toEncoder_(arity:2)(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # ( val, val1 )a -[[toEncoder_(arity:2)(0)]]-> (List U8, fmt -[[custom(2) ( val, val1 )a]]-> List U8) | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_(arity:2)(0)]]
+        #   @<2>: [[custom(2) ( val, val1 )*]] | val has Encoding, val1 has Encoding
+        #Derived.toEncoder_(arity:2) =
+          \#Derived.tup ->
+            custom
+              \#Derived.bytes, #Derived.fmt ->
+                appendWith
+                  #Derived.bytes
+                  (tuple [toEncoder #Derived.tup.0, toEncoder #Derived.tup.1])
                   #Derived.fmt
         "###
         )
