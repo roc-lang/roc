@@ -8373,7 +8373,23 @@ mod solve_expr {
                     #     ^^^^^^^^^
                 "#
             ),
-        @"Hash#Hash.hash(1) : a, I64 -[[Hash.hashI64(12)]]-> a | a has Hasher"
+        @"Hash#Hash.hash(1) : a, I64 -[[Hash.hashI64(13)]]-> a | a has Hasher"
+        )
+    }
+
+    #[test]
+    fn choose_bool_for_hash() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    \h -> Hash.hash h Bool.true
+                    #     ^^^^^^^^^
+                "#
+            ),
+        @"Hash#Hash.hash(1) : a, Bool -[[Hash.hashBool(9)]]-> a | a has Hasher"
         )
     }
 
