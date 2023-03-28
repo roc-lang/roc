@@ -4188,6 +4188,7 @@ where
                 // The naked pointer will get fixed-up to loopback to the union below when we
                 // intern the union.
                 tag_layout.push(Layout::NAKED_RECURSIVE_PTR);
+                criteria.and(NAKED_RECURSION_PTR);
                 continue;
             }
 
@@ -4228,12 +4229,17 @@ where
     } else {
         UnionLayout::Recursive(tag_layouts.into_bump_slice())
     };
-    criteria.pass_through_recursive_union(rec_var);
 
-    let union_layout = env
-        .cache
-        .interner
-        .insert_recursive(env.arena, Layout::Union(union_layout));
+    let union_layout = if criteria.has_naked_recursion_pointer {
+        env.cache
+            .interner
+            .insert_recursive(env.arena, Layout::Union(union_layout))
+    } else {
+        // There are no naked recursion pointers, so we can insert the layout as-is.
+        env.cache.interner.insert(Layout::Union(union_layout))
+    };
+
+    criteria.pass_through_recursive_union(rec_var);
 
     Cacheable(Ok(union_layout), criteria)
 }
