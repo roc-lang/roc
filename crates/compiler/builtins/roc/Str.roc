@@ -151,7 +151,90 @@ isEmpty : Str -> Bool
 concat : Str, Str -> Str
 
 ## Returns a string of the specified capacity without any content.
+##
+## This is a performance optimization tool that's like calling [Str.reserve] on an empty string.
+## It's useful when you plan to build up a string incrementally, for example by calling [Str.concat] on it:
+##
+## ```
+## greeting = "Hello"
+## subject = "World"
+##
+## # Evaluates to "Hello, World!\n"
+## helloWorld =
+##     Str.withCapacity 14
+##     |> Str.concat greeting
+##     |> Str.concat ", "
+##     |> Str.concat subject
+##     |> Str.concat "!\n"
+## ```
+##
+## Here, calling `"" |> Str.reserve 14` instead of `Str.withCapacity 14` would effectively do the same thing.
+##
+## In general, if you plan to use [Str.concat] on an empty string, it will be faster to start with
+## [Str.withCapacity] than with `""`. Even if you don't know the exact capacity of the string, giving [withCapacity]
+## a higher value than ends up being necessary can help prevent reallocation and copying—at
+## the cost of using more memory than is necessary.
+##
+## For more details on how the performance optimization works, see [Str.reserve].
 withCapacity : Nat -> Str
+
+## Increase a string's capacity by at least the given number of additional bytes.
+##
+## This can improve the performance of string concatenation operations like [Str.concat] by
+## allocating extra capacity up front, which can prevent the need for reallocations and copies.
+## Consider the following example which does not use [Str.reserve]:
+##
+## ```
+## greeting = "Hello"
+## subject = "World"
+##
+## # Evaluates to "Hello, World!\n"
+## helloWorld =
+##     greeting
+##     |> Str.concat ", "
+##     |> Str.concat subject
+##     |> Str.concat "!\n"
+## ```
+##
+## In this example:
+## 1. We start with `greeting = "Hello"`, which has both a length and capacity of 5 (bytes).
+## 2. `|> Str.concat ", "` will see that there isn't enough capacity to add 2 more bytes for the `", "`, so it will create a new heap allocation with enough bytes to hold both. (This probably will be more than 7 bytes, because when [Str] functions reallocate, they apply a multiplier to the exact capacity required. This makes it less likely that future realloctions will be needed. The multiplier amount is not specified, because it may change in future releases of Roc, but it will likely be around 1.5 to 2 times the exact capacity required.) Then it will copy the current bytes (`"Hello"`) into the new allocation, and finally concatenate the `", "` into the new allocation. The old allocation will then be deallocated because it's no longer referenced anywhere in the program.
+## 3. `|> Str.concat subject` will again check if there is enough capacity in the string. If it doesn't find enough capacity once again, it will make a third allocation, copy the existing bytes (`"Hello, "`) into that third allocation, and then deallocate the second allocation because it's already no longer being referenced anywhere else in the program. (It may find enough capacity in this prticular case, because the previous [Str.concat] allocated something like 1.5 to 2 times the necessary capacity in order to anticipate future concatenations like this...but if something longer than `"World"` were being concatenated here, it might still require further reallocation and copying.)
+## 4. `|> Str.concat "!\n"` will repeat this process once more.
+##
+## This process can have significant performance costs due to multiple reallocation of new strings, copying between old strings and new strings, and deallocation of immediately obsolete strings.
+##
+## Here's a modified example which uses [Str.reserve] to eliminate the need for all that reallocation, copying, and deallocation.
+##
+## ```
+## helloWorld =
+##     greeting
+##     |> Str.reserve 9
+##     |> Str.concat ", "
+##     |> Str.concat subject
+##     |> Str.concat "!\n"
+## ```
+##
+## In this example:
+## 1. We again start with `greeting`, which is `"Hello"` and has both a length and capacity of 5 bytes.
+## 2. `|> Str.reserve 9` will ensure that there is enough capacity in the string for an additional 9 bytes (to make room for ", ", "World", and "!\n"). Since the current capacity is only 5, it will create a new 14-byte (5 + 9) heap allocation and copy the contents of the existing allocation (`"Hello"`) into it.
+## 3. `|> Str.concat ", "` will concatenate `, ` to the string. No reallocation, copying, or deallocation will be necessary, because the string already has a capacity of 14 btytes, and `"Hello, "` will only use 7 of them.
+## 4. `|> Str.concat subject` will concatenate `subject` (`"World"`) to the string. Again, no reallocation, copying, or deallocation will be necessary.
+## 5. `|> Str.concat "!\n"` will concatenate `"!\n"` to the string, still without any reallocation, copying, or deallocation.
+##
+## Here, [Str.reserve] prevented multiple reallocations, copies, and deallocations during the
+## [Str.concat] calls. Notice that it did perform a heap allocation before any [Str.concat] calls
+## were made, which means that using [Str.reserve] is not free! You should only use it if you actually
+## expect to make use of the extra capacity.
+##
+## Ideally, you'd be able to predict exactly how many extra bytes of capacity will be needed, but this
+## may not always be knowable. When you don't know exactly how many bytes to reserve, you can often get better
+## performance by choosing a number of bytes that's too high, because a number that's too low could lead to reallocations. There's a limit to
+## this, of course; if you always give it ten times what it turns out to need, that could prevent
+## reallocations but will also waste a lot of memory!
+##
+## If you plan to use [Str.reserve] on an empty string, it's generally better to use [Str.withCapacity] instead.
+reserve : Str, Nat -> Str
 
 ## Combines a [List] of strings into a single string, with a separator
 ## string in between each.
@@ -200,7 +283,21 @@ repeat : Str, Nat -> Str
 ## using a single Unicode code point.
 countGraphemes : Str -> Nat
 
-## Split a string into its constituent grapheme clusters
+## Split a string into its constituent graphemes.
+##
+## This function breaks a string into its individual [graphemes](https://stackoverflow.com/a/27331885/4200103),
+## returning them as a list of strings. This is useful for working with text that
+## contains complex characters, such as emojis.
+##
+## Examples:
+## ```
+## expect Str.graphemes "Roc" == ["R", "o", "c"]
+## expect Str.graphemes "नमस्ते" == ["न", "म", "स्", "ते"]
+## expect Str.graphemes "👩‍👩‍👦‍👦" == ["👩‍", "👩‍", "👦‍", "👦"]
+## ```
+##
+## Note that the "👩‍👩‍👦‍👦" example consists of 4 grapheme clusters, although it visually
+## appears as a single glyph. This is because it uses an emoji modifier sequence.
 graphemes : Str -> List Str
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
@@ -743,9 +840,6 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
         walkUtf8WithIndexHelp string newState step (index + 1) length
     else
         state
-
-## Enlarge a string for at least the given number additional bytes.
-reserve : Str, Nat -> Str
 
 ## Shrink the memory footprint of a str such that it's capacity and length are equal.
 ## Note: This will also convert seamless slices to regular lists.
