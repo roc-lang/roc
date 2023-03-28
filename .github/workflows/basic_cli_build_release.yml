@@ -7,9 +7,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
   
-# use tar.gz for quick testing
+# use .tar.gz for quick testing
 env:
-  ARCHIVE_FORMAT: tar.br
+  ARCHIVE_FORMAT: .tar.br
 
 jobs:
   fetch-releases:
