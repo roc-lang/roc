@@ -1,4 +1,7 @@
-use libc::{c_char, c_int, c_uint, c_void, mode_t, off_t, pid_t, size_t};
+use libc::{c_char, c_int, c_void, size_t};
+#[cfg(unix)]
+use libc::{c_uint, mode_t, off_t, pid_t};
+
 use roc_std::RocStr;
 
 // These are required to ensure rust adds these functions to the final binary even though they are never used.
@@ -15,9 +18,11 @@ pub static ROC_DEALLOC: unsafe extern "C" fn(*mut c_void, u32) = roc_dealloc;
 #[used]
 pub static ROC_PANIC: unsafe extern "C" fn(&RocStr, u32) = roc_panic;
 
+#[cfg(unix)]
 #[used]
 pub static ROC_GETPPID: unsafe extern "C" fn() -> pid_t = roc_getppid;
 
+#[cfg(unix)]
 #[used]
 pub static ROC_MMAP: unsafe extern "C" fn(
     *mut c_void,
@@ -28,6 +33,7 @@ pub static ROC_MMAP: unsafe extern "C" fn(
     off_t,
 ) -> *mut c_void = roc_mmap;
 
+#[cfg(unix)]
 #[used]
 pub static ROC_SHM_OPEN: unsafe extern "C" fn(*const c_char, c_int, mode_t) -> c_int = roc_shm_open;
 
