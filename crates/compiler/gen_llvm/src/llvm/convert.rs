@@ -326,6 +326,10 @@ impl<'ctx> RocUnion<'ctx> {
         Self::new(context, target_info, data_align, data_width, None)
     }
 
+    pub fn data_width(&self) -> u32 {
+        self.data_width
+    }
+
     pub fn tag_alignment(&self) -> u32 {
         let tag_id_alignment = match self.tag_type {
             None => 0,

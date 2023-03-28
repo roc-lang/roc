@@ -129,6 +129,15 @@ fn write_state<'a, 'ctx, 'env>(
     env.builder.build_store(offset_ptr, offset);
 }
 
+fn offset_add<'ctx>(
+    builder: &Builder<'ctx>,
+    current: IntValue<'ctx>,
+    extra: u32,
+) -> IntValue<'ctx> {
+    let intval = current.get_type().const_int(extra as _, false);
+    builder.build_int_add(current, intval, "offset_add")
+}
+
 pub(crate) fn notify_parent_expect(env: &Env, shared_memory: &SharedMemoryPointer) {
     let func = env
         .module
@@ -564,6 +573,56 @@ fn load_tag_data<'a, 'ctx, 'env>(
     env.builder.new_build_load(tag_type, data_ptr, "load_data")
 }
 
+fn clone_tag_payload_and_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
+    ptr: PointerValue<'ctx>,
+    cursors: Cursors<'ctx>,
+    roc_union: RocUnion<'ctx>,
+    tag_id: usize,
+    payload_in_layout: InLayout<'a>,
+    opaque_payload_ptr: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    let payload_type = basic_type_from_layout(env, layout_interner, payload_in_layout);
+
+    let payload_ptr = env.builder.build_pointer_cast(
+        opaque_payload_ptr,
+        payload_type.ptr_type(AddressSpace::default()),
+        "cast_payload_ptr",
+    );
+
+    let payload = env
+        .builder
+        .new_build_load(payload_type, payload_ptr, "payload");
+
+    // NOTE: `answer` includes any extra_offset that the tag payload may have needed
+    // (e.g. because it includes a list). That is what we want to return, but not what
+    // we need to write the padding and offset of this tag
+    let answer = build_clone(
+        env,
+        layout_interner,
+        layout_ids,
+        ptr,
+        cursors,
+        payload,
+        payload_in_layout,
+    );
+
+    // include padding between data and tag id
+    let tag_id_internal_offset = roc_union.data_width();
+
+    let tag_id_offset = offset_add(env.builder, cursors.offset, tag_id_internal_offset);
+
+    // write the tag id
+    let value = env.context.i8_type().const_int(tag_id as _, false);
+    build_copy(env, ptr, tag_id_offset, value.into());
+
+    // NOTE: padding after tag id (is taken care of by the cursor)
+
+    answer
+}
+
 fn build_clone_tag_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -622,22 +681,38 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
-                let layout = layout_interner.insert(Layout::struct_no_name_order(
-                    env.arena.alloc([layout, union_layout.tag_id_layout()]),
-                ));
-
-                let basic_type = basic_type_from_layout(env, layout_interner, layout);
-                let data = load_tag_data(
-                    env,
+                let roc_union = RocUnion::tagged_from_slices(
                     layout_interner,
-                    union_layout,
-                    tag_value.into_pointer_value(),
-                    basic_type,
+                    env.context,
+                    tags,
+                    env.target_info,
                 );
 
-                let answer =
-                    build_clone(env, layout_interner, layout_ids, ptr, cursors, data, layout);
+                // load the tag payload (if any)
+                let payload_layout = Layout::struct_no_name_order(field_layouts);
+                let payload_in_layout = layout_interner.insert(payload_layout);
+
+                let opaque_payload_ptr = env
+                    .builder
+                    .new_build_struct_gep(
+                        roc_union.struct_type(),
+                        tag_value.into_pointer_value(),
+                        RocUnion::TAG_DATA_INDEX,
+                        "data_buffer",
+                    )
+                    .unwrap();
+
+                let answer = clone_tag_payload_and_id(
+                    env,
+                    layout_interner,
+                    layout_ids,
+                    ptr,
+                    cursors,
+                    roc_union,
+                    tag_id,
+                    payload_in_layout,
+                    opaque_payload_ptr,
+                );
 
                 env.builder.build_return(Some(&answer));
 
