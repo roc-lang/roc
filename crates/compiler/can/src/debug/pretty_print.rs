@@ -35,7 +35,10 @@ pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String
             DeclarationTag::Expectation => todo!(),
             DeclarationTag::ExpectationFx => todo!(),
             DeclarationTag::Destructure(_) => todo!(),
-            DeclarationTag::MutualRecursion { .. } => todo!(),
+            DeclarationTag::MutualRecursion { .. } => {
+                // the defs will be printed next
+                continue;
+            }
         };
 
         defs.push(def);
@@ -123,9 +126,10 @@ fn toplevel_function<'a>(
         .append(f.line())
         .append(f.text("\\"))
         .append(f.intersperse(args, f.text(", ")))
-        .append(f.text("->"))
+        .append(f.text(" ->"))
+        .group()
         .append(f.line())
-        .append(expr(c, EPrec::Free, f, body))
+        .append(expr(c, EPrec::Free, f, body).group())
         .nest(2)
         .group()
 }
