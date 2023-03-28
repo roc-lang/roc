@@ -123,7 +123,7 @@ jobs:
 
       # change to tar.gz for fast test build
       - run: |
-          echo "ARCHIVE_FORMAT='.tar.gz'" >> "$GITHUB_ENV"
+          echo "ARCHIVE_FORMAT='.tar.br'" >> "$GITHUB_ENV"
 
       - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
 
