@@ -2845,3 +2845,17 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
          "#
     )
 }
+
+#[mono_test]
+fn issue_4759() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            update { a : { x : "x", y: "y" } }
+
+        update = \state -> { state & a : { x : "ux", y: "uy" } }
+        "#
+    )
+}
