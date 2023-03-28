@@ -332,7 +332,7 @@ fn nested_int_list() {
 fn nested_float_list() {
     expect_success(
         r#"[[[4, 3, 2], [1, 0.0]], [[]], []]"#,
-        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Float *)))"#,
+        r#"[[[4., 3., 2.], [1., 0]], [[]], []] : List (List (List (Float *)))"#,
     );
 }
 

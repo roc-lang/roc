@@ -2414,7 +2414,7 @@ impl<'a> Layout<'a> {
                     Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_INTEGER
                         if is_unresolved_var(env.subs, actual_var) =>
                     {
-                        // default to i64
+                        // default to i128
                         cacheable(Ok(Layout::default_integer()))
                     }
 
@@ -2422,7 +2422,7 @@ impl<'a> Layout<'a> {
                         if is_unresolved_var(env.subs, actual_var)
                             || is_any_float_range(env.subs, actual_var) =>
                     {
-                        // default to f64
+                        // default to dec
                         cacheable(Ok(Layout::default_float()))
                     }
 
@@ -2846,11 +2846,11 @@ impl<'a> Layout<'a> {
     }
 
     pub fn default_integer() -> InLayout<'a> {
-        Layout::I64
+        Layout::U128
     }
 
     pub fn default_float() -> InLayout<'a> {
-        Layout::F64
+        Layout::DEC
     }
 
     pub fn int_literal_width_to_int(
@@ -4295,9 +4295,9 @@ fn layout_from_num_content<'a>(
         RecursionVar { .. } => panic!("recursion var in num"),
         FlexVar(_) | RigidVar(_) => {
             // If a Num makes it all the way through type checking with an unbound
-            // type variable, then assume it's a 64-bit integer.
+            // type variable, then assume it's a 128-bit integer.
             //
-            // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
+            // (e.g. for (5 + 5) assume both 5s are 128-bit integers.)
             Ok(Layout::default_integer())
         }
         FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
