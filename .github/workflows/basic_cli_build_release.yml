@@ -155,9 +155,6 @@ jobs:
 
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
-        
-      # for debugging  
-      - run: sudo apt install -y tree
 
       - if: contains(env.ARCHIVE_FORMAT, 'gz')
         run: |
