@@ -371,6 +371,12 @@ fromUtf8 = \bytes ->
     else
         Err (BadUtf8 result.dProblemCode result.aByteIndex)
 
+expect (Str.fromUtf8 [82, 111, 99]) == Ok "Roc"
+expect (Str.fromUtf8 [224, 174, 154, 224, 174, 191]) == Ok "சி"
+expect (Str.fromUtf8 [240, 159, 144, 166]) == Ok "🐦"
+expect (Str.fromUtf8 []) == Ok ""
+expect (Str.fromUtf8 [255]) |> Result.isErr
+
 ## Encode part of a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit)
 ## into a [Str]
 ## ```
@@ -387,6 +393,12 @@ fromUtf8Range = \bytes, config ->
             Err (BadUtf8 result.dProblemCode result.aByteIndex)
     else
         Err OutOfBounds
+
+expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 0, count: 2 }) == Ok "Hi"
+expect (Str.fromUtf8Range [233, 185, 143, 224, 174, 154, 224, 174, 191] { start: 3, count: 3 }) == Ok "சி"
+expect (Str.fromUtf8Range [240, 159, 144, 166] { start: 0, count: 4 }) == Ok "🐦"
+expect (Str.fromUtf8Range [] { start: 0, count: 0 }) == Ok ""
+expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 2, count: 3 }) |> Result.isErr
 
 FromUtf8Result : {
     aByteIndex : Nat,
@@ -863,10 +875,7 @@ walkUtf8Help = \str, state, step, index, length ->
     else
         state
 
-# Test walkUtf8 with a simple ASCII string
 expect (walkUtf8 "ABC" [] List.append) == [65, 66, 67]
-
-# Test walkUtf8 with a multi-byte string
 expect (walkUtf8 "鹏" [] List.append) == [233, 185, 143]
 
 ## Shrink the memory footprint of a str such that it's capacity and length are equal.
