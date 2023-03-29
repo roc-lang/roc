@@ -107,6 +107,7 @@ interface Str
         replaceLast,
         splitFirst,
         splitLast,
+        walkUtf8,
         walkUtf8WithIndex,
         reserve,
         releaseExcessCapacity,
@@ -840,6 +841,33 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
         walkUtf8WithIndexHelp string newState step (index + 1) length
     else
         state
+
+## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
+## state for each byte.
+##
+## ```
+## result = walkUtf8 "hello, world!" "" (\state, byte -> state ++ String.fromCodePoint byte)
+## expect result == Ok "hello, world!"
+## ```
+walkUtf8 : Str, state, (state, U8 -> state) -> state
+walkUtf8 = \str, initial, step ->
+    walkUtf8Help str initial step 0 (Str.countUtf8Bytes str)
+
+walkUtf8Help : Str, state, (state, U8 -> state), Nat, Nat -> state
+walkUtf8Help = \str, state, step, index, length ->
+    if index < length then
+        byte = Str.getUnsafe str index
+        newState = step state byte
+
+        walkUtf8Help str newState step (index + 1) length
+    else
+        state
+
+# Test walkUtf8 with a simple ASCII string
+expect (walkUtf8 "ABC" [] List.append) == [65, 66, 67]
+
+# Test walkUtf8 with a multi-byte string
+expect (walkUtf8 "鹏" [] List.append) == [233, 185, 143]
 
 ## Shrink the memory footprint of a str such that it's capacity and length are equal.
 ## Note: This will also convert seamless slices to regular lists.
