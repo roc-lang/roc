@@ -4,6 +4,8 @@
 //! the plan is to support any language via a plugin model.
 pub mod enums;
 pub mod load;
+pub mod roc_helpers;
+pub mod roc_type;
 pub mod rust_glue;
 pub mod structs;
 pub mod types;

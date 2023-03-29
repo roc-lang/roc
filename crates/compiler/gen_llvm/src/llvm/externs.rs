@@ -197,6 +197,11 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
         let mut params = fn_val.get_param_iter();
         let roc_str_arg = params.next().unwrap();
 
+        // normally, roc_panic is marked as external so it can be provided by the host. But when we
+        // define it here in LLVM IR, we never want it to be linked by the host (that would
+        // overwrite which implementation is used.
+        fn_val.set_linkage(Linkage::Internal);
+
         let tag_id_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());

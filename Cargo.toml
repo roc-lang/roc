@@ -71,6 +71,7 @@ version = "0.0.1"
 inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-15", features = ["llvm13-0"] }
 
 arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
+backtrace = "0.3.67"
 base64-url = "1.4.13"
 bincode = "1.3.3"
 bitflags = "1.3.2"
