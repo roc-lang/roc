@@ -47,11 +47,6 @@ impl TypeId {
     const MAX: Self = Self(Self::PENDING.0 - 1);
 }
 
-pub struct RocTarget {
-    pub(crate) entry_points: Vec<(roc_std::RocStr, TypeId)>,
-    pub(crate) types: Types,
-}
-
 // TODO: remove this and instead generate directly into roc_type::Types
 // Probably want to fix roc_std::RocDict and update roc_type::Types to use it first.
 #[derive(Debug, Clone)]
@@ -117,7 +112,7 @@ impl Types {
     }
 
     pub fn entry_points(&self) -> &[(String, TypeId)] {
-        self.entry_points.as_slice()
+        dbg!(self.entry_points.as_slice())
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {

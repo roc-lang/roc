@@ -1,12 +1,13 @@
 app "rust-glue"
-    packages { pf: "RocType.roc" }
+    packages { pf: "../platform/main.roc" }
     imports []
     provides [makeGlue] to pf
 
+makeGlue : List { entryPoints: List { name: Str, id: Nat }, types: _ } -> Result (List _) Str
 makeGlue = \targets ->
     modFileContent =
-        List.walk targets "" \content, { target } ->
-            archStr = archName target.architecture
+        List.walk targets "" \content, { types } ->
+            archStr = archName types.target.architecture
 
             Str.concat
                 content
@@ -19,6 +20,7 @@ makeGlue = \targets ->
                 """
 
     targets
+    |> List.map .types
     |> List.map typesWithDict
     |> List.map convertTypesToFile
     |> List.append { name: "mod.rs", content: modFileContent }

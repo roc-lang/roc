@@ -1,6 +1,6 @@
 use crate::types::{
-    Accessors, File, RocFn, RocNum, RocSingleTagPayload, RocStructFields, RocTagUnion, RocTarget,
-    RocType, TypeId, Types,
+    Accessors, File, RocFn, RocNum, RocSingleTagPayload, RocStructFields, RocTagUnion, RocType,
+    TypeId, Types,
 };
 use indexmap::IndexMap;
 use roc_target::{Architecture, TargetInfo};
@@ -60,13 +60,11 @@ fn add_decl(impls: &mut Impls, opt_impl: Impl, target_info: TargetInfo, body: St
     targets.push(target_info);
 }
 
-pub fn emit(targets: &[RocTarget]) -> Vec<File> {
+pub fn emit(types: &[Types]) -> Vec<File> {
     let mut buf = std::str::from_utf8(HEADER).unwrap().to_string();
     let mut impls: Impls = IndexMap::default();
 
-    for roc_target in targets {
-        let types = &roc_target.types;
-
+    for types in types {
         for id in types.sorted_ids() {
             add_type(types.target(), id, types, &mut impls);
         }

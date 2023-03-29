@@ -5,5 +5,5 @@ platform "roc-lang/glue"
     imports [Types.{ Types }, File.{ File }]
     provides [makeGlueForHost]
 
-makeGlueForHost : List Types -> Result (List File) Str
+makeGlueForHost : List { entryPoints: List { name: Str, id: Nat }, types: Types } -> Result (List File) Str
 makeGlueForHost = \types -> makeGlue types

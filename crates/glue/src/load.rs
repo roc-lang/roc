@@ -1,5 +1,5 @@
 use crate::roc_type::{self, ExposedRocTarget, ExposedTypes};
-use crate::types::{RocTarget, Types};
+use crate::types::Types;
 use bumpalo::Bump;
 use libloading::Library;
 use roc_build::{
@@ -125,15 +125,20 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                             .unwrap_or_else(|_| panic!("Unable to load glue function"))
                     };
 
+                    dbg!("what do the thing");
+
                     let targets = roc_targets
                         .into_iter()
-                        .map(|roc_target| ExposedRocTarget {
-                            entry_points: roc_target
-                                .entry_points
+                        .map(|types| ExposedRocTarget {
+                            entry_points: types
+                                .entry_points()
                                 .into_iter()
-                                .map(|(name, id)| roc_type::EntryPoint { name, id })
+                                .map(|(name, id)| roc_type::EntryPoint {
+                                    name: dbg!(roc_std::RocStr::from(name.as_str())),
+                                    id: *id,
+                                })
                                 .collect(),
-                            types: ExposedTypes::from(&roc_target.types),
+                            types: ExposedTypes::from(&types),
                         })
                         .collect();
 
@@ -337,7 +342,7 @@ pub fn load_types(
     full_file_path: PathBuf,
     threading: Threading,
     ignore_errors: IgnoreErrors,
-) -> Result<Vec<RocTarget>, io::Error> {
+) -> Result<Vec<Types>, io::Error> {
     let target_info = (&Triple::host()).into();
     let arena = &Bump::new();
     let LoadedModule {
@@ -471,12 +476,7 @@ pub fn load_types(
             target_info,
         );
 
-        let roc_target = RocTarget {
-            entry_points: Vec::new(),
-            types,
-        };
-
-        arch_types.push(roc_target);
+        arch_types.push(types);
     }
 
     Ok(arch_types)
