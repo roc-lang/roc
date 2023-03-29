@@ -1,34 +1,36 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
-    imports []
+    imports [pf.Types.{ Types }, pf.TypeId.{ TypeId }, pf.File.{ File }, pf.Target.{ Architecture }, pf.Shape.{ Shape } ]
     provides [makeGlue] to pf
 
-makeGlue : List { entryPoints: List { name: Str, id: Nat }, types: _ } -> Result (List _) Str
-makeGlue = \targets ->
+makeGlue : List { entryPoints: List { name: Str, id: Nat }, types: Types } -> Result (List File) Str
+makeGlue = \typesByArch ->
     modFileContent =
-        List.walk targets "" \content, { types } ->
-            archStr = archName types.target.architecture
+        typesByArch
+            |> List.walk "" \content, { types } ->
+                arch = (Types.target types).architecture
+                archStr = archName arch 
 
-            Str.concat
-                content
-                """
-                #[cfg(target_arch = "\(archStr)")]
-                mod \(archStr);
-                #[cfg(target_arch = "\(archStr)")]
-                pub use \(archStr)::*;
-                
-                """
+                Str.concat
+                    content
+                    """
+                    #[cfg(target_arch = "\(archStr)")]
+                    mod \(archStr);
+                    #[cfg(target_arch = "\(archStr)")]
+                    pub use \(archStr)::*;
+                    
+                    """
 
-    targets
+    typesByArch
     |> List.map .types
-    |> List.map typesWithDict
     |> List.map convertTypesToFile
     |> List.append { name: "mod.rs", content: modFileContent }
     |> Ok
 
-convertTypesToFile = \{ entryPoints: _, types } ->
+convertTypesToFile : Types -> { name: Str, content: Str }
+convertTypesToFile = \types ->
     content =
-        walkWithIndex types.types fileHeader \buf, id, type ->
+        Types.walkShapes types "" \buf, type, id ->
             when type is
                 Struct { name, fields } ->
                     generateStruct buf types id name fields Public
@@ -86,13 +88,16 @@ convertTypesToFile = \{ entryPoints: _, types } ->
                     # These types don't need to be declared in Rust.
                     # TODO: Eventually we want to generate roc_std. So these types will need to be emitted.
                     buf
-    archStr = archName types.target.architecture
+
+    arch = (Types.target types).architecture
+    archStr = archName arch 
 
     {
         name: "\(archStr).rs",
         content,
     }
 
+generateStruct : Str, Types, TypeId, _, _, _ -> Str 
 generateStruct = \buf, types, id, name, structFields, visibility ->
     escapedName = escapeKW name
     repr =
@@ -148,6 +153,7 @@ nameTagUnionPayloadFields = \payloadFields ->
             renamedFields = List.map fields \{ name, id, accessors } -> { name: "f\(name)", id, accessors }
             HasClosure renamedFields
 
+generateEnumeration : Str, Types, _, _, _, _ -> Str
 generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     escapedName = escapeKW name
 
@@ -315,6 +321,7 @@ writeTagImpls = \buf, tags, discriminantName, indents, f ->
     |> writeIndents indents
     |> Str.concat "}\n"
 
+generateTagUnionSizer : Str, Types, TypeId, _ -> Str
 generateTagUnionSizer = \buf, types, id, tags ->
     if List.len tags > 1 then
         # When there's a discriminant (so, multiple tags) and there is
@@ -584,6 +591,7 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
         
         """
 
+generateDeriveStr : Str, Types, _, _ -> Str
 generateDeriveStr = \buf, types, type, includeDebug ->
     buf
     |> Str.concat "#[derive(Clone, "
@@ -654,6 +662,7 @@ cannotDeriveDefault = \types, type ->
 hasFloat = \types, type ->
     hasFloatHelp types type (Set.empty {})
 
+hasFloatHelp : Types, _, Set TypeId -> Bool
 hasFloatHelp = \types, type, doNotRecurse ->
     # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
     # I think there is a change it really only matters for RecursivePointer, so it may be fine.
@@ -787,26 +796,23 @@ typeName = \types, id ->
         TagUnion (SingleTagStruct { name }) -> escapeKW name
         Function { functionName } -> escapeKW functionName
 
+getType : Types, TypeId -> Shape
 getType = \types, id ->
-    when List.get types.types id is
-        Ok type -> type
-        Err _ -> crash "unreachable"
+    Types.shape types id
 
+getSizeRoundedToAlignment : Types, TypeId -> U32
 getSizeRoundedToAlignment = \types, id ->
-    alignment = getAlignment types id
+    alignment = Types.alignment types id
 
     getSizeIgnoringAlignment types id
     |> roundUpToAlignment alignment
 
+getSizeIgnoringAlignment : Types, TypeId -> U32
 getSizeIgnoringAlignment = \types, id ->
-    when List.get types.sizes id is
-        Ok size -> size
-        Err _ -> crash "unreachable"
+    Types.size types id
 
 getAlignment = \types, id ->
-    when List.get types.aligns id is
-        Ok align -> align
-        Err _ -> crash "unreachable"
+    Types.alignment types id
 
 roundUpToAlignment = \width, alignment ->
     when alignment is
@@ -933,14 +939,3 @@ escapeKW = \input ->
         "r#\(input)"
     else
         input
-
-# This is a temporary helper until roc_std::roc_dict is update.
-# after that point, Dict will be passed in directly.
-typesWithDict = \{ types, sizes, aligns, typesByName, deps, target } -> {
-    types,
-    sizes,
-    aligns,
-    typesByName: Dict.fromList typesByName,
-    deps: Dict.fromList deps,
-    target,
-}

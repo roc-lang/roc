@@ -1,5 +1,5 @@
 interface Types
-    exposes [Types, shape, target, walkShapes]
+    exposes [Types, shape, size, alignment, target, walkShapes]
     imports [Shape.{ Shape }, TypeId.{ TypeId }, InternalTypeId, Target.{ Target }, InternalTypeId]
 
 Types := {
@@ -32,6 +32,24 @@ walkShapes = \@Types { shapes }, originalState, update ->
 shape : Types, TypeId -> Shape
 shape = \@Types types, id ->
     when List.get types.shapes (InternalTypeId.toNat id) is
+        Ok answer -> answer
+        Err OutOfBounds ->
+            idStr = Num.toStr (InternalTypeId.toNat id)
+
+            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+
+alignment : Types, TypeId -> U32
+alignment = \@Types types, id ->
+    when List.get types.aligns (InternalTypeId.toNat id) is
+        Ok answer -> answer
+        Err OutOfBounds ->
+            idStr = Num.toStr (InternalTypeId.toNat id)
+
+            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+
+size : Types, TypeId -> U32
+size = \@Types types, id ->
+    when List.get types.sizes (InternalTypeId.toNat id) is
         Ok answer -> answer
         Err OutOfBounds ->
             idStr = Num.toStr (InternalTypeId.toNat id)
