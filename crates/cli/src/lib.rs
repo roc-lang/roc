@@ -11,6 +11,7 @@ use roc_build::program::{
     BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
 use roc_error_macros::{internal_error, user_error};
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExpectMetadata, Threading};
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
@@ -366,7 +367,6 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
-    use roc_gen_llvm::llvm::build::LlvmBackendMode;
     use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
     use roc_target::TargetInfo;
@@ -600,15 +600,6 @@ pub fn build(
     // so we don't want to spend time freeing these values
     let arena = ManuallyDrop::new(Bump::new());
 
-    let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
-        CodeGenBackend::Wasm
-    } else {
-        match matches.is_present(FLAG_DEV) {
-            true => CodeGenBackend::Assembly,
-            false => CodeGenBackend::Llvm,
-        }
-    };
-
     let opt_level = if let BuildConfig::BuildAndRunIfNoErrors = config {
         OptLevel::Development
     } else {
@@ -624,6 +615,25 @@ pub fn build(
             }
         }
     };
+
+    let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
+        CodeGenBackend::Wasm
+    } else {
+        match matches.is_present(FLAG_DEV) {
+            true => CodeGenBackend::Assembly,
+            false => {
+                let backend_mode = match opt_level {
+                    OptLevel::Development => LlvmBackendMode::BinaryDev,
+                    OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
+                        LlvmBackendMode::Binary
+                    }
+                };
+
+                CodeGenBackend::Llvm(backend_mode)
+            }
+        }
+    };
+
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
 

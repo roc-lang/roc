@@ -10,6 +10,7 @@ use roc_build::{
     },
 };
 use roc_collections::MutMap;
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, GlueProc, OptLevel};
 use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
@@ -46,7 +47,8 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
             let triple = Triple::host();
 
             let code_gen_options = CodeGenOptions {
-                backend: CodeGenBackend::Llvm, // Maybe eventually use dev here or add flag for this.
+                // Maybe eventually use dev here or add flag for this.
+                backend: CodeGenBackend::Llvm(LlvmBackendMode::BinaryGlue),
                 opt_level: OptLevel::Development,
                 emit_debug_info: false,
             };

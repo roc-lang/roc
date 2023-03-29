@@ -75,7 +75,7 @@ impl Deref for CodeObject {
 #[derive(Debug, Clone, Copy)]
 pub enum CodeGenBackend {
     Assembly,
-    Llvm,
+    Llvm(LlvmBackendMode),
     Wasm,
 }
 
@@ -98,6 +98,10 @@ pub fn gen_from_mono_module<'a>(
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
+    let path = roc_file_path;
+    let debug = code_gen_options.emit_debug_info;
+    let opt = code_gen_options.opt_level;
+
     match code_gen_options.backend {
         CodeGenBackend::Assembly => gen_from_mono_module_dev(
             arena,
@@ -106,12 +110,18 @@ pub fn gen_from_mono_module<'a>(
             preprocessed_host_path,
             wasm_dev_stack_bytes,
         ),
-        CodeGenBackend::Llvm => {
-            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+        CodeGenBackend::Llvm(backend_mode) => {
+            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
         }
         CodeGenBackend::Wasm => {
             // emit wasm via the llvm backend
-            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+
+            let backend_mode = match code_gen_options.opt_level {
+                OptLevel::Development => LlvmBackendMode::BinaryDev,
+                OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+            };
+
+            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
         }
     }
 }
@@ -124,7 +134,9 @@ fn gen_from_mono_module_llvm<'a>(
     mut loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
-    code_gen_options: CodeGenOptions,
+    opt_level: OptLevel,
+    backend_mode: LlvmBackendMode,
+    emit_debug_info: bool,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -174,12 +186,6 @@ fn gen_from_mono_module_llvm<'a>(
         }
     }
 
-    let CodeGenOptions {
-        backend: _,
-        opt_level,
-        emit_debug_info,
-    } = code_gen_options;
-
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
     let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
@@ -194,10 +200,7 @@ fn gen_from_mono_module_llvm<'a>(
         interns: loaded.interns,
         module,
         target_info,
-        mode: match opt_level {
-            OptLevel::Development => LlvmBackendMode::BinaryDev,
-            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
-        },
+        mode: backend_mode,
 
         exposed_to_host: loaded
             .exposed_to_host
@@ -1233,7 +1236,7 @@ pub fn build_str_test<'a>(
     let triple = target_lexicon::Triple::host();
 
     let code_gen_options = CodeGenOptions {
-        backend: CodeGenBackend::Llvm,
+        backend: CodeGenBackend::Llvm(LlvmBackendMode::Binary),
         opt_level: OptLevel::Normal,
         emit_debug_info: false,
     };

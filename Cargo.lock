@@ -3442,6 +3442,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
+ "roc_gen_llvm",
  "roc_linker",
  "roc_load",
  "roc_module",
