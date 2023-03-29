@@ -5,7 +5,7 @@
 :warning: We do not yet officially support MacOS 13. But, as long as you are not using a zig or wasm platform most things should work fine.
 
 In order to develop in Roc, you need to install the Roc CLI,
-which includes the Roc compiler and various helpful utilities.
+which includes the Roc compiler and some helpful utilities.
 
 1. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
 
