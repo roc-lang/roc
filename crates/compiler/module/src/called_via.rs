@@ -256,7 +256,7 @@ mod tests {
 
     fn index_is_binop_u8(iter: impl Iterator<Item = BinOp>, table_name: &'static str) {
         for (index, op) in iter.enumerate() {
-            assert_eq!(op as usize, index);
+            assert_eq!(op as usize, index,  "{op} was found at index {index} in {table_name}, but it should have been at index {} instead.", op as usize);
         }
     }
 
