@@ -18,7 +18,6 @@ which includes the Roc compiler and various helpful utilities.
 1. Untar the archive:
 
     ```sh
-    mkdir roc_nightly-macos_x86_64-<VERSION>
     tar xf roc_nightly-macos_x86_64-<VERSION>.tar.gz
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
