@@ -1590,6 +1590,10 @@ fn expr_spec<'a>(
         Reset {
             symbol,
             update_mode,
+        }
+        | ResetRef {
+            symbol,
+            update_mode,
         } => {
             let tag_value_id = env.symbols[symbol];
 

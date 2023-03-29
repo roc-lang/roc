@@ -310,7 +310,14 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 update_mode_id: update_mode_ids.next_id(),
                             };
                             environment.push_reuse_token(&layout_clone, reuse_token);
-                            Some((layout_clone, *symbol, reuse_token))
+
+                            let dec_ref = match rc {
+                                ModifyRc::Dec(_) => false,
+                                ModifyRc::DecRef(_) => true,
+                                _ => unreachable!(),
+                            };
+
+                            Some((layout_clone, *symbol, reuse_token, dec_ref))
                         }
                         _ => None,
                     }
@@ -328,7 +335,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             );
 
             // If we inserted a reuse token, we need to insert a reset reuse operation if the reuse token is consumed.
-            if let Some((layout, symbol, reuse_token)) = reuse_pair {
+            if let Some((layout, symbol, reuse_token, dec_ref)) = reuse_pair {
                 let stack_reuse_token = environment.peek_reuse_token(&layout);
 
                 match stack_reuse_token {
@@ -340,9 +347,17 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     _ => {
                         // The token we inserted is no longer on the stack, it must have been consumed.
                         // So we need to insert a reset operation.
-                        let reset_expr = Expr::Reset {
-                            symbol,
-                            update_mode: reuse_token.update_mode_id,
+                        let reset_expr = match dec_ref {
+                            // A decref will be replaced by a resetref.
+                            true => Expr::ResetRef {
+                                symbol,
+                                update_mode: reuse_token.update_mode_id,
+                            },
+                            // And a dec will be replaced by a reset.
+                            false => Expr::Reset {
+                                symbol,
+                                update_mode: reuse_token.update_mode_id,
+                            },
                         };
 
                         // If we generate a reuse token, we no longer want to use the drop statement anymore. So we just return the reset expression.

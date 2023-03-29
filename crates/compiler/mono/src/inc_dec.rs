@@ -205,7 +205,7 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.extend(arguments.iter().copied());
             result.insert(*symbol);
         }
-        Reset { symbol: x, .. } => {
+        Reset { symbol: x, .. } | ResetRef { symbol: x, .. } => {
             result.insert(*x);
         }
 
@@ -945,7 +945,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            EmptyArray | Literal(_) | Reset { .. } | RuntimeErrorFunction(_) => {
+            EmptyArray | Literal(_) | Reset { .. } | ResetRef { .. } | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }

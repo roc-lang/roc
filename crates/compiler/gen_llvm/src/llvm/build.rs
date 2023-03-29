@@ -5,7 +5,8 @@ use crate::llvm::convert::{
 };
 use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
 use crate::llvm::refcounting::{
-    build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
+    build_reset, build_resetref, decrement_refcount_layout, increment_refcount_layout,
+    PointerToRefcount,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1202,6 +1203,74 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 let call = env
                     .builder
                     .build_call(reset_function, &[tag_ptr.into()], "call_reset");
+
+                call.set_call_convention(FAST_CALL_CONV);
+
+                let _ = call.try_as_basic_value();
+
+                env.builder.build_unconditional_branch(cont_block);
+            }
+            {
+                // If reset is used on a shared, non-reusable reference, it behaves
+                // like dec and returns NULL, which instructs reuse to behave like ctor
+                env.builder.position_at_end(else_block);
+                refcount_ptr.decrement(env, layout_interner, layout);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+            {
+                env.builder.position_at_end(cont_block);
+                let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
+
+                let null_ptr = tag_ptr.get_type().const_null();
+                phi.add_incoming(&[(&tag_ptr, then_block), (&null_ptr, else_block)]);
+
+                phi.as_basic_value()
+            }
+        }
+        ResetRef {
+            symbol,
+            update_mode,
+        } => {
+            let bytes = update_mode.to_bytes();
+            let update_var = UpdateModeVar(&bytes);
+            let update_mode = func_spec_solutions
+                .update_mode(update_var)
+                .unwrap_or(UpdateMode::Immutable);
+
+            let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
+            let tag_ptr = tag_ptr.into_pointer_value();
+
+            // reset is only generated for union values
+            let union_layout = match layout_interner.get(layout) {
+                Layout::Union(ul) => ul,
+                _ => unreachable!(),
+            };
+
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then_resetref");
+            let else_block = ctx.append_basic_block(parent, "else_decref");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            let refcount_ptr =
+                PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
+
+            let is_unique = match update_mode {
+                UpdateMode::InPlace => env.context.bool_type().const_int(1, false),
+                UpdateMode::Immutable => refcount_ptr.is_1(env),
+            };
+
+            env.builder
+                .build_conditional_branch(is_unique, then_block, else_block);
+
+            {
+                // reset, when used on a unique reference, eagerly decrements the components of the
+                // referenced value, and returns the location of the now-invalid cell
+                env.builder.position_at_end(then_block);
+
+                let reset_function = build_resetref(env, layout_interner, layout_ids, union_layout);
+                let call =
+                    env.builder
+                        .build_call(reset_function, &[tag_ptr.into()], "call_resetref");
 
                 call.set_call_convention(FAST_CALL_CONV);
 

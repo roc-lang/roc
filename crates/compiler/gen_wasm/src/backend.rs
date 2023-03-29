@@ -1093,6 +1093,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
+            Expr::ResetRef { symbol: arg, .. } => self.expr_resetref(*arg, sym, storage),
+
             Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100, false))
             }
@@ -1985,6 +1987,34 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     }
 
     fn expr_reset(&mut self, argument: Symbol, ret_symbol: Symbol, ret_storage: &StoredValue) {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        // Get an IR expression for the call to the specialized procedure
+        let layout = self.storage.symbol_layouts[&argument];
+        let (specialized_call_expr, new_specializations) = self
+            .helper_proc_gen
+            .call_reset_refcount(ident_ids, self.layout_interner, layout, argument);
+
+        // If any new specializations were created, register their symbol data
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
+        }
+
+        // Generate Wasm code for the IR call expression
+        self.expr(
+            ret_symbol,
+            self.env.arena.alloc(specialized_call_expr),
+            Layout::BOOL,
+            ret_storage,
+        );
+    }
+
+    // TODO update to not decrement children.
+    fn expr_resetref(&mut self, argument: Symbol, ret_symbol: Symbol, ret_storage: &StoredValue) {
         let ident_ids = self
             .interns
             .all_ident_ids

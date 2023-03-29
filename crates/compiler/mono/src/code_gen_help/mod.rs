@@ -31,6 +31,8 @@ pub enum HelperOp {
     Dec,
     DecRef(JoinPointId),
     Reset,
+    // TODO update all usages
+    ResetRef,
     Eq,
 }
 
@@ -272,7 +274,7 @@ impl<'a> CodeGenHelp<'a> {
                 let arg = self.replace_rec_ptr(ctx, layout_interner, layout);
                 match ctx.op {
                     Dec | DecRef(_) => (LAYOUT_UNIT, self.arena.alloc([arg])),
-                    Reset => (layout, self.arena.alloc([layout])),
+                    Reset | ResetRef => (layout, self.arena.alloc([layout])),
                     Inc => (LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
                     Eq => (LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
@@ -346,7 +348,7 @@ impl<'a> CodeGenHelp<'a> {
                     Symbol::ARG_1,
                 ),
             ),
-            Reset => (
+            Reset | ResetRef => (
                 layout,
                 refcount::refcount_reset_proc_body(
                     self,
@@ -370,7 +372,7 @@ impl<'a> CodeGenHelp<'a> {
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([roc_value, inc_amount])
                 }
-                Dec | DecRef(_) | Reset => self.arena.alloc([roc_value]),
+                Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
             }
         };
@@ -421,6 +423,7 @@ impl<'a> CodeGenHelp<'a> {
                 niche: Niche::NONE,
             },
             HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
+            HelperOp::ResetRef => unreachable!("No generated Proc for ResetRef"),
             HelperOp::Eq => ProcLayout {
                 arguments: self.arena.alloc([layout, layout]),
                 result: LAYOUT_BOOL,

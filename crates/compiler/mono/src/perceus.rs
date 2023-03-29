@@ -427,8 +427,8 @@ impl VariableUsage {
                     borrowed: MutSet::default(),
                 }
             }
-            Expr::Reuse { .. } | Expr::Reset { .. } => {
-                unreachable!("Reset and reuse should not exist at this point")
+            Expr::Reuse { .. } | Expr::Reset { .. } | Expr::ResetRef { .. } => {
+                unreachable!("Reset(ref) and reuse should not exist at this point")
             }
         }
     }
