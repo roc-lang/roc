@@ -254,6 +254,12 @@ const fn generate_display_table() -> [&'static str; 20] {
 mod tests {
     use super::{BinOp, ASSOCIATIVITIES, DISPLAY_STRINGS, PRECEDENCES};
 
+    fn index_is_binop_u8(iter: impl Iterator<Item = BinOp>, table_name: &'static str) {
+        for (index, op) in iter.enumerate() {
+            assert_eq!(op as usize, index);
+        }
+    }
+
     fn no_duplicates(iter: impl Iterator<Item = BinOp> + Clone, table_name: &'static str) {
         for op_to_count in iter.clone() {
             let mut instances = 0;
@@ -267,6 +273,21 @@ mod tests {
             // Each op should appear exactly once in the table
             assert_eq!(instances, 1, "{op_to_count} appeared {instances} times in {table_name}, but we expected it to appear once at most.");
         }
+    }
+
+    #[test]
+    fn indices_are_correct_in_precedences() {
+        index_is_binop_u8(PRECEDENCES.iter().map(|(op, _)| *op), "PRECEDENCES")
+    }
+
+    #[test]
+    fn indices_are_correct_in_associativities() {
+        index_is_binop_u8(ASSOCIATIVITIES.iter().map(|(op, _)| *op), "ASSOCIATIVITIES")
+    }
+
+    #[test]
+    fn indices_are_correct_in_display_string() {
+        index_is_binop_u8(DISPLAY_STRINGS.iter().map(|(op, _)| *op), "DISPLAY_STRINGS")
     }
 
     #[test]
