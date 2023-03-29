@@ -34,6 +34,7 @@ pub struct File {
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
 pub struct TypeId(usize);
 
 impl TypeId {
@@ -44,6 +45,11 @@ impl TypeId {
 
     /// When adding, we check for overflow based on whether we've exceeded this.
     const MAX: Self = Self(Self::PENDING.0 - 1);
+}
+
+pub struct RocTarget {
+    pub(crate) entry_points: Vec<(roc_std::RocStr, TypeId)>,
+    pub(crate) types: Types,
 }
 
 // TODO: remove this and instead generate directly into roc_type::Types
@@ -614,7 +620,7 @@ impl Types {
     }
 }
 
-impl From<&Types> for roc_type::Types {
+impl From<&Types> for roc_type::ExposedTypes {
     fn from(types: &Types) -> Self {
         let deps = types
             .deps
@@ -626,7 +632,7 @@ impl From<&Types> for roc_type::Types {
             .iter()
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
-        roc_type::Types {
+        roc_type::ExposedTypes {
             aligns: types.aligns.as_slice().into(),
             deps,
             sizes: types.sizes.as_slice().into(),

@@ -1,5 +1,5 @@
-use crate::roc_type;
-use crate::types::Types;
+use crate::roc_type::{self, ExposedRocTarget, ExposedTypes};
+use crate::types::{RocTarget, Types};
 use bumpalo::Bump;
 use libloading::Library;
 use roc_build::{
@@ -41,7 +41,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
         Threading::AllAvailable,
         IgnoreErrors::NONE,
     ) {
-        Ok(types) => {
+        Ok(roc_targets) => {
             // TODO: we should to modify the app file first before loading it.
             // Somehow it has to point to the correct platform file which may not exist on the target machine.
             let triple = Triple::host();
@@ -117,7 +117,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                     let lib = unsafe { Library::new(lib_path) }.unwrap();
                     type MakeGlue = unsafe extern "C" fn(
                         *mut roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>,
-                        &roc_std::RocList<roc_type::RocTarget>,
+                        &roc_std::RocList<roc_type::ExposedRocTarget>,
                     );
 
                     let make_glue: libloading::Symbol<MakeGlue> = unsafe {
@@ -125,11 +125,15 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                             .unwrap_or_else(|_| panic!("Unable to load glue function"))
                     };
 
-                    let targets = types
-                        .iter()
-                        .map(|types| roc_type::RocTarget {
-                            entry_points: roc_std::RocList::default(),
-                            types: types.into(),
+                    let targets = roc_targets
+                        .into_iter()
+                        .map(|roc_target| ExposedRocTarget {
+                            entry_points: roc_target
+                                .entry_points
+                                .into_iter()
+                                .map(|(name, id)| roc_type::EntryPoint { name, id })
+                                .collect(),
+                            types: ExposedTypes::from(&roc_target.types),
                         })
                         .collect();
 
@@ -333,7 +337,7 @@ pub fn load_types(
     full_file_path: PathBuf,
     threading: Threading,
     ignore_errors: IgnoreErrors,
-) -> Result<Vec<Types>, io::Error> {
+) -> Result<Vec<RocTarget>, io::Error> {
     let target_info = (&Triple::host()).into();
     let arena = &Bump::new();
     let LoadedModule {
@@ -467,7 +471,12 @@ pub fn load_types(
             target_info,
         );
 
-        arch_types.push(types);
+        let roc_target = RocTarget {
+            entry_points: Vec::new(),
+            types,
+        };
+
+        arch_types.push(roc_target);
     }
 
     Ok(arch_types)
