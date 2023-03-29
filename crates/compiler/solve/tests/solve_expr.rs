@@ -79,7 +79,10 @@ mod solve_expr {
         queries
     }
 
-    fn run_load_and_infer(src: &str) -> Result<(LoadedModule, String), std::io::Error> {
+    fn run_load_and_infer(
+        src: &str,
+        dependencies: &[(&str, &str)],
+    ) -> Result<(LoadedModule, String), std::io::Error> {
         use bumpalo::Bump;
         use tempfile::tempdir;
 
@@ -98,6 +101,11 @@ mod solve_expr {
 
         let loaded = {
             let dir = tempdir()?;
+
+            for (file, source) in dependencies {
+                std::fs::write(dir.path().join(file), source)?;
+            }
+
             let filename = PathBuf::from("Test.roc");
             let file_path = dir.path().join(filename);
             let result = roc_load::load_and_typecheck_str(
@@ -176,7 +184,7 @@ mod solve_expr {
                 ..
             },
             src,
-        ) = run_load_and_infer(src)?;
+        ) = run_load_and_infer(src, &[])?;
 
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
@@ -265,7 +273,12 @@ mod solve_expr {
         allow_errors: bool,
     }
 
-    fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: InferOptions) {
+    fn infer_queries_help(
+        src: &str,
+        dependencies: &[(&str, &str)],
+        expected: impl FnOnce(&str),
+        options: InferOptions,
+    ) {
         let (
             LoadedModule {
                 module_id: home,
@@ -278,7 +291,7 @@ mod solve_expr {
                 ..
             },
             src,
-        ) = run_load_and_infer(src).unwrap();
+        ) = run_load_and_infer(src, dependencies).unwrap();
 
         let decls = declarations_by_id.remove(&home).unwrap();
         let subs = solved.inner_mut();
@@ -362,11 +375,12 @@ mod solve_expr {
     }
 
     macro_rules! infer_queries {
-        ($program:expr, @$queries:literal $($option:ident: $value:expr)*) => {
-            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), InferOptions {
+        ($(.$file:literal: $file_program:expr,)* $program:expr, @$queries:literal $($option:ident: $value:expr)*) => {{
+            let dependencies = &[$(($file, $file_program),)*];
+            infer_queries_help($program, dependencies, |golden| insta::assert_snapshot!(golden, @$queries), InferOptions {
                 $($option: $value,)* ..InferOptions::default()
             })
-        };
+        }};
     }
 
     fn check_inferred_abilities<'a, I>(src: &'a str, expected_specializations: I)
@@ -380,7 +394,7 @@ mod solve_expr {
             interns,
             abilities_store,
             ..
-        } = run_load_and_infer(src).unwrap().0;
+        } = run_load_and_infer(src, &[]).unwrap().0;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
@@ -8867,6 +8881,39 @@ mod solve_expr {
                 "#
             ),
             @"Eq#Bool.isEq(9) : Bool, Bool -[[Bool.structuralEq(11)]]-> Bool"
+        );
+    }
+
+    #[test]
+    fn pass_abilities_across_referenced_aliases() {
+        infer_queries!(
+            ."O.roc": indoc!(
+                r#"
+                interface O exposes [O] imports []
+
+                O := {} has [Hash]
+                "#
+            ),
+            ."P.roc": indoc!(
+                r#"
+                interface P exposes [P] imports [O.{ O }]
+
+                P : O
+                "#
+            ),
+            indoc!(
+                r#"
+                app "test"
+                    imports [P.{ P }]
+                    provides [main] to "./platform"
+
+                p : P
+
+                main = \h -> Hash.hash h p
+                #            ^^^^^^^^^
+                "#
+            ),
+            @""
         );
     }
 }
