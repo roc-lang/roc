@@ -1,8 +1,6 @@
 // Frame limited reuse
 // Based on Reference Counting with Frame Limited Reuse
 
-use std::collections::HashMap;
-
 use crate::borrow::Ownership;
 use crate::ir::{
     BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt, UpdateModeId,
@@ -13,7 +11,7 @@ use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLay
 use bumpalo::Bump;
 
 use bumpalo::collections::vec::Vec;
-use roc_collections::MutMap;
+use roc_collections::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 /**
@@ -91,7 +89,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
-    // TODO it should be required.
     environment: &mut ReuseEnvironment<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -497,8 +494,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     .expect(
                         "Expected join point to be jumped to at least once from the remainder.",
                     );
-                let all_reuse_layouts =
-                    all_reuse_maps.iter().flat_map(|reuse_map| reuse_map.keys());
+                let all_reuse_layouts = all_reuse_maps
+                    .iter()
+                    .flat_map(|reuse_map| reuse_map.keys())
+                    // PERF: replace this collect with an unique iterator. To make sure every layout is only used once.
+                    .collect::<MutSet<_>>()
+                    .into_iter();
                 let reuse_layouts_max_tokens = all_reuse_layouts.map(|reuse_layout| {
                     let max_token = all_reuse_maps
                         .iter()
