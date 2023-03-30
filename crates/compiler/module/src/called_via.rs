@@ -260,21 +260,6 @@ mod tests {
         }
     }
 
-    fn no_duplicates(iter: impl Iterator<Item = BinOp> + Clone, table_name: &'static str) {
-        for op_to_count in iter.clone() {
-            let mut instances = 0;
-
-            for current_op in iter.clone() {
-                if current_op == op_to_count {
-                    instances += 1
-                }
-            }
-
-            // Each op should appear exactly once in the table
-            assert_eq!(instances, 1, "{op_to_count} appeared {instances} times in {table_name}, but we expected it to appear once at most.");
-        }
-    }
-
     #[test]
     fn indices_are_correct_in_precedences() {
         index_is_binop_u8(PRECEDENCES.iter().map(|(op, _)| *op), "PRECEDENCES")
@@ -288,20 +273,5 @@ mod tests {
     #[test]
     fn indices_are_correct_in_display_string() {
         index_is_binop_u8(DISPLAY_STRINGS.iter().map(|(op, _)| *op), "DISPLAY_STRINGS")
-    }
-
-    #[test]
-    fn no_duplicates_in_precedences() {
-        no_duplicates(PRECEDENCES.iter().map(|(op, _)| *op), "PRECEDENCES")
-    }
-
-    #[test]
-    fn no_duplicates_in_associativities() {
-        no_duplicates(ASSOCIATIVITIES.iter().map(|(op, _)| *op), "ASSOCIATIVITIES")
-    }
-
-    #[test]
-    fn no_duplicates_in_display_strings() {
-        no_duplicates(DISPLAY_STRINGS.iter().map(|(op, _)| *op), "DISPLAY_STRINGS")
     }
 }
