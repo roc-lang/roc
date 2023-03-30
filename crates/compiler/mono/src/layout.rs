@@ -61,7 +61,7 @@ struct CacheMeta {
 
 impl CacheMeta {
     #[inline(always)]
-    fn to_criteria(self) -> CacheCriteria {
+    fn into_criteria(self) -> CacheCriteria {
         let CacheMeta {
             recursive_structures,
         } = self;
@@ -2265,7 +2265,7 @@ macro_rules! cached_or_impl {
 
             if $self.can_reuse_cached($var, &metadata) {
                 // Happy path - the cached layout can be reused, return it immediately.
-                return Cacheable(result, metadata.to_criteria());
+                return Cacheable(result, metadata.into_criteria());
             } else {
                 // Although we have a cached layout, we cannot readily reuse it at this time. We'll
                 // need to recompute the layout, as done below.
