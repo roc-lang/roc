@@ -319,6 +319,7 @@ fn insert_reset<'a>(
             }
 
             Literal(_)
+            | NullPointer
             | Call(_)
             | Tag { .. }
             | Struct(_)
@@ -839,6 +840,7 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
 fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
     match expr {
         Expr::Literal(_) => false,
+        Expr::NullPointer => false,
         Expr::Call(call) => has_live_var_call(call, needle),
         Expr::Array { elems: fields, .. } => {
             for element in fields.iter() {
