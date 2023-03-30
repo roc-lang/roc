@@ -177,7 +177,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 annot.is_multiline() || has_clauses.iter().any(|has| has.is_multiline())
             }
 
-            Tuple { fields, ext } => {
+            Tuple { elems: fields, ext } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
                     _ => {}
@@ -343,7 +343,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
             }
 
-            Tuple { fields, ext } => {
+            Tuple { elems: fields, ext } => {
                 fmt_collection(buf, indent, Braces::Round, *fields, newlines);
 
                 if let Some(loc_ext_ann) = *ext {
@@ -509,6 +509,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
 
             buf.spaces(separator_spaces);
             buf.push('?');
+            buf.spaces(1);
             ann.value.format(buf, indent);
         }
         LabelOnly(name) => {

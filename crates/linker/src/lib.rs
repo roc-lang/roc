@@ -5,12 +5,12 @@
 //! practical to use a regular linker.
 use memmap2::{Mmap, MmapMut};
 use object::Object;
-use roc_build::link::{get_target_triple_str, rebuild_host, LinkType};
 use roc_error_macros::internal_error;
-use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
-use roc_mono::ir::OptLevel;
+use roc_load::{EntryPoint, ExecutionMode, ExposedToHost, LoadConfig, Threading};
+use roc_module::symbol::Interns;
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_target::get_target_triple_str;
 use std::cmp::Ordering;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,14 @@ mod pe;
 
 mod generate_dylib;
 mod metadata;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LinkType {
+    // These numbers correspond to the --lib and --no-link flags
+    Executable = 0,
+    Dylib = 1,
+    None = 2,
+}
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
     if let LinkType::Executable = link_type {
@@ -54,49 +62,16 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
     }
 }
 
-pub fn build_and_preprocess_host(
-    opt_level: OptLevel,
-    target: &Triple,
-    platform_main_roc: &Path,
-    preprocessed_host_path: &Path,
-    exposed_to_host: Vec<String>,
-    exported_closure_types: Vec<String>,
-) {
-    let stub_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        platform_main_roc.with_file_name("libapp.dll")
-    } else {
-        platform_main_roc.with_file_name("libapp.so")
-    };
+pub const PRECOMPILED_HOST_EXT: &str = "rh"; // Short for "roc host"
 
-    let dynhost = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        platform_main_roc.with_file_name("dynhost.exe")
-    } else {
-        platform_main_roc.with_file_name("dynhost")
-    };
-
-    let stub_dll_symbols = make_stub_dll_symbols(exposed_to_host, exported_closure_types);
-    generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
-    rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
-
-    let metadata = platform_main_roc.with_file_name(metadata_file_name(target));
-    // let prehost = host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
-
-    preprocess(
-        target,
-        &dynhost,
-        &metadata,
-        preprocessed_host_path,
-        &stub_lib,
-        &stub_dll_symbols,
-        false,
-        false,
-    )
+pub fn preprocessed_host_filename(target: &Triple) -> Option<String> {
+    roc_target::get_target_triple_str(target).map(|x| format!("{}.{}", x, PRECOMPILED_HOST_EXT))
 }
 
 fn metadata_file_name(target: &Triple) -> String {
     let target_triple_str = get_target_triple_str(target);
 
-    format!("metadata_{}.rm2", target_triple_str.unwrap_or("unknown"))
+    format!("metadata_{}.rm", target_triple_str.unwrap_or("unknown"))
 }
 
 pub fn link_preprocessed_host(
@@ -137,7 +112,7 @@ pub fn generate_stub_lib(
 
     let exposed_to_host = loaded
         .exposed_to_host
-        .values
+        .top_level_values
         .keys()
         .map(|x| x.as_str(&loaded.interns).to_string())
         .collect();
@@ -155,6 +130,11 @@ pub fn generate_stub_lib(
         })
         .collect();
 
+    let exposed_symbols = ExposedSymbols {
+        top_level_values: exposed_to_host,
+        exported_closure_types,
+    };
+
     if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point {
         let stub_lib = if let target_lexicon::OperatingSystem::Windows = triple.operating_system {
             platform_path.with_file_name("libapp.obj")
@@ -162,7 +142,7 @@ pub fn generate_stub_lib(
             platform_path.with_file_name("libapp.so")
         };
 
-        let stub_dll_symbols = make_stub_dll_symbols(exposed_to_host, exported_closure_types);
+        let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
         generate_dynamic_lib(triple, &stub_dll_symbols, &stub_lib);
     } else {
         unreachable!();
@@ -170,33 +150,104 @@ pub fn generate_stub_lib(
     Ok(0)
 }
 
-fn make_stub_dll_symbols(
-    exposed_to_host: Vec<String>,
-    exported_closure_types: Vec<String>,
-) -> Vec<String> {
-    let mut custom_names = Vec::new();
+pub fn generate_stub_lib_from_loaded(
+    target: &Triple,
+    platform_main_roc: &Path,
+    stub_dll_symbols: &[String],
+) -> PathBuf {
+    let stub_lib_path = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+        platform_main_roc.with_file_name("libapp.dll")
+    } else {
+        platform_main_roc.with_file_name("libapp.so")
+    };
 
-    for sym in exposed_to_host {
-        custom_names.extend([
-            format!("roc__{}_1_exposed", sym),
-            format!("roc__{}_1_exposed_generic", sym),
-            format!("roc__{}_size", sym),
-        ]);
+    generate_dynamic_lib(target, stub_dll_symbols, &stub_lib_path);
 
-        for closure_type in &exported_closure_types {
+    stub_lib_path
+}
+
+pub struct ExposedSymbols {
+    // usually just `mainForhost`
+    pub top_level_values: Vec<String>,
+
+    // old type exposing mechanism
+    pub exported_closure_types: Vec<String>,
+}
+
+impl ExposedSymbols {
+    pub fn from_exposed_to_host(interns: &Interns, exposed_to_host: &ExposedToHost) -> Vec<String> {
+        let mut custom_names = Vec::new();
+
+        for x in exposed_to_host.top_level_values.keys() {
+            let sym = x.as_str(interns);
+
             custom_names.extend([
-                format!("roc__{}_1_{}_caller", sym, closure_type),
-                format!("roc__{}_1_{}_size", sym, closure_type),
-                format!("roc__{}_1_{}_result_size", sym, closure_type),
+                format!("roc__{}_1_exposed", sym),
+                format!("roc__{}_1_exposed_generic", sym),
+                format!("roc__{}_1_exposed_size", sym),
+            ]);
+
+            let exported_closure_types = exposed_to_host
+                .closure_types
+                .iter()
+                .map(|x| format!("{}_{}", x.module_string(interns), x.as_str(interns)));
+
+            for (i, _) in exported_closure_types.enumerate() {
+                custom_names.extend([
+                    format!("roc__{}_{i}_caller", sym),
+                    format!("roc__{}_{i}_size", sym),
+                    format!("roc__{}_{i}_result_size", sym),
+                ]);
+            }
+        }
+
+        for x in &exposed_to_host.getters {
+            let sym = x.as_str(interns);
+            custom_names.extend([
+                sym.to_string(),
+                format!("{sym}_generic"),
+                format!("{sym}_size"),
             ]);
         }
+
+        for (top_level_value, lambda_set_id) in &exposed_to_host.lambda_sets {
+            let sym = top_level_value.as_str(interns);
+            let id = lambda_set_id.0;
+            custom_names.extend([format!("roc__{sym}_{id}_caller")]);
+        }
+
+        // on windows (PE) binary search is used on the symbols,
+        // so they must be in alphabetical order
+        custom_names.sort_unstable();
+
+        custom_names
     }
 
-    // on windows (PE) binary search is used on the symbols,
-    // so they must be in alphabetical order
-    custom_names.sort_unstable();
+    pub fn stub_dll_symbols(&self) -> Vec<String> {
+        let mut custom_names = Vec::new();
 
-    custom_names
+        for sym in &self.top_level_values {
+            custom_names.extend([
+                format!("roc__{}_1_exposed", sym),
+                format!("roc__{}_1_exposed_generic", sym),
+                format!("roc__{}_size", sym),
+            ]);
+
+            for closure_type in &self.exported_closure_types {
+                custom_names.extend([
+                    format!("roc__{}_1_{}_caller", sym, closure_type),
+                    format!("roc__{}_1_{}_size", sym, closure_type),
+                    format!("roc__{}_1_{}_result_size", sym, closure_type),
+                ]);
+            }
+        }
+
+        // on windows (PE) binary search is used on the symbols,
+        // so they must be in alphabetical order
+        custom_names.sort_unstable();
+
+        custom_names
+    }
 }
 
 fn generate_dynamic_lib(target: &Triple, stub_dll_symbols: &[String], stub_lib_path: &Path) {
@@ -330,6 +381,32 @@ fn stub_lib_is_up_to_date(target: &Triple, stub_lib_path: &Path, custom_names: &
     let it2 = custom_names.iter().map(|s| s.as_bytes());
 
     it1.eq(it2)
+}
+
+pub fn preprocess_host(
+    target: &Triple,
+    platform_main_roc: &Path,
+    preprocessed_path: &Path,
+    shared_lib: &Path,
+    stub_dll_symbols: &[String],
+) {
+    let metadata_path = platform_main_roc.with_file_name(metadata_file_name(target));
+    let host_exe_path = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
+        platform_main_roc.with_file_name("dynhost.exe")
+    } else {
+        platform_main_roc.with_file_name("dynhost")
+    };
+
+    preprocess(
+        target,
+        &host_exe_path,
+        &metadata_path,
+        preprocessed_path,
+        shared_lib,
+        stub_dll_symbols,
+        false,
+        false,
+    )
 }
 
 /// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk

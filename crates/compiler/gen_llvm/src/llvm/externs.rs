@@ -4,7 +4,6 @@ use crate::llvm::build::{CCReturn, Env, FunctionSpec};
 use crate::llvm::convert::zig_str_type;
 use inkwell::module::Linkage;
 use inkwell::types::BasicType;
-use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 
@@ -19,7 +18,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let builder = env.builder;
 
     let usize_type = env.ptr_int();
-    let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::default());
 
     match env.mode {
         super::build::LlvmBackendMode::CliTest => {
@@ -198,6 +197,11 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
         let mut params = fn_val.get_param_iter();
         let roc_str_arg = params.next().unwrap();
 
+        // normally, roc_panic is marked as external so it can be provided by the host. But when we
+        // define it here in LLVM IR, we never want it to be linked by the host (that would
+        // overwrite which implementation is used.
+        fn_val.set_linkage(Linkage::Internal);
+
         let tag_id_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());
@@ -271,7 +275,7 @@ pub fn build_longjmp_call(env: &Env) {
         // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
         let jmp_buf_i8p = env.builder.build_pointer_cast(
             jmp_buf,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            env.context.i8_type().ptr_type(AddressSpace::default()),
             "jmp_buf i8*",
         );
         let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p.into()]);

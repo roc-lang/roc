@@ -9,9 +9,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::RocList;
-#[allow(unused_imports)]
-use roc_std::RocStr;
+use roc_std::{RocBox, RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -3170,7 +3168,6 @@ fn alias_defined_out_of_order() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "TODO https://github.com/roc-lang/roc/issues/4905"]
 fn recursively_build_effect() {
     assert_evals_to!(
         indoc!(
@@ -3258,8 +3255,24 @@ fn issue_2322() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_small_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "short"
+                |> Box.box
+                |> Box.unbox
+            "#
+        ),
+        RocStr::from("short"),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn box_and_unbox_string() {
+fn box_and_unbox_big_string() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3276,17 +3289,62 @@ fn box_and_unbox_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn box_and_unbox_num() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_num() {
+    assert_evals_to!("Box.box 123u64", RocBox::new(123), RocBox<u64>)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[ignore = "triggers some UB somewhere in at least the llvm and dev backends"]
+fn box_str() {
     assert_evals_to!(
-        indoc!(
-            r#"
-            Box.unbox (Box.box (123u8))
-            "#
-        ),
-        123,
-        u8
-    )
+        "Box.box \"short\"",
+        RocBox::new(RocStr::from("short")),
+        RocBox<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u64() {
+    assert_evals_to!("Box.unbox (Box.box (123u64))", 123, u64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u32() {
+    assert_evals_to!("Box.unbox (Box.box (123u32))", 123, u32)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u16() {
+    assert_evals_to!("Box.unbox (Box.box (123u16))", 123, u16)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_u8() {
+    assert_evals_to!("Box.unbox (Box.box (123u8))", 123, u8)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_bool() {
+    assert_evals_to!("Box.unbox (Box.box (Bool.true))", true, bool)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_f64() {
+    assert_evals_to!("Box.unbox (Box.box (123.0f64))", 123.0, f64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_f32() {
+    assert_evals_to!("Box.unbox (Box.box (123.0f32))", 123.0, f32)
 }
 
 #[test]
@@ -3855,6 +3913,34 @@ fn compose_recursive_lambda_set_productive_inferred() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             compose = \forward -> \f, g ->
+                if forward
+                then \x -> g (f x)
+                else \x -> f (g x)
+
+             identity = \x -> x
+             exclame = \s -> "\(s)!"
+             whisper = \s -> "(\(s))"
+
+             main =
+                 res: Str -> Str
+                 res = List.walk [ exclame, whisper ] identity (compose Bool.false)
+                 res "hello"
+             "#
+        ),
+        RocStr::from("(hello)!"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn local_binding_aliases_function() {
     assert_evals_to!(
         indoc!(
@@ -4252,5 +4338,51 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         ),
         30,
         u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            go : U8 -> U8
+            go = \byte ->
+                when byte is
+                    15 if Bool.true -> 1
+                    b if Bool.true -> b + 2
+                    _ -> 3
+
+            main = go '.'
+            "#
+        ),
+        b'.' + 2,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn recursive_lambda_set_resolved_only_upon_specialization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            factCPS = \n, cont ->
+                if n == 0 then
+                    cont 1
+                else
+                    factCPS (n - 1) \value -> cont (n * value)
+
+            main =
+                factCPS 5u64 \x -> x
+            "#
+        ),
+        120,
+        u64
     );
 }

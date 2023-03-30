@@ -1498,6 +1498,20 @@ mod solve_expr {
     }
 
     #[test]
+    fn tuple_accessor_generalization() {
+        infer_eq(
+            indoc!(
+                r#"
+                    get0 = .0
+
+                    { a: get0 (1, 2), b: get0 ("a", "b", "c") }
+                "#
+            ),
+            "{ a : Num *, b : Str }",
+        );
+    }
+
+    #[test]
     fn record_arg() {
         infer_eq("\\rec -> rec.x", "{ x : a }* -> a");
     }
@@ -7791,8 +7805,8 @@ mod solve_expr {
             ),
             @r###"
         const : Str -[[const(2)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
-        compose : (Str -a-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -a-> Str)
-        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11]]-> (Str -a-> Str)
+        compose : (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
+        \c1, c2 -> compose c1 c2 : (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str), (Str -[[]]-> Str) -[[11]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         "###
@@ -8316,7 +8330,7 @@ mod solve_expr {
                  "#
             ),
         @r###"
-        job : { lst : List [Bar, FromG a] } -[[job(0)]]-> [G { lst : List [Bar, FromG a] }] as a
+        job : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] } -[[job(0)]]-> [G { lst : List [Bar, FromG a] }] as a
         config : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] }
         G config : [G { lst : List [Bar, FromG a] }] as a
         "###
@@ -8359,7 +8373,23 @@ mod solve_expr {
                     #     ^^^^^^^^^
                 "#
             ),
-        @"Hash#Hash.hash(1) : a, I64 -[[Hash.hashI64(12)]]-> a | a has Hasher"
+        @"Hash#Hash.hash(1) : a, I64 -[[Hash.hashI64(13)]]-> a | a has Hasher"
+        )
+    }
+
+    #[test]
+    fn choose_bool_for_hash() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    \h -> Hash.hash h Bool.true
+                    #     ^^^^^^^^^
+                "#
+            ),
+        @"Hash#Hash.hash(1) : a, Bool -[[Hash.hashBool(9)]]-> a | a has Hasher"
         )
     }
 
@@ -8594,12 +8624,11 @@ mod solve_expr {
 
         v2 = ""
 
-        apply = \fnParser, valParser-> \{} -[9]-> (fnParser {}) valParser
+        apply = \fnParser, valParser -> \{} -[9]-> (fnParser {}) valParser
 
-        map = \simpleParser, transform-> apply \{} -[12]-> transform simpleParser
+        map = \simpleParser, transform -> apply \{} -[12]-> transform simpleParser
 
-        parseInput =
-          \{}->
+        parseInput = \{} ->
           when [
               map v1 \{} -[13]-> "",
               map v2 \s -[14]-> s,
@@ -8762,6 +8791,82 @@ mod solve_expr {
                 "#
             ),
         @"main : List w_a"
+        );
+    }
+
+    #[test]
+    fn recursive_closure_with_transiently_used_capture() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [f] to "./platform"
+
+                thenDo = \x, callback ->
+                    callback x
+
+                f = \{} ->
+                    code = 10u16
+
+                    bf = \{} ->
+                    #^^{-1}
+                        thenDo code \_ -> bf {}
+                        #           ^^^^^^^^^^^
+
+                    bf {}
+                "#
+            ),
+        @r###"
+        bf : {} -[[bf(5) U16]]-> *
+        \_ -> bf {} : U16 -[[6 U16]]-> *
+        "###
+        );
+    }
+
+    #[test]
+    fn derive_decoder_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main : Decoder Bool _
+                main = Decode.custom \bytes, fmt ->
+                    Decode.decodeWith bytes Decode.decoder fmt
+                #                           ^^^^^^^^^^^^^^
+                "#
+            ),
+            @"Decoding#Decode.decoder(4) : List U8, fmt -[[] + fmt:Decode.bool(19):1]-> { rest : List U8, result : [Err [TooShort], Ok [False, True]] } | fmt has DecoderFormatting"
+            print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn derive_to_encoder_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Encode.toEncoder Bool.true
+                #      ^^^^^^^^^^^^^^^^
+                "#
+            ),
+            @"Encoding#Encode.toEncoder(2) : Bool -[[] + fmt:Encode.bool(17):1]-> Encoder fmt | fmt has EncoderFormatting"
+        );
+    }
+
+    #[test]
+    fn derive_eq_for_bool() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Bool.isEq Bool.true Bool.false
+                #      ^^^^^^^^^
+                "#
+            ),
+            @"Eq#Bool.isEq(9) : Bool, Bool -[[Bool.structuralEq(11)]]-> Bool"
         );
     }
 }

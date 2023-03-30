@@ -10,9 +10,9 @@ mod test_snapshots {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
     use roc_parse::ast::Expr::{self, *};
-    use roc_parse::ast::StrLiteral::*;
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{self, EscapedChar};
+    use roc_parse::ast::{Malformed, StrLiteral::*};
     use roc_parse::parser::SyntaxError;
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Loc, Region};
@@ -35,25 +35,45 @@ mod test_snapshots {
         };
     }
 
-    macro_rules! should_pass {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TestExpectation {
+        Pass,      // The test parses successfully and there are no Malformed nodes
+        Fail,      // The test gives a parse error
+        Malformed, // The test parses successfully but there are Malformed nodes
+    }
+
+    impl TestExpectation {
+        fn to_dir_name(self) -> &'static str {
+            match self {
+                TestExpectation::Pass => "pass",
+                TestExpectation::Fail => "fail",
+                TestExpectation::Malformed => "malformed",
+            }
+        }
+    }
+
+    macro_rules! test_expectation {
         (pass) => {
-            true
+            TestExpectation::Pass
         };
         (fail) => {
-            false
+            TestExpectation::Fail
+        };
+        (malformed) => {
+            TestExpectation::Malformed
         };
     }
 
     macro_rules! snapshot_tests {
         (
-            $($pass_or_fail:ident / $test_name:ident . $kind:ident),*
+            $($pass_or_fail_or_malformed:ident / $test_name:ident . $kind:ident),*
             $(,)?
         ) => {
             #[test]
             fn no_extra_snapshot_test_files() {
                 let tests = &[
                     $(concat!(
-                        stringify!($pass_or_fail),
+                        stringify!($pass_or_fail_or_malformed),
                         "/",
                         stringify!($test_name),
                         ".",
@@ -70,7 +90,7 @@ mod test_snapshots {
                 let pass_or_fail_names = list(&base);
                 let mut extra_test_files = std::collections::HashSet::new();
                 for res in pass_or_fail_names {
-                    assert!(res == "pass" || res == "fail", "a pass or fail filename was neither \"pass\" nor \"fail\", but rather: {:?}", res);
+                    assert!(res == "pass" || res == "fail" || res == "malformed", "expected only pass/fail/malformed dirs, but I see: {:?}", res);
                     let res_dir = base.join(&res);
                     for file in list(&res_dir) {
                         let test = if let Some(test) = file.strip_suffix(".formatted.roc") {
@@ -150,7 +170,7 @@ mod test_snapshots {
                 #[test]
                 fn $test_name() {
                     snapshot_test(
-                        should_pass!($pass_or_fail),
+                        test_expectation!($pass_or_fail_or_malformed),
                         stringify!($test_name),
                         stringify!($kind),
                         |input| snapshot_input!($kind => input));
@@ -227,6 +247,13 @@ mod test_snapshots {
         fail/when_over_indented_int.expr,
         fail/when_over_indented_underscore.expr,
         fail/wild_case_arrow.expr,
+        malformed/bad_opaque_ref.expr,
+        malformed/malformed_ident_due_to_underscore.expr,
+        malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
+        malformed/malformed_pattern_module_name.expr, // See https://github.com/roc-lang/roc/issues/399
+        malformed/module_dot_tuple.expr,
+        malformed/qualified_tag.expr,
+        malformed/underscore_expr_in_def.expr,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
         pass/ability_single_line.expr,
@@ -244,7 +271,6 @@ mod test_snapshots {
         pass/apply_two_args.expr,
         pass/apply_unary_negation.expr,
         pass/apply_unary_not.expr,
-        pass/bad_opaque_ref.expr,
         pass/basic_apply.expr,
         pass/basic_docs.expr,
         pass/basic_field.expr,
@@ -253,6 +279,8 @@ mod test_snapshots {
         pass/basic_var.expr,
         pass/bound_variable.expr,
         pass/call_with_newlines.expr,
+        pass/closure_in_binop.expr,
+        pass/closure_in_binop_with_spaces.expr,
         pass/closure_with_underscores.expr,
         pass/comment_after_annotation.expr,
         pass/comment_after_def.moduledefs,
@@ -276,12 +304,15 @@ mod test_snapshots {
         pass/empty_package_header.header,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
+        pass/empty_record_update.expr,
         pass/empty_string.expr,
         pass/equals.expr,
         pass/equals_with_spaces.expr,
         pass/expect.expr,
         pass/expect_fx.moduledefs,
+        pass/extra_newline_in_parens.expr,
         pass/float_with_underscores.expr,
+        pass/fn_with_record_arg.expr,
         pass/full_app_header.header,
         pass/full_app_header_trailing_commas.header,
         pass/function_effect_types.header,
@@ -297,13 +328,11 @@ mod test_snapshots {
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
+        pass/list_minus_newlines.expr,
         pass/list_pattern_weird_indent.expr,
         pass/list_patterns.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
-        pass/malformed_ident_due_to_underscore.expr,
-        pass/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
-        pass/malformed_pattern_module_name.expr, // See https://github.com/roc-lang/roc/issues/399
         pass/minimal_app_header.header,
         pass/minus_twelve_minus_five.expr,
         pass/mixed_docs.expr,
@@ -321,11 +350,12 @@ mod test_snapshots {
         pass/multiple_operators.expr,
         pass/neg_inf_float.expr,
         pass/negate_multiline_string.expr,
+        pass/negate_multiline_string_with_quote.expr,
         pass/negative_float.expr,
         pass/negative_in_apply_def.expr,
         pass/negative_int.expr,
-        pass/nested_def_annotation.moduledefs,
         pass/nested_backpassing_no_newline_before.expr,
+        pass/nested_def_annotation.moduledefs,
         pass/nested_def_without_newline.expr,
         pass/nested_if.expr,
         pass/nested_module.header,
@@ -346,6 +376,7 @@ mod test_snapshots {
         pass/nonempty_package_header.header,
         pass/nonempty_platform_header.header,
         pass/not_docs.expr,
+        pass/not_multiline_string.expr,
         pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
         pass/one_char_string.expr,
@@ -360,6 +391,7 @@ mod test_snapshots {
         pass/opaque_reference_pattern.expr,
         pass/opaque_reference_pattern_with_arguments.expr,
         pass/opaque_simple.moduledefs,
+        pass/opaque_type_def_with_newline.expr,
         pass/opaque_with_type_arguments.moduledefs,
         pass/ops_with_newlines.expr,
         pass/outdented_app_with_record.expr,
@@ -367,6 +399,10 @@ mod test_snapshots {
         pass/outdented_list.expr,
         pass/outdented_record.expr,
         pass/packed_singleton_list.expr,
+        pass/parens_in_type_def_apply.expr,
+        pass/parens_in_value_def_annotation.expr,
+        pass/parenthesized_type_def.expr,
+        pass/parenthesized_type_def_space_before.expr,
         pass/parenthetical_apply.expr,
         pass/parenthetical_basic_field.expr,
         pass/parenthetical_field_qualified_var.expr,
@@ -384,7 +420,6 @@ mod test_snapshots {
         pass/positive_int.expr,
         pass/provides_type.header,
         pass/qualified_field.expr,
-        pass/qualified_tag.expr,
         pass/qualified_var.expr,
         pass/record_access_after_tuple.expr,
         pass/record_destructure_def.expr,
@@ -399,12 +434,14 @@ mod test_snapshots {
         pass/spaced_singleton_list.expr,
         pass/spaces_inside_empty_list.expr,
         pass/standalone_module_defs.moduledefs,
+        pass/str_block_multiple_newlines.expr,
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
         pass/tag_pattern.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
+        pass/tuple_access_after_ident.expr,
         pass/tuple_access_after_record.expr,
         pass/tuple_accessor_function.expr,
         pass/tuple_type.expr,
@@ -423,7 +460,6 @@ mod test_snapshots {
         pass/unary_not.expr,
         pass/unary_not_with_parens.expr,
         pass/underscore_backpassing.expr,
-        pass/underscore_expr_in_def.expr,
         pass/underscore_in_assignment_pattern.expr,
         pass/value_def_confusion.expr,
         pass/var_else.expr,
@@ -501,13 +537,13 @@ mod test_snapshots {
         }
     }
 
-    fn snapshot_test<F>(should_pass: bool, name: &str, ty: &str, func: F)
+    fn snapshot_test<F>(expect: TestExpectation, name: &str, ty: &str, func: F)
     where
         F: for<'a> Fn(&'a str) -> Input<'a>,
     {
         let mut parent = std::path::PathBuf::from("tests");
         parent.push("snapshots");
-        parent.push(if should_pass { "pass" } else { "fail" });
+        parent.push(expect.to_dir_name());
         let input_path = parent.join(&format!("{}.{}.roc", name, ty));
         let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
         let formatted_path = parent.join(&format!("{}.{}.formatted.roc", name, ty));
@@ -523,21 +559,36 @@ mod test_snapshots {
 
         let arena = Bump::new();
         let result = match input.parse_in(&arena) {
-            Ok(ast) => Ok(ast.debug_format_inner()),
+            Ok(ast) => {
+                if expect == TestExpectation::Pass {
+                    assert!(!ast.is_malformed());
+                }
+                Ok(ast.debug_format_inner())
+            }
             Err(err) => Err(format!("{:?}", err)),
         };
 
-        let actual_result = if should_pass {
-            result.expect("The source code for this test did not successfully parse!")
-        } else {
-            result.expect_err(
+        if expect == TestExpectation::Pass {
+            let tokens = roc_parse::highlight::highlight(&source);
+            for token in tokens {
+                if token.value == roc_parse::highlight::Token::Error {
+                    panic!("Found an error highlight token in the input: {:?}", token);
+                }
+            }
+        }
+
+        let actual_result =
+            if expect == TestExpectation::Pass || expect == TestExpectation::Malformed {
+                result.expect("The source code for this test did not successfully parse!")
+            } else {
+                result.expect_err(
                 "The source code for this test successfully parsed, but it was not expected to!",
             )
-        };
+            };
 
         compare_snapshots(&result_path, Some(&actual_result));
 
-        if should_pass {
+        if expect == TestExpectation::Pass || expect == TestExpectation::Malformed {
             input.check_invariants(check_saved_formatting(input.as_str(), formatted_path), true);
         }
     }

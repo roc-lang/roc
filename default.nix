@@ -22,9 +22,9 @@ rustPlatform.buildRustPackage {
   cargoLock = {
     lockFile = ./Cargo.lock;
     outputHashes = {
-      "confy-0.5.0" = "sha256-BVTczVbURL1Id/k/5ArlDQTZxLuI3XxQl7BdIx230U4=";
+      "confy-0.5.1" = "sha256-3PQdz9W/uJd4CaUZdwAd2u3JJ100SFAoKLCFE6THRZI=";
       "criterion-0.3.5" = "sha256-7REd3phV6PBzqWwKF8hwttw4FTq2tKGxxAAJDpLC50A=";
-      "inkwell-0.1.0" = "sha256-Sl50CW9H5IXV3k7BoAc0l2mv57lbrzhNxD0ub1AlOxM=";
+      "inkwell-0.1.0" = "sha256-1kpvY3naS33B99nuu5ZYhb7mdddAyG+DkbUl/RG1Ptg=";
       "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
       "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
     };
@@ -65,7 +65,6 @@ rustPlatform.buildRustPackage {
       cargo
       makeWrapper # necessary for postBuild wrapProgram
     ] ++ lib.optionals pkgs.stdenv.isLinux [
-      alsa-lib
       valgrind
       vulkan-headers
       vulkan-loader

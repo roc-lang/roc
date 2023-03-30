@@ -148,7 +148,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
 
     assert!(type_problems.is_empty());
 
-    let main_fn_symbol = exposed_to_host.values.keys().copied().next();
+    let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
 
     if !no_check {
         check_procedures(arena, &interns, &mut layout_interner, &procedures);
@@ -592,7 +592,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test(no_check = "https://github.com/roc-lang/roc/issues/4694")]
+#[mono_test]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -2087,10 +2087,7 @@ fn match_list() {
 }
 
 #[mono_test]
-#[ignore = "https://github.com/roc-lang/roc/issues/4561"]
 fn recursive_function_and_union_with_inference_hole() {
-    let _tracing_guards = roc_tracing::setup_tracing!();
-
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
@@ -2188,6 +2185,20 @@ fn list_one_vs_one_spread_issue_4685() {
             [] -> "A"
             [_] -> "B"
             [_, ..] -> "C"
+        "#
+    )
+}
+
+#[mono_test]
+fn tuple_pattern_match() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = when (1, 2) is
+            (1, _) -> "A"
+            (_, 2) -> "B"
+            (_, _) -> "C"
         "#
     )
 }
@@ -2457,19 +2468,19 @@ fn issue_4772_weakened_monomorphic_destructure() {
 
         getNumber =
             { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.fromUtf8
-                    
-            when result is 
-                Ok val -> 
-                    when Str.toI64 val is 
+
+            when result is
+                Ok val ->
+                    when Str.toI64 val is
                         Ok number ->
                             Ok {val : number, input : rest}
                         Err InvalidNumStr ->
                             Err (ParsingFailure "not a number")
 
-                Err _ -> 
+                Err _ ->
                     Err (ParsingFailure "not a number")
 
-        expect 
+        expect
             result = getNumber
             result == Ok {val : -1234i64, input : []}
         "###
@@ -2494,5 +2505,357 @@ fn weakening_avoids_overspecialization() {
             else
                 List.drop input index
         "###
+    )
+}
+
+#[mono_test]
+fn recursively_build_effect() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        greeting =
+            hi = "Hello"
+            name = "World"
+
+            "\(hi), \(name)!"
+
+        main =
+            when nestHelp 4 is
+                _ -> greeting
+
+        nestHelp : I64 -> XEffect {}
+        nestHelp = \m ->
+            when m is
+                0 ->
+                    always {}
+
+                _ ->
+                    always {} |> after \_ -> nestHelp (m - 1)
+
+
+        XEffect a := {} -> a
+
+        always : a -> XEffect a
+        always = \x -> @XEffect (\{} -> x)
+
+        after : XEffect a, (a -> XEffect b) -> XEffect b
+        after = \(@XEffect e), toB ->
+            @XEffect \{} ->
+                when toB (e {}) is
+                    @XEffect e2 ->
+                        e2 {}
+        "#
+    )
+}
+
+#[mono_test]
+#[ignore = "roc glue code generation cannot handle a type that this test generates"]
+fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
+    indoc!(
+        r#"
+        app "test" provides [looper] to "./platform"
+
+        Effect : {} -> Str
+
+        after = \buildNext ->
+            afterInner = \{} -> (buildNext "foobar") {}
+            afterInner
+
+        await : (Str -> Effect) -> Effect
+        await = \cont -> after (\result -> cont result)
+
+        looper = await \_ -> if Bool.true then looper else \{} -> "done"
+        "#
+    )
+}
+
+#[mono_test]
+fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification() {
+    // This is a regression test for the ambient lambda set specialization algorithm.
+    //
+    // In the program below, monomorphization of `toEncoderQ` with the `Q` in `main` induces the
+    // resolution of `t.a` and `t.b`, and the unification of their pending unspecialization lambda
+    // sets, when `t.a` and `t.b` have been resolved to concrete types, but before the
+    // specialization procedure steps in to resolve the lambda sets concretely. That's because
+    // monomorphization unifies the general type of `toEncoderQ` with the concrete type, forcing
+    // concretization of `t`, but the specialization procedure runs only after the unification is
+    // complete.
+    //
+    // In this case, it's imperative that the unspecialized lambda sets of `toEncoder t.a` and
+    // `toEncoder t.b` wind up in the same lambda set, that is in
+    //
+    // tag : @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder+1] -> Bytes)
+    //       -[lTag]->
+    //       @MEncoder (Bytes, Linear -[[Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder:1] -> Bytes) }]] -> Bytes)
+    //
+    // rather than forcing the lambda set inside to `tag` to become disjoint, as e.g.
+    //
+    // tag : @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder+1] -> Bytes)
+    //       -[lTag]->
+    //       @MEncoder (Bytes, Linear -[[
+    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1] -> Bytes) },
+    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MStr:toEncoder:1] -> Bytes) },
+    //                  ]] -> Bytes)
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+
+        MEncoding has
+          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+
+        Format has
+          u8 : {} -> MEncoder fmt | fmt has Format
+          str : {} -> MEncoder fmt | fmt has Format
+          tag : MEncoder fmt -> MEncoder fmt | fmt has Format
+
+        Linear := {} has [Format {u8: lU8, str: lStr, tag: lTag}]
+
+        MU8 := U8 has [MEncoding {toEncoder: toEncoderU8}]
+        MStr := Str has [MEncoding {toEncoder: toEncoderStr}]
+
+        Q a b := { a: a, b: b }
+
+        lU8 = \{} -> @MEncoder (\lst, @Linear {} -> lst)
+        lStr = \{} -> @MEncoder (\lst, @Linear {} -> lst)
+
+        lTag = \@MEncoder doFormat -> @MEncoder (\lst, @Linear {} ->
+            doFormat lst (@Linear {})
+        )
+
+        toEncoderU8 = \@MU8 _ -> u8 {}
+
+        toEncoderStr = \@MStr _ -> str {}
+
+        toEncoderQ =
+            \@Q t -> \fmt ->
+                @MEncoder doit = if Bool.true
+                    then tag (toEncoder t.a)
+                    else tag (toEncoder t.b)
+
+                doit [] fmt
+
+        main =
+            fmt = toEncoderQ (@Q {a : @MStr "", b: @MU8 7})
+            fmt (@Linear {})
+        "#
+    )
+}
+
+#[mono_test]
+fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification_of_unifiable()
+{
+    // This is a regression test for the ambient lambda set specialization algorithm.
+    //
+    // The principle of the test is equivalent to that of `unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification`.
+    //
+    // However, this test requires a larger reproduction because it is negative behavior is only
+    // visible in the presence of builtin ability usage (in this case, `Encoding` and
+    // `EncoderFormatting`).
+    //
+    // In this test, the payload types `[A]*` and `[B]*` of the encoded type `Q` are unifiable in
+    // their unspecialized lambda set representations under `toEncoderQ`; however, they must not
+    // be, because they in fact represent to different specializations of needed encoders. In
+    // particular, the lambda set `[[] + [A]:toEncoder:1 + [B]:toEncoder:1]` must be preserved,
+    // rather than collapsing to `[[] + [A, B]:toEncoder:1]`.
+    indoc!(
+        r#"
+        app "test" imports [Json] provides [main] to "./platform"
+
+        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+
+        toEncoderQ =
+            \@Q t -> Encode.custom \bytes, fmt ->
+                f = if Bool.true
+                    then Encode.tag "A" [Encode.toEncoder t.a]
+                    else Encode.tag "B" [Encode.toEncoder t.b]
+
+                Encode.appendWith bytes f fmt
+
+        accessor = @Q {a : A, b: B}
+
+        main =
+            Encode.toBytes accessor Json.toUtf8
+        "#
+    )
+}
+
+#[mono_test]
+fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_types() {
+    // This is a regression test for the ambient lambda set specialization algorithm.
+    //
+    // The principle of the test is equivalent to that of `unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification`.
+    //
+    // However, this test requires a larger reproduction because it is negative behavior is only
+    // visible in the presence of builtin ability usage (in this case, `Encoding` and
+    // `EncoderFormatting`).
+    //
+    // In this test, the payload types `Str` and `Str` of the encoded type `Q` are unifiable in
+    // their unspecialized lambda set representations under `toEncoderQ`, and moreoever they are
+    // equivalent specializations, since they both come from the same root variable `x`. In as
+    // such, the lambda set `[[] + Str:toEncoder:1]` should be produced during compaction, rather
+    // than staying as the expanded `[[] + Str:toEncoder:1 + Str:toEncoder:1]` after the types of
+    // `t.a` and `t.b` are filled in.
+    indoc!(
+        r#"
+        app "test" imports [Json] provides [main] to "./platform"
+
+        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+
+        toEncoderQ =
+            \@Q t -> Encode.custom \bytes, fmt ->
+                f = if Bool.true
+                    then Encode.tag "A" [Encode.toEncoder t.a]
+                    else Encode.tag "B" [Encode.toEncoder t.b]
+
+                Encode.appendWith bytes f fmt
+
+        accessor =
+            x = ""
+            @Q {a : x, b: x}
+
+        main =
+            Encode.toBytes accessor Json.toUtf8
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_bool_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = if Bool.false then f else \n -> n
+            caller (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_enum_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n
+                C -> \n -> n + 1
+                D -> \n -> n + 2
+            (caller A) (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_union_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n + x
+            (caller A) (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn recursive_closure_with_transiently_used_capture() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        thenDo = \x, callback ->
+            callback x
+
+        f = \{} ->
+            code = 10u16
+
+            bf = \{} ->
+                thenDo code \_ -> bf {}
+
+            bf {}
+        "#
+    )
+}
+
+#[mono_test]
+fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        go : U8 -> U8
+        go = \byte ->
+            when byte is
+                15 if Bool.true -> 1
+                b if Bool.true -> b + 2
+                _ -> 3
+
+        main = go '.'
+        "#
+    )
+}
+
+#[mono_test]
+fn recursive_lambda_set_resolved_only_upon_specialization() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        factCPS = \n, cont ->
+            if n == 0u8 then
+                cont 1u8
+            else
+                factCPS (n - 1) \value -> cont (n * value)
+
+        main =
+            factCPS 5 \x -> x
+        "#
+    )
+}
+
+#[mono_test]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    indoc!(
+        r#"
+         app "test" provides [main] to "./platform"
+
+         compose = \forward -> \f, g ->
+            if forward
+            then \x -> g (f x)
+            else \x -> f (g x)
+
+         identity = \x -> x
+         exclame = \s -> "\(s)!"
+         whisper = \s -> "(\(s))"
+
+         main =
+             res: Str -> Str
+             res = List.walk [ exclame, whisper ] identity (compose Bool.true)
+             res "hello"
+         "#
+    )
+}
+
+#[mono_test]
+fn issue_4759() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            update { a : { x : "x", y: "y" } }
+
+        update = \state -> { state & a : { x : "ux", y: "uy" } }
+        "#
     )
 }

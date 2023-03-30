@@ -250,7 +250,7 @@ fn loc_type_in_parens<'a>(
             if fields.len() > 1 || ext.is_some() {
                 Ok((
                     MadeProgress,
-                    Loc::at(region, TypeAnnotation::Tuple { fields, ext }),
+                    Loc::at(region, TypeAnnotation::Tuple { elems: fields, ext }),
                     state,
                 ))
             } else if fields.len() == 1 {

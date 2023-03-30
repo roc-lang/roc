@@ -4,7 +4,7 @@ Defs(
             Index(2147483648),
         ],
         regions: [
-            @0-58,
+            @0-57,
         ],
         space_before: [
             Slice(start = 0, length = 0),
@@ -16,16 +16,13 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-7 MalformedIdent(
-                    "my_list",
-                    Underscore(
-                        @3,
-                    ),
+                @0-6 Identifier(
+                    "myList",
                 ),
-                @10-58 List(
+                @9-57 List(
                     Collection {
                         items: [
-                            @16-17 SpaceBefore(
+                            @15-16 SpaceBefore(
                                 Num(
                                     "0",
                                 ),
@@ -33,11 +30,11 @@ Defs(
                                     Newline,
                                 ],
                             ),
-                            @23-48 SpaceBefore(
+                            @22-47 SpaceBefore(
                                 List(
                                     Collection {
                                         items: [
-                                            @33-34 SpaceBefore(
+                                            @32-33 SpaceBefore(
                                                 Var {
                                                     module_name: "",
                                                     ident: "a",
@@ -46,7 +43,7 @@ Defs(
                                                     Newline,
                                                 ],
                                             ),
-                                            @44-45 SpaceBefore(
+                                            @43-44 SpaceBefore(
                                                 Var {
                                                     module_name: "",
                                                     ident: "b",
@@ -65,7 +62,7 @@ Defs(
                                     Newline,
                                 ],
                             ),
-                            @54-55 SpaceBefore(
+                            @53-54 SpaceBefore(
                                 Num(
                                     "1",
                                 ),
@@ -82,7 +79,7 @@ Defs(
             ),
         ],
     },
-    @59-61 SpaceBefore(
+    @58-60 SpaceBefore(
         Num(
             "42",
         ),

@@ -74,7 +74,7 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
     env.builder
         .build_pointer_cast(
             element_ptr,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            env.context.i8_type().ptr_type(AddressSpace::default()),
             "pass_element_as_opaque",
         )
         .into()
@@ -97,7 +97,7 @@ pub(crate) fn pass_as_opaque<'a, 'ctx, 'env>(
     env.builder
         .build_pointer_cast(
             ptr,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            env.context.i8_type().ptr_type(AddressSpace::default()),
             "pass_as_opaque",
         )
         .into()
@@ -133,7 +133,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let elem_type = basic_type_from_layout(env, layout_interner, element_layout);
-    let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
+    let ptr_type = elem_type.ptr_type(AddressSpace::default());
     // Load the pointer to the array data
     let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
@@ -180,6 +180,26 @@ pub(crate) fn list_reserve<'a, 'ctx, 'env>(
             pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_RESERVE,
+    )
+}
+
+/// List.releaseExcessCapacity : List elem -> List elem
+pub(crate) fn list_release_excess_capacity<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: InLayout<'a>,
+    update_mode: UpdateMode,
+) -> BasicValueEnum<'ctx> {
+    call_list_bitcode_fn_1(
+        env,
+        list.into_struct_value(),
+        &[
+            env.alignment_intvalue(layout_interner, element_layout),
+            layout_width(env, layout_interner, element_layout),
+            pass_update_mode(env, update_mode),
+        ],
+        bitcode::LIST_RELEASE_EXCESS_CAPACITY,
     )
 }
 
@@ -393,15 +413,34 @@ pub(crate) fn list_len<'ctx>(
         .into_int_value()
 }
 
-/// List.capacity : List * -> Nat
-pub(crate) fn list_capacity<'ctx>(
+pub(crate) fn list_capacity_or_ref_ptr<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
     builder
-        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "list_capacity")
+        .build_extract_value(
+            wrapper_struct,
+            Builtin::WRAPPER_CAPACITY,
+            "list_capacity_or_ref_ptr",
+        )
         .unwrap()
         .into_int_value()
+}
+
+// Gets a pointer to just after the refcount for a list or seamless slice.
+// The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
+pub(crate) fn list_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    wrapper_struct: StructValue<'ctx>,
+) -> PointerValue<'ctx> {
+    call_list_bitcode_fn(
+        env,
+        &[wrapper_struct],
+        &[],
+        BitcodeReturns::Basic,
+        bitcode::LIST_REFCOUNT_PTR,
+    )
+    .into_pointer_value()
 }
 
 pub(crate) fn destructure<'ctx>(
@@ -801,11 +840,7 @@ pub(crate) fn decref<'a, 'ctx, 'env>(
     wrapper_struct: StructValue<'ctx>,
     alignment: u32,
 ) {
-    let (_, pointer) = load_list(
-        env.builder,
-        wrapper_struct,
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
-    );
+    let refcount_ptr = list_refcount_ptr(env, wrapper_struct);
 
-    crate::llvm::refcounting::decref_pointer_check_null(env, pointer, alignment);
+    crate::llvm::refcounting::decref_pointer_check_null(env, refcount_ptr, alignment);
 }

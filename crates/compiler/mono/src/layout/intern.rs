@@ -12,7 +12,7 @@ use roc_collections::{default_hasher, BumpMap};
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
 
-use super::{Builtin, FieldOrderHash, LambdaSet, Layout, UnionLayout};
+use super::{Builtin, FieldOrderHash, LambdaSet, Layout, SeenRecPtrs, UnionLayout};
 
 macro_rules! cache_interned_layouts {
     ($($i:literal, $name:ident, $vis:vis, $layout:expr)*; $total_constants:literal) => {
@@ -121,6 +121,13 @@ impl<'a> Layout<'a> {
     }
 }
 
+/// Whether a recursive lambda set being inserted into an interner needs fixing-up of naked
+/// recursion pointers in the capture set.
+/// Applicable only if
+///   - the lambda set is indeed recursive, and
+///   - its capture set contain naked pointer references
+pub struct NeedsRecursionPointerFixup(pub bool);
+
 pub trait LayoutInterner<'a>: Sized {
     /// Interns a value, returning its interned representation.
     /// If the value has been interned before, the old interned representation will be re-used.
@@ -135,9 +142,11 @@ pub trait LayoutInterner<'a>: Sized {
     /// lambda set onto itself.
     fn insert_lambda_set(
         &mut self,
+        arena: &'a Bump,
         args: &'a &'a [InLayout<'a>],
         ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         representation: InLayout<'a>,
     ) -> LambdaSet<'a>;
 
@@ -198,14 +207,63 @@ pub trait LayoutInterner<'a>: Sized {
         Layout::runtime_representation_in(layout, self)
     }
 
+    fn chase_recursive(&self, mut layout: InLayout<'a>) -> Layout<'a> {
+        loop {
+            match self.get(layout) {
+                Layout::RecursivePointer(l) => layout = l,
+                other => return other,
+            }
+        }
+    }
+
+    fn chase_recursive_in(&self, mut layout: InLayout<'a>) -> InLayout<'a> {
+        loop {
+            match self.get(layout) {
+                Layout::RecursivePointer(l) => layout = l,
+                _ => return layout,
+            }
+        }
+    }
+
     fn safe_to_memcpy(&self, layout: InLayout<'a>) -> bool {
         self.get(layout).safe_to_memcpy(self)
+    }
+
+    /// Checks if two layouts are equivalent up to isomorphism.
+    ///
+    /// This is only to be used when layouts need to be compared across statements and depths,
+    /// for example
+    ///   - when looking up a layout index in a lambda set
+    ///   - in the [checker][crate::debug::check_procs], where `x = UnionAtIndex(f, 0)` may have
+    ///     that the recorded layout of `x` is at a different depth than that determined when we
+    ///     index the recorded layout of `f` at 0. Hence the two layouts may have different
+    ///     interned representations, even if they are in fact isomorphic.
+    fn equiv(&self, l1: InLayout<'a>, l2: InLayout<'a>) -> bool {
+        std::thread_local! {
+            static SCRATCHPAD: RefCell<Option<Vec<(InLayout<'static>, InLayout<'static>)>>> = RefCell::new(Some(Vec::with_capacity(64)));
+        }
+
+        SCRATCHPAD.with(|f| {
+            // SAFETY: the promotion to lifetime 'a only lasts during equivalence-checking; the
+            // scratchpad stack is cleared after every use.
+            let mut stack: Vec<(InLayout<'a>, InLayout<'a>)> =
+                unsafe { std::mem::transmute(f.take().unwrap()) };
+
+            let answer = equiv::equivalent(&mut stack, self, l1, l2);
+            stack.clear();
+
+            let stack: Vec<(InLayout<'static>, InLayout<'static>)> =
+                unsafe { std::mem::transmute(stack) };
+            f.replace(Some(stack));
+            answer
+        })
     }
 
     fn to_doc<'b, D, A>(
         &self,
         layout: InLayout<'a>,
         alloc: &'b D,
+        seen_rec: &mut SeenRecPtrs<'a>,
         parens: crate::ir::Parens,
     ) -> ven_pretty::DocBuilder<'b, D, A>
     where
@@ -213,13 +271,103 @@ pub trait LayoutInterner<'a>: Sized {
         D::Doc: Clone,
         A: Clone,
     {
-        self.get(layout).to_doc(alloc, self, parens)
+        use Layout::*;
+
+        match self.get(layout) {
+            Builtin(builtin) => builtin.to_doc(alloc, self, seen_rec, parens),
+            Struct { field_layouts, .. } => {
+                let fields_doc = field_layouts
+                    .iter()
+                    .map(|x| self.to_doc(*x, alloc, seen_rec, parens));
+
+                alloc
+                    .text("{")
+                    .append(alloc.intersperse(fields_doc, ", "))
+                    .append(alloc.text("}"))
+            }
+            Union(union_layout) => {
+                let is_recursive = !matches!(union_layout, UnionLayout::NonRecursive(..));
+                if is_recursive {
+                    seen_rec.insert(layout);
+                }
+                let doc = union_layout.to_doc(alloc, self, seen_rec, parens);
+                if is_recursive {
+                    seen_rec.remove(&layout);
+                }
+                doc
+            }
+            LambdaSet(lambda_set) => {
+                self.to_doc(lambda_set.runtime_representation(), alloc, seen_rec, parens)
+            }
+            RecursivePointer(rec_layout) => {
+                if seen_rec.contains(&rec_layout) {
+                    alloc.text("*self")
+                } else {
+                    self.to_doc(rec_layout, alloc, seen_rec, parens)
+                }
+            }
+            Boxed(inner) => alloc
+                .text("Boxed(")
+                .append(self.to_doc(inner, alloc, seen_rec, parens))
+                .append(")"),
+        }
     }
 
+    fn to_doc_top<'b, D, A>(
+        &self,
+        layout: InLayout<'a>,
+        alloc: &'b D,
+    ) -> ven_pretty::DocBuilder<'b, D, A>
+    where
+        D: ven_pretty::DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        self.to_doc(
+            layout,
+            alloc,
+            &mut Default::default(),
+            crate::ir::Parens::NotNeeded,
+        )
+    }
+
+    /// Pretty-print a representation of the layout.
     fn dbg(&self, layout: InLayout<'a>) -> String {
         let alloc: ven_pretty::Arena<()> = ven_pretty::Arena::new();
-        let doc = self.to_doc(layout, &alloc, crate::ir::Parens::NotNeeded);
+        let doc = self.to_doc_top(layout, &alloc);
         doc.1.pretty(80).to_string()
+    }
+
+    /// Yields a debug representation of a layout, traversing its entire nested structure and
+    /// debug-printing all intermediate interned layouts.
+    ///
+    /// By default, a [Layout] is composed inductively by [interned layout][InLayout]s.
+    /// This makes debugging a layout more than one level challenging, as you may run into further
+    /// opaque interned layouts that need unwrapping.
+    ///
+    /// [`dbg_deep`][LayoutInterner::dbg_deep] works around this by returning a value whose debug
+    /// representation chases through all nested interned layouts as you would otherwise have to do
+    /// manually.
+    ///
+    /// ## Example
+    ///
+    /// ```ignore(illustrative)
+    /// fn is_rec_ptr<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> bool {
+    ///     if matches!(interner.get(layout), Layout::RecursivePointer(..)) {
+    ///         return true;
+    ///     }
+    ///
+    ///     let deep_dbg = interner.dbg_deep(layout);
+    ///     roc_tracing::info!("not a recursive pointer, actually a {deep_dbg:?}");
+    ///     return false;
+    /// }
+    /// ```
+    fn dbg_deep<'r>(&'r self, layout: InLayout<'a>) -> dbg::Dbg<'a, 'r, Self> {
+        dbg::Dbg(self, layout)
+    }
+
+    fn dbg_deep_iter<'r>(&'r self, layouts: &'a [InLayout<'a>]) -> dbg::DbgFields<'a, 'r, Self> {
+        dbg::DbgFields(self, layouts)
     }
 }
 
@@ -259,6 +407,10 @@ impl<'a> InLayout<'a> {
     /// ```
     pub(crate) const unsafe fn from_index(index: usize) -> Self {
         Self(index, PhantomData)
+    }
+
+    pub fn index(&self) -> usize {
+        self.0
     }
 }
 
@@ -407,40 +559,64 @@ impl<'a> GlobalLayoutInterner<'a> {
 
     fn get_or_insert_hashed_normalized_lambda_set(
         &self,
+        arena: &'a Bump,
         normalized: LambdaSet<'a>,
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         normalized_hash: u64,
     ) -> WrittenGlobalLambdaSet<'a> {
         let mut normalized_lambda_set_map = self.0.normalized_lambda_set_map.lock();
-        let (_, full_lambda_set) = normalized_lambda_set_map
-            .raw_entry_mut()
+        if let Some((_, &full_lambda_set)) = normalized_lambda_set_map
+            .raw_entry()
             .from_key_hashed_nocheck(normalized_hash, &normalized)
-            .or_insert_with(|| {
-                // We don't already have an entry for the lambda set, which means it must be new to
-                // the world. Reserve a slot, insert the lambda set, and that should fill the slot
-                // in.
-                let mut map = self.0.map.lock();
-                let mut vec = self.0.vec.write();
+        {
+            let full_layout = self.0.vec.read()[full_lambda_set.full_layout.0];
+            return WrittenGlobalLambdaSet {
+                full_lambda_set,
+                full_layout,
+            };
+        }
 
-                let slot = unsafe { InLayout::from_index(vec.len()) };
+        // We don't already have an entry for the lambda set, which means it must be new to
+        // the world. Reserve a slot, insert the lambda set, and that should fill the slot
+        // in.
+        let mut map = self.0.map.lock();
+        let mut vec = self.0.vec.write();
 
-                let lambda_set = LambdaSet {
-                    full_layout: slot,
-                    ..normalized
-                };
-                let lambda_set_layout = Layout::LambdaSet(lambda_set);
+        let slot = unsafe { InLayout::from_index(vec.len()) };
+        vec.push(Layout::VOID_NAKED);
 
-                vec.push(lambda_set_layout);
+        let set = if needs_recursive_fixup.0 {
+            let mut interner = LockedGlobalInterner {
+                map: &mut map,
+                normalized_lambda_set_map: &mut normalized_lambda_set_map,
+                vec: &mut vec,
+                target_info: self.0.target_info,
+            };
+            reify::reify_lambda_set_captures(arena, &mut interner, slot, normalized.set)
+        } else {
+            normalized.set
+        };
 
-                // TODO: Is it helpful to persist the hash and give it back to the thread-local
-                // interner?
-                let _old = map.insert(lambda_set_layout, slot);
-                debug_assert!(_old.is_none());
+        let full_lambda_set = LambdaSet {
+            full_layout: slot,
+            set,
+            ..normalized
+        };
+        let lambda_set_layout = Layout::LambdaSet(full_lambda_set);
 
-                (normalized, lambda_set)
-            });
-        let full_layout = self.0.vec.read()[full_lambda_set.full_layout.0];
+        vec[slot.0] = lambda_set_layout;
+
+        // TODO: Is it helpful to persist the hash and give it back to the thread-local
+        // interner?
+        let _old = map.insert(lambda_set_layout, slot);
+        debug_assert!(_old.is_none());
+
+        let _old_normalized = normalized_lambda_set_map.insert(normalized, full_lambda_set);
+        debug_assert!(_old_normalized.is_none());
+
+        let full_layout = vec[full_lambda_set.full_layout.0];
         WrittenGlobalLambdaSet {
-            full_lambda_set: *full_lambda_set,
+            full_lambda_set,
             full_layout,
         }
     }
@@ -539,9 +715,11 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
 
     fn insert_lambda_set(
         &mut self,
+        arena: &'a Bump,
         args: &'a &'a [InLayout<'a>],
         ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         representation: InLayout<'a>,
     ) -> LambdaSet<'a> {
         // The tricky bit of inserting a lambda set is we need to fill in the `full_layout` only
@@ -567,7 +745,12 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
                 let WrittenGlobalLambdaSet {
                     full_lambda_set,
                     full_layout,
-                } = global.get_or_insert_hashed_normalized_lambda_set(normalized, normalized_hash);
+                } = global.get_or_insert_hashed_normalized_lambda_set(
+                    arena,
+                    normalized,
+                    needs_recursive_fixup,
+                    normalized_hash,
+                );
 
                 // The Layout(lambda_set) isn't present in our thread; make sure it is for future
                 // reference.
@@ -689,9 +872,11 @@ macro_rules! st_impl {
 
             fn insert_lambda_set(
                 &mut self,
+                arena: &'a Bump,
                 args: &'a &'a [InLayout<'a>],
                 ret: InLayout<'a>,
                 set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
+                needs_recursive_fixup: NeedsRecursionPointerFixup,
                 representation: InLayout<'a>,
             ) -> LambdaSet<'a> {
                 // IDEA:
@@ -708,6 +893,14 @@ macro_rules! st_impl {
 
                 // This lambda set must be new to the interner, reserve a slot and fill it in.
                 let slot = unsafe { InLayout::from_index(self.vec.len()) };
+                self.vec.push(Layout::VOID_NAKED);
+
+                let set = if needs_recursive_fixup.0 {
+                    reify::reify_lambda_set_captures(arena, self, slot, set)
+                } else {
+                    set
+                };
+
                 let lambda_set = LambdaSet {
                     args,
                     ret,
@@ -715,11 +908,14 @@ macro_rules! st_impl {
                     representation,
                     full_layout: slot,
                 };
-                let filled_slot = self.insert(Layout::LambdaSet(lambda_set));
-                assert_eq!(slot, filled_slot);
+                self.vec[slot.0] = Layout::LambdaSet(lambda_set);
 
-                self.normalized_lambda_set_map
+                let _old = self.map.insert(Layout::LambdaSet(lambda_set), slot);
+                debug_assert!(_old.is_none());
+
+                let _old = self.normalized_lambda_set_map
                     .insert(normalized_lambda_set, lambda_set);
+                debug_assert!(_old.is_none());
 
                 lambda_set
             }
@@ -768,10 +964,11 @@ st_impl!('r LockedGlobalInterner);
 
 mod reify {
     use bumpalo::{collections::Vec, Bump};
+    use roc_module::symbol::Symbol;
 
     use crate::layout::{Builtin, LambdaSet, Layout, UnionLayout};
 
-    use super::{InLayout, LayoutInterner};
+    use super::{InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
     // TODO: if recursion becomes a problem we could make this iterative
     pub fn reify_recursive_layout<'a>(
@@ -912,18 +1109,330 @@ mod reify {
         };
         let representation = reify_layout(arena, interner, slot, representation);
 
-        interner.insert_lambda_set(arena.alloc(args), ret, arena.alloc(set), representation)
+        interner.insert_lambda_set(
+            arena,
+            arena.alloc(args),
+            ret,
+            arena.alloc(set),
+            // All nested recursive pointers should been fixed up, since we just did that above.
+            NeedsRecursionPointerFixup(false),
+            representation,
+        )
+    }
+
+    pub fn reify_lambda_set_captures<'a>(
+        arena: &'a Bump,
+        interner: &mut impl LayoutInterner<'a>,
+        slot: InLayout<'a>,
+        set: &[(Symbol, &'a [InLayout<'a>])],
+    ) -> &'a &'a [(Symbol, &'a [InLayout<'a>])] {
+        let mut reified_set = Vec::with_capacity_in(set.len(), arena);
+        for (f, captures) in set.iter() {
+            let reified_captures = reify_layout_slice(arena, interner, slot, captures);
+            reified_set.push((*f, reified_captures));
+        }
+        arena.alloc(reified_set.into_bump_slice())
+    }
+}
+
+mod equiv {
+    use crate::layout::{self, Layout, UnionLayout};
+
+    use super::{InLayout, LayoutInterner};
+
+    pub fn equivalent<'a>(
+        stack: &mut Vec<(InLayout<'a>, InLayout<'a>)>,
+        interner: &impl LayoutInterner<'a>,
+        l1: InLayout<'a>,
+        l2: InLayout<'a>,
+    ) -> bool {
+        stack.push((l1, l2));
+
+        macro_rules! equiv_fields {
+            ($fields1:expr, $fields2:expr) => {{
+                if $fields1.len() != $fields2.len() {
+                    return false;
+                }
+                stack.extend($fields1.iter().copied().zip($fields2.iter().copied()));
+            }};
+        }
+
+        macro_rules! equiv_unions {
+            ($tags1:expr, $tags2:expr) => {{
+                if $tags1.len() != $tags2.len() {
+                    return false;
+                }
+                for (payloads1, payloads2) in $tags1.iter().zip($tags2) {
+                    equiv_fields!(payloads1, payloads2)
+                }
+            }};
+        }
+
+        while let Some((l1, l2)) = stack.pop() {
+            if l1 == l2 {
+                continue;
+            }
+            use Layout::*;
+            match (interner.get(l1), interner.get(l2)) {
+                (RecursivePointer(rec), _) => stack.push((rec, l2)),
+                (_, RecursivePointer(rec)) => stack.push((l1, rec)),
+                (Builtin(b1), Builtin(b2)) => {
+                    use crate::layout::Builtin::*;
+                    match (b1, b2) {
+                        (List(e1), List(e2)) => stack.push((e1, e2)),
+                        (b1, b2) => {
+                            if b1 != b2 {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                (
+                    Struct {
+                        field_order_hash: foh1,
+                        field_layouts: fl1,
+                    },
+                    Struct {
+                        field_order_hash: foh2,
+                        field_layouts: fl2,
+                    },
+                ) => {
+                    if foh1 != foh2 {
+                        return false;
+                    }
+                    equiv_fields!(fl1, fl2)
+                }
+                (Boxed(b1), Boxed(b2)) => stack.push((b1, b2)),
+                (Union(u1), Union(u2)) => {
+                    use UnionLayout::*;
+                    match (u1, u2) {
+                        (NonRecursive(tags1), NonRecursive(tags2)) => equiv_unions!(tags1, tags2),
+                        (Recursive(tags1), Recursive(tags2)) => equiv_unions!(tags1, tags2),
+                        (NonNullableUnwrapped(fields1), NonNullableUnwrapped(fields2)) => {
+                            equiv_fields!(fields1, fields2)
+                        }
+                        (
+                            NullableWrapped {
+                                nullable_id: null_id1,
+                                other_tags: tags1,
+                            },
+                            NullableWrapped {
+                                nullable_id: null_id2,
+                                other_tags: tags2,
+                            },
+                        ) => {
+                            if null_id1 != null_id2 {
+                                return false;
+                            }
+                            equiv_unions!(tags1, tags2)
+                        }
+                        (
+                            NullableUnwrapped {
+                                nullable_id: null_id1,
+                                other_fields: fields1,
+                            },
+                            NullableUnwrapped {
+                                nullable_id: null_id2,
+                                other_fields: fields2,
+                            },
+                        ) => {
+                            if null_id1 != null_id2 {
+                                return false;
+                            }
+                            equiv_fields!(fields1, fields2)
+                        }
+                        _ => return false,
+                    }
+                }
+                (
+                    LambdaSet(layout::LambdaSet {
+                        args: args1,
+                        ret: ret1,
+                        set: set1,
+                        representation: repr1,
+                        full_layout: _,
+                    }),
+                    LambdaSet(layout::LambdaSet {
+                        args: args2,
+                        ret: ret2,
+                        set: set2,
+                        representation: repr2,
+                        full_layout: _,
+                    }),
+                ) => {
+                    for ((fn1, captures1), (fn2, captures2)) in (**set1).iter().zip(*set2) {
+                        if fn1 != fn2 {
+                            return false;
+                        }
+                        equiv_fields!(captures1, captures2);
+                    }
+                    equiv_fields!(args1, args2);
+                    stack.push((ret1, ret2));
+                    stack.push((repr1, repr2));
+                }
+                _ => return false,
+            }
+        }
+
+        true
+    }
+}
+
+pub mod dbg {
+    use roc_module::symbol::Symbol;
+
+    use crate::layout::{Builtin, LambdaSet, Layout, UnionLayout};
+
+    use super::{InLayout, LayoutInterner};
+
+    pub struct Dbg<'a, 'r, I: LayoutInterner<'a>>(pub &'r I, pub InLayout<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for Dbg<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0.get(self.1) {
+                Layout::Builtin(b) => f
+                    .debug_tuple("Builtin")
+                    .field(&DbgBuiltin(self.0, b))
+                    .finish(),
+                Layout::Struct {
+                    field_order_hash,
+                    field_layouts,
+                } => f
+                    .debug_struct("Struct")
+                    .field("hash", &field_order_hash)
+                    .field("fields", &DbgFields(self.0, field_layouts))
+                    .finish(),
+                Layout::Boxed(b) => f.debug_tuple("Boxed").field(&Dbg(self.0, b)).finish(),
+                Layout::Union(un) => f.debug_tuple("Union").field(&DbgUnion(self.0, un)).finish(),
+                Layout::LambdaSet(ls) => f
+                    .debug_tuple("LambdaSet")
+                    .field(&DbgLambdaSet(self.0, ls))
+                    .finish(),
+                Layout::RecursivePointer(rp) => {
+                    f.debug_tuple("RecursivePointer").field(&rp.0).finish()
+                }
+            }
+        }
+    }
+
+    pub struct DbgFields<'a, 'r, I: LayoutInterner<'a>>(pub &'r I, pub &'a [InLayout<'a>]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgFields<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(self.1.iter().map(|l| Dbg(self.0, *l)))
+                .finish()
+        }
+    }
+
+    struct DbgTags<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'a [&'a [InLayout<'a>]]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgTags<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(self.1.iter().map(|l| DbgFields(self.0, l)))
+                .finish()
+        }
+    }
+
+    struct DbgBuiltin<'a, 'r, I: LayoutInterner<'a>>(&'r I, Builtin<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgBuiltin<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.1 {
+                Builtin::Int(w) => f.debug_tuple("Int").field(&w).finish(),
+                Builtin::Float(w) => f.debug_tuple("Float").field(&w).finish(),
+                Builtin::Bool => f.debug_tuple("Bool").finish(),
+                Builtin::Decimal => f.debug_tuple("Decimal").finish(),
+                Builtin::Str => f.debug_tuple("Str").finish(),
+                Builtin::List(e) => f.debug_tuple("List").field(&Dbg(self.0, e)).finish(),
+            }
+        }
+    }
+
+    struct DbgUnion<'a, 'r, I: LayoutInterner<'a>>(&'r I, UnionLayout<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgUnion<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.1 {
+                UnionLayout::NonRecursive(payloads) => f
+                    .debug_tuple("NonRecursive")
+                    .field(&DbgTags(self.0, payloads))
+                    .finish(),
+                UnionLayout::Recursive(payloads) => f
+                    .debug_tuple("Recursive")
+                    .field(&DbgTags(self.0, payloads))
+                    .finish(),
+                UnionLayout::NonNullableUnwrapped(fields) => f
+                    .debug_tuple("NonNullableUnwrapped")
+                    .field(&DbgFields(self.0, fields))
+                    .finish(),
+                UnionLayout::NullableWrapped {
+                    nullable_id,
+                    other_tags,
+                } => f
+                    .debug_struct("NullableWrapped")
+                    .field("nullable_id", &nullable_id)
+                    .field("other_tags", &DbgTags(self.0, other_tags))
+                    .finish(),
+                UnionLayout::NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                } => f
+                    .debug_struct("NullableUnwrapped")
+                    .field("nullable_id", &nullable_id)
+                    .field("other_tags", &DbgFields(self.0, other_fields))
+                    .finish(),
+            }
+        }
+    }
+
+    struct DbgLambdaSet<'a, 'r, I: LayoutInterner<'a>>(&'r I, LambdaSet<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgLambdaSet<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let LambdaSet {
+                args,
+                ret,
+                set,
+                representation,
+                full_layout,
+            } = self.1;
+
+            f.debug_struct("LambdaSet")
+                .field("args", &DbgFields(self.0, args))
+                .field("ret", &Dbg(self.0, ret))
+                .field("set", &DbgCapturesSet(self.0, set))
+                .field("representation", &Dbg(self.0, representation))
+                .field("full_layout", &full_layout)
+                .finish()
+        }
+    }
+
+    struct DbgCapturesSet<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'a [(Symbol, &'a [InLayout<'a>])]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgCapturesSet<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(
+                    self.1
+                        .iter()
+                        .map(|(sym, captures)| (sym, DbgFields(self.0, captures))),
+                )
+                .finish()
+        }
     }
 }
 
 #[cfg(test)]
 mod insert_lambda_set {
+    use bumpalo::Bump;
     use roc_module::symbol::Symbol;
     use roc_target::TargetInfo;
 
     use crate::layout::{LambdaSet, Layout};
 
-    use super::{GlobalLayoutInterner, InLayout, LayoutInterner};
+    use super::{GlobalLayoutInterner, InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
     const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
     const TEST_SET: &&[(Symbol, &[InLayout])] =
@@ -931,50 +1440,57 @@ mod insert_lambda_set {
     const TEST_ARGS: &&[InLayout] = &(&[Layout::UNIT] as &[_]);
     const TEST_RET: InLayout = Layout::UNIT;
 
+    const FIXUP: NeedsRecursionPointerFixup = NeedsRecursionPointerFixup(true);
+
     #[test]
     fn two_threads_write() {
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
-        let set = TEST_SET;
-        let repr = Layout::UNIT;
-
         for _ in 0..100 {
-            let mut handles = Vec::with_capacity(10);
-            for _ in 0..10 {
-                let mut interner = global.fork();
-                handles.push(std::thread::spawn(move || {
-                    interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
-                }))
-            }
-            let ins: Vec<LambdaSet> = handles.into_iter().map(|t| t.join().unwrap()).collect();
-            let interned = ins[0];
-            assert!(ins.iter().all(|in2| interned == *in2));
+            let mut arenas: Vec<_> = std::iter::repeat_with(Bump::new).take(10).collect();
+            let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+            let set = TEST_SET;
+            let repr = Layout::UNIT;
+            std::thread::scope(|s| {
+                let mut handles = Vec::with_capacity(10);
+                for arena in arenas.iter_mut() {
+                    let mut interner = global.fork();
+                    handles.push(s.spawn(move || {
+                        interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
+                    }))
+                }
+                let ins: Vec<LambdaSet> = handles.into_iter().map(|t| t.join().unwrap()).collect();
+                let interned = ins[0];
+                assert!(ins.iter().all(|in2| interned == *in2));
+            });
         }
     }
 
     #[test]
     fn insert_then_reintern() {
+        let arena = &Bump::new();
         let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
         let mut interner = global.fork();
 
-        let lambda_set = interner.insert_lambda_set(TEST_ARGS, TEST_RET, TEST_SET, Layout::UNIT);
+        let lambda_set =
+            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, TEST_SET, FIXUP, Layout::UNIT);
         let lambda_set_layout_in = interner.insert(Layout::LambdaSet(lambda_set));
         assert_eq!(lambda_set.full_layout, lambda_set_layout_in);
     }
 
     #[test]
     fn write_global_then_single_threaded() {
+        let arena = &Bump::new();
         let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
         let set = TEST_SET;
         let repr = Layout::UNIT;
 
         let in1 = {
             let mut interner = global.fork();
-            interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
+            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
         };
 
         let in2 = {
             let mut st_interner = global.unwrap().unwrap();
-            st_interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
+            st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
         };
 
         assert_eq!(in1, in2);
@@ -982,18 +1498,19 @@ mod insert_lambda_set {
 
     #[test]
     fn write_single_threaded_then_global() {
+        let arena = &Bump::new();
         let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
         let mut st_interner = global.unwrap().unwrap();
 
         let set = TEST_SET;
         let repr = Layout::UNIT;
 
-        let in1 = st_interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr);
+        let in1 = st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr);
 
         let global = st_interner.into_global();
         let mut interner = global.fork();
 
-        let in2 = interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr);
+        let in2 = interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr);
 
         assert_eq!(in1, in2);
     }
@@ -1022,7 +1539,7 @@ mod insert_recursive_layout {
     }
 
     fn get_rec_ptr_index<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> usize {
-        match interner.get(layout) {
+        match interner.chase_recursive(layout) {
             Layout::Union(UnionLayout::Recursive(&[&[l1], &[l2]])) => {
                 match (interner.get(l1), interner.get(l2)) {
                     (
@@ -1146,7 +1663,7 @@ mod insert_recursive_layout {
             make_layout(arena, &mut interner)
         };
 
-        let in1 = {
+        let in1: InLayout = {
             let mut interner = global.fork();
             interner.insert_recursive(arena, layout)
         };

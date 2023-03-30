@@ -23,6 +23,7 @@ interface Decode
         string,
         list,
         record,
+        tuple,
         custom,
         decodeWith,
         fromBytesPartial,
@@ -43,6 +44,7 @@ interface Decode
             I32,
             I64,
             I128,
+            Nat,
             F32,
             F64,
             Dec,
@@ -76,7 +78,23 @@ DecoderFormatting has
     bool : Decoder Bool fmt | fmt has DecoderFormatting
     string : Decoder Str fmt | fmt has DecoderFormatting
     list : Decoder elem fmt -> Decoder (List elem) fmt | fmt has DecoderFormatting
+
+    ## `record state stepField finalizer` decodes a record field-by-field.
+    ##
+    ## `stepField` returns a decoder for the given field in the record, or
+    ## `Skip` if the field is not a part of the decoded record.
+    ##
+    ## `finalizer` should produce the record value from the decoded `state`.
     record : state, (state, Str -> [Keep (Decoder state fmt), Skip]), (state -> Result val DecodeError) -> Decoder val fmt | fmt has DecoderFormatting
+
+    ## `tuple state stepElem finalizer` decodes a tuple element-by-element.
+    ##
+    ## `stepElem` returns a decoder for the nth index in the tuple, or
+    ## `TooLong` if the index is larger than the expected size of the tuple. The
+    ## index passed to `stepElem` is 0-indexed.
+    ##
+    ## `finalizer` should produce the tuple value from the decoded `state`.
+    tuple : state, (state, Nat -> [Next (Decoder state fmt), TooLong]), (state -> Result val DecodeError) -> Decoder val fmt | fmt has DecoderFormatting
 
 custom : (List U8, fmt -> DecodeResult val) -> Decoder val fmt | fmt has DecoderFormatting
 custom = \decode -> @Decoder decode

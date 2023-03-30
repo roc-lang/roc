@@ -7,8 +7,8 @@ static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
 #[cfg(all(target_os = "linux"))]
 fn build_host() {
-    use roc_build::link::preprocessed_host_filename;
-    use roc_linker::build_and_preprocess_host;
+    use roc_build::program::build_and_preprocess_host;
+    use roc_linker::preprocessed_host_filename;
 
     let platform_main_roc = std::env::current_dir()
         .unwrap()
@@ -26,8 +26,10 @@ fn build_host() {
         &target,
         &platform_main_roc,
         &preprocessed_host_path,
-        vec![String::from("mainForHost")],
-        vec![],
+        roc_linker::ExposedSymbols {
+            top_level_values: vec![String::from("mainForHost")],
+            exported_closure_types: vec![],
+        },
     );
 }
 
@@ -45,7 +47,7 @@ fn valgrind_test(source: &str) {
 
 #[cfg(target_os = "linux")]
 fn valgrind_test_linux(source: &str) {
-    use roc_cli::build::BuiltFile;
+    use roc_build::program::BuiltFile;
 
     // the host is identical for all tests so we only want to build it once
     BUILD_ONCE.call_once(build_host);
@@ -81,7 +83,7 @@ fn valgrind_test_linux(source: &str) {
 
     let arena = bumpalo::Bump::new();
     let assume_prebuilt = true;
-    let res_binary_path = roc_cli::build::build_str_test(
+    let res_binary_path = roc_build::program::build_str_test(
         &arena,
         &app_module_path,
         &app_module_source,
@@ -101,7 +103,7 @@ fn valgrind_test_linux(source: &str) {
 
             run_with_valgrind(&binary_path);
         }
-        Err(roc_cli::build::BuildFileError::LoadingProblem(
+        Err(roc_build::program::BuildFileError::LoadingProblem(
             roc_load::LoadingProblem::FormattedReport(report),
         )) => {
             eprintln!("{}", report);
@@ -290,6 +292,23 @@ fn str_trim_left_capacity() {
             out = str |> Str.trimLeft
 
             if out == "" then "A" else "B"
+        )
+        "#
+    ));
+}
+
+#[test]
+fn str_concat_later_referencing_empty_list_with_capacity() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            a : List U8
+            a = List.withCapacity 1
+
+            List.concat a [58]
+            |> List.len
+            |> Num.addWrap (List.len a)
+            |> Num.toStr
         )
         "#
     ));

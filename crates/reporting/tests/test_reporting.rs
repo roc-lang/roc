@@ -543,7 +543,7 @@ mod test_reporting {
                  ^
 
     Since these variables have the same name, it's easy to use the wrong
-    one on accident. Give one of them a new name.
+    one by accident. Give one of them a new name.
     "###
     );
 
@@ -575,7 +575,7 @@ mod test_reporting {
             ^^^^^^^^^^^^^^^^^^^^^^^^
 
     Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    by accident. Give one of them a new name.
     "###
     );
 
@@ -955,6 +955,59 @@ mod test_reporting {
 
     All branches of a `when` must have the same type!
     "###
+    );
+
+    test_report!(
+        tuple_exhaustiveness_bad,
+        indoc!(
+            r#"
+            Color : [Red, Blue]
+
+            value : (Color, Color)
+            value = (Red, Red)
+
+            when value is
+                (Blue, Blue) -> "foo"
+                (Red, Blue) -> "foo"
+                (Blue, Red) -> "foo"
+                #(Red, Red) -> "foo"
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     9│>      when value is
+    10│>          (Blue, Blue) -> "foo"
+    11│>          (Red, Blue) -> "foo"
+    12│>          (Blue, Red) -> "foo"
+
+    Other possibilities include:
+
+        ( Red, Red )
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        tuple_exhaustiveness_good,
+        indoc!(
+            r#"
+            Color : [Red, Blue]
+
+            value : (Color, Color)
+            value = (Red, Red)
+
+            when value is
+                (Blue, Blue) -> "foo"
+                (Red, Blue) -> "foo"
+                (Blue, Red) -> "foo"
+                (Red, Red) -> "foo"
+            "#
+        ),
+        @"" // No error
     );
 
     test_report!(
@@ -1408,7 +1461,10 @@ mod test_reporting {
 
     But `f` needs its 1st argument to be:
 
-        [Green, Red]
+        [
+            Green,
+            Red,
+        ]
 
     Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1442,7 +1498,10 @@ mod test_reporting {
 
     But `f` needs its 1st argument to be:
 
-        [Green Str, Red (Int *)]
+        [
+            Green Str,
+            Red (Int *),
+        ]
 
     Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -2475,11 +2534,11 @@ mod test_reporting {
 
     This `a` value is a:
 
-        [A]
+        […]
 
     But the type annotation on `f` says it should be:
 
-        [A, B]
+        [B, …]
 
     Tip: Looks like a closed tag union does not have the `B` tag.
 
@@ -2509,11 +2568,15 @@ mod test_reporting {
 
     This `a` value is a:
 
-        [A]
+        […]
 
     But the type annotation on `f` says it should be:
 
-        [A, B, C]
+        [
+            B,
+            C,
+            …
+        ]
 
     Tip: Looks like a closed tag union does not have the `B` and `C` tags.
 
@@ -2578,11 +2641,11 @@ mod test_reporting {
 
     This `x` value is a:
 
-        [Left {}, Right Str]
+        [Right Str, …]
 
     But you are trying to use it as:
 
-        [Left *]
+        […]
 
     Tip: Looks like a closed tag union does not have the `Right` tag.
 
@@ -3327,11 +3390,23 @@ mod test_reporting {
 
     This `Cons` tag application has the type:
 
-        [Cons {} [Cons Str [Cons {} a, Nil]b as a, Nil]b, Nil]b
+        [
+            Cons {} [
+                Cons Str [
+                    Cons {} a,
+                    Nil,
+                ]b as a,
+                Nil,
+            ]b,
+            Nil,
+        ]b
 
     But the type annotation on `x` says it should be:
 
-        [Cons {} a, Nil] as a
+        [
+            Cons {} a,
+            Nil,
+        ] as a
     "###
     );
 
@@ -3364,12 +3439,29 @@ mod test_reporting {
 
     This `ACons` tag application has the type:
 
-        [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
-        ANil]b as ∞, BNil]c, ANil]b, BNil]c, ANil]b
+        [
+            ACons (Int Signed64) [
+                BCons (Int Signed64) [
+                    ACons Str [
+                        BCons I64 [
+                            ACons I64 (BList I64 I64),
+                            ANil,
+                        ]b as ∞,
+                        BNil,
+                    ]c,
+                    ANil,
+                ]b,
+                BNil,
+            ]c,
+            ANil,
+        ]b
 
     But the type annotation on `x` says it should be:
 
-        [ACons I64 (BList I64 I64), ANil] as a
+        [
+            ACons I64 (BList I64 I64),
+            ANil,
+        ] as a
     "###
     );
 
@@ -5590,25 +5682,6 @@ All branches in an `if` must have the same type!
     It looks like a field access on an accessor. I parse.client.name as
     (.client).name. Maybe use an anonymous function like
     (\r -> r.client.name) instead?
-    "###
-    );
-
-    test_report!(
-        part_starts_with_number,
-        indoc!(
-            r#"
-            foo.100
-            "#
-        ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-    I trying to parse a record field access here:
-
-    4│      foo.100
-                ^
-
-    So I expect to see a lowercase letter next, like .name or .height.
     "###
     );
 
@@ -7912,11 +7985,11 @@ In roc, functions are always written as a lambda, like{}
 
     This `v` value is a:
 
-        F [A, B, C]
+        F [C, …]
 
     But the branch patterns have type:
 
-        F [A, B]
+        F […]
 
     The branches must be cases of the `when` condition's type!
 
@@ -8391,7 +8464,7 @@ In roc, functions are always written as a lambda, like{}
                                                ^^^^^^^^^
 
         Since these variables have the same name, it's easy to use the wrong
-        one on accident. Give one of them a new name.
+        one by accident. Give one of them a new name.
         "#
     );
 
@@ -8420,7 +8493,7 @@ In roc, functions are always written as a lambda, like{}
             ^^^^^^^
 
         Since these abilities have the same name, it's easy to use the wrong
-        one on accident. Give one of them a new name.
+        one by accident. Give one of them a new name.
         "#
     );
 
@@ -8942,26 +9015,30 @@ In roc, functions are always written as a lambda, like{}
             foo
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        The branches of this `when` expression don't match the condition:
+    The branches of this `when` expression don't match the condition:
 
-        6│>          when bool is
-        7│               True -> "true"
-        8│               False -> "false"
-        9│               Wat -> "surprise!"
+    6│>          when bool is
+    7│               True -> "true"
+    8│               False -> "false"
+    9│               Wat -> "surprise!"
 
-        This `bool` value is a:
+    This `bool` value is a:
 
-            Bool
+        Bool
 
-        But the branch patterns have type:
+    But the branch patterns have type:
 
-            [False, True, Wat]
+        [
+            False,
+            True,
+            Wat,
+        ]
 
-        The branches must be cases of the `when` condition's type!
-        "#
+    The branches must be cases of the `when` condition's type!
+    "###
     );
 
     // from https://github.com/roc-lang/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
@@ -9705,7 +9782,7 @@ In roc, functions are always written as a lambda, like{}
         ^^^^
 
     Since these variables have the same name, it's easy to use the wrong
-    one on accident. Give one of them a new name.
+    one by accident. Give one of them a new name.
 
     ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
 
@@ -9942,7 +10019,10 @@ In roc, functions are always written as a lambda, like{}
 
     This `lst` value is a:
 
-        [Cons {} ∞, Nil] as ∞
+        [
+            Cons {} ∞,
+            Nil,
+        ] as ∞
 
     But the type annotation on `olist` says it should be:
 
@@ -10509,11 +10589,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `u8` value is a:
 
-        [Bad [DecodeProblem], Good (List U8)]
+        [Good …, …]
 
     But the branch patterns have type:
 
-        [Bad [DecodeProblem], Good (List U8) *]
+        [Good … *, …]
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -11143,6 +11223,55 @@ I recommend using camelCase. It's the standard style in Roc code!
     "###
     );
 
+    test_no_problem!(
+        derive_hash_for_tuple,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo ("", 1)
+             "#
+        )
+    );
+
+    test_report!(
+        cannot_hash_tuple_with_non_hash_element,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo ("", \{} -> {})
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo ("", \{} -> {})
+                   ^^^^^^^^^^^^^^^
+
+    I can't generate an implementation of the `Hash` ability for
+
+        (
+            Str,
+            {}a -> {},
+        )a
+
+    In particular, an implementation for
+
+        {}a -> {}
+
+    cannot be generated.
+
+    Note: `Hash` cannot be generated for functions.
+    "###
+    );
+
     test_report!(
         shift_by_negative,
         indoc!(
@@ -11522,6 +11651,58 @@ I recommend using camelCase. It's the standard style in Roc code!
         a -> a
 
     Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_no_problem!(
+        derive_eq_for_tuple,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo ("", 1)
+             "#
+        )
+    );
+
+    test_report!(
+        cannot_eq_tuple_with_non_eq_element,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo ("", 1.0f64)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo ("", 1.0f64)
+                   ^^^^^^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        (
+            Str,
+            F64,
+        )a
+
+    In particular, an implementation for
+
+        F64
+
+    cannot be generated.
+
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
     "###
     );
 
@@ -11984,7 +12165,10 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     The `when` condition is a list of type:
 
-        List [A, B]
+        List [
+            A,
+            B,
+        ]
 
     But the branch patterns have type:
 
@@ -12967,11 +13151,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `map` call produces:
 
-        List [One, Two]
+        List [Two, …]
 
     But the type annotation on `main` says it should be:
 
-        List [One]
+        List […]
     "###
     );
 
@@ -13005,11 +13189,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `map` call produces:
 
-        List [One, Two]
+        List [Two, …]
 
     But the type annotation on `main` says it should be:
 
-        List [One]
+        List […]
     "###
     );
 
@@ -13025,6 +13209,211 @@ I recommend using camelCase. It's the standard style in Roc code!
                     when tag is
                         One -> One
                         Two -> Two
+            "#
+        )
+    );
+
+    test_report!(
+        derive_decoding_for_nat,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder Nat fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    I can't generate an implementation of the `Decoding` ability for
+
+        Nat
+
+    Note: Decoding to a Nat is not supported. Consider decoding to a
+    fixed-sized unsigned integer, like U64, then converting to a Nat if
+    needed.
+    "###
+    );
+
+    test_report!(
+        derive_encoding_for_nat,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : Nat
+
+            main = Encode.toEncoder x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = Encode.toEncoder x
+                                ^
+
+    I can't generate an implementation of the `Encoding` ability for
+
+        Int Natural
+
+    In particular, an implementation for
+
+        Natural
+
+    cannot be generated.
+
+    Tip: `Natural` does not implement `Encoding`.
+    "###
+    );
+
+    test_no_problem!(
+        derive_decoding_for_tuple,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (U32, Str) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        )
+    );
+
+    test_report!(
+        cannot_decode_tuple_with_non_decode_element,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (U32, {} -> {}) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    I can't generate an implementation of the `Decoding` ability for
+
+        U32, {} -> {}
+
+    Note: `Decoding` cannot be generated for functions.
+    "###
+    );
+
+    test_no_problem!(
+        derive_encoding_for_tuple,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : (U32, Str)
+
+            main = Encode.toEncoder x
+            "#
+        )
+    );
+
+    test_report!(
+        cannot_encode_tuple_with_non_encode_element,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : (U32, {} -> {})
+
+            main = Encode.toEncoder x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = Encode.toEncoder x
+                                ^
+
+    I can't generate an implementation of the `Encoding` ability for
+
+        U32, {} -> {}
+
+    Note: `Encoding` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        exhaustiveness_check_function_or_tag_union_issue_4994,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            x : U8
+
+            ifThenCase =
+                when x is
+                    0 -> Red
+                    1 -> Yellow
+                    2 -> Purple
+                    3 -> Zulip
+                    _ -> Green
+
+            main =
+                when ifThenCase is
+                    Red -> "red"
+                    Green -> "green"
+                    Yellow -> "yellow"
+                    Zulip -> "zulip"
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    14│>      when ifThenCase is
+    15│>          Red -> "red"
+    16│>          Green -> "green"
+    17│>          Yellow -> "yellow"
+    18│>          Zulip -> "zulip"
+
+    Other possibilities include:
+
+        Purple
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        openness_constraint_opens_under_tuple,
+        indoc!(
+            r#"
+              x : [A, B, C]
+              when (x, 1u8) is
+                (A, _) -> Bool.true
+                (B, _) -> Bool.true
+                _ -> Bool.true
             "#
         )
     );

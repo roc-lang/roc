@@ -1532,7 +1532,16 @@ fn surgery_elf_help(
         let func_virt_offset = match app_func_vaddr_map.get(func_name) {
             Some(offset) => *offset as u64,
             None => {
-                internal_error!("Function, {}, was not defined by the app", &func_name);
+                eprintln!("Error:");
+                eprintln!("\n\tFunction, {}, was not defined by the app.", &func_name);
+                eprintln!("\nPotential causes:");
+                eprintln!("\n\t- because the platform was built with a non-compatible version of roc compared to the one you are running.");
+                eprintln!("\n\t\tsolutions:");
+                eprintln!("\t\t\t+ Downgrade your roc version to the one that was used to build the platform.");
+                eprintln!("\t\t\t+ Or ask the platform author to release a new version of the platform using a current roc release.");
+                eprintln!("\n\t- This can also occur due to a bug in the compiler. In that case, file an issue here: https://github.com/roc-lang/roc/issues/new/choose");
+
+                std::process::exit(1);
             }
         };
         if verbose {
@@ -1637,8 +1646,8 @@ fn surgery_elf_help(
 mod tests {
     use super::*;
 
+    use crate::preprocessed_host_filename;
     use indoc::indoc;
-    use roc_build::link::preprocessed_host_filename;
     use target_lexicon::Triple;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];

@@ -2,9 +2,12 @@ use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::Relocation;
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
+use roc_builtins::bitcode::FloatWidth;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, STLayoutInterner};
+
+use super::CompareOperation;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -609,9 +612,31 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         }
     }
     #[inline(always)]
+    fn mov_reg32_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
+        todo!()
+    }
+    #[inline(always)]
+    fn mov_reg16_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
+        todo!()
+    }
+    #[inline(always)]
+    fn mov_reg8_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
+        todo!()
+    }
+    #[inline(always)]
     fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
         todo!("saving floating point reg to base offset for AArch64");
     }
+    #[inline(always)]
+    fn movesd_mem64_offset32_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _ptr: AArch64GeneralReg,
+        _offset: i32,
+        _src: AArch64FloatReg,
+    ) {
+        todo!()
+    }
+
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
@@ -622,6 +647,19 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         } else {
             todo!("base offsets over 32k for AArch64");
         }
+    }
+
+    #[inline(always)]
+    fn mov_base32_reg32(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
+        todo!()
+    }
+    #[inline(always)]
+    fn mov_base32_reg16(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
+        todo!()
+    }
+    #[inline(always)]
+    fn mov_base32_reg8(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
+        todo!()
     }
 
     #[inline(always)]
@@ -641,6 +679,41 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         }
     }
     #[inline(always)]
+    fn mov_reg32_mem32_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        if offset < 0 {
+            todo!("negative mem offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_reg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+        } else {
+            todo!("mem offsets over 32k for AArch64");
+        }
+    }
+    #[inline(always)]
+    fn mov_reg16_mem16_offset32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src: AArch64GeneralReg,
+        _offset: i32,
+    ) {
+        todo!()
+    }
+    #[inline(always)]
+    fn mov_reg8_mem8_offset32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src: AArch64GeneralReg,
+        _offset: i32,
+    ) {
+        todo!()
+    }
+
+    #[inline(always)]
     fn mov_mem64_offset32_reg64(
         buf: &mut Vec<'_, u8>,
         dst: AArch64GeneralReg,
@@ -655,6 +728,36 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         } else {
             todo!("mem offsets over 32k for AArch64");
         }
+    }
+
+    #[inline(always)]
+    fn mov_mem32_offset32_reg32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _offset: i32,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!()
+    }
+
+    #[inline(always)]
+    fn mov_mem16_offset32_reg16(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _offset: i32,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!()
+    }
+
+    #[inline(always)]
+    fn mov_mem8_offset32_reg8(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _offset: i32,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!()
     }
 
     #[inline(always)]
@@ -740,12 +843,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn sub_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers subtractions for AArch64");
+        sub_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     #[inline(always)]
@@ -786,6 +889,18 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src2: AArch64GeneralReg,
     ) {
         todo!("registers unsigned less than for AArch64");
+    }
+
+    #[inline(always)]
+    fn cmp_freg_freg_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64FloatReg,
+        _src2: AArch64FloatReg,
+        _width: FloatWidth,
+        _operation: CompareOperation,
+    ) {
+        todo!("registers float comparison for AArch64");
     }
 
     #[inline(always)]
@@ -898,6 +1013,53 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src2: AArch64GeneralReg,
     ) {
         todo!("bitwise xor for AArch64")
+    }
+
+    fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("shl for AArch64")
+    }
+
+    fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("shr for AArch64")
+    }
+
+    fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("sar for AArch64")
+    }
+
+    fn sqrt_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
+        todo!("sqrt")
+    }
+
+    fn sqrt_freg32_freg32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
+        todo!("sqrt")
     }
 }
 
@@ -1315,6 +1477,19 @@ fn sub_reg64_reg64_imm12(
     buf.extend(inst.bytes());
 }
 
+/// `SUB Xd, Xm, Xn` -> Subtract Xm and Xn and place the result into Xd.
+#[inline(always)]
+fn sub_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = ArithmeticShifted::new(true, false, ShiftType::LSL, 0, src2, src1, dst);
+
+    buf.extend(inst.bytes());
+}
+
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
@@ -1532,6 +1707,34 @@ mod tests {
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+
+    #[test]
+    fn test_sub_reg64_reg64_reg64() {
+        disassembler_test!(
+            sub_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| {
+                if reg2 == AArch64GeneralReg::ZRSP {
+                    // When the second register is ZR, it gets disassembled as neg,
+                    // which is an alias for sub.
+                    format!(
+                        "neg {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                } else {
+                    format!(
+                        "sub {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 

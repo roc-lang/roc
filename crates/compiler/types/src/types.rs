@@ -1786,7 +1786,9 @@ static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
 
 pub fn get_type_clone_count() -> usize {
     if cfg!(debug_assertions) {
-        unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::SeqCst) }
+        // A global counter just needs relaxed, and nothing relies upon this atomic for any
+        // happens-before relationships.
+        unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::Relaxed) }
     } else {
         0
     }
@@ -1796,7 +1798,7 @@ impl Clone for Type {
     fn clone(&self) -> Self {
         #[cfg(debug_assertions)]
         unsafe {
-            TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         };
 
         match self {
@@ -3615,6 +3617,13 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     }
 }
 
+/// Either a field name for a record or an index into a tuple
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IndexOrField {
+    Field(Lowercase),
+    Index(usize),
+}
+
 #[derive(Debug)]
 pub struct RecordStructure {
     /// Invariant: these should be sorted!
@@ -3775,10 +3784,9 @@ pub enum Category {
 
     // records
     Record,
-    RecordAccessor(Lowercase),
+    Accessor(IndexOrField),
     RecordAccess(Lowercase),
     Tuple,
-    TupleAccessor(usize),
     TupleAccess(usize),
     DefaultValue(Lowercase), // for setting optional fields
 
@@ -3794,6 +3802,7 @@ pub enum Category {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternCategory {
     Record,
+    Tuple,
     List,
     EmptyRecord,
     PatternGuard,
@@ -4598,18 +4607,9 @@ pub fn gather_tags_unsorted_iter(
 
     let mut stack = vec![other_fields];
 
-    #[cfg(debug_assertions)]
-    let mut seen_head_union = false;
-
     loop {
         match subs.get_content_without_compacting(ext.var()) {
             Structure(TagUnion(sub_fields, sub_ext)) => {
-                #[cfg(debug_assertions)]
-                {
-                    assert!(!seen_head_union, "extension variable is another tag union, but I expected it to be either open or closed!");
-                    seen_head_union = true;
-                }
-
                 stack.push(*sub_fields);
 
                 ext = *sub_ext;

@@ -1,16 +1,19 @@
 [package]
 name = "roc_code_markup"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Our own markup language for Roc code. Used by the editor and the docs."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
 roc_ast = { path = "../ast" }
 roc_module = { path = "../compiler/module" }
-roc_utils = { path = "../utils" }
-serde = { version = "1.0.144", features = ["derive"] }
-palette = "0.6.1"
-snafu = { version = "0.7.1", features = ["backtraces"] }
-bumpalo = { version = "3.11.1", features = ["collections"] }
+roc_error_utils = { path = "../utils/error" }
+
+palette.workspace = true
+
+bumpalo.workspace = true
+serde.workspace = true
+snafu.workspace = true

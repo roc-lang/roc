@@ -1568,8 +1568,10 @@ fn unspecialized_lambda_set_sorter(subs: &Subs, uls1: Uls, uls2: Uls) -> std::cm
                 }
                 (FlexAbleVar(..), _) => Greater,
                 (_, FlexAbleVar(..)) => Less,
-                // For everything else, the order is irrelevant
-                (_, _) => Less,
+                // For everything else, sort by the root key
+                (_, _) => subs
+                    .get_root_key_without_compacting(var1)
+                    .cmp(&subs.get_root_key_without_compacting(var2)),
             }
         }
         ord => ord,
@@ -1731,6 +1733,8 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             let kept = uls_left.next().unwrap();
                             merged_uls.push(*kept);
                         } else {
+                            // CASE: disjoint_flex_specializations
+                            //
                             //     ... a1     ...
                             //     ... b1     ...
                             // =>  ... a1, b1 ...
@@ -1800,20 +1804,38 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                         let _dropped = uls_left.next().unwrap();
                     }
                     (_, _) => {
-                        //     ... {foo: _} ...
-                        //     ... {foo: _} ...
-                        // =>  ... {foo: _} ...
-                        //
-                        // Unify them, then advance one.
-                        // (the choice is arbitrary, so we choose the left)
-
-                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
-                        if !outcome.mismatches.is_empty() {
-                            return Err(outcome);
+                        if env.subs.equivalent_without_compacting(var_l, var_r) {
+                            //     ... a1    ...
+                            //     ... b1=a1 ...
+                            // =>  ... a1    ...
+                            //
+                            // Keep the one on the left, drop the one on the right. Then progress
+                            // both, because the next variable on the left must be disjoint from
+                            // the current on the right (resp. next variable on the right vs.
+                            // current left) - if they aren't, then the invariant was broken.
+                            //
+                            // Then progress both, because the invariant tells us they must be
+                            // disjoint, and if there were any concrete variables, they would have
+                            // appeared earlier.
+                            let _dropped = uls_right.next().unwrap();
+                            let kept = uls_left.next().unwrap();
+                            merged_uls.push(*kept);
+                        } else {
+                            // Even if these two variables unify, since they are not equivalent,
+                            // they correspond to different specializations! As such we must not
+                            // merge them.
+                            //
+                            // Instead, keep both, but do so by adding and advancing the side with
+                            // the lower root. See CASE disjoint_flex_specializations for
+                            // reasoning.
+                            if env.subs.get_root_key(var_l) < env.subs.get_root_key(var_r) {
+                                let kept = uls_left.next().unwrap();
+                                merged_uls.push(*kept);
+                            } else {
+                                let kept = uls_right.next().unwrap();
+                                merged_uls.push(*kept);
+                            }
                         }
-                        whole_outcome.union(outcome);
-
-                        let _dropped = uls_left.next().unwrap();
                     }
                 }
             }
@@ -3756,30 +3778,38 @@ fn unify_recursion<M: MetaCollector>(
     structure: Variable,
     other: &Content,
 ) -> Outcome<M> {
-    if !matches!(other, RecursionVar { .. }) {
-        if env.seen_recursion_pair(ctx.first, ctx.second) {
-            return Default::default();
-        }
-
-        env.add_recursion_pair(ctx.first, ctx.second);
+    if env.seen_recursion_pair(ctx.first, ctx.second) {
+        return Default::default();
     }
+
+    env.add_recursion_pair(ctx.first, ctx.second);
 
     let outcome = match other {
         RecursionVar {
             opt_name: other_opt_name,
-            structure: _other_structure,
+            structure: other_structure,
         } => {
-            // NOTE: structure and other_structure may not be unified yet, but will be
-            // we should not do that here, it would create an infinite loop!
+            // We haven't seen these two recursion vars yet, so go and unify their structures.
+            // We need to do this before we merge the two recursion vars, since the unification of
+            // the structures may be material.
+
+            let mut outcome = unify_pool(env, pool, structure, *other_structure, ctx.mode);
+            if !outcome.mismatches.is_empty() {
+                return outcome;
+            }
+
             let name = (*opt_name).or(*other_opt_name);
-            merge(
+            let merge_outcome = merge(
                 env,
                 ctx,
                 RecursionVar {
                     opt_name: name,
                     structure,
                 },
-            )
+            );
+
+            outcome.union(merge_outcome);
+            outcome
         }
 
         Structure(_) => {
@@ -3841,9 +3871,7 @@ fn unify_recursion<M: MetaCollector>(
         Error => merge(env, ctx, Error),
     };
 
-    if !matches!(other, RecursionVar { .. }) {
-        env.remove_recursion_pair(ctx.first, ctx.second);
-    }
+    env.remove_recursion_pair(ctx.first, ctx.second);
 
     outcome
 }

@@ -18,7 +18,9 @@ fn basic_type_from_record<'a, 'ctx, 'env>(
     let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
 
     for field_layout in fields.iter() {
-        field_types.push(basic_type_from_layout(env, layout_interner, *field_layout));
+        let typ = basic_type_from_layout(env, layout_interner, *field_layout);
+
+        field_types.push(typ);
     }
 
     env.context
@@ -44,13 +46,13 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         Boxed(inner_layout) => {
             let inner_type = basic_type_from_layout(env, layout_interner, inner_layout);
 
-            inner_type.ptr_type(AddressSpace::Generic).into()
+            inner_type.ptr_type(AddressSpace::default()).into()
         }
         Union(union_layout) => basic_type_from_union_layout(env, layout_interner, &union_layout),
         RecursivePointer(_) => env
             .context
             .i64_type()
-            .ptr_type(AddressSpace::Generic)
+            .ptr_type(AddressSpace::default())
             .as_basic_type_enum(),
 
         Builtin(builtin) => basic_type_from_builtin(env, &builtin),
@@ -65,6 +67,7 @@ pub fn struct_type_from_union_layout<'a, 'ctx, 'env>(
     use UnionLayout::*;
 
     match union_layout {
+        NonRecursive([]) => env.context.struct_type(&[], false),
         NonRecursive(tags) => {
             RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info)
                 .struct_type()
@@ -109,7 +112,7 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
         Recursive(_)
         | NonNullableUnwrapped(_)
         | NullableWrapped { .. }
-        | NullableUnwrapped { .. } => struct_type.ptr_type(AddressSpace::Generic).into(),
+        | NullableUnwrapped { .. } => struct_type.ptr_type(AddressSpace::default()).into(),
     }
 }
 
@@ -158,7 +161,7 @@ pub fn argument_type_from_layout<'a, 'ctx, 'env>(
             let base = basic_type_from_layout(env, layout_interner, layout);
 
             if layout_interner.is_passed_by_reference(layout) {
-                base.ptr_type(AddressSpace::Generic).into()
+                base.ptr_type(AddressSpace::default()).into()
             } else {
                 base
             }
@@ -176,7 +179,7 @@ pub fn argument_type_from_union_layout<'a, 'ctx, 'env>(
     let heap_type = basic_type_from_union_layout(env, layout_interner, union_layout);
 
     if let UnionLayout::NonRecursive(_) = union_layout {
-        heap_type.ptr_type(AddressSpace::Generic).into()
+        heap_type.ptr_type(AddressSpace::default()).into()
     } else {
         heap_type
     }
@@ -300,7 +303,8 @@ impl<'ctx> RocUnion<'ctx> {
         target_info: TargetInfo,
     ) -> Self {
         let tag_type = match layouts.len() {
-            0..=255 => TagType::I8,
+            0 => unreachable!("zero-element tag union is not represented as a RocUnion"),
+            1..=255 => TagType::I8,
             _ => TagType::I16,
         };
 
@@ -320,6 +324,10 @@ impl<'ctx> RocUnion<'ctx> {
             Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
 
         Self::new(context, target_info, data_align, data_width, None)
+    }
+
+    pub fn data_width(&self) -> u32 {
+        self.data_width
     }
 
     pub fn tag_alignment(&self) -> u32 {
@@ -375,7 +383,7 @@ impl<'ctx> RocUnion<'ctx> {
 
         let cast_pointer = env.builder.build_pointer_cast(
             data_buffer,
-            data.get_type().ptr_type(AddressSpace::Generic),
+            data.get_type().ptr_type(AddressSpace::default()),
             "to_data_ptr",
         );
 
@@ -436,7 +444,7 @@ pub fn zig_dec_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ct
 }
 
 pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
-    let u8_ptr_t = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let u8_ptr_t = env.context.i8_type().ptr_type(AddressSpace::default());
 
     env.context
         .struct_type(&[env.context.bool_type().into(), u8_ptr_t.into()], false)

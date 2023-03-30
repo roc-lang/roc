@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use roc_fmt::{annotation::Formattable, module::fmt_module};
 use roc_parse::{
-    ast::{Defs, Expr, Module},
+    ast::{Defs, Expr, Malformed, Module},
     module::module_defs,
     parser::{Parser, SyntaxError},
     state::State,
@@ -100,6 +100,20 @@ impl<'a> Output<'a> {
             Output::ModuleDefs(defs) => format!("{:#?}\n", defs),
             Output::Expr(expr) => format!("{:#?}\n", expr),
             Output::Full { .. } => format!("{:#?}\n", self),
+        }
+    }
+}
+
+impl<'a> Malformed for Output<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Output::Header(header) => header.is_malformed(),
+            Output::ModuleDefs(defs) => defs.is_malformed(),
+            Output::Expr(expr) => expr.is_malformed(),
+            Output::Full {
+                header,
+                module_defs,
+            } => header.is_malformed() || module_defs.is_malformed(),
         }
     }
 }
@@ -229,10 +243,11 @@ impl<'a> Input<'a> {
             let reformatted = reparsed_ast.format();
 
             if output != reformatted {
-                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\n",
+                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",
                     self.as_str(),
                     output.as_ref().as_str(),
-                    actual);
+                    actual,
+                    reparsed_ast);
                 eprintln!("Reformatting the formatted code changed it again, as follows:\n\n");
 
                 assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());
