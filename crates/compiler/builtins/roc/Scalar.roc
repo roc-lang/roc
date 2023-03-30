@@ -6,6 +6,7 @@ interface Scalar
 ## any [code point](./CodePt#CodePt) except for [high-surrogate](http://www.unicode.org/glossary/#high_surrogate_code_point)
 ## and [low-surrogate](http://www.unicode.org/glossary/#low_surrogate_code_point) code points.
 Scalar := U32
+    has [Eq, Hash]
 
 toU32 : Scalar -> U32
 toU32 = \@Scalar u32 -> u32
@@ -141,8 +142,77 @@ parseUtf8 = \bytes ->
             else
                 Err InvalidUtf8
         else if firstByte >= 0b1110_0000 && firstByte <= 0b1110_1111 then
-            crash "TODO finish implementation"
-        else #if firstByte >= 0b1111_0000 && firstByte <= 0b1111_0111 then
-            crash "TODO finish implementation"
+            secondByte <- List.get bytes 1 |> Result.try
+            thirdByte <- List.get bytes 2 |> Result.try
+
+            if
+                Num.bitwiseAnd firstByte 0b11110000 == 0b11100000
+                && Num.bitwiseAnd secondByte 0b11000000 == 0b10000000
+                && Num.bitwiseAnd thirdByte 0b11000000 == 0b10000000
+            then
+                answer =
+                    firstByte
+                    |> Num.bitwiseAnd 0b00001111
+                    |> Num.shiftLeftBy 12
+                    |> Num.bitwiseOr (Num.bitwiseAnd secondByte 0b00111111 |> Num.shiftLeftBy 6)
+                    |> Num.bitwiseOr (Num.bitwiseAnd thirdByte 0b00111111)
+
+                if Num.toU16 answer >= 0x800 then
+                    Ok { scalar: @Scalar (Num.toU32 answer), bytesParsed: 3 }
+                else
+                    Err InvalidUtf8
+            else
+                Err InvalidUtf8
+        else if firstByte >= 0b1111_0000 && firstByte <= 0b1111_0111 then
+            secondByte <- List.get bytes 1 |> Result.try
+            thirdByte <- List.get bytes 2 |> Result.try
+            fourthByte <- List.get bytes 3 |> Result.try
+
+            if
+                Num.bitwiseAnd firstByte 0b11111000 == 0b11110000
+                && Num.bitwiseAnd secondByte 0b11000000 == 0b10000000
+                && Num.bitwiseAnd thirdByte 0b11000000 == 0b10000000
+                && Num.bitwiseAnd fourthByte 0b11000000 == 0b10000000
+            then
+                answer =
+                    firstByte
+                    |> Num.bitwiseAnd 0b00000111
+                    |> Num.shiftLeftBy 18
+                    |> Num.bitwiseOr (Num.bitwiseAnd secondByte 0b00111111 |> Num.shiftLeftBy 12)
+                    |> Num.bitwiseOr (Num.bitwiseAnd thirdByte 0b00111111 |> Num.shiftLeftBy 6)
+                    |> Num.bitwiseOr (Num.bitwiseAnd fourthByte 0b00111111)
+
+                if Num.toU32 answer >= 0x10000 && Num.toU32 answer <= 0x10FFFF then
+                    Ok { scalar: @Scalar (Num.toU32 answer), bytesParsed: 4 }
+                else
+                    Err InvalidUtf8
+            else
+                Err InvalidUtf8
+        else
+            Err InvalidUtf8
 
     Result.mapErr result \_ -> InvalidUtf8
+
+## Empty input
+expect [] |> parseUtf8 == Err InvalidUtf8
+
+## Incorrect continuation byte
+expect [0xC3, 0x28] |> parseUtf8 == Err InvalidUtf8
+
+## Overlong encoding for ASCII character
+expect [0xC0, 0xA1] |> parseUtf8 == Err InvalidUtf8
+
+## Overlong encoding for two-byte character
+expect [0xE0, 0x80, 0xAF] |> parseUtf8 == Err InvalidUtf8
+
+## Overlong encoding for three-byte character
+expect [0xF0, 0x80, 0x80, 0xA6] |> parseUtf8 == Err InvalidUtf8
+
+## Invalid four-byte encoding (scalar value too large)
+expect [0xF4, 0x90, 0x80, 0x80] |> parseUtf8 == Err InvalidUtf8
+
+## Invalid first byte (>= 0xF8)
+expect [0xF8, 0xA1, 0xA2, 0xA3, 0xA4] |> parseUtf8 == Err InvalidUtf8
+
+## Invalid first byte (>= 0xC0 and <= 0xC1)
+expect [0xC0, 0x80] |> parseUtf8 == Err InvalidUtf8
