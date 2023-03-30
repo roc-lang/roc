@@ -2013,7 +2013,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         );
     }
 
-    // TODO update to not decrement children.
     fn expr_resetref(&mut self, argument: Symbol, ret_symbol: Symbol, ret_storage: &StoredValue) {
         let ident_ids = self
             .interns
@@ -2025,7 +2024,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let layout = self.storage.symbol_layouts[&argument];
         let (specialized_call_expr, new_specializations) = self
             .helper_proc_gen
-            .call_reset_refcount(ident_ids, self.layout_interner, layout, argument);
+            .call_resetref_refcount(ident_ids, self.layout_interner, layout, argument);
 
         // If any new specializations were created, register their symbol data
         for (spec_sym, spec_layout) in new_specializations.into_iter() {

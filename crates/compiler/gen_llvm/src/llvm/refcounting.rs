@@ -1543,61 +1543,6 @@ pub fn build_reset<'a, 'ctx, 'env>(
     function
 }
 
-pub fn build_resetref<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    layout_ids: &mut LayoutIds<'a>,
-    union_layout: UnionLayout<'a>,
-) -> FunctionValue<'ctx> {
-    // TODO update to not decref the children.
-    todo!("update to not decref the children.");
-    let mode = Mode::Dec;
-
-    let union_layout_in = layout_interner.insert(Layout::Union(union_layout));
-    let layout_id = layout_ids.get(Symbol::DEC, &union_layout_in);
-    let fn_name = layout_id.to_symbol_string(Symbol::DEC, &env.interns);
-    let fn_name = format!("{}_resetref", fn_name);
-
-    let when_recursive = WhenRecursive::Loop(union_layout);
-    let dec_function = build_rec_union(
-        env,
-        layout_interner,
-        layout_ids,
-        Mode::Dec,
-        &when_recursive,
-        union_layout,
-    );
-
-    let function = match env.module.get_function(fn_name.as_str()) {
-        Some(function_value) => function_value,
-        None => {
-            let block = env.builder.get_insert_block().expect("to be in a function");
-            let di_location = env.builder.get_current_debug_location().unwrap();
-
-            let basic_type = basic_type_from_layout(env, layout_interner, union_layout_in);
-            let function_value = build_header(env, basic_type, mode, &fn_name);
-
-            build_reuse_rec_union_help(
-                env,
-                layout_interner,
-                layout_ids,
-                &when_recursive,
-                union_layout,
-                function_value,
-                dec_function,
-            );
-
-            env.builder.position_at_end(block);
-            env.builder
-                .set_current_debug_location(env.context, di_location);
-
-            function_value
-        }
-    };
-
-    function
-}
-
 #[allow(clippy::too_many_arguments)]
 fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

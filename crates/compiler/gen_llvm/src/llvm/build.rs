@@ -5,8 +5,7 @@ use crate::llvm::convert::{
 };
 use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
 use crate::llvm::refcounting::{
-    build_reset, build_resetref, decrement_refcount_layout, increment_refcount_layout,
-    PointerToRefcount,
+    build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1247,8 +1246,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             };
 
             let ctx = env.context;
-            let then_block = ctx.append_basic_block(parent, "then_resetref");
-            let else_block = ctx.append_basic_block(parent, "else_decref");
+            let not_unique_block = ctx.append_basic_block(parent, "else_decref");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
             let refcount_ptr =
@@ -1259,29 +1257,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 UpdateMode::Immutable => refcount_ptr.is_1(env),
             };
 
+            let parent_block = env.builder.get_insert_block().unwrap();
+
             env.builder
-                .build_conditional_branch(is_unique, then_block, else_block);
+                .build_conditional_branch(is_unique, cont_block, not_unique_block);
 
-            {
-                // reset, when used on a unique reference, eagerly decrements the components of the
-                // referenced value, and returns the location of the now-invalid cell
-                env.builder.position_at_end(then_block);
-
-                let reset_function = build_resetref(env, layout_interner, layout_ids, union_layout);
-                let call =
-                    env.builder
-                        .build_call(reset_function, &[tag_ptr.into()], "call_resetref");
-
-                call.set_call_convention(FAST_CALL_CONV);
-
-                let _ = call.try_as_basic_value();
-
-                env.builder.build_unconditional_branch(cont_block);
-            }
             {
                 // If reset is used on a shared, non-reusable reference, it behaves
                 // like dec and returns NULL, which instructs reuse to behave like ctor
-                env.builder.position_at_end(else_block);
+                env.builder.position_at_end(not_unique_block);
                 refcount_ptr.decrement(env, layout_interner, layout);
                 env.builder.build_unconditional_branch(cont_block);
             }
@@ -1290,7 +1274,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
 
                 let null_ptr = tag_ptr.get_type().const_null();
-                phi.add_incoming(&[(&tag_ptr, then_block), (&null_ptr, else_block)]);
+                phi.add_incoming(&[(&tag_ptr, parent_block), (&null_ptr, not_unique_block)]);
 
                 phi.as_basic_value()
             }

@@ -31,7 +31,6 @@ pub enum HelperOp {
     Dec,
     DecRef(JoinPointId),
     Reset,
-    // TODO update all usages
     ResetRef,
     Eq,
 }
@@ -165,6 +164,38 @@ impl<'a> CodeGenHelp<'a> {
     }
 
     pub fn call_reset_refcount(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
+        layout: InLayout<'a>,
+        argument: Symbol,
+    ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(self.arena),
+            recursive_union: None,
+            op: HelperOp::Reset,
+        };
+
+        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout_interner, layout);
+
+        let arguments = self.arena.alloc([argument]);
+        let ret_layout = layout;
+        let arg_layouts = self.arena.alloc([layout]);
+        let expr = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: LambdaName::no_niche(proc_name),
+                ret_layout,
+                arg_layouts,
+                specialization_id: CallSpecId::BACKEND_DUMMY,
+            },
+            arguments,
+        });
+
+        (expr, ctx.new_linker_data)
+    }
+
+    // TODO update to not decrement children.
+    pub fn call_resetref_refcount(
         &mut self,
         ident_ids: &mut IdentIds,
         layout_interner: &mut STLayoutInterner<'a>,
@@ -348,9 +379,20 @@ impl<'a> CodeGenHelp<'a> {
                     Symbol::ARG_1,
                 ),
             ),
-            Reset | ResetRef => (
+            Reset => (
                 layout,
                 refcount::refcount_reset_proc_body(
+                    self,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    layout,
+                    Symbol::ARG_1,
+                ),
+            ),
+            ResetRef => (
+                layout,
+                refcount::refcount_resetref_proc_body(
                     self,
                     ident_ids,
                     ctx,
