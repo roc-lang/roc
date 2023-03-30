@@ -3293,7 +3293,6 @@ fn generate_host_exposed_function<'a>(
                 closure_data_layout: None,
                 ret_layout: result,
                 is_self_recursive: SelfRecursive::NotSelfRecursive,
-                must_own_arguments: false,
                 host_exposed_layouts: HostExposedLayouts::NotHostExposed,
             };
 
@@ -3358,7 +3357,6 @@ fn generate_host_exposed_lambda_set<'a>(
         closure_data_layout: None,
         ret_layout: return_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        must_own_arguments: false,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
     };
 
@@ -9722,7 +9720,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         };
 
@@ -9818,7 +9815,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         };
 
