@@ -32,7 +32,7 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx, 'env>(
         PtrWidth::Bytes4 | PtrWidth::Bytes8 => {
             let result_ptr_cast = env.builder.build_pointer_cast(
                 pointer,
-                record_type.ptr_type(AddressSpace::Generic),
+                record_type.ptr_type(AddressSpace::default()),
                 "to_unnamed",
             );
 
@@ -62,4 +62,20 @@ pub(crate) fn str_equal<'a, 'ctx, 'env>(
         BitcodeReturns::Basic,
         bitcode::STR_EQUAL,
     )
+}
+
+// Gets a pointer to just after the refcount for a list or seamless slice.
+// The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
+pub(crate) fn str_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    call_str_bitcode_fn(
+        env,
+        &[value],
+        &[],
+        BitcodeReturns::Basic,
+        bitcode::STR_REFCOUNT_PTR,
+    )
+    .into_pointer_value()
 }

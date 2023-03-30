@@ -1,4 +1,6 @@
-use crate::ast::{Collection, CommentOrNewline, Spaced, Spaces, StrLiteral, TypeAnnotation};
+use crate::ast::{
+    Collection, CommentOrNewline, Malformed, Spaced, Spaces, StrLiteral, TypeAnnotation,
+};
 use crate::blankspace::space0_e;
 use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{optional, then};
@@ -341,4 +343,56 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> 
             StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(text.region.start()))),
         },
     )
+}
+
+impl<'a, K, V> Malformed for KeywordItem<'a, K, V>
+where
+    K: Malformed,
+    V: Malformed,
+{
+    fn is_malformed(&self) -> bool {
+        self.keyword.is_malformed() || self.item.is_malformed()
+    }
+}
+
+impl<'a> Malformed for InterfaceHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> Malformed for HostedHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> Malformed for AppHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        self.name.is_malformed()
+    }
+}
+
+impl<'a> Malformed for PackageHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> Malformed for PlatformRequires<'a> {
+    fn is_malformed(&self) -> bool {
+        self.signature.is_malformed()
+    }
+}
+
+impl<'a> Malformed for PlatformHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> Malformed for TypedIdent<'a> {
+    fn is_malformed(&self) -> bool {
+        self.ann.is_malformed()
+    }
 }

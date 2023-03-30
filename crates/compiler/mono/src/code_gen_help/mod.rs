@@ -125,16 +125,6 @@ impl<'a> CodeGenHelp<'a> {
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        if !refcount::is_rc_implemented_yet(layout_interner, layout) {
-            // Just a warning, so we can decouple backend development from refcounting development.
-            // When we are closer to completion, we can change it to a panic.
-            println!(
-                "WARNING! MEMORY LEAK! Refcounting not yet implemented for Layout {:?}",
-                layout
-            );
-            return (following, Vec::new_in(self.arena));
-        }
-
         let op = match modify {
             ModifyRc::Inc(..) => HelperOp::Inc,
             ModifyRc::Dec(_) => HelperOp::Dec,

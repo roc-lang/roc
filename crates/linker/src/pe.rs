@@ -1357,8 +1357,9 @@ mod test {
     use object::read::pe::PeFile64;
     use object::{pe, LittleEndian as LE, Object};
 
+    use crate::preprocessed_host_filename;
     use indoc::indoc;
-    use roc_build::link::preprocessed_host_filename;
+    use serial_test::serial;
     use target_lexicon::Triple;
 
     use super::*;
@@ -1834,12 +1835,14 @@ mod test {
     }
 
     #[cfg(windows)]
+    #[serial(zig_build)]
     #[test]
     fn basics_windows() {
         assert_eq!("Hello, 234567 32 1 3!\n", windows_test(test_basics))
     }
 
     #[test]
+    #[serial(zig_build)]
     #[ignore]
     fn basics_wine() {
         assert_eq!("Hello, 234567 32 1 3!\n", wine_test(test_basics))
@@ -1876,13 +1879,15 @@ mod test {
     }
 
     #[cfg(windows)]
+    #[serial(zig_build)]
     #[test]
     fn app_internal_relocations_windows() {
         assert_eq!("Hello foo\n", windows_test(test_internal_relocations))
     }
 
-    #[ignore]
     #[test]
+    #[serial(zig_build)]
+    #[ignore]
     fn app_internal_relocations_wine() {
         assert_eq!("Hello foo\n", wine_test(test_internal_relocations))
     }

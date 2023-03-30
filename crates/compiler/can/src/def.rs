@@ -15,7 +15,7 @@ use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
-use crate::expr::RecordAccessorData;
+use crate::expr::StructAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
@@ -36,6 +36,7 @@ use roc_parse::ast::AssignedField;
 use roc_parse::ast::Defs;
 use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
+use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::ShadowKind;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
@@ -45,6 +46,7 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
+use roc_types::types::IndexOrField;
 use roc_types::types::LambdaSet;
 use roc_types::types::MemberImpl;
 use roc_types::types::OptAbleType;
@@ -1995,6 +1997,16 @@ fn pattern_to_vars_by_symbol(
             vars_by_symbol.insert(*opaque, expr_var);
         }
 
+        TupleDestructure { destructs, .. } => {
+            for destruct in destructs {
+                pattern_to_vars_by_symbol(
+                    vars_by_symbol,
+                    &destruct.value.typ.1.value,
+                    destruct.value.typ.0,
+                );
+            }
+        }
+
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
                 vars_by_symbol.insert(destruct.value.symbol, destruct.value.var);
@@ -2316,19 +2328,23 @@ fn canonicalize_pending_body<'a>(
                     ident: defined_symbol,
                     ..
                 },
-                ast::Expr::RecordAccessorFunction(field),
+                ast::Expr::AccessorFunction(field),
             ) => {
+                let field = match field {
+                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
+                };
                 let (loc_can_expr, can_output) = (
                     Loc::at(
                         loc_expr.region,
-                        RecordAccessor(RecordAccessorData {
+                        RecordAccessor(StructAccessorData {
                             name: *defined_symbol,
                             function_var: var_store.fresh(),
                             record_var: var_store.fresh(),
                             ext_var: var_store.fresh(),
                             closure_var: var_store.fresh(),
                             field_var: var_store.fresh(),
-                            field: (*field).into(),
+                            field,
                         }),
                     ),
                     Output::default(),

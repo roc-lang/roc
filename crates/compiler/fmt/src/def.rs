@@ -61,7 +61,7 @@ impl<'a> Formattable for TypeDef<'a> {
         &self,
         buf: &mut Buf<'buf>,
         _parens: Parens,
-        _newlines: Newlines,
+        newlines: Newlines,
         indent: u16,
     ) {
         use roc_parse::ast::TypeDef::*;
@@ -76,8 +76,19 @@ impl<'a> Formattable for TypeDef<'a> {
 
                 for var in *vars {
                     buf.spaces(1);
+
+                    let need_parens = matches!(var.value, Pattern::Apply(..));
+
+                    if need_parens {
+                        buf.push_str("(");
+                    }
+
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                     buf.indent(indent);
+
+                    if need_parens {
+                        buf.push_str(")");
+                    }
                 }
 
                 buf.push_str(" :");
@@ -86,22 +97,10 @@ impl<'a> Formattable for TypeDef<'a> {
                 ann.format(buf, indent)
             }
             Opaque {
-                header: TypeHeader { name, vars },
+                header,
                 typ: ann,
                 derived: has_abilities,
             } => {
-                buf.indent(indent);
-                buf.push_str(name.value);
-
-                for var in *vars {
-                    buf.spaces(1);
-                    fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
-                    buf.indent(indent);
-                }
-
-                buf.push_str(" :=");
-                buf.spaces(1);
-
                 let ann_is_where_clause =
                     matches!(ann.extract_spaces().item, TypeAnnotation::Where(..));
 
@@ -115,7 +114,7 @@ impl<'a> Formattable for TypeDef<'a> {
 
                 let make_multiline = ann.is_multiline() || has_abilities_multiline;
 
-                ann.format(buf, indent);
+                fmt_general_def(header, buf, indent, ":=", &ann.value, newlines);
 
                 if let Some(has_abilities) = has_abilities {
                     buf.spaces(1);
@@ -167,6 +166,29 @@ impl<'a> Formattable for TypeDef<'a> {
     }
 }
 
+impl<'a> Formattable for TypeHeader<'a> {
+    fn is_multiline(&self) -> bool {
+        self.vars.iter().any(|v| v.is_multiline())
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(self.name.value);
+
+        for var in self.vars.iter() {
+            buf.spaces(1);
+            fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+            buf.indent(indent);
+        }
+    }
+}
+
 impl<'a> Formattable for ValueDef<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::ValueDef::*;
@@ -193,63 +215,14 @@ impl<'a> Formattable for ValueDef<'a> {
         use roc_parse::ast::ValueDef::*;
         match self {
             Annotation(loc_pattern, loc_annotation) => {
-                loc_pattern.format(buf, indent);
-                buf.indent(indent);
-
-                if loc_annotation.is_multiline() {
-                    buf.push_str(" :");
-                    buf.spaces(1);
-
-                    let should_outdent = match loc_annotation.value {
-                        TypeAnnotation::SpaceBefore(sub_def, spaces) => match sub_def {
-                            TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => {
-                                let is_only_newlines = spaces.iter().all(|s| s.is_newline());
-                                is_only_newlines && sub_def.is_multiline()
-                            }
-                            _ => false,
-                        },
-                        TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => true,
-                        _ => false,
-                    };
-
-                    if should_outdent {
-                        match loc_annotation.value {
-                            TypeAnnotation::SpaceBefore(sub_def, _) => {
-                                sub_def.format_with_options(
-                                    buf,
-                                    Parens::NotNeeded,
-                                    Newlines::No,
-                                    indent,
-                                );
-                            }
-                            _ => {
-                                loc_annotation.format_with_options(
-                                    buf,
-                                    Parens::NotNeeded,
-                                    Newlines::No,
-                                    indent,
-                                );
-                            }
-                        }
-                    } else {
-                        loc_annotation.format_with_options(
-                            buf,
-                            Parens::NotNeeded,
-                            newlines,
-                            indent + INDENT,
-                        );
-                    }
-                } else {
-                    buf.spaces(1);
-                    buf.push(':');
-                    buf.spaces(1);
-                    loc_annotation.format_with_options(
-                        buf,
-                        Parens::NotNeeded,
-                        Newlines::No,
-                        indent,
-                    );
-                }
+                fmt_general_def(
+                    loc_pattern,
+                    buf,
+                    indent,
+                    ":",
+                    &loc_annotation.value,
+                    newlines,
+                );
             }
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
@@ -266,34 +239,7 @@ impl<'a> Formattable for ValueDef<'a> {
                 body_pattern,
                 body_expr,
             } => {
-                let is_type_multiline = ann_type.is_multiline();
-                let is_type_function = matches!(
-                    ann_type.value,
-                    TypeAnnotation::Function(..)
-                        | TypeAnnotation::SpaceBefore(TypeAnnotation::Function(..), ..)
-                        | TypeAnnotation::SpaceAfter(TypeAnnotation::Function(..), ..)
-                );
-
-                let next_indent = if is_type_multiline {
-                    indent + INDENT
-                } else {
-                    indent
-                };
-
-                ann_pattern.format(buf, indent);
-                buf.push_str(" :");
-
-                if is_type_multiline && is_type_function {
-                    ann_type.format_with_options(
-                        buf,
-                        Parens::NotNeeded,
-                        Newlines::Yes,
-                        next_indent,
-                    );
-                } else {
-                    buf.spaces(1);
-                    ann_type.format(buf, indent);
-                }
+                fmt_general_def(ann_pattern, buf, indent, ":", &ann_type.value, newlines);
 
                 if let Some(comment_str) = comment {
                     buf.push_str(" #");
@@ -304,6 +250,66 @@ impl<'a> Formattable for ValueDef<'a> {
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
+        }
+    }
+}
+
+fn fmt_general_def<L: Formattable>(
+    lhs: L,
+    buf: &mut Buf,
+    indent: u16,
+    sep: &str,
+    rhs: &TypeAnnotation,
+    newlines: Newlines,
+) {
+    lhs.format(buf, indent);
+    buf.indent(indent);
+
+    if rhs.is_multiline() {
+        buf.spaces(1);
+        buf.push_str(sep);
+        buf.spaces(1);
+
+        let should_outdent = should_outdent(rhs);
+
+        if should_outdent {
+            match rhs {
+                TypeAnnotation::SpaceBefore(sub_def, _) => {
+                    sub_def.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+                }
+                _ => {
+                    rhs.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+                }
+            }
+        } else {
+            rhs.format_with_options(buf, Parens::NotNeeded, newlines, indent + INDENT);
+        }
+    } else {
+        buf.spaces(1);
+        buf.push_str(sep);
+        buf.spaces(1);
+        rhs.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+    }
+}
+
+fn should_outdent(mut rhs: &TypeAnnotation) -> bool {
+    loop {
+        match rhs {
+            TypeAnnotation::SpaceBefore(sub_def, spaces) => {
+                let is_only_newlines = spaces.iter().all(|s| s.is_newline());
+                if !is_only_newlines || !sub_def.is_multiline() {
+                    return false;
+                }
+                rhs = sub_def;
+            }
+            TypeAnnotation::Where(ann, _clauses) => {
+                if !ann.is_multiline() {
+                    return false;
+                }
+                rhs = &ann.value;
+            }
+            TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => return true,
+            _ => return false,
         }
     }
 }

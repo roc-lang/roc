@@ -405,7 +405,7 @@ pub fn to_type2<'a>(
 
             Type2::Variable(var)
         }
-        Tuple { fields: _, ext: _ } => {
+        Tuple { elems: _, ext: _ } => {
             todo!("tuple type");
         }
         Record { fields, ext, .. } => {

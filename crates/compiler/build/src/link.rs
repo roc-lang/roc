@@ -1,26 +1,18 @@
 use crate::target::{arch_str, target_zig_str};
-use const_format::concatcp;
 use libloading::{Error, Library};
-use roc_builtins::bitcode;
+use roc_command_utils::{cargo, clang, get_lib_path, rustup, zig};
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
-use roc_utils::{cargo, clang, zig};
-use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
-use std::env;
+use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
+use std::{env, fs};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum LinkType {
-    // These numbers correspond to the --lib and --no-link flags
-    Executable = 0,
-    Dylib = 1,
-    None = 2,
-}
+pub use roc_linker::LinkType;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkingStrategy {
@@ -60,134 +52,15 @@ pub fn link(
     }
 }
 
-const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
-
-const WASM_TARGET_STR: &str = "wasm32";
-const LINUX_X86_64_TARGET_STR: &str = "linux-x86_64";
-const LINUX_ARM64_TARGET_STR: &str = "linux-arm64";
-const MACOS_ARM64_TARGET_STR: &str = "macos-arm64";
-const MACOS_X86_64_TARGET_STR: &str = "macos-x86_64";
-const WINDOWS_X86_64_TARGET_STR: &str = "windows-x86_64";
-const WINDOWS_X86_32_TARGET_STR: &str = "windows-x86_32";
-const WIDNOWS_ARM64_TARGET_STR: &str = "windows-arm64";
-
-pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str> {
-    // Don't try to split this match off in a different function, it will not work with concatcp
-    match target {
-        Triple {
-            architecture: Architecture::Wasm32,
-            ..
-        } => Some(concatcp!(WASM_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(concatcp!(
-            LINUX_X86_64_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(concatcp!(LINUX_ARM64_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(concatcp!(MACOS_ARM64_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(concatcp!(
-            MACOS_X86_64_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(concatcp!(
-            WINDOWS_X86_64_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_32(_),
-            ..
-        } => Some(concatcp!(
-            WINDOWS_X86_32_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(concatcp!(
-            WIDNOWS_ARM64_TARGET_STR,
-            '.',
-            PRECOMPILED_HOST_EXT
-        )),
-        _ => None,
-    }
-}
-
-pub fn get_target_triple_str(target: &Triple) -> Option<&'static str> {
-    match target {
-        Triple {
-            architecture: Architecture::Wasm32,
-            ..
-        } => Some(WASM_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(LINUX_X86_64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(LINUX_ARM64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(MACOS_ARM64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(MACOS_X86_64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some(WINDOWS_X86_64_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_32(_),
-            ..
-        } => Some(WINDOWS_X86_32_TARGET_STR),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some(WIDNOWS_ARM64_TARGET_STR),
-        _ => None,
-    }
-}
-
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
 pub fn legacy_host_filename(target: &Triple) -> Option<String> {
     let os = roc_target::OperatingSystem::from(target.operating_system);
     let ext = os.object_file_ext();
 
-    Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
+    Some(
+        roc_linker::preprocessed_host_filename(target)?
+            .replace(roc_linker::PRECOMPILED_HOST_EXT, ext),
+    )
 }
 
 fn find_zig_str_path() -> PathBuf {
@@ -681,7 +554,7 @@ pub fn rebuild_host(
     let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
 
     let builtins_host_tempfile =
-        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+        roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     if zig_host_src.exists() {
         // Compile host.zig
@@ -752,14 +625,6 @@ pub fn rebuild_host(
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = platform_main_roc.parent().unwrap();
 
-        let cargo_out_dir = cargo_dir.join("target").join(
-            if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
-                "release"
-            } else {
-                "debug"
-            },
-        );
-
         let mut cargo_cmd = if cfg!(windows) {
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
@@ -793,11 +658,20 @@ pub fn rebuild_host(
 
         run_build_command(cargo_cmd, source_file, 0);
 
+        let cargo_out_dir = find_used_target_sub_folder(opt_level, cargo_dir.join("target"));
+
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
             let mut exe_path = cargo_out_dir.join("host");
             exe_path.set_extension(executable_extension);
-            std::fs::copy(&exe_path, &host_dest).unwrap();
+            if let Err(e) = std::fs::copy(&exe_path, &host_dest) {
+                panic!(
+                    "unable to copy {} => {}: {:?}\n\nIs the file used by another invocation of roc?",
+                    exe_path.display(),
+                    host_dest.display(),
+                    e,
+                );
+            }
         } else {
             // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
 
@@ -941,6 +815,63 @@ pub fn rebuild_host(
     let _ = builtins_host_tempfile;
 
     host_dest
+}
+
+// there can be multiple release folders, one in target and one in target/x86_64-unknown-linux-musl,
+// we want the one that was most recently used
+fn find_used_target_sub_folder(opt_level: OptLevel, target_folder: PathBuf) -> PathBuf {
+    let out_folder_name = if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
+        "release"
+    } else {
+        "debug"
+    };
+
+    let matching_folders = find_in_folder_or_subfolders(&target_folder, out_folder_name);
+    let mut matching_folders_iter = matching_folders.iter();
+
+    let mut out_folder = match matching_folders_iter.next() {
+        Some(dir_entry) => dir_entry,
+        None => panic!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
+    };
+
+    let mut out_folder_last_change = out_folder.metadata().unwrap().modified().unwrap();
+
+    for dir_entry in matching_folders_iter {
+        let last_modified = dir_entry.metadata().unwrap().modified().unwrap();
+
+        if last_modified > out_folder_last_change {
+            out_folder_last_change = last_modified;
+            out_folder = dir_entry;
+        }
+    }
+
+    out_folder.path().canonicalize().unwrap()
+}
+
+fn find_in_folder_or_subfolders(path: &PathBuf, folder_to_find: &str) -> Vec<DirEntry> {
+    let mut matching_dirs = vec![];
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                let dir_name = entry
+                    .file_name()
+                    .into_string()
+                    .unwrap_or_else(|_| "".to_string());
+
+                if dir_name == folder_to_find {
+                    matching_dirs.push(entry)
+                } else {
+                    let matched_in_sub_dir =
+                        find_in_folder_or_subfolders(&entry.path(), folder_to_find);
+
+                    matching_dirs.extend(matched_in_sub_dir);
+                }
+            }
+        }
+    }
+
+    matching_dirs
 }
 
 fn get_target_str(target: &Triple) -> &str {
@@ -1502,8 +1433,8 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
             (but seems to be an unofficial API)
     */
 
-    let builtins_host_tempfile =
-        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
+        .expect("failed to write host builtins object to tempfile");
 
     let mut zig_cmd = zig();
     let args = &[

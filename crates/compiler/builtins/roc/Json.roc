@@ -1,3 +1,40 @@
+## JSON is a data format that is easy for humans to read and write. It is
+## commonly used to exhange data between two systems such as a server and a
+## client (e.g. web browser).
+##
+## This module implements functionality to serialise and de-serialise Roc types
+## to and from JSON data. Using the `Encode` and `Decode` builtins this process
+## can be achieved without the need to write custom encoder and decoder functions
+## to parse UTF-8 strings.
+##
+## Here is a basic example which shows how to parse a JSON record into a Roc
+## type named `Language` which includes a `name` field. The JSON string is
+## decoded and then the field is encoded back into a UTF-8 string.
+##
+## ```
+## Language : {
+##     name : Str,
+## }
+##
+## jsonStr = Str.toUtf8 "{\"name\":\"Röc Lang\"}"
+##
+## result : Result Language _
+## result =
+##     jsonStr
+##     |> Decode.fromBytes fromUtf8 # returns `Ok {name : "Röc Lang"}`
+##
+## name =
+##     decodedValue <- Result.map result
+##
+##     Encode.toBytes decodedValue.name toUtf8
+##
+## expect name == Ok (Str.toUtf8 "\"Röc Lang\"")
+## ```
+##
+## **Note:** This module is likely to be moved out of the builtins in future.
+## It is currently located here to facilitate development of the Abilities
+## language feature and testing. You are welcome to use this module, just note
+## that it will be moved into a package in a future update.
 interface Json
     exposes [
         Json,
@@ -7,6 +44,7 @@ interface Json
     imports [
         List,
         Str,
+        Result.{ Result },
         Encode,
         Encode.{
             Encoder,
@@ -37,6 +75,8 @@ interface Json
         Result,
     ]
 
+## An opaque type with the `EncoderFormatting` and
+## `DecoderFormatting` abilities.
 Json := {} has [
          EncoderFormatting {
              u8: encodeU8,
@@ -56,6 +96,7 @@ Json := {} has [
              string: encodeString,
              list: encodeList,
              record: encodeRecord,
+             tuple: encodeTuple,
              tag: encodeTag,
          },
          DecoderFormatting {
@@ -76,11 +117,14 @@ Json := {} has [
              string: decodeString,
              list: decodeList,
              record: decodeRecord,
+             tuple: decodeTuple,
          },
      ]
 
+## Returns a JSON `Decoder`
 toUtf8 = @Json {}
 
+## Returns a JSON `Encoder`
 fromUtf8 = @Json {}
 
 numToBytes = \n ->
@@ -165,6 +209,25 @@ encodeRecord = \fields ->
 
         List.append bytesWithRecord (Num.toU8 '}')
 
+encodeTuple = \elems ->
+    Encode.custom \bytes, @Json {} ->
+        writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
+            bufferWithElem =
+                appendWith buffer elemEncoder (@Json {})
+
+            bufferWithSuffix =
+                if elemsLeft > 1 then
+                    List.append bufferWithElem (Num.toU8 ',')
+                else
+                    bufferWithElem
+
+            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
+
+        bytesHead = List.append bytes (Num.toU8 '[')
+        { buffer: bytesWithRecord } = List.walk elems { buffer: bytesHead, elemsLeft: List.len elems } writeTuple
+
+        List.append bytesWithRecord (Num.toU8 ']')
+
 encodeTag = \name, payload ->
     Encode.custom \bytes, @Json {} ->
         # Idea: encode `A v1 v2` as `{"A": [v1, v2]}`
@@ -191,16 +254,42 @@ encodeTag = \name, payload ->
         List.append bytesWithPayload (Num.toU8 ']')
         |> List.append (Num.toU8 '}')
 
+isEscapeSequence : U8, U8 -> Bool
+isEscapeSequence = \a, b ->
+    when P a b is
+        P '\\' 'b' -> Bool.true # Backspace
+        P '\\' 'f' -> Bool.true # Form feed
+        P '\\' 'n' -> Bool.true # Newline
+        P '\\' 'r' -> Bool.true # Carriage return
+        P '\\' 't' -> Bool.true # Tab
+        P '\\' '"' -> Bool.true # Double quote
+        P '\\' '\\' -> Bool.true # Backslash
+        _ -> Bool.false
+
 takeWhile = \list, predicate ->
     helper = \{ taken, rest } ->
-        when List.first rest is
-            Ok elem ->
-                if predicate elem then
-                    helper { taken: List.append taken elem, rest: List.split rest 1 |> .others }
+        when rest is
+            [a, b, ..] ->
+                if isEscapeSequence a b then
+                    helper {
+                        taken: taken |> List.append a |> List.append b,
+                        rest: List.drop rest 2,
+                    }
+                else if predicate a then
+                    helper {
+                        taken: List.append taken a,
+                        rest: List.dropFirst rest,
+                    }
                 else
                     { taken, rest }
 
-            Err _ -> { taken, rest }
+            [a, ..] if predicate a ->
+                helper {
+                    taken: List.append taken a,
+                    rest: List.dropFirst rest,
+                }
+
+            _ -> { taken, rest }
 
     helper { taken: [], rest: list }
 
@@ -341,7 +430,6 @@ jsonString = \bytes ->
     if
         before == ['"']
     then
-        # TODO: handle escape sequences
         { taken: strSequence, rest } = takeWhile afterStartingQuote \n -> n != '"'
 
         when Str.fromUtf8 strSequence is
@@ -358,42 +446,38 @@ decodeString = Decode.custom \bytes, @Json {} ->
     jsonString bytes
 
 decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
+
         decodeElems = \chunk, accum ->
             when Decode.decodeWith chunk decodeElem (@Json {}) is
                 { result, rest } ->
                     when result is
-                        Ok val ->
-                            # TODO: handle spaces before ','
-                            { before: afterElem, others } = List.split rest 1
-
-                            if
-                                afterElem == [',']
-                            then
-                                decodeElems others (List.append accum val)
-                            else
-                                Done (List.append accum val) rest
-
                         Err e -> Errored e rest
+                        Ok val ->
+                            restWithoutWhitespace = eatWhitespace rest
+                            when restWithoutWhitespace is
+                                [',', ..] -> decodeElems (eatWhitespace (List.dropFirst restWithoutWhitespace)) (List.append accum val)
+                                _ -> Done (List.append accum val) restWithoutWhitespace
 
-        { before, others: afterStartingBrace } = List.split bytes 1
+        when bytes is
+            ['[', ']'] -> { result: Ok [], rest: List.drop bytes 2 }
+            ['[', ..] ->
+                bytesWithoutWhitespace = eatWhitespace (List.dropFirst bytes)
+                when bytesWithoutWhitespace is
+                    [']', ..] ->
+                        { result: Ok [], rest: List.dropFirst bytesWithoutWhitespace }
 
-        if
-            before == ['[']
-        then
-            # TODO: empty lists
-            when decodeElems afterStartingBrace [] is
-                Errored e rest -> { result: Err e, rest }
-                Done vals rest ->
-                    { before: maybeEndingBrace, others: afterEndingBrace } = List.split rest 1
+                    _ ->
+                        when decodeElems bytesWithoutWhitespace [] is
+                            Errored e rest ->
+                                { result: Err e, rest }
 
-                    if
-                        maybeEndingBrace == [']']
-                    then
-                        { result: Ok vals, rest: afterEndingBrace }
-                    else
-                        { result: Err TooShort, rest }
-        else
-            { result: Err TooShort, rest: bytes }
+                            Done vals rest ->
+                                when rest is
+                                    [']', ..] -> { result: Ok vals, rest: List.dropFirst rest }
+                                    _ -> { result: Err TooShort, rest }
+
+            _ ->
+                { result: Err TooShort, rest: bytes }
 
 parseExactChar : List U8, U8 -> DecodeResult {}
 parseExactChar = \bytes, char ->
@@ -413,6 +497,12 @@ openBrace = \bytes -> parseExactChar bytes '{'
 
 closingBrace : List U8 -> DecodeResult {}
 closingBrace = \bytes -> parseExactChar bytes '}'
+
+openBracket : List U8 -> DecodeResult {}
+openBracket = \bytes -> parseExactChar bytes '['
+
+closingBracket : List U8 -> DecodeResult {}
+closingBracket = \bytes -> parseExactChar bytes ']'
 
 recordKey : List U8 -> DecodeResult Str
 recordKey = \bytes -> jsonString bytes
@@ -463,3 +553,92 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
         when finalizer endStateResult is
             Ok val -> { result: Ok val, rest: afterRecordBytes }
             Err e -> { result: Err e, rest: afterRecordBytes }
+
+decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \initialBytes, @Json {} ->
+        # NB: the stepper function must be passed explicitly until #2894 is resolved.
+        decodeElems = \stepper, state, index, bytes ->
+            { val: newState, rest: beforeCommaOrBreak } <- tryDecode
+                    (
+                        when stepper state index is
+                            TooLong ->
+                                { rest: beforeCommaOrBreak } <- bytes |> anything |> tryDecode
+                                { result: Ok state, rest: beforeCommaOrBreak }
+
+                            Next decoder ->
+                                Decode.decodeWith bytes decoder (@Json {})
+                    )
+
+            { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
+
+            when commaResult is
+                Ok {} -> decodeElems stepElem newState (index + 1) nextBytes
+                Err _ -> { result: Ok newState, rest: nextBytes }
+
+        { rest: afterBracketBytes } <- initialBytes |> openBracket |> tryDecode
+
+        { val: endStateResult, rest: beforeClosingBracketBytes } <- decodeElems stepElem initialState 0 afterBracketBytes |> tryDecode
+
+        { rest: afterTupleBytes } <- beforeClosingBracketBytes |> closingBracket |> tryDecode
+
+        when finalizer endStateResult is
+            Ok val -> { result: Ok val, rest: afterTupleBytes }
+            Err e -> { result: Err e, rest: afterTupleBytes }
+
+# Helper to eat leading Json whitespace characters
+eatWhitespace = \input ->
+    when input is
+        [' ', ..] -> eatWhitespace (List.dropFirst input)
+        ['\n', ..] -> eatWhitespace (List.dropFirst input)
+        ['\r', ..] -> eatWhitespace (List.dropFirst input)
+        ['\t', ..] -> eatWhitespace (List.dropFirst input)
+        _ -> input
+
+# Test eating Json whitespace
+expect
+    input = Str.toUtf8 " \n\r\tabc"
+    actual = eatWhitespace input
+    expected = Str.toUtf8 "abc"
+
+    actual == expected
+
+# Test json string decoding with escapes
+expect
+    input = Str.toUtf8 "\"a\r\nbc\\\"xz\""
+    expected = Ok "a\r\nbc\\\"xz"
+    actual = Decode.fromBytes input fromUtf8
+
+    actual == expected
+
+# Test json string encoding with escapes
+expect
+    input = "a\r\nbc\\\"xz"
+    expected = Str.toUtf8 "\"a\r\nbc\\\"xz\""
+    actual = Encode.toBytes input toUtf8
+
+    actual == expected
+
+# Test json array decode empty list
+expect
+    input = Str.toUtf8 "[ ]"
+    actual : Result (List U8) _
+    actual = Decode.fromBytes input fromUtf8
+    expected = Ok []
+
+    actual == expected
+
+# Test json array decoding into integers
+expect
+    input = Str.toUtf8 "[ 1,\n2,\t3]"
+    actual : Result (List U8) _
+    actual = Decode.fromBytes input fromUtf8
+    expected = Ok [1, 2, 3]
+
+    actual == expected
+
+# Test json array decoding into strings ignoring whitespace around values
+expect
+    input = Str.toUtf8 "[\r\"one\" ,\t\"two\"\n,\n\"3\"\t]"
+    actual = Decode.fromBytes input fromUtf8
+    expected = Ok ["one", "two", "3"]
+
+    actual == expected

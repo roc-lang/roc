@@ -20,7 +20,7 @@ use roc_types::types::Polarity;
 use roc_unify::unify::MetaCollector;
 use roc_unify::unify::{Env, Mode, Unified};
 
-pub use roc_solve::ability::Resolved;
+pub use roc_solve::ability::{ResolveError, Resolved};
 pub use roc_types::subs::instantiate_rigids;
 
 pub mod storage;
@@ -161,7 +161,7 @@ pub fn resolve_ability_specialization(
     abilities: &AbilitiesView,
     ability_member: Symbol,
     specialization_var: Variable,
-) -> Option<Resolved> {
+) -> Result<Resolved, ResolveError> {
     let late_resolver = LateResolver { home, abilities };
     roc_solve::ability::resolve_ability_specialization(
         subs,

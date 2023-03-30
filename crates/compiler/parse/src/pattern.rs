@@ -1,6 +1,6 @@
 use crate::ast::{Has, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_e, spaces, spaces_before};
-use crate::ident::{lowercase_ident, parse_ident, Ident};
+use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
@@ -377,42 +377,49 @@ fn loc_ident_pattern_help<'a>(
             Ident::Access { module_name, parts } => {
                 // Plain identifiers (e.g. `foo`) are allowed in patterns, but
                 // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
-                if crate::keyword::KEYWORDS.contains(&parts[0]) {
-                    Err((NoProgress, EPattern::End(original_state.pos())))
-                } else if module_name.is_empty() && parts.len() == 1 {
-                    Ok((
-                        MadeProgress,
-                        Loc {
-                            region: loc_ident.region,
-                            value: Pattern::Identifier(parts[0]),
-                        },
-                        state,
-                    ))
-                } else {
-                    let malformed_str = if module_name.is_empty() {
-                        parts.join(".")
-                    } else {
-                        format!("{}.{}", module_name, parts.join("."))
-                    };
-                    Ok((
-                        MadeProgress,
-                        Loc {
-                            region: loc_ident.region,
-                            value: Pattern::Malformed(
-                                String::from_str_in(&malformed_str, arena).into_bump_str(),
-                            ),
-                        },
-                        state,
-                    ))
+
+                for keyword in crate::keyword::KEYWORDS.iter() {
+                    if parts[0] == Accessor::RecordField(keyword) {
+                        return Err((NoProgress, EPattern::End(original_state.pos())));
+                    }
                 }
+
+                if module_name.is_empty() && parts.len() == 1 {
+                    if let Accessor::RecordField(var) = &parts[0] {
+                        return Ok((
+                            MadeProgress,
+                            Loc {
+                                region: loc_ident.region,
+                                value: Pattern::Identifier(var),
+                            },
+                            state,
+                        ));
+                    }
+                }
+                let mut malformed_str = String::new_in(arena);
+
+                if !module_name.is_empty() {
+                    malformed_str.push_str(module_name);
+                };
+                for part in parts {
+                    if !malformed_str.is_empty() {
+                        malformed_str.push('.');
+                    }
+                    malformed_str.push_str(part.as_inner());
+                }
+
+                Ok((
+                    MadeProgress,
+                    Loc {
+                        region: loc_ident.region,
+                        value: Pattern::Malformed(malformed_str.into_bump_str()),
+                    },
+                    state,
+                ))
             }
-            Ident::RecordAccessorFunction(_string) => Err((
+            Ident::AccessorFunction(_string) => Err((
                 MadeProgress,
-                EPattern::RecordAccessorFunction(loc_ident.region.start()),
-            )),
-            Ident::TupleAccessorFunction(_string) => Err((
-                MadeProgress,
-                EPattern::TupleAccessorFunction(loc_ident.region.start()),
+                EPattern::AccessorFunction(loc_ident.region.start()),
             )),
             Ident::Malformed(malformed, problem) => {
                 debug_assert!(!malformed.is_empty());

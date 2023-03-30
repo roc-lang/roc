@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::docs::ModuleDocumentation;
-use bumpalo::Bump;
+use bumpalo::{collections::CollectIn, Bump};
 use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
@@ -32,9 +32,10 @@ use roc_module::symbol::{
 };
 use roc_mono::fl_reuse;
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
-    UpdateModeIds,
+    CapturedSymbols, ExternalSpecializations, GlueLayouts, LambdaSetId, PartialProc, Proc,
+    ProcLayout, Procs, ProcsBase, UpdateModeIds,
 };
+use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
     GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
@@ -118,11 +119,11 @@ pub enum ExecutionMode {
 
 impl ExecutionMode {
     fn goal_phase(&self) -> Phase {
+        use ExecutionMode::*;
+
         match self {
-            ExecutionMode::Executable => Phase::MakeSpecializations,
-            ExecutionMode::Check | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
-                Phase::SolveTypes
-            }
+            Executable => Phase::MakeSpecializations,
+            Check | ExecutableIfCheck | Test => Phase::SolveTypes,
         }
     }
 
@@ -767,6 +768,7 @@ pub struct MonomorphizedModule<'a> {
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub expectations: VecMap<ModuleId, Expectations>,
     pub uses_prebuilt_platform: bool,
+    pub glue_layouts: GlueLayouts<'a>,
 }
 
 /// Values used to render expect output
@@ -797,9 +799,12 @@ pub struct Expectations {
 #[derive(Clone, Debug, Default)]
 pub struct ExposedToHost {
     /// usually `mainForHost`
-    pub values: MutMap<Symbol, Variable>,
+    pub top_level_values: MutMap<Symbol, Variable>,
     /// exposed closure types, typically `Fx`
     pub closure_types: Vec<Symbol>,
+    /// lambda_sets
+    pub lambda_sets: Vec<(Symbol, LambdaSetId)>,
+    pub getters: Vec<Symbol>,
 }
 
 impl<'a> MonomorphizedModule<'a> {
@@ -2777,7 +2782,7 @@ fn update<'a>(
                 !matches!(state.exec_mode, ExecutionMode::Test);
 
             if add_to_host_exposed {
-                state.exposed_to_host.values.extend(
+                state.exposed_to_host.top_level_values.extend(
                     solved_module
                         .exposed_vars_by_symbol
                         .iter()
@@ -3104,7 +3109,7 @@ fn update<'a>(
                     // debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                     // let host_exposed_procs = bumpalo::collections::Vec::from_iter_in(
-                    //     state.exposed_to_host.values.keys().copied(),
+                    //     state.exposed_to_host.top_level_values.keys().copied(),
                     //     arena,
                     // );
 
@@ -3294,8 +3299,8 @@ fn finish_specialization<'a>(
     arena: &'a Bump,
     state: State<'a>,
     subs: Subs,
-    layout_interner: STLayoutInterner<'a>,
-    exposed_to_host: ExposedToHost,
+    mut layout_interner: STLayoutInterner<'a>,
+    mut exposed_to_host: ExposedToHost,
     module_expectations: VecMap<ModuleId, Expectations>,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
@@ -3325,38 +3330,16 @@ fn finish_specialization<'a>(
         all_ident_ids,
     };
 
-    let State {
-        toplevel_expects,
-        procedures,
-        module_cache,
-        output_path,
-        platform_path,
-        platform_data,
-        exec_mode,
-        ..
-    } = state;
-
-    let ModuleCache {
-        type_problems,
-        can_problems,
-        sources,
-        ..
-    } = module_cache;
-
-    let sources: MutMap<ModuleId, (PathBuf, Box<str>)> = sources
-        .into_iter()
-        .map(|(id, (path, src))| (id, (path, src.into())))
-        .collect();
-
     let entry_point = {
-        match exec_mode {
-            ExecutionMode::Test => EntryPoint::Test,
+        let interns: &mut Interns = &mut interns;
+        match state.exec_mode {
+            ExecutionMode::Test => Ok(EntryPoint::Test),
             ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
                 use PlatformPath::*;
 
-                let platform_path = match platform_path {
+                let platform_path = match &state.platform_path {
                     Valid(To::ExistingPackage(shorthand)) => {
-                        match (*state.arc_shorthands).lock().get(shorthand) {
+                        match state.arc_shorthands.lock().get(shorthand) {
                             Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
                             None => unreachable!(),
                         }
@@ -3368,13 +3351,14 @@ fn finish_specialization<'a>(
                     }
                 };
 
-                let exposed_symbols_and_layouts = match platform_data {
+                let exposed_symbols_and_layouts = match state.platform_data {
                     None => {
-                        let src = &exposed_to_host.values;
+                        let src = &state.exposed_to_host.top_level_values;
                         let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
 
                         for &symbol in src.keys() {
-                            let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
+                            let proc_layout =
+                                proc_layout_for(state.procedures.keys().copied(), symbol);
 
                             buf.push((symbol, proc_layout));
                         }
@@ -3393,7 +3377,8 @@ fn finish_specialization<'a>(
                         for (loc_name, _loc_typed_ident) in provides {
                             let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
                             let symbol = Symbol::new(module_id, ident_id);
-                            let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
+                            let proc_layout =
+                                proc_layout_for(state.procedures.keys().copied(), symbol);
 
                             buf.push((symbol, proc_layout));
                         }
@@ -3402,14 +3387,84 @@ fn finish_specialization<'a>(
                     }
                 };
 
-                EntryPoint::Executable {
+                Ok(EntryPoint::Executable {
                     exposed_to_host: exposed_symbols_and_layouts,
                     platform_path,
-                }
+                })
             }
             ExecutionMode::Check => unreachable!(),
         }
-    };
+    }?;
+
+    let State {
+        toplevel_expects,
+        procedures,
+        module_cache,
+        output_path,
+        platform_data,
+        ..
+    } = state;
+
+    let ModuleCache {
+        type_problems,
+        can_problems,
+        sources,
+        ..
+    } = module_cache;
+
+    let sources: MutMap<ModuleId, (PathBuf, Box<str>)> = sources
+        .into_iter()
+        .map(|(id, (path, src))| (id, (path, src.into())))
+        .collect();
+
+    let module_id = state.root_id;
+    let mut glue_getters = Vec::new();
+
+    // the REPL does not have any platform data
+    if let (
+        EntryPoint::Executable {
+            exposed_to_host: exposed_top_levels,
+            ..
+        },
+        Some(platform_data),
+    ) = (&entry_point, platform_data.as_ref())
+    {
+        // Expose glue for the platform, not for the app module!
+        let module_id = platform_data.module_id;
+
+        for (_name, proc_layout) in exposed_top_levels.iter() {
+            let ret = &proc_layout.result;
+            for in_layout in proc_layout.arguments.iter().chain([ret]) {
+                let layout = layout_interner.get(*in_layout);
+                let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+                let all_glue_procs = roc_mono::ir::generate_glue_procs(
+                    module_id,
+                    ident_ids,
+                    arena,
+                    &mut layout_interner,
+                    arena.alloc(layout),
+                );
+
+                let lambda_set_names = all_glue_procs
+                    .extern_names
+                    .iter()
+                    .map(|(lambda_set_id, _)| (*_name, *lambda_set_id));
+                exposed_to_host.lambda_sets.extend(lambda_set_names);
+
+                let getter_names = all_glue_procs
+                    .getters
+                    .iter()
+                    .flat_map(|(_, glue_procs)| glue_procs.iter().map(|glue_proc| glue_proc.name));
+                exposed_to_host.getters.extend(getter_names);
+
+                glue_getters.extend(all_glue_procs.getters.iter().flat_map(|(_, glue_procs)| {
+                    glue_procs
+                        .iter()
+                        .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
+                }));
+            }
+        }
+    }
 
     let output_path = match output_path {
         Some(path_str) => Path::new(path_str).into(),
@@ -3429,7 +3484,7 @@ fn finish_specialization<'a>(
         output_path,
         expectations: module_expectations,
         exposed_to_host,
-        module_id: state.root_id,
+        module_id,
         subs,
         interns,
         layout_interner,
@@ -3438,6 +3493,9 @@ fn finish_specialization<'a>(
         sources,
         timings: state.timings,
         toplevel_expects,
+        glue_layouts: GlueLayouts {
+            getters: glue_getters,
+        },
         uses_prebuilt_platform,
     })
 }
@@ -3460,6 +3518,7 @@ fn proc_layout_for<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish(
     mut state: State,
     solved: Solved<Subs>,
@@ -5659,10 +5718,14 @@ fn make_specializations<'a>(
 
     let mut procs = Procs::new_in(arena);
 
+    let host_exposed_symbols: bumpalo::collections::Vec<_> =
+        procs_base.get_host_exposed_symbols().collect_in(arena);
+
     for (symbol, partial_proc) in procs_base.partial_procs.into_iter() {
         procs.partial_procs.insert(symbol, partial_proc);
     }
 
+    procs.host_exposed_symbols = host_exposed_symbols.into_bump_slice();
     procs.module_thunks = procs_base.module_thunks;
     procs.runtime_errors = procs_base.runtime_errors;
     procs.imported_module_thunks = procs_base.imported_module_thunks;
@@ -5753,6 +5816,8 @@ fn build_pending_specializations<'a>(
         derived_module: &derived_module,
     };
 
+    let layout_cache_snapshot = layout_cache.snapshot();
+
     // Add modules' decls to Procs
     for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
@@ -5760,7 +5825,7 @@ fn build_pending_specializations<'a>(
         let symbol = declarations.symbols[index].value;
         let expr_var = declarations.variables[index];
 
-        let is_host_exposed = exposed_to_host.values.contains_key(&symbol);
+        let is_host_exposed = exposed_to_host.top_level_values.contains_key(&symbol);
 
         // TODO remove clones (with drain)
         let annotation = declarations.annotations[index].clone();
@@ -6129,6 +6194,8 @@ fn build_pending_specializations<'a>(
             }
         }
     }
+
+    layout_cache.rollback_to(layout_cache_snapshot);
 
     procs_base.module_thunks = module_thunks.into_bump_slice();
 
@@ -6665,7 +6732,7 @@ fn to_parse_problem_report<'a>(
     buf
 }
 
-fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
+fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;

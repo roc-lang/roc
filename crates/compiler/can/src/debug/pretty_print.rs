@@ -5,7 +5,7 @@ use crate::expr::Expr::{self, *};
 use crate::expr::{
     ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
 };
-use crate::pattern::{Pattern, RecordDestruct};
+use crate::pattern::{Pattern, RecordDestruct, TupleDestruct};
 
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
@@ -35,7 +35,10 @@ pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String
             DeclarationTag::Expectation => todo!(),
             DeclarationTag::ExpectationFx => todo!(),
             DeclarationTag::Destructure(_) => todo!(),
-            DeclarationTag::MutualRecursion { .. } => todo!(),
+            DeclarationTag::MutualRecursion { .. } => {
+                // the defs will be printed next
+                continue;
+            }
         };
 
         defs.push(def);
@@ -123,9 +126,10 @@ fn toplevel_function<'a>(
         .append(f.line())
         .append(f.text("\\"))
         .append(f.intersperse(args, f.text(", ")))
-        .append(f.text("->"))
+        .append(f.text(" ->"))
+        .group()
         .append(f.line())
-        .append(expr(c, EPrec::Free, f, body))
+        .append(expr(c, EPrec::Free, f, body).group())
         .nest(2)
         .group()
 }
@@ -330,12 +334,15 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         } => expr(c, AppArg, f, &loc_expr.value)
             .append(f.text(format!(".{}", field.as_str())))
             .group(),
-        TupleAccess { .. } => todo!(),
+        TupleAccess {
+            loc_expr, index, ..
+        } => expr(c, AppArg, f, &loc_expr.value)
+            .append(f.text(format!(".{index}")))
+            .group(),
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
             f.text(format!("@{}", opaque_name.as_str(c.interns)))
         }
         RecordAccessor(_) => todo!(),
-        TupleAccessor(_) => todo!(),
         RecordUpdate {
             symbol, updates, ..
         } => f
@@ -386,7 +393,15 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         ),
         Crash { .. } => todo!(),
         ZeroArgumentTag { .. } => todo!(),
-        OpaqueRef { .. } => todo!(),
+        OpaqueRef { name, argument, .. } => maybe_paren!(
+            Free,
+            p,
+            || true,
+            pp_sym(c, f, *name)
+                .append(f.space())
+                .append(expr(c, AppArg, f, &argument.1.value))
+                .group()
+        ),
         Dbg { .. } => todo!(),
         Expect { .. } => todo!(),
         ExpectFx { .. } => todo!(),
@@ -504,6 +519,19 @@ fn pattern<'a>(
                 ),
             )
             .append(f.text("}"))
+            .group(),
+        TupleDestructure { destructs, .. } => f
+            .text("(")
+            .append(
+                f.intersperse(
+                    destructs
+                        .iter()
+                        .map(|l| &l.value)
+                        .map(|TupleDestruct { typ: (_, p), .. }| pattern(c, Free, f, &p.value)),
+                    f.text(", "),
+                ),
+            )
+            .append(f.text(")"))
             .group(),
         List { .. } => todo!(),
         NumLiteral(_, n, _, _) | IntLiteral(_, _, n, _, _) | FloatLiteral(_, _, n, _, _) => {

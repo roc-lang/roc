@@ -28,7 +28,7 @@ Defs(
                         ),
                     ],
                     @11-21 Tuple {
-                        fields: [
+                        elems: [
                             @12-15 Apply(
                                 "",
                                 "I64",
@@ -57,7 +57,7 @@ Defs(
                         ),
                     ],
                     @11-21 Tuple {
-                        fields: [
+                        elems: [
                             @12-15 Apply(
                                 "",
                                 "I64",

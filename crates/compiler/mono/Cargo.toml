@@ -1,32 +1,33 @@
 [package]
 name = "roc_mono"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Roc's main intermediate representation (IR), which is responsible for monomorphization, defunctionalization, inserting ref-count instructions, and transforming a Roc program into a form that is easy to consume by a backend."
 
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_exhaustive = { path = "../exhaustive" }
-roc_region = { path = "../region" }
-roc_module = { path = "../module" }
-roc_types = { path = "../types" }
-roc_can = { path = "../can" }
-roc_derive_key = { path = "../derive_key" }
-roc_derive = { path = "../derive" }
-roc_late_solve = { path = "../late_solve" }
-roc_std = { path = "../../roc_std" }
-roc_problem = { path = "../problem" }
 roc_builtins = { path = "../builtins" }
+roc_can = { path = "../can" }
+roc_collections = { path = "../collections" }
+roc_debug_flags = { path = "../debug_flags" }
+roc_derive = { path = "../derive" }
+roc_derive_key = { path = "../derive_key" }
+roc_error_macros = { path = "../../error_macros" }
+roc_exhaustive = { path = "../exhaustive" }
+roc_late_solve = { path = "../late_solve" }
+roc_module = { path = "../module" }
+roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
+roc_std = { path = "../../roc_std" }
 roc_target = { path = "../roc_target" }
-roc_error_macros = {path="../../error_macros"}
-roc_debug_flags = {path="../debug_flags"}
 roc_tracing = { path = "../../tracing" }
+roc_types = { path = "../types" }
 ven_pretty = { path = "../../vendor/pretty" }
 
+bitvec.workspace = true
 bumpalo.workspace = true
 hashbrown.workspace = true
-static_assertions.workspace = true
-bitvec.workspace = true
 parking_lot.workspace = true
+static_assertions.workspace = true

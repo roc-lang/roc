@@ -178,10 +178,10 @@ digit : Parser RawStr U8
 digit =
     digitParsers =
         List.range { start: At '0', end: At '9' }
-        |> List.map \digitNum ->
-            digitNum
+        |> List.map \digitCodeUnit ->
+            digitCodeUnit
             |> codeunit
-            |> map \_ -> digitNum
+            |> map \_ -> digitCodeUnit - '0'
 
     oneOf digitParsers
 

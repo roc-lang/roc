@@ -89,6 +89,22 @@ macro_rules! v {
              roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, ext)))
          }
      }};
+     (( $($make_v:expr,)* )$( $($ext:tt)+ )?) => {{
+         #[allow(unused)]
+         use roc_types::subs::{Subs, RecordFields, Content, FlatType, Variable, TupleElems};
+         |subs: &mut Subs| {
+             let elems = [
+                 $($make_v(subs),)*
+             ].into_iter().enumerate();
+             let elems = TupleElems::insert_into_subs(subs, elems);
+
+             #[allow(unused_mut, unused)]
+             let mut ext = Variable::EMPTY_TUPLE;
+             $( ext = $crate::v!($($ext)+)(subs); )?
+
+             roc_derive::synth_var(subs, Content::Structure(FlatType::Tuple(elems, ext)))
+         }
+     }};
      ([ $($tag:ident $($payload:expr)*),* ] as $rec_var:ident) => {{
          use roc_types::subs::{Subs, SubsIndex, Variable, Content, FlatType, TagExt, UnionTags};
          use roc_module::ident::TagName;

@@ -38,6 +38,7 @@ pub enum RenderAs {
     Tag,
     Opaque,
     Record(Vec<Lowercase>),
+    Tuple,
     Guard,
 }
 

@@ -103,7 +103,7 @@ pub fn helper(
         // println!("=================================\n");
     }
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
+    debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
     let entry_point = match loaded.entry_point {
         EntryPoint::Executable {
             exposed_to_host,
@@ -188,7 +188,7 @@ pub fn helper(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
         generate_allocators: true, // Needed for testing, since we don't have a platform
     };
@@ -208,7 +208,11 @@ pub fn helper(
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
     let builtins_host_tempfile =
-        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+        roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+
+    if false {
+        std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
+    }
 
     let (mut child, dylib_path) = link(
         &target,
@@ -269,6 +273,7 @@ macro_rules! assert_evals_to {
 
         let transform = |success| {
             let expected = $expected;
+            #[allow(clippy::redundant_closure_call)]
             let given = $transform(success);
             assert_eq!(&given, &expected);
         };

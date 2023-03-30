@@ -1,0 +1,29 @@
+procedure Test.0 ():
+    let Test.15 : I64 = 1i64;
+    let Test.16 : I64 = 2i64;
+    let Test.1 : {I64, I64} = Struct {Test.15, Test.16};
+    joinpoint Test.5:
+        let Test.2 : Str = "A";
+        ret Test.2;
+    in
+    let Test.12 : I64 = StructAtIndex 1 Test.1;
+    let Test.13 : I64 = 2i64;
+    let Test.14 : Int1 = lowlevel Eq Test.13 Test.12;
+    if Test.14 then
+        let Test.6 : I64 = StructAtIndex 0 Test.1;
+        let Test.7 : I64 = 1i64;
+        let Test.8 : Int1 = lowlevel Eq Test.7 Test.6;
+        if Test.8 then
+            jump Test.5;
+        else
+            let Test.3 : Str = "B";
+            ret Test.3;
+    else
+        let Test.9 : I64 = StructAtIndex 0 Test.1;
+        let Test.10 : I64 = 1i64;
+        let Test.11 : Int1 = lowlevel Eq Test.10 Test.9;
+        if Test.11 then
+            jump Test.5;
+        else
+            let Test.4 : Str = "C";
+            ret Test.4;

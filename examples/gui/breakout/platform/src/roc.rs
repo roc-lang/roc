@@ -13,26 +13,26 @@ use winit::event::VirtualKeyCode;
 extern "C" {
     // program
 
-    #[link_name = "roc__programForHost_1_exposed_generic"]
-    fn roc_program();
+    // #[link_name = "roc__programForHost_1_exposed_generic"]
+    // fn roc_program();
 
-    #[link_name = "roc__programForHost_size"]
-    fn roc_program_size() -> i64;
+    // #[link_name = "roc__programForHost_1_exposed_size"]
+    // fn roc_program_size() -> i64;
 
     // init
 
-    #[link_name = "roc__programForHost_1__Init_caller"]
+    #[link_name = "roc__programForHost_0_caller"]
     fn call_init(size: *const Bounds, closure_data: *const u8, output: *mut Model);
 
-    #[link_name = "roc__programForHost_1__Init_size"]
+    #[link_name = "roc__programForHost_0_size"]
     fn init_size() -> i64;
 
-    #[link_name = "roc__programForHost_1__Init_result_size"]
+    #[link_name = "roc__programForHost_0_result_size"]
     fn init_result_size() -> i64;
 
     // update
 
-    #[link_name = "roc__programForHost_1__Update_caller"]
+    #[link_name = "roc__programForHost_1_caller"]
     fn call_update(
         model: *const Model,
         event: *const RocEvent,
@@ -40,18 +40,18 @@ extern "C" {
         output: *mut Model,
     );
 
-    #[link_name = "roc__programForHost_1__Update_size"]
+    #[link_name = "roc__programForHost_1_size"]
     fn update_size() -> i64;
 
-    #[link_name = "roc__programForHost_1__Update_result_size"]
+    #[link_name = "roc__programForHost_1_result_size"]
     fn update_result_size() -> i64;
 
     // render
 
-    #[link_name = "roc__programForHost_1__Render_caller"]
+    #[link_name = "roc__programForHost_2_caller"]
     fn call_render(model: *const Model, closure_data: *const u8, output: *mut RocList<RocElem>);
 
-    #[link_name = "roc__programForHost_1__Render_size"]
+    #[link_name = "roc__programForHost_2_size"]
     fn roc_render_size() -> i64;
 }
 

@@ -13,6 +13,7 @@ use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
     ir::HigherOrderLowLevel,
     layout::{Builtin, InLayout, LambdaSet, Layout, LayoutIds, LayoutInterner, STLayoutInterner},
+    list_element_layout,
 };
 use roc_target::PtrWidth;
 
@@ -27,10 +28,10 @@ use crate::llvm::{
         load_roc_value, roc_function_call, BuilderExt, RocReturn,
     },
     build_list::{
-        list_append_unsafe, list_capacity, list_concat, list_drop_at, list_get_unsafe, list_len,
-        list_map, list_map2, list_map3, list_map4, list_prepend, list_replace_unsafe, list_reserve,
-        list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity,
-        pass_update_mode,
+        list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
+        list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
+        list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
+        list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
     },
     compare::{generic_eq, generic_neq},
     convert::{
@@ -48,15 +49,6 @@ use super::{
     build::{load_symbol, load_symbol_and_layout, Env, Scope},
     convert::zig_dec_type,
 };
-
-macro_rules! list_element_layout {
-    ($interner:expr, $list_layout:expr) => {
-        match $interner.get($list_layout) {
-            Layout::Builtin(Builtin::List(list_layout)) => list_layout,
-            _ => unreachable!("invalid list layout"),
-        }
-    };
-}
 
 pub(crate) fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -256,7 +248,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
                             let roc_return_type =
                                 basic_type_from_layout(env, layout_interner, layout)
-                                    .ptr_type(AddressSpace::Generic);
+                                    .ptr_type(AddressSpace::default());
 
                             let roc_return_alloca = env.builder.build_pointer_cast(
                                 zig_return_alloca,
@@ -497,7 +489,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     let return_type = basic_type_from_layout(env, layout_interner, layout);
                     let cast_result = env.builder.build_pointer_cast(
                         result,
-                        return_type.ptr_type(AddressSpace::Generic),
+                        return_type.ptr_type(AddressSpace::default()),
                         "cast",
                     );
 
@@ -565,6 +557,18 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 &[capacity],
                 BitcodeReturns::Str,
                 bitcode::STR_RESERVE,
+            )
+        }
+        StrReleaseExcessCapacity => {
+            // Str.releaseExcessCapacity: Str -> Str
+            arguments!(string);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_RELEASE_EXCESS_CAPACITY,
             )
         }
         StrAppendScalar => {
@@ -640,10 +644,16 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             list_len(env.builder, list.into_struct_value()).into()
         }
         ListGetCapacity => {
-            // List.capacity : List * -> Nat
+            // List.capacity: List a -> Nat
             arguments!(list);
 
-            list_capacity(env.builder, list.into_struct_value()).into()
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::LIST_CAPACITY,
+            )
         }
         ListWithCapacity => {
             // List.withCapacity : Nat -> List a
@@ -708,6 +718,15 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 element_layout,
                 update_mode,
             )
+        }
+        ListReleaseExcessCapacity => {
+            // List.releaseExcessCapacity: List elem -> List elem
+            debug_assert_eq!(args.len(), 1);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let element_layout = list_element_layout!(layout_interner, list_layout);
+
+            list_release_excess_capacity(env, layout_interner, list, element_layout, update_mode)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -856,9 +875,24 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!(),
             }
         }
-        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
-        | NumCeiling | NumFloor | NumToFrac | NumIsFinite | NumAtan | NumAcos | NumAsin
-        | NumToIntChecked => {
+        NumAbs
+        | NumNeg
+        | NumRound
+        | NumSqrtUnchecked
+        | NumLogUnchecked
+        | NumSin
+        | NumCos
+        | NumCeiling
+        | NumFloor
+        | NumToFrac
+        | NumIsFinite
+        | NumAtan
+        | NumAcos
+        | NumAsin
+        | NumToIntChecked
+        | NumCountLeadingZeroBits
+        | NumCountTrailingZeroBits
+        | NumCountOneBits => {
             arguments_with_layouts!((arg, arg_layout));
 
             match layout_interner.get(arg_layout) {
@@ -920,6 +954,28 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 &[position],
                 BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U32,
+            )
+        }
+        NumBytesToU64 => {
+            arguments!(list, position);
+
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[position],
+                BitcodeReturns::Basic,
+                bitcode::NUM_BYTES_TO_U64,
+            )
+        }
+        NumBytesToU128 => {
+            arguments!(list, position);
+
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[position],
+                BitcodeReturns::Basic,
+                bitcode::NUM_BYTES_TO_U128,
             )
         }
         NumCompare => {
@@ -1663,7 +1719,7 @@ fn dec_alloca<'a, 'ctx, 'env>(
 
     let ptr = env.builder.build_pointer_cast(
         alloca,
-        value.get_type().ptr_type(AddressSpace::Generic),
+        value.get_type().ptr_type(AddressSpace::default()),
         "cast_to_i128_ptr",
     );
 
@@ -2013,7 +2069,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 
                                 let roc_return_type =
                                     basic_type_from_layout(env, layout_interner, return_layout)
-                                        .ptr_type(AddressSpace::Generic);
+                                        .ptr_type(AddressSpace::default());
 
                                 let roc_return_alloca = env.builder.build_pointer_cast(
                                     zig_return_alloca,
@@ -2052,6 +2108,19 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 
                 complex_bitcast_check_size(env, result, return_type.into(), "cast_bitpacked")
             }
+        }
+        NumCountLeadingZeroBits => call_bitcode_fn(
+            env,
+            &[arg.into()],
+            &bitcode::NUM_COUNT_LEADING_ZERO_BITS[arg_width],
+        ),
+        NumCountTrailingZeroBits => call_bitcode_fn(
+            env,
+            &[arg.into()],
+            &bitcode::NUM_COUNT_TRAILING_ZERO_BITS[arg_width],
+        ),
+        NumCountOneBits => {
+            call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_COUNT_ONE_BITS[arg_width])
         }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);

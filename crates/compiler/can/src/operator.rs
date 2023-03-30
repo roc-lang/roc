@@ -130,8 +130,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | NonBase10Int { .. }
         | Str(_)
         | SingleQuote(_)
-        | RecordAccessorFunction(_)
-        | TupleAccessorFunction(_)
+        | AccessorFunction(_)
         | Var { .. }
         | Underscore { .. }
         | MalformedIdent(_, _)

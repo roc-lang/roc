@@ -2196,3 +2196,68 @@ fn nullable_wrapped_with_nullable_not_last_index() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Effect : {} -> Str
+
+            after = \effect, buildNext ->
+                \{} ->
+                    when buildNext (effect {}) is
+                        thunk -> thunk {}
+
+            line : Effect
+            line = \{} -> "done"
+
+            await : Effect, (Str -> Effect) -> Effect
+            await = \fx, cont ->
+                after
+                fx
+                cont
+
+            succeed : {} -> Effect
+            succeed = \{} -> (\{} -> "success")
+
+            test =
+                await line \s ->
+                    if s == "done" then succeed {} else test
+
+            main = test {}
+            "#
+        ),
+        RocStr::from("success"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_5162_recast_nested_nullable_unwrapped_layout() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            Concept : [
+                AtomicConcept,
+                ExistentialRestriction { role : Str, concept : Concept }
+            ]
+
+            bottom : Concept
+            bottom = AtomicConcept
+
+            main =
+                when Dict.single bottom 0 is
+                    _ -> Bool.true
+            "###
+        ),
+        true,
+        bool
+    );
+}

@@ -474,7 +474,8 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
+    #[serial(basic_cli_url)]
+    #[cfg_attr(windows, ignore)]
     fn hello_world() {
         test_roc_app_slim(
             "examples",
@@ -533,6 +534,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
@@ -675,12 +677,26 @@ mod cli_run {
         )
     }
 
+    #[cfg_attr(windows, ignore)] // flaky error; issue #5024
+    #[serial(breakout)]
     #[test]
     fn breakout() {
         test_roc_app_slim(
             "examples/gui/breakout",
             "breakout.roc",
             "breakout",
+            "",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
+    #[serial(breakout)]
+    fn breakout_hello_gui() {
+        test_roc_app_slim(
+            "examples/gui/breakout",
+            "hello-gui.roc",
+            "hello-gui",
             "",
             UseValgrind::No,
         )
@@ -790,10 +806,10 @@ mod cli_run {
             "False.roc",
             "false",
             &[],
-            &[Arg::ExamplePath("examples/hello.false")],
+            &[Arg::ExamplePath("examples/sqrt.false")],
             &[],
-            &("Hello, World!".to_string() + LINE_ENDING),
-            UseValgrind::No,
+            "1414",
+            UseValgrind::Yes,
             TestCliCommands::Many,
         )
     }
@@ -819,7 +835,7 @@ mod cli_run {
             &[],
             &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
             &[],
-            "Processed 3 files with 3 successes and 0 errors\n",
+            "Processed 4 files with 3 successes and 0 errors\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -849,6 +865,8 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(parser_package)]
+    #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
@@ -861,7 +879,9 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
+    #[serial(parser_package)]
+    #[serial(basic_cli_url)]
+    #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
             "examples/parser/examples",

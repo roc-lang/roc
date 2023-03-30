@@ -6,6 +6,8 @@
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
+// Not a useful lint for us
+#![allow(clippy::too_many_arguments)]
 
 pub mod borrow;
 pub mod code_gen_help;
@@ -18,10 +20,5 @@ pub mod low_level;
 pub mod perceus;
 pub mod reset_reuse;
 pub mod tail_recursion;
-
-// Temporary, while we can build up test cases and optimize the exhaustiveness checking.
-// For now, following this warning's advice will lead to nasty type inference errors.
-//#[allow(clippy::ptr_arg)]
-pub mod decision_tree;
 
 pub mod debug;

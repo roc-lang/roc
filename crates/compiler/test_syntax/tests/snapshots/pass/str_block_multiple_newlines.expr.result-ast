@@ -1,0 +1,24 @@
+SpaceAfter(
+    Str(
+        Block(
+            [
+                [
+                    Plaintext(
+                        "\n",
+                    ),
+                    Plaintext(
+                        "\n",
+                    ),
+                    Plaintext(
+                        "#",
+                    ),
+                ],
+            ],
+        ),
+    ),
+    [
+        LineComment(
+            "",
+        ),
+    ],
+)

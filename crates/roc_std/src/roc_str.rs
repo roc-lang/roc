@@ -18,7 +18,7 @@ use core::{
 };
 
 #[cfg(feature = "std")]
-use core::ffi::{CStr, CString};
+use std::ffi::{CStr, CString};
 
 use crate::RocList;
 
@@ -154,7 +154,7 @@ impl RocStr {
     /// bytes over - in other words, calling this `as_str` method and then calling `to_string`
     /// on that.
     pub fn as_str(&self) -> &str {
-        &*self
+        self
     }
 
     /// Create an empty RocStr with enough space preallocated to store
@@ -562,8 +562,8 @@ impl Deref for RocStr {
 
     fn deref(&self) -> &Self::Target {
         match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(h) => unsafe { core::str::from_utf8_unchecked(&*h) },
-            RocStrInnerRef::SmallString(s) => &*s,
+            RocStrInnerRef::HeapAllocated(h) => unsafe { core::str::from_utf8_unchecked(h) },
+            RocStrInnerRef::SmallString(s) => s,
         }
     }
 }
@@ -698,6 +698,11 @@ impl From<SendSafeRocStr> for RocStr {
 
 #[repr(C)]
 union RocStrInner {
+    // TODO: this really should be separated from the List type.
+    // Due to length specifying seamless slices for Str and capacity for Lists they should not share the same code.
+    // Currently, there are work arounds in RocList to handle both via removing the highest bit of length in many cases.
+    // With glue changes, we should probably rewrite these cleanly to match what is in the zig bitcode.
+    // It is definitely a bit stale now and I think the storage mechanism can be quite confusing with our extra pieces of state.
     heap_allocated: ManuallyDrop<RocList<u8>>,
     small_string: SmallString,
 }
