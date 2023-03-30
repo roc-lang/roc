@@ -157,19 +157,17 @@ concat : Str, Str -> Str
 ## It's useful when you plan to build up a string incrementally, for example by calling [Str.concat] on it:
 ##
 ## ```
-## greeting = "Hello"
-## subject = "World"
+## greeting = "Hello and welcome to Roc"
+## subject = "Awesome Programmer"
 ##
-## # Evaluates to "Hello, World!\n"
+## # Evaluates to "Hello and welcome to Roc, Awesome Programmer!"
 ## helloWorld =
-##     Str.withCapacity 14
+##     Str.withCapacity 45
 ##     |> Str.concat greeting
 ##     |> Str.concat ", "
 ##     |> Str.concat subject
-##     |> Str.concat "!\n"
+##     |> Str.concat "!"
 ## ```
-##
-## Here, calling `"" |> Str.reserve 14` instead of `Str.withCapacity 14` would effectively do the same thing.
 ##
 ## In general, if you plan to use [Str.concat] on an empty string, it will be faster to start with
 ## [Str.withCapacity] than with `""`. Even if you don't know the exact capacity of the string, giving [withCapacity]
@@ -186,19 +184,19 @@ withCapacity : Nat -> Str
 ## Consider the following example which does not use [Str.reserve]:
 ##
 ## ```
-## greeting = "Hello"
-## subject = "World"
+## greeting = "Hello and welcome to Roc"
+## subject = "Awesome Programmer"
 ##
-## # Evaluates to "Hello, World!\n"
+## # Evaluates to "Hello and welcome to Roc, Awesome Programmer!"
 ## helloWorld =
 ##     greeting
 ##     |> Str.concat ", "
 ##     |> Str.concat subject
-##     |> Str.concat "!\n"
+##     |> Str.concat "!"
 ## ```
 ##
 ## In this example:
-## 1. We start with `greeting = "Hello"`, which has both a length and capacity of 5 (bytes).
+## 1. We start with `greeting`, which has both a length and capacity of 24 (bytes).
 ## 2. `|> Str.concat ", "` will see that there isn't enough capacity to add 2 more bytes for the `", "`, so it will create a new heap allocation with enough bytes to hold both. (This probably will be more than 7 bytes, because when [Str] functions reallocate, they apply a multiplier to the exact capacity required. This makes it less likely that future realloctions will be needed. The multiplier amount is not specified, because it may change in future releases of Roc, but it will likely be around 1.5 to 2 times the exact capacity required.) Then it will copy the current bytes (`"Hello"`) into the new allocation, and finally concatenate the `", "` into the new allocation. The old allocation will then be deallocated because it's no longer referenced anywhere in the program.
 ## 3. `|> Str.concat subject` will again check if there is enough capacity in the string. If it doesn't find enough capacity once again, it will make a third allocation, copy the existing bytes (`"Hello, "`) into that third allocation, and then deallocate the second allocation because it's already no longer being referenced anywhere else in the program. (It may find enough capacity in this prticular case, because the previous [Str.concat] allocated something like 1.5 to 2 times the necessary capacity in order to anticipate future concatenations like this...but if something longer than `"World"` were being concatenated here, it might still require further reallocation and copying.)
 ## 4. `|> Str.concat "!\n"` will repeat this process once more.
@@ -210,17 +208,17 @@ withCapacity : Nat -> Str
 ## ```
 ## helloWorld =
 ##     greeting
-##     |> Str.reserve 9
+##     |> Str.reserve 21
 ##     |> Str.concat ", "
 ##     |> Str.concat subject
-##     |> Str.concat "!\n"
+##     |> Str.concat "!"
 ## ```
 ##
 ## In this example:
-## 1. We again start with `greeting`, which is `"Hello"` and has both a length and capacity of 5 bytes.
-## 2. `|> Str.reserve 9` will ensure that there is enough capacity in the string for an additional 9 bytes (to make room for ", ", "World", and "!\n"). Since the current capacity is only 5, it will create a new 14-byte (5 + 9) heap allocation and copy the contents of the existing allocation (`"Hello"`) into it.
-## 3. `|> Str.concat ", "` will concatenate `, ` to the string. No reallocation, copying, or deallocation will be necessary, because the string already has a capacity of 14 btytes, and `"Hello, "` will only use 7 of them.
-## 4. `|> Str.concat subject` will concatenate `subject` (`"World"`) to the string. Again, no reallocation, copying, or deallocation will be necessary.
+## 1. We again start with `greeting`, which has both a length and capacity of 24 bytes.
+## 2. `|> Str.reserve 21` will ensure that there is enough capacity in the string for an additional 21 bytes (to make room for `", "`, `"Awesome Programmer"`, and `"!"`). Since the current capacity is only 24, it will create a new 45-byte (24 + 21) heap allocation and copy the contents of the existing allocation (`greeting`) into it.
+## 3. `|> Str.concat ", "` will concatenate `, ` to the string. No reallocation, copying, or deallocation will be necessary, because the string already has a capacity of 45 btytes, and `greeting` will only use 24 of them.
+## 4. `|> Str.concat subject` will concatenate `subject` (`"Awesome Programmer"`) to the string. Again, no reallocation, copying, or deallocation will be necessary.
 ## 5. `|> Str.concat "!\n"` will concatenate `"!\n"` to the string, still without any reallocation, copying, or deallocation.
 ##
 ## Here, [Str.reserve] prevented multiple reallocations, copies, and deallocations during the
