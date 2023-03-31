@@ -275,14 +275,22 @@ pub struct InferredProgram {
 
 impl InferredProgram {
     /// Decomposes the program and inferred queries.
-    /// Returns all inferred queries, sorted by their source location.
+    /// Returns all inferred queries, sorted by
+    ///   - increasing source line
+    ///   - on ties, decreasing source column
     pub fn decompose(self) -> (Vec<InferredQuery>, Program) {
         let Self {
             program,
             mut inferred_queries,
         } = self;
 
-        inferred_queries.sort_by_key(|iq| iq.source_line_column);
+        inferred_queries.sort_by(|lc1, lc2| {
+            let line1 = lc1.source_line_column.line;
+            let line2 = lc2.source_line_column.line;
+            let col1 = lc1.source_line_column.column;
+            let col2 = lc2.source_line_column.column;
+            line1.cmp(&line2).then(col2.cmp(&col1))
+        });
 
         (inferred_queries, program)
     }
