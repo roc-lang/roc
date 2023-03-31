@@ -9,8 +9,7 @@ use std::{
 use lazy_static::lazy_static;
 use libtest_mimic::{run, Arguments, Failed, Trial};
 use regex::Regex;
-use roc_region::all::LineColumn;
-use test_solve_helpers::{infer_queries, InferOptions, InferredQuery};
+use test_solve_helpers::{infer_queries, InferOptions, InferredHeader, InferredQuery};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Arguments::from_args();
@@ -183,14 +182,9 @@ fn assemble_query_output(
                 ..
             }) if source_line_column.line == i as _
         ) {
-            let InferredQuery {
-                output,
-                comment_column,
-                source_line_column,
-                source,
-            } = sorted_queries.pop().unwrap();
+            let inferred = sorted_queries.pop().unwrap();
 
-            reconstruct_comment_line(writer, &source, source_line_column, comment_column, output)?;
+            reconstruct_comment_line(writer, inferred)?;
 
             writeln!(writer)?;
 
@@ -207,11 +201,16 @@ fn assemble_query_output(
 
 fn reconstruct_comment_line(
     writer: &mut impl io::Write,
-    source: &str,
-    source_line_column: LineColumn,
-    comment_column: u32,
-    output: String,
+    inferred: InferredQuery,
 ) -> io::Result<()> {
+    let InferredQuery {
+        comment_column,
+        source_line_column,
+        source,
+        header,
+        elaboration,
+    } = inferred;
+
     for _ in 0..comment_column {
         write!(writer, " ")?;
     }
@@ -219,6 +218,14 @@ fn reconstruct_comment_line(
     for _ in 0..(source_line_column.column - comment_column - 1) {
         write!(writer, " ")?;
     }
-    write!(writer, "{source} {output}")?;
-    Ok(())
+    write!(writer, "{source} ")?;
+
+    match header {
+        InferredHeader::Specialization(spec) => write!(writer, "{spec}: ")?,
+        InferredHeader::Source(_) => {
+            // source is inline above the query string, don't print it again.
+        }
+    }
+
+    write!(writer, "{elaboration}")
 }

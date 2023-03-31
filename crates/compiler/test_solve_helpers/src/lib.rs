@@ -221,8 +221,23 @@ pub struct InferOptions {
     pub allow_errors: bool,
 }
 
+pub enum InferredHeader {
+    Specialization(String),
+    Source(String),
+}
+
+impl std::fmt::Display for InferredHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            InferredHeader::Specialization(s) => write!(f, "{s}"),
+            InferredHeader::Source(s) => write!(f, "{s}"),
+        }
+    }
+}
+
 pub struct InferredQuery {
-    pub output: String,
+    pub header: InferredHeader,
+    pub elaboration: String,
     /// Where the comment before the query string was written in the source.
     pub comment_column: u32,
     /// Where the query string "^^^" itself was written in the source.
@@ -314,27 +329,26 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
         );
         subs.rollback_to(snapshot);
 
-        let elaborated = match find_ability_member_and_owning_type_at(
+        let (header, elaboration) = match find_ability_member_and_owning_type_at(
             query_region,
             &declarations,
             &abilities_store,
         ) {
-            Some((spec_type, spec_symbol)) => {
-                format!(
-                    "{}#{}({}) : {}",
+            Some((spec_type, spec_symbol)) => (
+                InferredHeader::Specialization(format!(
+                    "{}#{}({})",
                     spec_type.as_str(&interns),
                     text,
                     spec_symbol.ident_id().index(),
-                    actual_str
-                )
-            }
-            None => {
-                format!("{} : {}", text, actual_str)
-            }
+                )),
+                actual_str,
+            ),
+            None => (InferredHeader::Source(text.to_owned()), actual_str),
         };
 
         inferred_queries.push(InferredQuery {
-            output: elaborated,
+            header,
+            elaboration,
             comment_column,
             source_line_column,
             source,
@@ -371,8 +385,13 @@ pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: Infer
         output_parts.push("\n".to_owned());
     }
 
-    for InferredQuery { output, .. } in inferred_queries {
-        output_parts.push(output);
+    for InferredQuery {
+        header,
+        elaboration,
+        ..
+    } in inferred_queries
+    {
+        output_parts.push(format!("{header} : {elaboration}"));
     }
 
     let pretty_output = output_parts.join("\n");
