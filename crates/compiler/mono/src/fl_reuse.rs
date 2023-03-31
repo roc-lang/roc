@@ -755,11 +755,24 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                     let token_layouts_clone = token_layouts.clone();
 
+                    let mut void_pointer_layout_symbols: std::vec::Vec<(InLayout, Symbol)> = vec![];
+
                     // See what tokens we can get from the env, if none are available, use a void pointer.
                     let tokens = token_layouts_clone.iter().map(|token_layout| {
-                        environment
-                            .pop_reuse_token(&token_layout)
-                            .map_or_else(|| void_pointer_symbol(), |reuse_token| reuse_token.symbol)
+                        environment.pop_reuse_token(&token_layout).map_or_else(
+                            || match void_pointer_layout_symbols
+                                .iter()
+                                .find(|(layout, _)| layout == token_layout)
+                            {
+                                Some(existing_symbol) => existing_symbol.1,
+                                None => {
+                                    let new_symbol = Symbol::new(home, ident_ids.gen_unique());
+                                    void_pointer_layout_symbols.push((*token_layout, new_symbol));
+                                    new_symbol
+                                }
+                            },
+                            |reuse_token| reuse_token.symbol,
+                        )
                     });
 
                     // Add the void tokens to the jump arguments to match the expected arguments of the join point.
@@ -767,7 +780,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         Vec::from_iter_in(arguments.iter().copied().chain(tokens), arena)
                             .into_bump_slice();
 
-                    arena.alloc(Stmt::Jump(*id, extended_arguments))
+                    // Wrap the jump in a let statement for each void pointer token layout.
+                    void_pointer_layout_symbols.into_iter().fold(
+                        arena.alloc(Stmt::Jump(*id, extended_arguments)),
+                        |child, (layout, symbol)| {
+                            arena.alloc(Stmt::Let(symbol, Expr::NullPointer, layout, child))
+                        },
+                    )
                 }
                 JoinPointReuseTokens::BodySecondPass(token_layouts) => {
                     // If there are no tokens to reuse, we can just jump.
@@ -777,14 +796,36 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                     // We currently don't pass any reuse tokens to recursive jumps.
                     // This is to avoid keeping reuse tokens alive for too long. But it could be changed.
-                    let void_tokens = token_layouts.iter().map(|_| void_pointer_symbol());
+                    let mut void_pointer_layout_symbols: std::vec::Vec<(InLayout, Symbol)> = vec![];
+
+                    let void_tokens =
+                        token_layouts
+                            .iter()
+                            .map(|token_layout| {
+                                match void_pointer_layout_symbols
+                                    .iter()
+                                    .find(|(layout, _)| layout == token_layout)
+                                {
+                                    Some(existing_symbol) => existing_symbol.1,
+                                    None => {
+                                        let new_symbol = Symbol::new(home, ident_ids.gen_unique());
+                                        void_pointer_layout_symbols
+                                            .push((*token_layout, new_symbol));
+                                        new_symbol
+                                    }
+                                }
+                            });
 
                     // Add the void tokens to the jump arguments to match the expected arguments of the join point.
                     let extended_arguments =
                         Vec::from_iter_in(arguments.iter().copied().chain(void_tokens), arena)
                             .into_bump_slice();
 
-                    arena.alloc(Stmt::Jump(*id, extended_arguments))
+                    // Wrap the jump in a let statement for each void pointer token layout.
+                    void_pointer_layout_symbols.into_iter().fold(
+                        arena.alloc(Stmt::Jump(*id, extended_arguments)),
+                        |child, (layout, symbol)| arena.alloc(Stmt::Jump(*id, extended_arguments)),
+                    )
                 }
             }
         }
@@ -1056,8 +1097,4 @@ fn drop_unused_reuse_tokens<'a>(
             continuation,
         ))
     })
-}
-
-fn void_pointer_symbol() -> Symbol {
-    todo!()
 }
