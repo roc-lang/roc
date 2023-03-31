@@ -41,6 +41,8 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             // The type of this function (but not the implementation) should have
             // already been defined by the builtins, which rely on it.
             let fn_val = module.get_function("roc_alloc").unwrap();
+            fn_val.set_linkage(Linkage::Internal);
+
             let mut params = fn_val.get_param_iter();
             let size_arg = params.next().unwrap();
             let _alignment_arg = params.next().unwrap();
@@ -135,6 +137,8 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             // The type of this function (but not the implementation) should have
             // already been defined by the builtins, which rely on it.
             let fn_val = module.get_function("roc_dealloc").unwrap();
+            fn_val.set_linkage(Linkage::Internal);
+
             let mut params = fn_val.get_param_iter();
             let ptr_arg = params.next().unwrap();
             let _alignment_arg = params.next().unwrap();
