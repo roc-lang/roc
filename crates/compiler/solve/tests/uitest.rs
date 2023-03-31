@@ -9,7 +9,8 @@ use std::{
 use lazy_static::lazy_static;
 use libtest_mimic::{run, Arguments, Failed, Trial};
 use regex::Regex;
-use test_solve_helpers::InferOptions;
+use roc_region::all::LineColumn;
+use test_solve_helpers::{infer_queries, InferOptions, InferredQuery};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Arguments::from_args();
@@ -77,7 +78,18 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
         source,
     } = TestCase::parse(data)?;
 
-    fs::write(&path, &source)?;
+    let inferred_program = infer_queries(&source, infer_options)?;
+    let inferred_queries = inferred_program.into_sorted_queries();
+
+    {
+        let mut fd = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+
+        assemble_query_output(&mut fd, &source, inferred_queries)?;
+    }
+
     check_for_changes(&path)?;
 
     Ok(())
@@ -148,5 +160,65 @@ fn check_for_changes(path: &Path) -> Result<(), Failed> {
         .into());
     }
 
+    Ok(())
+}
+
+/// Assemble the output for a test, with queries elaborated in-line.
+fn assemble_query_output(
+    writer: &mut impl io::Write,
+    source: &str,
+    sorted_queries: Vec<InferredQuery>,
+) -> io::Result<()> {
+    // Reverse the queries so that we can pop them off the end as we pass through the lines.
+    let mut sorted_queries = sorted_queries;
+    sorted_queries.reverse();
+
+    for (i, line) in source.lines().enumerate() {
+        let mut is_query_line = false;
+
+        while matches!(
+            sorted_queries.last(),
+            Some(InferredQuery {
+                source_line_column,
+                ..
+            }) if source_line_column.line == i as _
+        ) {
+            let InferredQuery {
+                output,
+                comment_column,
+                source_line_column,
+                source,
+            } = sorted_queries.pop().unwrap();
+
+            reconstruct_comment_line(writer, &source, source_line_column, comment_column, output)?;
+
+            writeln!(writer)?;
+
+            is_query_line = true;
+        }
+
+        if !is_query_line {
+            write!(writer, "{line}\n")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn reconstruct_comment_line(
+    writer: &mut impl io::Write,
+    source: &str,
+    source_line_column: LineColumn,
+    comment_column: u32,
+    output: String,
+) -> io::Result<()> {
+    for _ in 0..comment_column {
+        write!(writer, " ")?;
+    }
+    write!(writer, "#")?;
+    for _ in 0..(source_line_column.column - comment_column - 1) {
+        write!(writer, " ")?;
+    }
+    write!(writer, "{source} {output}")?;
     Ok(())
 }

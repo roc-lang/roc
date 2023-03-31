@@ -134,8 +134,13 @@ lazy_static! {
         Regex::new(r#"(?P<where>\^+)(?:\{-(?P<sub>\d+)\})?"#).unwrap();
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct TypeQuery(Region);
+#[derive(Debug, Clone)]
+pub struct TypeQuery {
+    query_region: Region,
+    source: String,
+    comment_column: u32,
+    source_line_column: LineColumn,
+}
 
 /// Parse inference queries in a Roc program.
 /// See [RE_TYPE_QUERY].
@@ -144,6 +149,16 @@ fn parse_queries(src: &str) -> Vec<TypeQuery> {
     let mut queries = vec![];
     let mut consecutive_query_lines = 0;
     for (i, line) in src.lines().enumerate() {
+        // If this is a query line, it should start with a comment somewhere before the query
+        // lines.
+        let comment_column = match line.find("#") {
+            Some(i) => i as _,
+            None => {
+                consecutive_query_lines = 0;
+                continue;
+            }
+        };
+
         let mut queries_on_line = RE_TYPE_QUERY.captures_iter(line).into_iter().peekable();
 
         if queries_on_line.peek().is_none() {
@@ -154,28 +169,46 @@ fn parse_queries(src: &str) -> Vec<TypeQuery> {
         }
 
         for capture in queries_on_line {
+            let source = capture
+                .get(0)
+                .expect("full capture must always exist")
+                .as_str()
+                .to_string();
+
             let wher = capture.name("where").unwrap();
             let subtract_col = capture
                 .name("sub")
                 .and_then(|m| str::parse(m.as_str()).ok())
                 .unwrap_or(0);
 
-            let (start, end) = (wher.start() as u32, wher.end() as u32);
-            let (start, end) = (start - subtract_col, end - subtract_col);
+            let (source_start, source_end) = (wher.start() as u32, wher.end() as u32);
+            let (query_start, query_end) = (source_start - subtract_col, source_end - subtract_col);
 
-            let last_line = i as u32 - consecutive_query_lines;
-            let start_lc = LineColumn {
-                line: last_line,
-                column: start,
+            let source_line_column = LineColumn {
+                line: i as u32,
+                column: source_start,
             };
-            let end_lc = LineColumn {
-                line: last_line,
-                column: end,
-            };
-            let lc_region = LineColumnRegion::new(start_lc, end_lc);
-            let region = line_info.convert_line_column_region(lc_region);
 
-            queries.push(TypeQuery(region));
+            let query_region = {
+                let last_line = i as u32 - consecutive_query_lines;
+                let query_start_lc = LineColumn {
+                    line: last_line,
+                    column: query_start,
+                };
+                let query_end_lc = LineColumn {
+                    line: last_line,
+                    column: query_end,
+                };
+                let query_lc_region = LineColumnRegion::new(query_start_lc, query_end_lc);
+                line_info.convert_line_column_region(query_lc_region)
+            };
+
+            queries.push(TypeQuery {
+                query_region,
+                source,
+                comment_column,
+                source_line_column,
+            });
         }
     }
     queries
@@ -189,8 +222,13 @@ pub struct InferOptions {
 }
 
 pub struct InferredQuery {
-    pub region: Region,
     pub output: String,
+    /// Where the comment before the query string was written in the source.
+    pub comment_column: u32,
+    /// Where the query string "^^^" itself was written in the source.
+    pub source_line_column: LineColumn,
+    /// The content of the query string.
+    pub source: String,
 }
 
 pub struct InferredProgram {
@@ -198,6 +236,15 @@ pub struct InferredProgram {
     interns: Interns,
     declarations: Declarations,
     inferred_queries: Vec<InferredQuery>,
+}
+
+impl InferredProgram {
+    /// Returns all inferred queries, sorted by their source location.
+    pub fn into_sorted_queries(self) -> Vec<InferredQuery> {
+        let mut inferred = self.inferred_queries;
+        inferred.sort_by_key(|iq| iq.source_line_column);
+        inferred
+    }
 }
 
 pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram, Box<dyn Error>> {
@@ -239,12 +286,18 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
     }
 
     let mut inferred_queries = Vec::with_capacity(queries.len());
-    for TypeQuery(region) in queries.into_iter() {
-        let start = region.start().offset;
-        let end = region.end().offset;
+    for TypeQuery {
+        query_region,
+        source,
+        comment_column,
+        source_line_column,
+    } in queries.into_iter()
+    {
+        let start = query_region.start().offset;
+        let end = query_region.end().offset;
         let text = &src[start as usize..end as usize];
-        let var = find_type_at(region, &declarations)
-            .ok_or_else(|| format!("No type for {:?} ({:?})!", &text, region))?;
+        let var = find_type_at(query_region, &declarations)
+            .ok_or_else(|| format!("No type for {:?} ({:?})!", &text, query_region))?;
 
         let snapshot = subs.snapshot();
         let actual_str = name_and_print_var(
@@ -261,25 +314,30 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
         );
         subs.rollback_to(snapshot);
 
-        let elaborated =
-            match find_ability_member_and_owning_type_at(region, &declarations, &abilities_store) {
-                Some((spec_type, spec_symbol)) => {
-                    format!(
-                        "{}#{}({}) : {}",
-                        spec_type.as_str(&interns),
-                        text,
-                        spec_symbol.ident_id().index(),
-                        actual_str
-                    )
-                }
-                None => {
-                    format!("{} : {}", text, actual_str)
-                }
-            };
+        let elaborated = match find_ability_member_and_owning_type_at(
+            query_region,
+            &declarations,
+            &abilities_store,
+        ) {
+            Some((spec_type, spec_symbol)) => {
+                format!(
+                    "{}#{}({}) : {}",
+                    spec_type.as_str(&interns),
+                    text,
+                    spec_symbol.ident_id().index(),
+                    actual_str
+                )
+            }
+            None => {
+                format!("{} : {}", text, actual_str)
+            }
+        };
 
         inferred_queries.push(InferredQuery {
-            region,
             output: elaborated,
+            comment_column,
+            source_line_column,
+            source,
         });
     }
 
