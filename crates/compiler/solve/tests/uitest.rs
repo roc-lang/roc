@@ -133,18 +133,7 @@ impl TestCase {
 }
 
 fn check_for_changes(path: &Path) -> Result<(), Failed> {
-    let is_tracked = Command::new("git")
-        .args(["ls-files", "--error-unmatch"])
-        .arg(path)
-        .output()?;
-
-    if !is_tracked.status.success() {
-        return Err(format!(
-            "Test file {} is not tracked by git. Try using `git add` on it.",
-            path.display(),
-        )
-        .into());
-    }
+    Command::new("git").args(["add", "-N"]).arg(path).output()?;
 
     let has_changes = Command::new("git")
         .args(["diff", "--color=always"])
