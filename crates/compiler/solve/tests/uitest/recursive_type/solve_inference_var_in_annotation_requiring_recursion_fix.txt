@@ -1,0 +1,6 @@
+app "test" provides [translateStatic] to "./platform"
+
+translateStatic : _ -> _
+translateStatic = \Element c ->
+#^^^^^^^^^^^^^^^{-1} [Element (List a)] as a -[[translateStatic(0)]]-> [Element (List b)]* as b
+    Element (List.map c translateStatic)

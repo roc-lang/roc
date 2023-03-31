@@ -215,7 +215,7 @@ fn assemble_query_output(
 
         // Otherwise, write the Roc source line.
         if !is_query_line {
-            writeln!(writer, "{line}")?;
+            writeln!(writer, "{}", line.trim_end())?;
         }
     }
 
