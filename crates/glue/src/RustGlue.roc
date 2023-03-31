@@ -1,12 +1,14 @@
 app "rust-glue"
-    packages { pf: "RocType.roc" }
-    imports []
+    packages { pf: "../platform/main.roc" }
+    imports [pf.Types.{ Types }, pf.File.{ File }, pf.TypeId.{ TypeId }]
     provides [makeGlue] to pf
 
-makeGlue = \types ->
+makeGlue : List Types -> Result (List File) Str
+makeGlue = \typesByArch ->
     modFileContent =
-        List.walk types "" \content, { target } ->
-            archStr = archName target.architecture
+        List.walk typesByArch "" \content, types ->
+            arch = (Types.target types).architecture
+            archStr = archName arch 
 
             Str.concat
                 content
@@ -18,15 +20,15 @@ makeGlue = \types ->
                 
                 """
 
-    types
-    |> List.map typesWithDict
+    typesByArch
     |> List.map convertTypesToFile
     |> List.append { name: "mod.rs", content: modFileContent }
     |> Ok
 
+convertTypesToFile : Types -> File
 convertTypesToFile = \types ->
     content =
-        walkWithIndex types.types fileHeader \buf, id, type ->
+        Types.walkShapes types fileHeader \buf, type, id ->
             when type is
                 Struct { name, fields } ->
                     generateStruct buf types id name fields Public
@@ -84,13 +86,16 @@ convertTypesToFile = \types ->
                     # These types don't need to be declared in Rust.
                     # TODO: Eventually we want to generate roc_std. So these types will need to be emitted.
                     buf
-    archStr = archName types.target.architecture
+
+    arch = (Types.target types).architecture
+    archStr = archName arch 
 
     {
         name: "\(archStr).rs",
         content,
     }
 
+generateStruct : Str, Types, TypeId, _, _, _ -> Str
 generateStruct = \buf, types, id, name, structFields, visibility ->
     escapedName = escapeKW name
     repr =
@@ -108,7 +113,7 @@ generateStruct = \buf, types, id, name, structFields, visibility ->
             Public -> "pub"
             Private -> ""
 
-    structType = getType types id
+    structType = Types.shape types id
 
     buf
     |> generateDeriveStr types structType IncludeDebug
@@ -221,7 +226,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
         """
     |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
     |> \b ->
-        type = getType types id
+        type = Types.shape types id
         if cannotDeriveCopy types type then
             # A custom drop impl is only needed when we can't derive copy.
             b
@@ -285,7 +290,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         buf
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
-                Some id if cannotDeriveCopy types (getType types id) ->
+                Some id if cannotDeriveCopy types (Types.shape types id) ->
                     "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).\(name)) }},"
 
                 _ ->
@@ -313,6 +318,7 @@ writeTagImpls = \buf, tags, discriminantName, indents, f ->
     |> writeIndents indents
     |> Str.concat "}\n"
 
+generateTagUnionSizer : Str, Types, TypeId, _ -> Str
 generateTagUnionSizer = \buf, types, id, tags ->
     if List.len tags > 1 then
         # When there's a discriminant (so, multiple tags) and there is
@@ -355,7 +361,7 @@ generateUnionField = \types ->
                 typeStr = typeName types id
                 escapedFieldName = escapeKW fieldName
 
-                type = getType types id
+                type = Types.shape types id
                 fullTypeStr =
                     if cannotDeriveCopy types type then
                         # types with pointers need ManuallyDrop
@@ -614,40 +620,40 @@ cannotDeriveCopy = \types, type ->
         Unit | Unsized | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.true
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
 
         TagUnion (NonRecursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> cannotDeriveCopy types (getType types id)
+                    Some id -> cannotDeriveCopy types (Types.shape types id)
                     None -> Bool.false
 
         RocResult okId errId ->
-            cannotDeriveCopy types (getType types okId)
-            || cannotDeriveCopy types (getType types errId)
+            cannotDeriveCopy types (Types.shape types okId)
+            || cannotDeriveCopy types (Types.shape types errId)
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
 
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
         RocStr | Bool | Num _ | Struct { fields: HasClosure _ } | TagUnionPayload { fields: HasClosure _ } -> Bool.false
         RocList id | RocSet id | RocBox id ->
-            cannotDeriveDefault types (getType types id)
+            cannotDeriveDefault types (Types.shape types id)
 
         RocDict keyId valId ->
-            cannotDeriveCopy types (getType types keyId)
-            || cannotDeriveCopy types (getType types valId)
+            cannotDeriveCopy types (Types.shape types keyId)
+            || cannotDeriveCopy types (Types.shape types valId)
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
+            List.any fields \{ id } -> cannotDeriveDefault types (Types.shape types id)
 
 hasFloat = \types, type ->
     hasFloatHelp types type (Set.empty {})
@@ -664,40 +670,40 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
         Unit | Unsized | EmptyTagUnion | RocStr | Bool | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocList id | RocSet id | RocBox id ->
-            hasFloatHelp types (getType types id) doNotRecurse
+            hasFloatHelp types (Types.shape types id) doNotRecurse
 
         RocDict id0 id1 | RocResult id0 id1 ->
-            hasFloatHelp types (getType types id0) doNotRecurse
-            || hasFloatHelp types (getType types id1) doNotRecurse
+            hasFloatHelp types (Types.shape types id0) doNotRecurse
+            || hasFloatHelp types (Types.shape types id1) doNotRecurse
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
 
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
 
         TagUnion (Recursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NonRecursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NullableWrapped { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NonNullableUnwrapped { payload }) ->
@@ -706,7 +712,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse payload
 
-                hasFloatHelp types (getType types payload) nextDoNotRecurse
+                hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
 
         TagUnion (NullableUnwrapped { nonNullPayload }) ->
             if Set.contains doNotRecurse nonNullPayload then
@@ -714,7 +720,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse nonNullPayload
 
-                hasFloatHelp types (getType types nonNullPayload) nextDoNotRecurse
+                hasFloatHelp types (Types.shape types nonNullPayload) nextDoNotRecurse
 
         RecursivePointer payload ->
             if Set.contains doNotRecurse payload then
@@ -722,10 +728,10 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse payload
 
-                hasFloatHelp types (getType types payload) nextDoNotRecurse
+                hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
 
 typeName = \types, id ->
-    when getType types id is
+    when Types.shape types id is
         Unit -> "()"
         Unsized -> "roc_std::RocList<u8>"
         EmptyTagUnion -> "std::convert::Infallible"
@@ -785,26 +791,11 @@ typeName = \types, id ->
         TagUnion (SingleTagStruct { name }) -> escapeKW name
         Function { functionName } -> escapeKW functionName
 
-getType = \types, id ->
-    when List.get types.types id is
-        Ok type -> type
-        Err _ -> crash "unreachable"
-
 getSizeRoundedToAlignment = \types, id ->
-    alignment = getAlignment types id
+    alignment = Types.alignment types id
 
-    getSizeIgnoringAlignment types id
+    Types.size types id
     |> roundUpToAlignment alignment
-
-getSizeIgnoringAlignment = \types, id ->
-    when List.get types.sizes id is
-        Ok size -> size
-        Err _ -> crash "unreachable"
-
-getAlignment = \types, id ->
-    when List.get types.aligns id is
-        Ok align -> align
-        Err _ -> crash "unreachable"
 
 roundUpToAlignment = \width, alignment ->
     when alignment is
@@ -931,14 +922,3 @@ escapeKW = \input ->
         "r#\(input)"
     else
         input
-
-# This is a temporary helper until roc_std::roc_dict is update.
-# after that point, Dict will be passed in directly.
-typesWithDict = \{ types, sizes, aligns, typesByName, deps, target } -> {
-    types,
-    sizes,
-    aligns,
-    typesByName: Dict.fromList typesByName,
-    deps: Dict.fromList deps,
-    target,
-}
