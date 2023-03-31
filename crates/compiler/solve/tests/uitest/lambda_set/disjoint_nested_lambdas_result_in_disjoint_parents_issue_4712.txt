@@ -26,7 +26,7 @@ parseInput = \{} ->
 
 main = parseInput {} == ""
 
-# emit:can_decls
+# -emit:can_decls
 v1 = {}
 
 v2 = ""

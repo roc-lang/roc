@@ -100,7 +100,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
     Ok(())
 }
 
-const EMIT_HEADER: &str = "# emit:";
+const EMIT_HEADER: &str = "# -emit:";
 
 struct TestCase {
     infer_options: InferOptions,
@@ -115,7 +115,7 @@ struct PrintOptions {
 
 impl TestCase {
     fn parse(mut data: String) -> Result<Self, Failed> {
-        // Drop anything following `# emit:` header lines; that's the output.
+        // Drop anything following `# -emit:` header lines; that's the output.
         if let Some(drop_at) = data.find(EMIT_HEADER) {
             data.truncate(drop_at);
             data.truncate(data.trim_end().len());
