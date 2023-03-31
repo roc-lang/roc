@@ -129,8 +129,10 @@ impl TestCase {
     }
 
     fn parse_infer_options(data: &str) -> Result<InferOptions, Failed> {
-        let mut infer_opts = InferOptions::default();
-        infer_opts.no_promote = true;
+        let mut infer_opts = InferOptions {
+            no_promote: true,
+            ..Default::default()
+        };
 
         let found_infer_opts = RE_OPT_INFER.captures_iter(data);
         for infer_opt in found_infer_opts {

@@ -52,12 +52,12 @@ fn print_declarations_help<'a>(
         let body = &declarations.expressions[index];
 
         let def = match tag {
-            DeclarationTag::Value => def_symbol_help(c, &f, symbol, &body.value),
+            DeclarationTag::Value => def_symbol_help(c, f, symbol, &body.value),
             DeclarationTag::Function(f_index)
             | DeclarationTag::Recursive(f_index)
             | DeclarationTag::TailRecursive(f_index) => {
                 let function_def = &declarations.function_bodies[f_index.index()].value;
-                toplevel_function(c, &f, symbol, function_def, &body.value)
+                toplevel_function(c, f, symbol, function_def, &body.value)
             }
             DeclarationTag::Expectation => todo!(),
             DeclarationTag::ExpectationFx => todo!(),

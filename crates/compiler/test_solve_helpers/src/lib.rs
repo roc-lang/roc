@@ -154,7 +154,7 @@ fn parse_queries(src: &str) -> Vec<TypeQuery> {
     for (i, line) in src.lines().enumerate() {
         // If this is a query line, it should start with a comment somewhere before the query
         // lines.
-        let comment_column = match line.find("#") {
+        let comment_column = match line.find('#') {
             Some(i) => i as _,
             None => {
                 consecutive_query_lines = 0;
