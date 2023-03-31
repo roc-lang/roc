@@ -172,7 +172,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
 
                         file.write_all(content.as_bytes()).unwrap_or_else(|err| {
                             eprintln!(
-                                "Unable to write bindings to output file {} - {:?}",
+                                "Unable to write glue to output file {} - {:?}",
                                 full_path.display(),
                                 err
                             );
@@ -182,7 +182,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                     }
 
                     println!(
-                        "🎉 Generated type declarations in:\n\n\t{}",
+                        "🎉 Generated output from {} in:\n\n\t{}",
                         output_path.display()
                     );
 

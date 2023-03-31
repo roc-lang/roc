@@ -1,18 +1,18 @@
 interface Types
-    exposes [Types, shape, size, alignment, target, walkShapes]
-    imports [Shape.{ Shape }, TypeId.{ TypeId }, Target.{ Target }, InternalTypeId]
+    exposes [Types, shape]
+    imports [Shape.{ Shape }, TypeId.{ TypeId }, InternalTypeId, Target.{ Target }]
 
-# TODO: switch AssocList uses to Dict once roc_std is updated.
+# TODO use real tuples here when doing so doesn't crash the compiler
 Tuple1 : [T Str TypeId]
 Tuple2 : [T TypeId (List TypeId)]
 
 Types := {
     # These are all indexed by TypeId
-    types : List Shape,
+    shapes : List Shape,
     sizes : List U32,
     aligns : List U32,
 
-    # Needed to check for duplicates
+    # Needed internally to check for duplicates
     typesByName : List Tuple1,
 
     ## Dependencies - that is, which type depends on which other type.
@@ -22,40 +22,8 @@ Types := {
     target : Target,
 }
 
-target : Types -> Target
-target = \@Types types -> types.target
-
-walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
-walkShapes = \@Types { types: shapes }, originalState, update ->
-    List.walk shapes { index: 0, state: originalState } \{ index, state }, elem ->
-        id = InternalTypeId.fromNat index
-
-        { index: index + 1, state: update state elem id }
-    |> .state
-
 shape : Types, TypeId -> Shape
 shape = \@Types types, id ->
-    when List.get types.types (InternalTypeId.toNat id) is
+    when List.get types.shapes (InternalTypeId.toNat id) is
         Ok answer -> answer
-        Err OutOfBounds ->
-            idStr = Num.toStr (InternalTypeId.toNat id)
-
-            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
-
-alignment : Types, TypeId -> U32
-alignment = \@Types types, id ->
-    when List.get types.aligns (InternalTypeId.toNat id) is
-        Ok answer -> answer
-        Err OutOfBounds ->
-            idStr = Num.toStr (InternalTypeId.toNat id)
-
-            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
-
-size : Types, TypeId -> U32
-size = \@Types types, id ->
-    when List.get types.sizes (InternalTypeId.toNat id) is
-        Ok answer -> answer
-        Err OutOfBounds ->
-            idStr = Num.toStr (InternalTypeId.toNat id)
-
-            crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
+        Err _ -> crash "unreachable"
