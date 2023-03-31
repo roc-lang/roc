@@ -117,20 +117,27 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                     let lib = unsafe { Library::new(lib_path) }.unwrap();
                     type MakeGlue = unsafe extern "C" fn(
                         *mut roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>,
-                        &roc_std::RocList<roc_type::Types>,
+                        &roc_std::RocList<roc_type::RocTarget>,
                     );
 
                     let make_glue: libloading::Symbol<MakeGlue> = unsafe {
                         lib.get("roc__makeGlueForHost_1_exposed_generic".as_bytes())
                             .unwrap_or_else(|_| panic!("Unable to load glue function"))
                     };
-                    let roc_types: roc_std::RocList<roc_type::Types> =
-                        types.iter().map(|x| x.into()).collect();
+
+                    let targets = types
+                        .iter()
+                        .map(|types| roc_type::RocTarget {
+                            entry_points: roc_std::RocList::default(),
+                            types: types.into(),
+                        })
+                        .collect();
+
                     let mut files = roc_std::RocResult::err(roc_std::RocStr::empty());
-                    unsafe { make_glue(&mut files, &roc_types) };
+                    unsafe { make_glue(&mut files, &targets) };
 
                     // Roc will free data passed into it. So forget that data.
-                    std::mem::forget(roc_types);
+                    std::mem::forget(targets);
 
                     let files: Result<roc_std::RocList<roc_type::File>, roc_std::RocStr> =
                         files.into();

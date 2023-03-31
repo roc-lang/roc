@@ -39,6 +39,27 @@ pub struct File {
 ))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
+pub struct RocTarget {
+    pub entry_points: roc_std::RocList<EntryPoint>,
+    pub types: Types,
+}
+
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[repr(C)]
+pub struct EntryPoint {
+    id: usize,
+    name: roc_std::RocStr,
+}
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[repr(C)]
 pub struct Types {
     pub aligns: roc_std::RocList<u32>,
     pub deps: roc_std::RocList<Tuple2>,
