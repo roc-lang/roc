@@ -33,7 +33,7 @@ mod solve_expr {
                 ..
             },
             src,
-        ) = run_load_and_infer(src)?;
+        ) = run_load_and_infer(src, false)?;
 
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
@@ -113,7 +113,7 @@ mod solve_expr {
             interns,
             abilities_store,
             ..
-        } = run_load_and_infer(src).unwrap().0;
+        } = run_load_and_infer(src, false).unwrap().0;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
@@ -8318,61 +8318,35 @@ mod solve_expr {
         );
     }
 
-    #[test]
-    fn disjoint_nested_lambdas_result_in_disjoint_parents_issue_4712() {
-        infer_queries!(
-            indoc!(
-                r#"
-                app "test" provides [main] to "./platform"
+    //#[test]
+    //fn disjoint_nested_lambdas_result_in_disjoint_parents_issue_4712() {
+    //    infer_queries!(
+    //        indoc!(
+    //            r#"
+    //            "#
+    //        ),
+    //    @r###"
+    //    v1 = {}
 
-                Parser a : {} -> a
+    //    v2 = ""
 
-                v1 : {}
-                v1 = {}
+    //    apply = \fnParser, valParser -> \{} -[9]-> (fnParser {}) valParser
 
-                v2 : Str
-                v2 = ""
+    //    map = \simpleParser, transform -> apply \{} -[12]-> transform simpleParser
 
-                apply : Parser (a -> Str), a -> Parser Str
-                apply = \fnParser, valParser ->
-                    \{} ->
-                        (fnParser {}) (valParser)
+    //    parseInput = \{} ->
+    //      when [
+    //          map v1 \{} -[13]-> "",
+    //          map v2 \s -[14]-> s,
+    //        ] is
+    //        _ -> ""
 
-                map : a, (a -> Str) -> Parser Str
-                map = \simpleParser, transform ->
-                    apply (\{} -> transform) simpleParser
+    //    main = Bool.isEq (parseInput {}) ""
 
-                parseInput = \{} ->
-                    when [ map v1 (\{} -> ""), map v2 (\s -> s) ] is
-                    #    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                        _ -> ""
-
-                main = parseInput {} == ""
-                "#
-            ),
-        @r###"
-        v1 = {}
-
-        v2 = ""
-
-        apply = \fnParser, valParser -> \{} -[9]-> (fnParser {}) valParser
-
-        map = \simpleParser, transform -> apply \{} -[12]-> transform simpleParser
-
-        parseInput = \{} ->
-          when [
-              map v1 \{} -[13]-> "",
-              map v2 \s -[14]-> s,
-            ] is
-            _ -> ""
-
-        main = Bool.isEq (parseInput {}) ""
-
-
-        [ map v1 (\{} -> ""), map v2 (\s -> s) ] : List (({} -[[9 (({} -[[12 (Str -[[14]]-> Str)]]-> (Str -[[14]]-> Str))) Str, 9 (({} -[[12 ({} -[[13]]-> Str)]]-> ({} -[[13]]-> Str))) {}]]-> Str))
-        "###
-        print_only_under_alias: true
-        print_can_decls: true
-        );
-    }
+    //    [ map v1 (\{} -> ""), map v2 (\s -> s) ] : List (({} -[[9 (({} -[[12 (Str -[[14]]-> Str)]]-> (Str -[[14]]-> Str))) Str, 9 (({} -[[12 ({} -[[13]]-> Str)]]-> ({} -[[13]]-> Str))) {}]]-> Str))
+    //    "###
+    //    print_only_under_alias: true
+    //    print_can_decls: true
+    //    );
+    //}
 }

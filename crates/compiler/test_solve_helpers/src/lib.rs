@@ -1,4 +1,4 @@
-use std::{error::Error, path::PathBuf};
+use std::{error::Error, io, path::PathBuf};
 
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -36,7 +36,10 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-pub fn run_load_and_infer(src: &str) -> Result<(LoadedModule, String), std::io::Error> {
+pub fn run_load_and_infer(
+    src: &str,
+    no_promote: bool,
+) -> Result<(LoadedModule, String), std::io::Error> {
     use bumpalo::Bump;
     use tempfile::tempdir;
 
@@ -44,7 +47,7 @@ pub fn run_load_and_infer(src: &str) -> Result<(LoadedModule, String), std::io::
 
     let module_src;
     let temp;
-    if src.starts_with("app") {
+    if src.starts_with("app") || no_promote {
         // this is already a module
         module_src = src;
     } else {
@@ -219,6 +222,7 @@ pub struct InferOptions {
     pub print_can_decls: bool,
     pub print_only_under_alias: bool,
     pub allow_errors: bool,
+    pub no_promote: bool,
 }
 
 pub enum InferredHeader {
@@ -246,19 +250,41 @@ pub struct InferredQuery {
     pub source: String,
 }
 
-pub struct InferredProgram {
+pub struct Program {
     home: ModuleId,
     interns: Interns,
     declarations: Declarations,
+}
+
+impl Program {
+    pub fn write_can_decls(&self, writer: &mut impl io::Write) -> io::Result<()> {
+        use roc_can::debug::{pretty_write_declarations, PPCtx};
+        let ctx = PPCtx {
+            home: self.home,
+            interns: &self.interns,
+            print_lambda_names: true,
+        };
+        pretty_write_declarations(writer, &ctx, &self.declarations)
+    }
+}
+
+pub struct InferredProgram {
+    program: Program,
     inferred_queries: Vec<InferredQuery>,
 }
 
 impl InferredProgram {
+    /// Decomposes the program and inferred queries.
     /// Returns all inferred queries, sorted by their source location.
-    pub fn into_sorted_queries(self) -> Vec<InferredQuery> {
-        let mut inferred = self.inferred_queries;
-        inferred.sort_by_key(|iq| iq.source_line_column);
-        inferred
+    pub fn decompose(self) -> (Vec<InferredQuery>, Program) {
+        let Self {
+            program,
+            mut inferred_queries,
+        } = self;
+
+        inferred_queries.sort_by_key(|iq| iq.source_line_column);
+
+        (inferred_queries, program)
     }
 }
 
@@ -275,7 +301,7 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
             ..
         },
         src,
-    ) = run_load_and_infer(src)?;
+    ) = run_load_and_infer(src, options.no_promote)?;
 
     let declarations = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
@@ -356,18 +382,18 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
     }
 
     Ok(InferredProgram {
-        home,
-        interns,
-        declarations,
+        program: Program {
+            home,
+            interns,
+            declarations,
+        },
         inferred_queries,
     })
 }
 
 pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: InferOptions) {
     let InferredProgram {
-        home,
-        interns,
-        declarations: decls,
+        program,
         inferred_queries,
     } = infer_queries(src, options).unwrap();
 
@@ -376,11 +402,11 @@ pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: Infer
     if options.print_can_decls {
         use roc_can::debug::{pretty_print_declarations, PPCtx};
         let ctx = PPCtx {
-            home,
-            interns: &interns,
+            home: program.home,
+            interns: &program.interns,
             print_lambda_names: true,
         };
-        let pretty_decls = pretty_print_declarations(&ctx, &decls);
+        let pretty_decls = pretty_print_declarations(&ctx, &program.declarations);
         output_parts.push(pretty_decls);
         output_parts.push("\n".to_owned());
     }

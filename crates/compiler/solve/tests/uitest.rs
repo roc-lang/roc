@@ -9,7 +9,9 @@ use std::{
 use lazy_static::lazy_static;
 use libtest_mimic::{run, Arguments, Failed, Trial};
 use regex::Regex;
-use test_solve_helpers::{infer_queries, InferOptions, InferredHeader, InferredQuery};
+use test_solve_helpers::{
+    infer_queries, InferOptions, InferredHeader, InferredProgram, InferredQuery,
+};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Arguments::from_args();
@@ -33,7 +35,11 @@ lazy_static! {
 
     /// # +opt infer:<opt>
     static ref RE_OPT_INFER: Regex =
-        Regex::new(r#"# +opt infer:(?P<opt>.*)"#).unwrap();
+        Regex::new(r#"# \+opt infer:(?P<opt>.*)"#).unwrap();
+
+    /// # +opt print:<opt>
+    static ref RE_OPT_PRINT: Regex =
+        Regex::new(r#"# \+opt print:(?P<opt>.*)"#).unwrap();
 }
 
 fn collect_uitest_files() -> io::Result<Vec<PathBuf>> {
@@ -74,11 +80,11 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
     let data = std::fs::read_to_string(&path)?;
     let TestCase {
         infer_options,
+        print_options,
         source,
     } = TestCase::parse(data)?;
 
     let inferred_program = infer_queries(&source, infer_options)?;
-    let inferred_queries = inferred_program.into_sorted_queries();
 
     {
         let mut fd = fs::OpenOptions::new()
@@ -86,7 +92,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
             .truncate(true)
             .open(&path)?;
 
-        assemble_query_output(&mut fd, &source, inferred_queries)?;
+        assemble_query_output(&mut fd, &source, inferred_program, print_options)?;
     }
 
     check_for_changes(&path)?;
@@ -94,29 +100,37 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
     Ok(())
 }
 
-const UITEST_HEADER: &str = "# uitest:";
+const EMIT_HEADER: &str = "# emit:";
 
 struct TestCase {
     infer_options: InferOptions,
+    print_options: PrintOptions,
     source: String,
+}
+
+#[derive(Default)]
+struct PrintOptions {
+    can_decls: bool,
 }
 
 impl TestCase {
     fn parse(mut data: String) -> Result<Self, Failed> {
-        // Drop anything following `# uitest:` header lines; that's the output.
-        if let Some(drop_at) = data.find(UITEST_HEADER) {
+        // Drop anything following `# emit:` header lines; that's the output.
+        if let Some(drop_at) = data.find(EMIT_HEADER) {
             data.truncate(drop_at);
             data.truncate(data.trim_end().len());
         }
 
         Ok(TestCase {
             infer_options: Self::parse_infer_options(&data)?,
+            print_options: Self::parse_print_options(&data)?,
             source: data,
         })
     }
 
     fn parse_infer_options(data: &str) -> Result<InferOptions, Failed> {
         let mut infer_opts = InferOptions::default();
+        infer_opts.no_promote = true;
 
         let found_infer_opts = RE_OPT_INFER.captures_iter(data);
         for infer_opt in found_infer_opts {
@@ -129,6 +143,21 @@ impl TestCase {
         }
 
         Ok(infer_opts)
+    }
+
+    fn parse_print_options(data: &str) -> Result<PrintOptions, Failed> {
+        let mut print_opts = PrintOptions::default();
+
+        let found_infer_opts = RE_OPT_PRINT.captures_iter(data);
+        for infer_opt in found_infer_opts {
+            let opt = infer_opt.name("opt").unwrap().as_str();
+            match opt {
+                "can_decls" => print_opts.can_decls = true,
+                other => return Err(format!("unknown print option: {other}").into()),
+            }
+        }
+
+        Ok(print_opts)
     }
 }
 
@@ -155,15 +184,17 @@ fn check_for_changes(path: &Path) -> Result<(), Failed> {
 fn assemble_query_output(
     writer: &mut impl io::Write,
     source: &str,
-    sorted_queries: Vec<InferredQuery>,
+    inferred_program: InferredProgram,
+    print_options: PrintOptions,
 ) -> io::Result<()> {
     // Reverse the queries so that we can pop them off the end as we pass through the lines.
-    let mut sorted_queries = sorted_queries;
+    let (mut sorted_queries, program) = inferred_program.decompose();
     sorted_queries.reverse();
 
     for (i, line) in source.lines().enumerate() {
         let mut is_query_line = false;
 
+        // Write all elaborated query lines if applicable.
         while matches!(
             sorted_queries.last(),
             Some(InferredQuery {
@@ -180,9 +211,17 @@ fn assemble_query_output(
             is_query_line = true;
         }
 
+        // Otherwise, write the Roc source line.
         if !is_query_line {
-            write!(writer, "{line}\n")?;
+            writeln!(writer, "{line}")?;
         }
+    }
+
+    // Finish up with any remaining print options we were asked to provide.
+    let PrintOptions { can_decls } = print_options;
+    if can_decls {
+        writeln!(writer, "\n{EMIT_HEADER}can_decls")?;
+        program.write_can_decls(writer)?;
     }
 
     Ok(())
