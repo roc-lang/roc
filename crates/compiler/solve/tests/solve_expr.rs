@@ -8317,36 +8317,4 @@ mod solve_expr {
         "###
         );
     }
-
-    //#[test]
-    //fn disjoint_nested_lambdas_result_in_disjoint_parents_issue_4712() {
-    //    infer_queries!(
-    //        indoc!(
-    //            r#"
-    //            "#
-    //        ),
-    //    @r###"
-    //    v1 = {}
-
-    //    v2 = ""
-
-    //    apply = \fnParser, valParser -> \{} -[9]-> (fnParser {}) valParser
-
-    //    map = \simpleParser, transform -> apply \{} -[12]-> transform simpleParser
-
-    //    parseInput = \{} ->
-    //      when [
-    //          map v1 \{} -[13]-> "",
-    //          map v2 \s -[14]-> s,
-    //        ] is
-    //        _ -> ""
-
-    //    main = Bool.isEq (parseInput {}) ""
-
-    //    [ map v1 (\{} -> ""), map v2 (\s -> s) ] : List (({} -[[9 (({} -[[12 (Str -[[14]]-> Str)]]-> (Str -[[14]]-> Str))) Str, 9 (({} -[[12 ({} -[[13]]-> Str)]]-> ({} -[[13]]-> Str))) {}]]-> Str))
-    //    "###
-    //    print_only_under_alias: true
-    //    print_can_decls: true
-    //    );
-    //}
 }
