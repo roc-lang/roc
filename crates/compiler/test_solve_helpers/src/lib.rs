@@ -1,8 +1,11 @@
-use std::path::PathBuf;
+use std::{error::Error, path::PathBuf};
 
 use lazy_static::lazy_static;
 use regex::Regex;
-use roc_can::traverse::{find_ability_member_and_owning_type_at, find_type_at};
+use roc_can::{
+    expr::Declarations,
+    traverse::{find_ability_member_and_owning_type_at, find_type_at},
+};
 use roc_load::LoadedModule;
 use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
@@ -132,7 +135,7 @@ lazy_static! {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TypeQuery(Region);
+pub struct TypeQuery(Region);
 
 /// Parse inference queries in a Roc program.
 /// See [RE_TYPE_QUERY].
@@ -178,14 +181,26 @@ fn parse_queries(src: &str) -> Vec<TypeQuery> {
     queries
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct InferOptions {
     pub print_can_decls: bool,
     pub print_only_under_alias: bool,
     pub allow_errors: bool,
 }
 
-pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: InferOptions) {
+pub struct InferredQuery {
+    pub region: Region,
+    pub output: String,
+}
+
+pub struct InferredProgram {
+    home: ModuleId,
+    interns: Interns,
+    declarations: Declarations,
+    inferred_queries: Vec<InferredQuery>,
+}
+
+pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram, Box<dyn Error>> {
     let (
         LoadedModule {
             module_id: home,
@@ -198,49 +213,38 @@ pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: Infer
             ..
         },
         src,
-    ) = run_load_and_infer(src).unwrap();
+    ) = run_load_and_infer(src)?;
 
-    let decls = declarations_by_id.remove(&home).unwrap();
+    let declarations = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
 
     let can_problems = can_problems.remove(&home).unwrap_or_default();
     let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-    let (can_problems, type_problems) =
-        format_problems(&src, home, &interns, can_problems, type_problems);
-
     if !options.allow_errors {
-        assert!(
-            can_problems.is_empty(),
-            "Canonicalization problems: {}",
-            can_problems
-        );
-        assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+        let (can_problems, type_problems) =
+            format_problems(&src, home, &interns, can_problems, type_problems);
+
+        if !can_problems.is_empty() {
+            return Err(format!("Canonicalization problems: {can_problems}",).into());
+        }
+        if !type_problems.is_empty() {
+            return Err(format!("Type problems: {type_problems}",).into());
+        }
     }
 
     let queries = parse_queries(&src);
-    assert!(!queries.is_empty(), "No queries provided!");
-
-    let mut output_parts = Vec::with_capacity(queries.len() + 2);
-
-    if options.print_can_decls {
-        use roc_can::debug::{pretty_print_declarations, PPCtx};
-        let ctx = PPCtx {
-            home,
-            interns: &interns,
-            print_lambda_names: true,
-        };
-        let pretty_decls = pretty_print_declarations(&ctx, &decls);
-        output_parts.push(pretty_decls);
-        output_parts.push("\n".to_owned());
+    if queries.is_empty() {
+        return Err("No queries provided!".into());
     }
 
+    let mut inferred_queries = Vec::with_capacity(queries.len());
     for TypeQuery(region) in queries.into_iter() {
         let start = region.start().offset;
         let end = region.end().offset;
         let text = &src[start as usize..end as usize];
-        let var = find_type_at(region, &decls)
-            .unwrap_or_else(|| panic!("No type for {:?} ({:?})!", &text, region));
+        let var = find_type_at(region, &declarations)
+            .ok_or_else(|| format!("No type for {:?} ({:?})!", &text, region))?;
 
         let snapshot = subs.snapshot();
         let actual_str = name_and_print_var(
@@ -258,7 +262,7 @@ pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: Infer
         subs.rollback_to(snapshot);
 
         let elaborated =
-            match find_ability_member_and_owning_type_at(region, &decls, &abilities_store) {
+            match find_ability_member_and_owning_type_at(region, &declarations, &abilities_store) {
                 Some((spec_type, spec_symbol)) => {
                     format!(
                         "{}#{}({}) : {}",
@@ -273,7 +277,44 @@ pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: Infer
                 }
             };
 
-        output_parts.push(elaborated);
+        inferred_queries.push(InferredQuery {
+            region,
+            output: elaborated,
+        });
+    }
+
+    Ok(InferredProgram {
+        home,
+        interns,
+        declarations,
+        inferred_queries,
+    })
+}
+
+pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: InferOptions) {
+    let InferredProgram {
+        home,
+        interns,
+        declarations: decls,
+        inferred_queries,
+    } = infer_queries(src, options).unwrap();
+
+    let mut output_parts = Vec::with_capacity(inferred_queries.len() + 2);
+
+    if options.print_can_decls {
+        use roc_can::debug::{pretty_print_declarations, PPCtx};
+        let ctx = PPCtx {
+            home,
+            interns: &interns,
+            print_lambda_names: true,
+        };
+        let pretty_decls = pretty_print_declarations(&ctx, &decls);
+        output_parts.push(pretty_decls);
+        output_parts.push("\n".to_owned());
+    }
+
+    for InferredQuery { output, .. } in inferred_queries {
+        output_parts.push(output);
     }
 
     let pretty_output = output_parts.join("\n");
