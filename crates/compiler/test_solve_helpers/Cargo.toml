@@ -1,0 +1,29 @@
+[package]
+name = "test_solve_helpers"
+description = "Utilities for testing the solver. This should eventually made into the roc_solve crate, but currently, solve tests have multiple harnesses."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_can = { path = "../can" }
+roc_load = { path = "../load" }
+roc_module = { path = "../module" }
+roc_packaging = { path = "../../packaging" }
+roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
+roc_reporting = { path = "../../reporting" }
+roc_solve = { path = "../solve" }
+roc_solve_problem = { path = "../solve_problem" }
+roc_target = { path = "../roc_target" }
+roc_types = { path = "../types" }
+
+bumpalo.workspace = true
+indoc.workspace = true
+insta.workspace = true
+lazy_static.workspace = true
+pretty_assertions.workspace = true
+regex.workspace = true
+tempfile.workspace = true

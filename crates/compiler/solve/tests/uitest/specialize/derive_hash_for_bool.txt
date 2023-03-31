@@ -1,0 +1,4 @@
+app "test" provides [main] to "./platform"
+
+main = Bool.isEq Bool.true Bool.false
+#      ^^^^^^^^^

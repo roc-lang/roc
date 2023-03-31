@@ -3840,6 +3840,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "tempfile",
+ "test_solve_helpers",
 ]
 
 [[package]]
@@ -4615,6 +4616,30 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "test_solve_helpers"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "insta",
+ "lazy_static",
+ "pretty_assertions",
+ "regex",
+ "roc_can",
+ "roc_load",
+ "roc_module",
+ "roc_packaging",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_solve_problem",
+ "roc_target",
+ "roc_types",
+ "tempfile",
 ]
 
 [[package]]

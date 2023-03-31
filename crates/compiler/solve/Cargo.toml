@@ -8,8 +8,8 @@ license.workspace = true
 version.workspace = true
 
 [[test]]
-name = "instantiate"
-path = "tests/instantiate.rs"
+name = "uitest"
+path = "tests/uitest.rs"
 harness = false
 
 [dependencies]
@@ -40,6 +40,7 @@ roc_problem = { path = "../problem" }
 roc_reporting = { path = "../../reporting" }
 roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
+test_solve_helpers = { path = "../test_solve_helpers" }
 
 bumpalo.workspace = true
 indoc.workspace = true

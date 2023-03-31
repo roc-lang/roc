@@ -5,16 +5,13 @@ extern crate indoc;
 
 extern crate bumpalo;
 
-mod helpers;
-
 #[cfg(test)]
 mod solve_expr {
-    use crate::helpers::{
-        format_problems, infer_queries_help, run_load_and_infer, with_larger_debug_stack,
-        InferOptions,
-    };
     use roc_can::abilities::ImplKey;
     use roc_load::LoadedModule;
+    use test_solve_helpers::{
+        format_problems, infer_queries_help, run_load_and_infer, InferOptions,
+    };
 
     use roc_types::{
         pretty_print::{name_and_print_var, DebugPrint},
@@ -3170,52 +3167,50 @@ mod solve_expr {
 
     #[test]
     fn quicksort_partition() {
-        with_larger_debug_stack(|| {
-            infer_eq_without_problem(
-                indoc!(
-                    r#"
-                swap : Nat, Nat, List a -> List a
-                swap = \i, j, list ->
-                    when Pair (List.get list i) (List.get list j) is
-                        Pair (Ok atI) (Ok atJ) ->
-                            list
-                                |> List.set i atJ
-                                |> List.set j atI
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+            swap : Nat, Nat, List a -> List a
+            swap = \i, j, list ->
+                when Pair (List.get list i) (List.get list j) is
+                    Pair (Ok atI) (Ok atJ) ->
+                        list
+                            |> List.set i atJ
+                            |> List.set j atI
 
-                        _ ->
-                            list
+                    _ ->
+                        list
 
-                partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
-                partition = \low, high, initialList ->
-                    when List.get initialList high is
-                        Ok pivot ->
-                            go = \i, j, list ->
-                                if j < high then
-                                    when List.get list j is
-                                        Ok value ->
-                                            if value <= pivot then
-                                                go (i + 1) (j + 1) (swap (i + 1) j list)
-                                            else
-                                                go i (j + 1) list
+            partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
+            partition = \low, high, initialList ->
+                when List.get initialList high is
+                    Ok pivot ->
+                        go = \i, j, list ->
+                            if j < high then
+                                when List.get list j is
+                                    Ok value ->
+                                        if value <= pivot then
+                                            go (i + 1) (j + 1) (swap (i + 1) j list)
+                                        else
+                                            go i (j + 1) list
 
-                                        Err _ ->
-                                            Pair i list
-                                else
-                                    Pair i list
+                                    Err _ ->
+                                        Pair i list
+                            else
+                                Pair i list
 
-                            when go (low - 1) low initialList is
-                                Pair newI newList ->
-                                    Pair (newI + 1) (swap (newI + 1) high newList)
+                        when go (low - 1) low initialList is
+                            Pair newI newList ->
+                                Pair (newI + 1) (swap (newI + 1) high newList)
 
-                        Err _ ->
-                            Pair (low - 1) initialList
+                    Err _ ->
+                        Pair (low - 1) initialList
 
-                partition
-            "#
-                ),
-                "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
-            );
-        });
+            partition
+        "#
+            ),
+            "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
+        );
     }
 
     #[test]
