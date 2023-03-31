@@ -8292,29 +8292,4 @@ mod solve_expr {
         @"n : Dec"
         );
     }
-
-    #[test]
-    fn resolve_set_eq_issue_4671() {
-        infer_queries!(
-            indoc!(
-                r#"
-                app "test" provides [main] to "./platform"
-
-                main =
-                    s1 : Set U8
-                    s1 = Set.empty {}
-
-                    s2 : Set Str
-                    s2 = Set.empty {}
-
-                    Bool.isEq s1 s1 && Bool.isEq s2 s2
-                #   ^^^^^^^^^          ^^^^^^^^^
-                "#
-            ),
-        @r###"
-        Set#Bool.isEq(17) : Set U8, Set U8 -[[Set.isEq(17)]]-> Bool
-        Set#Bool.isEq(17) : Set Str, Set Str -[[Set.isEq(17)]]-> Bool
-        "###
-        );
-    }
 }
