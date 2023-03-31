@@ -24,6 +24,7 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
+* [Jonas Schell](https://github.com/Ocupe)
 * [Christopher Dolan](https://github.com/cdolan)
 * [Nick Gravgaard](https://github.com/nickgravgaard)
 * [Aaron White](https://github.com/aaronwhite)

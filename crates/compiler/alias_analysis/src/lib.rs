@@ -1289,6 +1289,11 @@ fn expr_spec<'a>(
 
     match expr {
         Literal(literal) => literal_spec(builder, block, literal),
+        NullPointer => {
+            let pointer_type = layout_spec(env, builder, interner, layout)?;
+
+            builder.add_unknown_with(block, &[], pointer_type)
+        }
         Call(call) => call_spec(builder, interner, env, block, layout, call),
         Reuse {
             tag_layout,

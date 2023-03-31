@@ -4386,3 +4386,38 @@ fn recursive_lambda_set_resolved_only_upon_specialization() {
         u64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn layout_cache_structure_with_multiple_recursive_structures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Chain : [
+                End,
+                Link Chain,
+            ]
+
+            LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
+
+            main =
+                base : LinkedList 
+                base = Nil
+
+                walker : LinkedList, Chain -> LinkedList
+                walker = \rest, first -> Cons { first, rest } 
+
+                list : List Chain
+                list = []
+
+                r = List.walk list base walker
+                
+                if r == base then 11u8 else 22u8
+            "#
+        ),
+        11,
+        u8
+    );
+}

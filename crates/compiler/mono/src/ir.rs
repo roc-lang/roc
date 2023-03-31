@@ -1878,6 +1878,7 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
+    NullPointer,
 
     StructAtIndex {
         index: u64,
@@ -2016,6 +2017,7 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            NullPointer => alloc.text("NullPointer"),
             Reuse {
                 symbol,
                 tag_id,
@@ -7461,6 +7463,8 @@ fn substitute_in_expr<'a>(
                 None
             }
         }
+
+        NullPointer => None,
 
         Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
 
