@@ -251,7 +251,10 @@ impl VariableUsage {
         expr: &Expr<'a>,
     ) -> VariableUsage {
         match expr {
-            Expr::Literal(_) | Expr::EmptyArray | Expr::RuntimeErrorFunction(_) => {
+            Expr::Literal(_)
+            | Expr::NullPointer
+            | Expr::EmptyArray
+            | Expr::RuntimeErrorFunction(_) => {
                 // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
                 VariableUsage::default()
             }
