@@ -2,10 +2,11 @@ interface InternalTypeId
     exposes [InternalTypeId, fromNat, toNat]
     imports []
 
-InternalTypeId : Nat
+InternalTypeId := U32
+     has [ Eq, Hash ]
 
 toNat : InternalTypeId -> Nat
-toNat = \x -> x
+toNat = \@InternalTypeId nat -> Num.intCast nat
 
 fromNat : Nat -> InternalTypeId
-fromNat = \x -> x
+fromNat = \nat -> @InternalTypeId (Num.intCast nat)

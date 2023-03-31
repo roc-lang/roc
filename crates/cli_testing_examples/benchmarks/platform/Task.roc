@@ -1,6 +1,11 @@
 interface Task
-    exposes [Task, succeed, fail, after, map, putLine, putInt, getInt, forever, loop]
+    exposes [Task, succeed, fail, after, map, putLine, putInt, getInt, forever, loop, InternalTypeId, newInternalTypeId]
     imports [pf.Effect]
+
+
+InternalTypeId : Effect.InternalTypeId
+
+newInternalTypeId = Effect.newInternalTypeId 
 
 Task ok err : Effect.Effect (Result ok err)
 

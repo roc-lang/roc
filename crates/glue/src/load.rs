@@ -1,4 +1,4 @@
-use crate::roc_type;
+use crate::roc_type::{self, ExposedRocTarget, ExposedTypes};
 use crate::types::Types;
 use bumpalo::Bump;
 use libloading::Library;
@@ -41,7 +41,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
         Threading::AllAvailable,
         IgnoreErrors::NONE,
     ) {
-        Ok(types) => {
+        Ok(roc_targets) => {
             // TODO: we should to modify the app file first before loading it.
             // Somehow it has to point to the correct platform file which may not exist on the target machine.
             let triple = Triple::host();
@@ -117,20 +117,36 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                     let lib = unsafe { Library::new(lib_path) }.unwrap();
                     type MakeGlue = unsafe extern "C" fn(
                         *mut roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>,
-                        &roc_std::RocList<roc_type::Types>,
+                        &roc_std::RocList<roc_type::ExposedRocTarget>,
                     );
 
                     let make_glue: libloading::Symbol<MakeGlue> = unsafe {
                         lib.get("roc__makeGlueForHost_1_exposed_generic".as_bytes())
                             .unwrap_or_else(|_| panic!("Unable to load glue function"))
                     };
-                    let roc_types: roc_std::RocList<roc_type::Types> =
-                        types.iter().map(|x| x.into()).collect();
+
+                    dbg!("what do the thing");
+
+                    let targets = roc_targets
+                        .into_iter()
+                        .map(|types| ExposedRocTarget {
+                            entry_points: types
+                                .entry_points()
+                                .into_iter()
+                                .map(|(name, id)| roc_type::EntryPoint {
+                                    name: dbg!(roc_std::RocStr::from(name.as_str())),
+                                    id: *id,
+                                })
+                                .collect(),
+                            types: ExposedTypes::from(&types),
+                        })
+                        .collect();
+
                     let mut files = roc_std::RocResult::err(roc_std::RocStr::empty());
-                    unsafe { make_glue(&mut files, &roc_types) };
+                    unsafe { make_glue(&mut files, &targets) };
 
                     // Roc will free data passed into it. So forget that data.
-                    std::mem::forget(roc_types);
+                    std::mem::forget(targets);
 
                     let files: Result<roc_std::RocList<roc_type::File>, roc_std::RocStr> =
                         files.into();
@@ -172,7 +188,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
 
                         file.write_all(content.as_bytes()).unwrap_or_else(|err| {
                             eprintln!(
-                                "Unable to write bindings to output file {} - {:?}",
+                                "Unable to write glue to output file {} - {:?}",
                                 full_path.display(),
                                 err
                             );
@@ -181,10 +197,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                         });
                     }
 
-                    println!(
-                        "🎉 Generated type declarations in:\n\n\t{}",
-                        output_path.display()
-                    );
+                    println!("🎉 Generated output in:\n\n\t{}", output_path.display());
 
                     Ok(0)
                 }

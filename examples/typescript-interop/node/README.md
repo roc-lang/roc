@@ -2,44 +2,35 @@
 
 This is an example of calling Roc code from [TypeScript](https://www.typescriptlang.org/) on [Node.js](https://nodejs.org/en/).
 
-## Installation
-
 You'll need to have a C compiler installed, but most operating systems will have one already.
 (e.g. macOS has `clang` installed by default, Linux usually has `gcc` by default, etc.)
 All of these commands should be run from the same directory as this README file.
 
+## Building
 
-First, run this to install Node dependencies and generate the Makefile that will be
-used by future commands. (You should only need to run this once.)
+First, `cd` into this directory's `platform/` subdirectory and run this in your terminal:
 
 ```
-npm install
-npx node-gyp configure
+roc glue roc-to-node.roc glue/
 ```
 
-## Building the Roc library
+This will generate the bindings between Node and Roc, as well as TypeScript type definitions.
 
-First, `cd` into this directory and run this in your terminal:
+Next, `cd ..` to get to the parent directory of `platform/` and then run:
 
 ```
 roc build --lib
 ```
 
-This compiles your Roc code into a shared library in the current directory. The library's filename will be libhello plus an OS-specific extension (e.g. libhello.dylib on macOS).
+This compiles your Roc code into a shared library in the current directory. The library's filename will be `libhello` plus an OS-specific extension (e.g. `libhello.dylib` on macOS).
 
-Next, run this to rebuild the C sources.
-
-```
-npx node-gyp build
-```
-
-Finally, run this to copy the generated TypeScript type definitions into the build directory:
+Finally, run this to install Node dependencies and build the behind-the-scenes C bindings.
 
 ```
-cp addon.d.ts build/Release/
+npm install
 ```
 
-You can verify that TypeScript sees the correct types with:
+You can verify that TypeScript now sees the correct types with:
 
 ```
 npx tsc hello.ts
@@ -53,10 +44,16 @@ Now that everything is built, you should be able to run the example with:
 npx ts-node hello.ts
 ```
 
-To rebuild after changing either the `demo.c` file or any `.roc` files, run:
+To change the bindings between Roc and TypeScript, `cd` into `platform/` and run:
 
 ```
-roc build --lib && npx node-gyp build
+rm -rf glue/ && roc glue roc-to-node.roc glue/
+```
+
+Then `cd` back into the parent directory and rebuild with:
+
+```
+roc build --lib && npm install
 ```
 
 ## About this example

@@ -1,34 +1,36 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.File.{ File }, pf.TypeId.{ TypeId }]
+    imports [pf.Types.{ Types }, pf.TypeId.{ TypeId }, pf.File.{ File }, pf.Target.{ Architecture }, pf.Shape.{ Shape } ]
     provides [makeGlue] to pf
 
-makeGlue : List Types -> Result (List File) Str
+makeGlue : List { entryPoints: List { name: Str, id: Nat }, types: Types } -> Result (List File) Str
 makeGlue = \typesByArch ->
     modFileContent =
-        List.walk typesByArch "" \content, types ->
-            arch = (Types.target types).architecture
-            archStr = archName arch 
+        typesByArch
+            |> List.walk "" \content, { types } ->
+                arch = (Types.target types).architecture
+                archStr = archName arch 
 
-            Str.concat
-                content
-                """
-                #[cfg(target_arch = "\(archStr)")]
-                mod \(archStr);
-                #[cfg(target_arch = "\(archStr)")]
-                pub use \(archStr)::*;
-                
-                """
+                Str.concat
+                    content
+                    """
+                    #[cfg(target_arch = "\(archStr)")]
+                    mod \(archStr);
+                    #[cfg(target_arch = "\(archStr)")]
+                    pub use \(archStr)::*;
+                    
+                    """
 
     typesByArch
+    |> List.map .types
     |> List.map convertTypesToFile
     |> List.append { name: "mod.rs", content: modFileContent }
     |> Ok
 
-convertTypesToFile : Types -> File
+convertTypesToFile : Types -> { name: Str, content: Str }
 convertTypesToFile = \types ->
     content =
-        Types.walkShapes types fileHeader \buf, type, id ->
+        Types.walkShapes types "" \buf, type, id ->
             when type is
                 Struct { name, fields } ->
                     generateStruct buf types id name fields Public
@@ -95,7 +97,7 @@ convertTypesToFile = \types ->
         content,
     }
 
-generateStruct : Str, Types, TypeId, _, _, _ -> Str
+generateStruct : Str, Types, TypeId, _, _, _ -> Str 
 generateStruct = \buf, types, id, name, structFields, visibility ->
     escapedName = escapeKW name
     repr =
@@ -113,7 +115,7 @@ generateStruct = \buf, types, id, name, structFields, visibility ->
             Public -> "pub"
             Private -> ""
 
-    structType = Types.shape types id
+    structType = getType types id
 
     buf
     |> generateDeriveStr types structType IncludeDebug
@@ -151,6 +153,7 @@ nameTagUnionPayloadFields = \payloadFields ->
             renamedFields = List.map fields \{ name, id, accessors } -> { name: "f\(name)", id, accessors }
             HasClosure renamedFields
 
+generateEnumeration : Str, Types, _, _, _, _ -> Str
 generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     escapedName = escapeKW name
 
@@ -226,7 +229,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
         """
     |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
     |> \b ->
-        type = Types.shape types id
+        type = getType types id
         if cannotDeriveCopy types type then
             # A custom drop impl is only needed when we can't derive copy.
             b
@@ -290,7 +293,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         buf
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
-                Some id if cannotDeriveCopy types (Types.shape types id) ->
+                Some id if cannotDeriveCopy types (getType types id) ->
                     "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).\(name)) }},"
 
                 _ ->
@@ -361,7 +364,7 @@ generateUnionField = \types ->
                 typeStr = typeName types id
                 escapedFieldName = escapeKW fieldName
 
-                type = Types.shape types id
+                type = getType types id
                 fullTypeStr =
                     if cannotDeriveCopy types type then
                         # types with pointers need ManuallyDrop
@@ -588,6 +591,7 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
         
         """
 
+generateDeriveStr : Str, Types, _, _ -> Str
 generateDeriveStr = \buf, types, type, includeDebug ->
     buf
     |> Str.concat "#[derive(Clone, "
@@ -620,44 +624,45 @@ cannotDeriveCopy = \types, type ->
         Unit | Unsized | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.true
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
 
         TagUnion (NonRecursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> cannotDeriveCopy types (Types.shape types id)
+                    Some id -> cannotDeriveCopy types (getType types id)
                     None -> Bool.false
 
         RocResult okId errId ->
-            cannotDeriveCopy types (Types.shape types okId)
-            || cannotDeriveCopy types (Types.shape types errId)
+            cannotDeriveCopy types (getType types okId)
+            || cannotDeriveCopy types (getType types errId)
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
 
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
         RocStr | Bool | Num _ | Struct { fields: HasClosure _ } | TagUnionPayload { fields: HasClosure _ } -> Bool.false
         RocList id | RocSet id | RocBox id ->
-            cannotDeriveDefault types (Types.shape types id)
+            cannotDeriveDefault types (getType types id)
 
         RocDict keyId valId ->
-            cannotDeriveCopy types (Types.shape types keyId)
-            || cannotDeriveCopy types (Types.shape types valId)
+            cannotDeriveCopy types (getType types keyId)
+            || cannotDeriveCopy types (getType types valId)
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveDefault types (Types.shape types id)
+            List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
 
 hasFloat = \types, type ->
     hasFloatHelp types type (Set.empty {})
 
+hasFloatHelp : Types, _, Set TypeId -> Bool
 hasFloatHelp = \types, type, doNotRecurse ->
     # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
     # I think there is a change it really only matters for RecursivePointer, so it may be fine.
@@ -670,40 +675,40 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
         Unit | Unsized | EmptyTagUnion | RocStr | Bool | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocList id | RocSet id | RocBox id ->
-            hasFloatHelp types (Types.shape types id) doNotRecurse
+            hasFloatHelp types (getType types id) doNotRecurse
 
         RocDict id0 id1 | RocResult id0 id1 ->
-            hasFloatHelp types (Types.shape types id0) doNotRecurse
-            || hasFloatHelp types (Types.shape types id1) doNotRecurse
+            hasFloatHelp types (getType types id0) doNotRecurse
+            || hasFloatHelp types (getType types id1) doNotRecurse
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
 
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
 
         TagUnion (Recursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
+                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NonRecursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
+                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NullableWrapped { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
+                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NonNullableUnwrapped { payload }) ->
@@ -712,7 +717,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse payload
 
-                hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
+                hasFloatHelp types (getType types payload) nextDoNotRecurse
 
         TagUnion (NullableUnwrapped { nonNullPayload }) ->
             if Set.contains doNotRecurse nonNullPayload then
@@ -720,7 +725,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse nonNullPayload
 
-                hasFloatHelp types (Types.shape types nonNullPayload) nextDoNotRecurse
+                hasFloatHelp types (getType types nonNullPayload) nextDoNotRecurse
 
         RecursivePointer payload ->
             if Set.contains doNotRecurse payload then
@@ -728,10 +733,10 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse payload
 
-                hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
+                hasFloatHelp types (getType types payload) nextDoNotRecurse
 
 typeName = \types, id ->
-    when Types.shape types id is
+    when getType types id is
         Unit -> "()"
         Unsized -> "roc_std::RocList<u8>"
         EmptyTagUnion -> "std::convert::Infallible"
@@ -791,11 +796,23 @@ typeName = \types, id ->
         TagUnion (SingleTagStruct { name }) -> escapeKW name
         Function { functionName } -> escapeKW functionName
 
+getType : Types, TypeId -> Shape
+getType = \types, id ->
+    Types.shape types id
+
+getSizeRoundedToAlignment : Types, TypeId -> U32
 getSizeRoundedToAlignment = \types, id ->
     alignment = Types.alignment types id
 
-    Types.size types id
+    getSizeIgnoringAlignment types id
     |> roundUpToAlignment alignment
+
+getSizeIgnoringAlignment : Types, TypeId -> U32
+getSizeIgnoringAlignment = \types, id ->
+    Types.size types id
+
+getAlignment = \types, id ->
+    Types.alignment types id
 
 roundUpToAlignment = \width, alignment ->
     when alignment is

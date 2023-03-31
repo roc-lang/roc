@@ -34,6 +34,7 @@ pub struct File {
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
 pub struct TypeId(usize);
 
 impl TypeId {
@@ -111,7 +112,7 @@ impl Types {
     }
 
     pub fn entry_points(&self) -> &[(String, TypeId)] {
-        self.entry_points.as_slice()
+        dbg!(self.entry_points.as_slice())
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
@@ -614,7 +615,7 @@ impl Types {
     }
 }
 
-impl From<&Types> for roc_type::Types {
+impl From<&Types> for roc_type::ExposedTypes {
     fn from(types: &Types) -> Self {
         let deps = types
             .deps
@@ -626,7 +627,7 @@ impl From<&Types> for roc_type::Types {
             .iter()
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
-        roc_type::Types {
+        roc_type::ExposedTypes {
             aligns: types.aligns.as_slice().into(),
             deps,
             sizes: types.sizes.as_slice().into(),

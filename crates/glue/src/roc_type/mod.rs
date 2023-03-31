@@ -16,6 +16,8 @@
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::clone_on_copy)]
 
+use crate::types::TypeId;
+
 #[cfg(any(
     target_arch = "arm",
     target_arch = "aarch64",
@@ -39,7 +41,28 @@ pub struct File {
 ))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
-pub struct Types {
+pub struct ExposedRocTarget {
+    pub entry_points: roc_std::RocList<EntryPoint>,
+    pub types: ExposedTypes,
+}
+
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[repr(C)]
+pub struct EntryPoint {
+    pub id: TypeId,
+    pub name: roc_std::RocStr,
+}
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[repr(C)]
+pub struct ExposedTypes {
     pub aligns: roc_std::RocList<u32>,
     pub deps: roc_std::RocList<Tuple2>,
     pub sizes: roc_std::RocList<u32>,
