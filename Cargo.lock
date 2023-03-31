@@ -3193,6 +3193,7 @@ dependencies = [
  "hashbrown 0.13.2",
  "im",
  "im-rc",
+ "smallvec",
  "wyhash",
 ]
 
