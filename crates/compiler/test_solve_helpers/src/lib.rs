@@ -126,7 +126,7 @@ pub fn format_problems(
 lazy_static! {
     /// Queries of the form
     ///
-    /// ```
+    /// ```text
     /// ^^^{(directive),*}?
     ///
     /// directive :=
