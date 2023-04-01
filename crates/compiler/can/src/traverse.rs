@@ -582,14 +582,23 @@ pub fn find_type_at(region: Region, decls: &Declarations) -> Option<Variable> {
     visitor.typ
 }
 
+pub enum FoundSymbol {
+    /// Specialization(T, foo1) is the specialization of foo for T.
+    Specialization(Symbol, Symbol),
+    /// AbilityMember(Foo, foo) is the ability member foo of Foo.
+    AbilityMember(Symbol, Symbol),
+    /// Raw symbol, not specialized to anything.
+    Symbol(Symbol),
+}
+
 /// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a
 /// symbol foo1 that specializes foo for T. Otherwise if the symbol is foo but the specialization
 /// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
-pub fn find_ability_member_and_owning_type_at(
+pub fn find_symbol_at(
     region: Region,
     decls: &Declarations,
     abilities_store: &AbilitiesStore,
-) -> Option<(Symbol, Symbol)> {
+) -> Option<FoundSymbol> {
     let mut visitor = Finder {
         region,
         found: None,
@@ -601,7 +610,7 @@ pub fn find_ability_member_and_owning_type_at(
     struct Finder<'a> {
         region: Region,
         abilities_store: &'a AbilitiesStore,
-        found: Option<(Symbol, Symbol)>,
+        found: Option<FoundSymbol>,
     }
 
     impl Visitor for Finder<'_> {
@@ -611,16 +620,19 @@ pub fn find_ability_member_and_owning_type_at(
 
         fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
             if region == self.region {
-                if let Pattern::AbilityMemberSpecialization {
-                    ident: spec_symbol,
-                    specializes: _,
-                } = pattern
-                {
-                    debug_assert!(self.found.is_none());
-                    let spec_type =
-                        find_specialization_type_of_symbol(*spec_symbol, self.abilities_store)
-                            .unwrap();
-                    self.found = Some((spec_type, *spec_symbol))
+                match pattern {
+                    Pattern::AbilityMemberSpecialization {
+                        ident: spec_symbol,
+                        specializes: _,
+                    } => {
+                        debug_assert!(self.found.is_none());
+                        let spec_type =
+                            find_specialization_type_of_symbol(*spec_symbol, self.abilities_store)
+                                .unwrap();
+                        self.found = Some(FoundSymbol::Specialization(spec_type, *spec_symbol))
+                    }
+                    Pattern::Identifier(symbol) => self.found = Some(FoundSymbol::Symbol(*symbol)),
+                    _ => {}
                 }
             }
 
@@ -640,7 +652,7 @@ pub fn find_ability_member_and_owning_type_at(
                                 self.abilities_store,
                             )
                             .unwrap();
-                            Some((spec_type, spec_symbol))
+                            Some(FoundSymbol::Specialization(spec_type, spec_symbol))
                         }
                         None => {
                             let parent_ability = self
@@ -648,7 +660,7 @@ pub fn find_ability_member_and_owning_type_at(
                                 .member_def(member_symbol)
                                 .unwrap()
                                 .parent_ability;
-                            Some((parent_ability, member_symbol))
+                            Some(FoundSymbol::AbilityMember(parent_ability, member_symbol))
                         }
                     };
                     return;
