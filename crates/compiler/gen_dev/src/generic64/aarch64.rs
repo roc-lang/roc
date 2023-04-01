@@ -469,29 +469,29 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("register signed division for AArch64");
+        sdiv_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn udiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("register unsigned division for AArch64");
+        udiv_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     #[inline(always)]
@@ -1853,6 +1853,18 @@ fn orr_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
+#[inline(always)]
+fn sdiv_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = DataProcessingTwoSource::new(0b000011, src2, src1, dst);
+
+    buf.extend(inst.bytes());
+}
+
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
@@ -1922,6 +1934,18 @@ fn subs_reg64_reg64_reg64(
 #[inline(always)]
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
     let inst = UnconditionalBranchRegister::new(0b10, xn);
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn udiv_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = DataProcessingTwoSource::new(0b000010, src2, src1, dst);
 
     buf.extend(inst.bytes());
 }
@@ -2413,6 +2437,22 @@ mod tests {
     }
 
     #[test]
+    fn test_sdiv_reg64_reg64_reg64() {
+        disassembler_test!(
+            sdiv_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "sdiv {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_str_reg64_reg64_imm12() {
         disassembler_test!(
             str_reg64_reg64_imm12,
@@ -2542,6 +2582,22 @@ mod tests {
             } else {
                 format!("ret {}", reg1.capstone_string(UsesZR))
             },
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_udiv_reg64_reg64_reg64() {
+        disassembler_test!(
+            udiv_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "udiv {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );
     }
