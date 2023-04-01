@@ -5,7 +5,7 @@ use regex::Regex;
 use roc_can::{
     abilities::AbilitiesStore,
     expr::Declarations,
-    traverse::{find_symbol_at, find_type_at, FoundSymbol},
+    traverse::{find_declaration, find_symbol_at, find_type_at, FoundSymbol},
 };
 use roc_load::LoadedModule;
 use roc_module::symbol::{Interns, ModuleId};
@@ -157,8 +157,7 @@ pub struct TypeQuery {
 
 /// Parse inference queries in a Roc program.
 /// See [RE_TYPE_QUERY].
-fn parse_queries(src: &str) -> Vec<TypeQuery> {
-    let line_info = LineInfo::new(src);
+fn parse_queries(src: &str, line_info: &LineInfo) -> Vec<TypeQuery> {
     let mut queries = vec![];
     let mut consecutive_query_lines = 0;
     for (i, line) in src.lines().enumerate() {
@@ -249,23 +248,25 @@ pub struct InferOptions {
     pub no_promote: bool,
 }
 
-pub enum InferredHeader {
-    Specialization(String),
-    Source(String),
-}
-
-impl std::fmt::Display for InferredHeader {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            InferredHeader::Specialization(s) => write!(f, "{s}"),
-            InferredHeader::Source(s) => write!(f, "{s}"),
-        }
-    }
+pub enum Elaboration {
+    Specialization {
+        specialized_name: String,
+        typ: String,
+    },
+    Source {
+        source: String,
+        typ: String,
+    },
+    Instantiation {
+        typ: String,
+        source: String,
+        offset_line: u32,
+        queries_in_instantiation: Vec<InferredQuery>,
+    },
 }
 
 pub struct InferredQuery {
-    pub header: InferredHeader,
-    pub elaboration: String,
+    pub elaboration: Elaboration,
     /// Where the comment before the query string was written in the source.
     pub comment_column: u32,
     /// Where the query string "^^^" itself was written in the source.
@@ -292,6 +293,25 @@ impl Program {
     }
 }
 
+pub struct InferredQueries(Vec<InferredQuery>);
+
+impl InferredQueries {
+    /// Returns all inferred queries, sorted by
+    ///   - increasing source line
+    ///   - on ties, decreasing source column
+    pub fn into_sorted(self) -> Vec<InferredQuery> {
+        let mut queries = self.0;
+        queries.sort_by(|lc1, lc2| {
+            let line1 = lc1.source_line_column.line;
+            let line2 = lc2.source_line_column.line;
+            let col1 = lc1.source_line_column.column;
+            let col2 = lc2.source_line_column.column;
+            line1.cmp(&line2).then(col2.cmp(&col1))
+        });
+        queries
+    }
+}
+
 pub struct InferredProgram {
     program: Program,
     inferred_queries: Vec<InferredQuery>,
@@ -299,24 +319,13 @@ pub struct InferredProgram {
 
 impl InferredProgram {
     /// Decomposes the program and inferred queries.
-    /// Returns all inferred queries, sorted by
-    ///   - increasing source line
-    ///   - on ties, decreasing source column
-    pub fn decompose(self) -> (Vec<InferredQuery>, Program) {
+    pub fn decompose(self) -> (InferredQueries, Program) {
         let Self {
             program,
-            mut inferred_queries,
+            inferred_queries,
         } = self;
 
-        inferred_queries.sort_by(|lc1, lc2| {
-            let line1 = lc1.source_line_column.line;
-            let line2 = lc2.source_line_column.line;
-            let col1 = lc1.source_line_column.column;
-            let col2 = lc2.source_line_column.column;
-            line1.cmp(&line2).then(col2.cmp(&col1))
-        });
-
-        (inferred_queries, program)
+        (InferredQueries(inferred_queries), program)
     }
 }
 
@@ -353,7 +362,8 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
         }
     }
 
-    let queries = parse_queries(&src);
+    let line_info = LineInfo::new(&src);
+    let queries = parse_queries(&src, &line_info);
     if queries.is_empty() {
         return Err("No queries provided!".into());
     }
@@ -368,6 +378,7 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
         abilities_store: &abilities_store,
         home,
         interns: &interns,
+        line_info,
         options,
     };
 
@@ -394,6 +405,7 @@ struct QueryCtx<'a> {
     abilities_store: &'a AbilitiesStore,
     home: ModuleId,
     interns: &'a Interns,
+    line_info: LineInfo,
     options: InferOptions,
 }
 
@@ -414,29 +426,8 @@ impl<'a> QueryCtx<'a> {
             .ok_or_else(|| format!("No type for {:?} ({:?})!", &text, query_region))?;
 
         let snapshot = self.subs.snapshot();
-        let (header, elaboration) = if *instantiate {
-            self.infer_instantiated(var)
-        } else {
-            self.infer_direct(var, *query_region, text)
-        };
-        self.subs.rollback_to(snapshot);
 
-        Ok(InferredQuery {
-            header,
-            elaboration,
-            comment_column: *comment_column,
-            source_line_column: *source_line_column,
-            source: source.to_string(),
-        })
-    }
-
-    fn infer_direct(
-        &mut self,
-        var: Variable,
-        query_region: Region,
-        text: &str,
-    ) -> (InferredHeader, String) {
-        let actual_str = name_and_print_var(
+        let type_string = name_and_print_var(
             var,
             self.subs,
             self.home,
@@ -449,33 +440,89 @@ impl<'a> QueryCtx<'a> {
             },
         );
 
-        let (header, elaboration) =
-            match find_symbol_at(query_region, self.declarations, self.abilities_store) {
-                Some(found_symbol) => {
-                    let header = match found_symbol {
-                        FoundSymbol::Specialization(spec_type, spec_symbol)
-                        | FoundSymbol::AbilityMember(spec_type, spec_symbol) => {
-                            InferredHeader::Specialization(format!(
-                                "{}#{}({})",
-                                spec_type.as_str(self.interns),
-                                text,
-                                spec_symbol.ident_id().index(),
-                            ))
-                        }
-                        FoundSymbol::Symbol(symbol) => {
-                            InferredHeader::Source(symbol.as_str(self.interns).to_owned())
-                        }
-                    };
+        let elaboration = if *instantiate {
+            self.infer_instantiated(var, type_string, *query_region, text)?
+        } else {
+            self.infer_direct(type_string, *query_region, text)
+        };
+        self.subs.rollback_to(snapshot);
 
-                    (header, actual_str)
-                }
-                None => (InferredHeader::Source(text.to_owned()), actual_str),
-            };
-        (header, elaboration)
+        Ok(InferredQuery {
+            elaboration,
+            comment_column: *comment_column,
+            source_line_column: *source_line_column,
+            source: source.to_string(),
+        })
     }
 
-    fn infer_instantiated(&self, var: Variable) -> (InferredHeader, String) {
-        todo!()
+    fn infer_direct(&mut self, typ: String, query_region: Region, text: &str) -> Elaboration {
+        match find_symbol_at(query_region, self.declarations, self.abilities_store) {
+            Some(found_symbol) => match found_symbol {
+                FoundSymbol::Specialization(spec_type, spec_symbol)
+                | FoundSymbol::AbilityMember(spec_type, spec_symbol) => {
+                    Elaboration::Specialization {
+                        specialized_name: format!(
+                            "{}#{}({})",
+                            spec_type.as_str(self.interns),
+                            text,
+                            spec_symbol.ident_id().index(),
+                        ),
+                        typ,
+                    }
+                }
+                FoundSymbol::Symbol(symbol) => Elaboration::Source {
+                    source: symbol.as_str(self.interns).to_owned(),
+                    typ,
+                },
+            },
+            None => Elaboration::Source {
+                source: text.to_owned(),
+                typ,
+            },
+        }
+    }
+
+    fn infer_instantiated(
+        &mut self,
+        var: Variable,
+        typ: String,
+        query_region: Region,
+        text: &str,
+    ) -> Result<Elaboration, Box<dyn Error>> {
+        let symbol = match find_symbol_at(query_region, self.declarations, self.abilities_store) {
+            Some(FoundSymbol::Symbol(symbol) | FoundSymbol::Specialization(_, symbol)) => symbol,
+            _ => return Err(format!("No symbol under {text:?}",).into()),
+        };
+
+        let def = find_declaration(symbol, self.declarations)
+            .ok_or_else(|| format!("No def found for {text:?}"))?;
+
+        let region = def.region();
+        let lc_region @ LineColumnRegion { start, end } = self.line_info.convert_region(region);
+
+        let start_pos = self.line_info.convert_line_column(LineColumn {
+            line: start.line,
+            column: 0,
+        });
+        let end_pos = self.line_info.convert_line_column(LineColumn {
+            line: end.line + 1,
+            column: 0,
+        });
+        let def_source = &self.source[start_pos.offset as usize..end_pos.offset as usize];
+
+        let queries_in_instantiation = self
+            .all_queries
+            .iter()
+            .filter(|query| lc_region.includes(query.source_line_column))
+            .map(|query| self.answer(query))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Elaboration::Instantiation {
+            typ,
+            source: def_source.to_owned(),
+            offset_line: start.line,
+            queries_in_instantiation,
+        })
     }
 }
 
@@ -499,13 +546,16 @@ pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: Infer
         output_parts.push("\n".to_owned());
     }
 
-    for InferredQuery {
-        header,
-        elaboration,
-        ..
-    } in inferred_queries
-    {
-        output_parts.push(format!("{header} : {elaboration}"));
+    for InferredQuery { elaboration, .. } in inferred_queries {
+        let output_part = match elaboration {
+            Elaboration::Specialization {
+                specialized_name,
+                typ,
+            } => format!("{specialized_name} : {typ}"),
+            Elaboration::Source { source, typ } => format!("{source} : {typ}"),
+            Elaboration::Instantiation { .. } => panic!("Use uitest instead"),
+        };
+        output_parts.push(output_part);
     }
 
     let pretty_output = output_parts.join("\n");

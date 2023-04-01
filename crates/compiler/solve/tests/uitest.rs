@@ -10,7 +10,7 @@ use lazy_static::lazy_static;
 use libtest_mimic::{run, Arguments, Failed, Trial};
 use regex::Regex;
 use test_solve_helpers::{
-    infer_queries, InferOptions, InferredHeader, InferredProgram, InferredQuery,
+    infer_queries, Elaboration, InferOptions, InferredProgram, InferredQuery,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -101,6 +101,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
 }
 
 const EMIT_HEADER: &str = "# -emit:";
+const MUTLILINE_MARKER: &str = "│";
 
 struct TestCase {
     infer_options: InferOptions,
@@ -190,34 +191,12 @@ fn assemble_query_output(
     print_options: PrintOptions,
 ) -> io::Result<()> {
     // Reverse the queries so that we can pop them off the end as we pass through the lines.
-    let (mut sorted_queries, program) = inferred_program.decompose();
+    let (queries, program) = inferred_program.decompose();
+    let mut sorted_queries = queries.into_sorted();
     sorted_queries.reverse();
 
-    for (i, line) in source.lines().enumerate() {
-        let mut is_query_line = false;
-
-        // Write all elaborated query lines if applicable.
-        while matches!(
-            sorted_queries.last(),
-            Some(InferredQuery {
-                source_line_column,
-                ..
-            }) if source_line_column.line == i as _
-        ) {
-            let inferred = sorted_queries.pop().unwrap();
-
-            reconstruct_comment_line(writer, inferred)?;
-
-            writeln!(writer)?;
-
-            is_query_line = true;
-        }
-
-        // Otherwise, write the Roc source line.
-        if !is_query_line {
-            writeln!(writer, "{}", line.trim_end())?;
-        }
-    }
+    let mut reflow = Reflow::new_unindented(writer);
+    write_source_with_answers(&mut reflow, source, sorted_queries)?;
 
     // Finish up with any remaining print options we were asked to provide.
     let PrintOptions { can_decls } = print_options;
@@ -229,33 +208,161 @@ fn assemble_query_output(
     Ok(())
 }
 
-fn reconstruct_comment_line(
-    writer: &mut impl io::Write,
+fn write_source_with_answers<W: io::Write>(
+    reflow: &mut Reflow<'_, W>,
+    source: &str,
+    mut sorted_queries: Vec<InferredQuery>,
+) -> io::Result<()> {
+    for (i, line) in source.lines().enumerate() {
+        let mut is_query_line = false;
+        reflow.reset();
+
+        // Write all elaborated query lines if applicable.
+        while matches!(
+            sorted_queries.last(),
+            Some(InferredQuery {
+                source_line_column,
+                ..
+            }) if source_line_column.line == i as _
+        ) {
+            let inferred = sorted_queries.pop().unwrap();
+
+            reconstruct_comment_line(reflow, inferred)?;
+            reflow.reset();
+            reflow.write("\n")?;
+
+            is_query_line = true;
+        }
+
+        // If this was previously a multi-line query output line, skip it, since we already wrote
+        // the new output above.
+        if line.contains(MUTLILINE_MARKER) {
+            continue;
+        }
+
+        // Otherwise, write the Roc source line.
+        if !is_query_line {
+            reflow.write(line.trim_end())?;
+            reflow.write("\n")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn reconstruct_comment_line<W: io::Write>(
+    reflow: &mut Reflow<'_, W>,
     inferred: InferredQuery,
 ) -> io::Result<()> {
     let InferredQuery {
         comment_column,
         source_line_column,
         source,
-        header,
         elaboration,
     } = inferred;
 
-    for _ in 0..comment_column {
-        write!(writer, " ")?;
-    }
-    write!(writer, "#")?;
-    for _ in 0..(source_line_column.column - comment_column - 1) {
-        write!(writer, " ")?;
-    }
-    write!(writer, "{source} ")?;
+    reflow.set_comment(comment_column as _);
+    reflow.set_content(source_line_column.column as _);
+    reflow.write_and_bump(&format!("{source} "))?;
 
-    match header {
-        InferredHeader::Specialization(spec) => write!(writer, "{spec}: ")?,
-        InferredHeader::Source(_) => {
-            // source is inline above the query string, don't print it again.
+    match elaboration {
+        Elaboration::Specialization {
+            specialized_name,
+            typ,
+        } => {
+            reflow.write_and_bump(&format!("{specialized_name}: "))?;
+            reflow.write(&typ)
+        }
+        Elaboration::Source { source: _, typ } => reflow.write(&typ),
+        Elaboration::Instantiation {
+            typ,
+            source,
+            offset_line,
+            queries_in_instantiation,
+        } => {
+            reflow.write(&typ)?;
+
+            // Write the source on new line, but at the reflow column the comment is aligned at.
+            reflow.set_content(source_line_column.column as _);
+            reflow.write("\n")?;
+            reflow.write(&source.trim_end())
+        }
+    }
+}
+
+struct Reflow<'a, W: io::Write> {
+    writer: &'a mut W,
+    top_line_written: bool,
+    line_prefix_written: bool,
+    comment_column: usize,
+    content_column: usize,
+}
+
+impl<'a, W: io::Write> Reflow<'a, W> {
+    fn new_unindented(writer: &'a mut W) -> Self {
+        Self {
+            writer,
+            top_line_written: false,
+            line_prefix_written: false,
+            comment_column: 0,
+            content_column: 0,
         }
     }
 
-    write!(writer, "{elaboration}")
+    /// Reset to base state.
+    fn reset(&mut self) {
+        self.top_line_written = false;
+        self.line_prefix_written = false;
+        self.comment_column = 0;
+        self.content_column = 0;
+    }
+
+    fn set_comment(&mut self, comment_column: usize) {
+        self.comment_column = comment_column;
+    }
+
+    fn set_content(&mut self, content_column: usize) {
+        self.content_column = content_column;
+    }
+
+    fn write(&mut self, content: &str) -> io::Result<()> {
+        for (i, content_line) in content.split('\n').enumerate() {
+            if i > 0 {
+                // new line
+                writeln!(self.writer)?;
+                self.line_prefix_written = false;
+            }
+            if !self.line_prefix_written && self.content_column > 0 {
+                for _ in 0..self.comment_column {
+                    write!(self.writer, " ")?;
+                }
+                write!(self.writer, "#")?;
+                for _ in 0..(self.content_column - self.comment_column - 1) {
+                    write!(self.writer, " ")?;
+                }
+
+                if self.top_line_written {
+                    write!(self.writer, "{MUTLILINE_MARKER} ")?;
+                }
+
+                self.line_prefix_written = true;
+                self.top_line_written = true;
+            }
+
+            write!(self.writer, "{content_line}")?;
+        }
+
+        Ok(())
+    }
+
+    fn write_and_bump(&mut self, content: &str) -> io::Result<()> {
+        assert!(
+            content.lines().count() == 1,
+            "cannot bump with multi-line content"
+        );
+
+        self.write(content)?;
+        self.content_column += content.len();
+        Ok(())
+    }
 }

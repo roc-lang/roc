@@ -199,6 +199,10 @@ impl LineColumnRegion {
         }
     }
 
+    pub fn includes(&self, lc: LineColumn) -> bool {
+        self.contains(&Self::from_pos(lc))
+    }
+
     pub const fn from_pos(pos: LineColumn) -> Self {
         Self {
             start: pos,
