@@ -447,25 +447,25 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn imul_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("register signed multiplication for AArch64");
+        mul_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn umul_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("register unsigned multiplication for AArch64");
+        mul_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
@@ -1432,6 +1432,47 @@ impl DataProcessingTwoSource {
     }
 }
 
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct DataProcessingThreeSource {
+    sf: bool,
+    op54: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<5>>,
+    op31: Integer<u8, packed_bits::Bits<3>>,
+    rm: Integer<u8, packed_bits::Bits<5>>,
+    o0: bool,
+    ra: Integer<u8, packed_bits::Bits<5>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for DataProcessingThreeSource {}
+
+impl DataProcessingThreeSource {
+    #[inline(always)]
+    fn new(
+        op31: u8,
+        rm: AArch64GeneralReg,
+        ra: AArch64GeneralReg,
+        rn: AArch64GeneralReg,
+        rd: AArch64GeneralReg,
+    ) -> Self {
+        debug_assert!(op31 <= 0b111);
+
+        Self {
+            sf: true,
+            op54: 0b00.into(),
+            fixed: 0b011011.into(),
+            op31: op31.into(),
+            rm: rm.id().into(),
+            o0: false,
+            ra: ra.id().into(),
+            rn: rn.id().into(),
+            rd: rd.id().into(),
+        }
+    }
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 enum LogicalOp {
@@ -1804,6 +1845,19 @@ fn asr_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
+#[inline(always)]
+fn madd_reg64_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+    src3: AArch64GeneralReg,
+) {
+    let inst = DataProcessingThreeSource::new(0b000000, src2, src3, src1, dst);
+
+    buf.extend(inst.bytes());
+}
+
 /// `MOV Xd, Xm` -> Move Xm to Xd.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
@@ -1834,6 +1888,16 @@ fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
     let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
 
     buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn mul_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    madd_reg64_reg64_reg64_reg64(buf, dst, src1, src2, AArch64GeneralReg::ZRSP);
 }
 
 #[inline(always)]
@@ -2347,6 +2411,38 @@ mod tests {
     }
 
     #[test]
+    fn test_madd_reg64_reg64_reg64_reg64() {
+        disassembler_test!(
+            madd_reg64_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg,
+             reg2: AArch64GeneralReg,
+             reg3: AArch64GeneralReg,
+             reg4: AArch64GeneralReg| {
+                if reg4 == AArch64GeneralReg::ZRSP {
+                    format!(
+                        "mul {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                } else {
+                    format!(
+                        "madd {}, {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR),
+                        reg4.capstone_string(UsesZR)
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_mov_reg64_reg64() {
         disassembler_test!(
             mov_reg64_reg64,
@@ -2393,6 +2489,22 @@ mod tests {
             ALL_GENERAL_REGS,
             [TEST_U16],
             [0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn test_mul_reg64_reg64_reg64() {
+        disassembler_test!(
+            mul_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "mul {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 
