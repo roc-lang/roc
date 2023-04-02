@@ -290,21 +290,17 @@ fn reconstruct_comment_line<W: io::Write>(
             typ,
             source,
             offset_line,
-            mut queries_in_instantiation,
+            queries_in_instantiation,
         } => {
             reflow.write(&typ)?;
 
             // Write the source on new line, but at the reflow column the comment is aligned at.
             reflow.set_content(source_line_column.column as _);
             reflow.write("\n")?;
-            queries_in_instantiation.reverse();
 
-            write_source_with_answers(
-                reflow,
-                source.trim_end(),
-                queries_in_instantiation,
-                offset_line as _,
-            )
+            let queries = queries_in_instantiation.into_sorted();
+
+            write_source_with_answers(reflow, source.trim_end(), queries, offset_line as _)
         }
     }
 }

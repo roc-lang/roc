@@ -268,7 +268,7 @@ pub enum Elaboration {
         typ: String,
         source: String,
         offset_line: u32,
-        queries_in_instantiation: Vec<InferredQuery>,
+        queries_in_instantiation: InferredQueries,
     },
 }
 
@@ -301,6 +301,7 @@ impl Program {
     }
 }
 
+#[derive(Debug)]
 pub struct InferredQueries(Vec<InferredQuery>);
 
 impl InferredQueries {
@@ -555,7 +556,7 @@ impl<'a> QueryCtx<'a> {
             typ,
             source: def_source.to_owned(),
             offset_line: start.line,
-            queries_in_instantiation,
+            queries_in_instantiation: InferredQueries(queries_in_instantiation),
         })
     }
 }

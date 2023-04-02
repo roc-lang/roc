@@ -19,12 +19,12 @@ main = {
   a: caller (@O {}),
   #  ^^^^^^{inst} O -[[caller(7)]]-> {}
   #  │ caller = \x -> consume x
-  #  │                ^^^^^^^ X#consume(2): O -[[consumeO(5)]]-> {}
   #  │                        ^ O
+  #  │                ^^^^^^^ X#consume(2): O -[[consumeO(5)]]-> {}
 
   b: caller (@P {}),
   #  ^^^^^^{inst} P -[[caller(7)]]-> {}
   #  │ caller = \x -> consume x
-  #  │                ^^^^^^^ X#consume(2): P -[[consumeP(6)]]-> {}
   #  │                        ^ P
+  #  │                ^^^^^^^ X#consume(2): P -[[consumeP(6)]]-> {}
 }
