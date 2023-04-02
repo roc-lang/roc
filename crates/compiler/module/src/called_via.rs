@@ -4,14 +4,14 @@ use std::cmp::Ordering;
 use std::fmt;
 
 const PRECEDENCES: [(BinOp, u8); 20] = [
-    (Pizza, 6),
-    (Caret, 5),
-    (Star, 4),
-    (Slash, 4),
-    (DoubleSlash, 4),
-    (Percent, 4),
-    (Plus, 3),
-    (Minus, 3),
+    (Caret, 7),
+    (Star, 6),
+    (Slash, 6),
+    (DoubleSlash, 5),
+    (Percent, 5),
+    (Plus, 4),
+    (Minus, 4),
+    (Pizza, 3),
     (Equals, 2),
     (NotEquals, 2),
     (LessThan, 1),
@@ -28,7 +28,6 @@ const PRECEDENCES: [(BinOp, u8); 20] = [
 ];
 
 const ASSOCIATIVITIES: [(BinOp, Associativity); 20] = [
-    (Pizza, LeftAssociative),
     (Caret, RightAssociative),
     (Star, LeftAssociative),
     (Slash, LeftAssociative),
@@ -36,6 +35,7 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 20] = [
     (Percent, LeftAssociative),
     (Plus, LeftAssociative),
     (Minus, LeftAssociative),
+    (Pizza, LeftAssociative),
     (Equals, NonAssociative),
     (NotEquals, NonAssociative),
     (LessThan, NonAssociative),
@@ -52,7 +52,6 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 20] = [
 ];
 
 const DISPLAY_STRINGS: [(BinOp, &str); 20] = [
-    (Pizza, "|>"),
     (Caret, "^"),
     (Star, "*"),
     (Slash, "/"),
@@ -60,6 +59,7 @@ const DISPLAY_STRINGS: [(BinOp, &str); 20] = [
     (Percent, "%"),
     (Plus, "+"),
     (Minus, "-"),
+    (Pizza, "|>"),
     (Equals, "=="),
     (NotEquals, "!="),
     (LessThan, "<"),
@@ -101,7 +101,6 @@ pub enum UnaryOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinOp {
     // highest precedence
-    Pizza,
     Caret,
     Star,
     Slash,
@@ -109,6 +108,7 @@ pub enum BinOp {
     Percent,
     Plus,
     Minus,
+    Pizza,
     Equals,
     NotEquals,
     LessThan,
