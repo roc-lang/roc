@@ -1,0 +1,16 @@
+app "test" provides [main] to "./platform"
+
+main =
+  x = Bool.true
+  y = Bool.false
+
+  a = "foo"
+  b = "bar"
+
+  foo = \{} -> if x then a else bar {}
+  #^^^{-1} {} -[[foo(5) Bool Bool Str Str]]-> Str
+
+  bar = \{} -> if y then b else foo {}
+  #^^^{-1} {} -[[bar(6) Bool Bool Str Str]]-> Str
+
+  bar {}

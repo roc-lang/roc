@@ -35,6 +35,7 @@ roc_problem = { path = "../problem" }
 roc_reporting = { path = "../../reporting" }
 roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
+test_solve_helpers = { path = "../test_solve_helpers" }
 
 bumpalo.workspace = true
 indoc.workspace = true
@@ -43,3 +44,4 @@ lazy_static.workspace = true
 pretty_assertions.workspace = true
 regex.workspace = true
 tempfile.workspace = true
+libtest-mimic.workspace = true

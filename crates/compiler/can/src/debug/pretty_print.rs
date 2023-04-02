@@ -19,18 +19,45 @@ pub struct Ctx<'a> {
 
 pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String {
     let f = Arena::new();
+    print_declarations_help(c, &f, declarations)
+        .1
+        .pretty(80)
+        .to_string()
+}
+
+pub fn pretty_write_declarations(
+    writer: &mut impl std::io::Write,
+    c: &Ctx,
+    declarations: &Declarations,
+) -> std::io::Result<()> {
+    let f = Arena::new();
+    print_declarations_help(c, &f, declarations)
+        .1
+        .render(80, writer)
+}
+
+pub fn pretty_print_def(c: &Ctx, d: &Def) -> String {
+    let f = Arena::new();
+    def(c, &f, d).append(f.hardline()).1.pretty(80).to_string()
+}
+
+fn print_declarations_help<'a>(
+    c: &Ctx,
+    f: &'a Arena<'a>,
+    declarations: &'a Declarations,
+) -> DocBuilder<'a, Arena<'a>> {
     let mut defs = Vec::with_capacity(declarations.len());
     for (index, tag) in declarations.iter_bottom_up() {
         let symbol = declarations.symbols[index].value;
         let body = &declarations.expressions[index];
 
         let def = match tag {
-            DeclarationTag::Value => def_symbol_help(c, &f, symbol, &body.value),
+            DeclarationTag::Value => def_symbol_help(c, f, symbol, &body.value),
             DeclarationTag::Function(f_index)
             | DeclarationTag::Recursive(f_index)
             | DeclarationTag::TailRecursive(f_index) => {
                 let function_def = &declarations.function_bodies[f_index.index()].value;
-                toplevel_function(c, &f, symbol, function_def, &body.value)
+                toplevel_function(c, f, symbol, function_def, &body.value)
             }
             DeclarationTag::Expectation => todo!(),
             DeclarationTag::ExpectationFx => todo!(),
@@ -45,14 +72,6 @@ pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String
     }
 
     f.intersperse(defs, f.hardline().append(f.hardline()))
-        .1
-        .pretty(80)
-        .to_string()
-}
-
-pub fn pretty_print_def(c: &Ctx, d: &Def) -> String {
-    let f = Arena::new();
-    def(c, &f, d).append(f.hardline()).1.pretty(80).to_string()
 }
 
 macro_rules! maybe_paren {

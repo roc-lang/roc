@@ -1,6 +1,6 @@
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.267 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.267;
+    let Str.299 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.299;
 
 procedure Test.2 (Test.4):
     let Test.16 : U8 = GetTagId Test.4;

@@ -1,0 +1,8 @@
+# +opt infer:allow_errors
+app "test" provides [main] to "./platform"
+
+main =
+    \x -> when x is
+    #^ [A [B]w_a [C]w_b]
+        A B _ -> ""
+        A _ C -> ""
