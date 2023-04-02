@@ -6074,109 +6074,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn encoder() {
-        infer_queries!(
-            indoc!(
-                r#"
-                app "test" provides [myU8Bytes] to "./platform"
-
-                MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
-
-                MEncoding has
-                  toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
-
-                Format has
-                  u8 : U8 -> MEncoder fmt | fmt has Format
-
-                appendWith : List U8, MEncoder fmt, fmt -> List U8 | fmt has Format
-                appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
-
-                toBytes : val, fmt -> List U8 | val has MEncoding, fmt has Format
-                toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
-
-
-                Linear := {} has [Format {u8}]
-
-                u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
-                #^^{-1}
-
-                MyU8 := U8 has [MEncoding {toEncoder}]
-
-                toEncoder = \@MyU8 n -> u8 n
-                #^^^^^^^^^{-1}
-
-                myU8Bytes = toBytes (@MyU8 15) (@Linear {})
-                #^^^^^^^^^{-1}
-                "#
-            ),
-            @r###"
-        Linear#u8(10) : U8 -[[u8(10)]]-> MEncoder Linear
-        MyU8#toEncoder(11) : MyU8 -[[toEncoder(11)]]-> MEncoder fmt | fmt has Format
-        myU8Bytes : List U8
-        "###
-        )
-    }
-
-    #[test]
-    fn decoder() {
-        infer_queries!(
-            indoc!(
-                r#"
-                app "test" provides [myU8] to "./platform"
-
-                MDecodeError : [TooShort, Leftover (List U8)]
-
-                MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
-
-                MDecoding has
-                    decoder : MDecoder val fmt | val has MDecoding, fmt has MDecoderFormatting
-
-                MDecoderFormatting has
-                    u8 : MDecoder U8 fmt | fmt has MDecoderFormatting
-
-                decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
-                decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
-
-                fromBytes : List U8, fmt -> Result val MDecodeError
-                            | fmt has MDecoderFormatting, val has MDecoding
-                fromBytes = \lst, fmt ->
-                    when decodeWith lst decoder fmt is
-                        { result, rest } ->
-                            when result is
-                                Ok val -> if List.isEmpty rest then Ok val else Err (Leftover rest)
-                                Err e -> Err e
-
-
-                Linear := {} has [MDecoderFormatting {u8}]
-
-                u8 = @MDecoder \lst, @Linear {} ->
-                #^^{-1}
-                        when List.first lst is
-                            Ok n -> { result: Ok n, rest: List.dropFirst lst }
-                            Err _ -> { result: Err TooShort, rest: [] }
-
-                MyU8 := U8 has [MDecoding {decoder}]
-
-                decoder = @MDecoder \lst, fmt ->
-                #^^^^^^^{-1}
-                    when decodeWith lst u8 fmt is
-                        { result, rest } ->
-                            { result: Result.map result (\n -> @MyU8 n), rest }
-
-                myU8 : Result MyU8 _
-                myU8 = fromBytes [15] (@Linear {})
-                #^^^^{-1}
-                "#
-            ),
-            @r###"
-        Linear#u8(11) : MDecoder U8 Linear
-        MyU8#decoder(12) : MDecoder MyU8 fmt | fmt has MDecoderFormatting
-        myU8 : Result MyU8 MDecodeError
-        "###
-        )
-    }
-
-    #[test]
     fn task_wildcard_wildcard() {
         infer_eq_without_problem(
             indoc!(
@@ -6195,29 +6092,6 @@ mod solve_expr {
             ),
             "Task val err -> Task * *",
         );
-    }
-
-    #[test]
-    fn static_specialization() {
-        infer_queries!(
-            indoc!(
-                r#"
-                app "test" provides [main] to "./platform"
-
-                Default has default : {} -> a | a has Default
-
-                A := {} has [Default {default}]
-                default = \{} -> @A {}
-
-                main =
-                    a : A
-                    a = default {}
-                #       ^^^^^^^
-                    a
-                "#
-            ),
-            @"A#default(4) : {} -[[default(4)]]-> A"
-        )
     }
 
     #[test]
@@ -6243,43 +6117,6 @@ mod solve_expr {
                 "#
             ),
             "Str",
-        )
-    }
-
-    #[test]
-    fn encode_record() {
-        infer_queries!(
-            indoc!(
-                r#"
-                app "test"
-                    imports [Encode.{ toEncoder }]
-                    provides [main] to "./platform"
-
-                main = toEncoder { a: "" }
-                     # ^^^^^^^^^
-                "#
-            ),
-            @"Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
-        )
-    }
-
-    #[test]
-    fn encode_record_with_nested_custom_impl() {
-        infer_queries!(
-            indoc!(
-                r#"
-                app "test"
-                    imports [Encode.{ toEncoder, custom }]
-                    provides [main] to "./platform"
-
-                A := {} has [Encoding {toEncoder}]
-                toEncoder = \@A _ -> custom \b, _ -> b
-
-                main = toEncoder { a: @A {} }
-                     # ^^^^^^^^^
-                "#
-            ),
-            @"Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 

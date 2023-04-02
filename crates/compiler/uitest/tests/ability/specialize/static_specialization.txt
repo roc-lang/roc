@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+Default has default : {} -> a | a has Default
+
+A := {} has [Default {default}]
+default = \{} -> @A {}
+
+main =
+    a : A
+    a = default {}
+#       ^^^^^^^ A#default(4): {} -[[default(4)]]-> A
+    a
