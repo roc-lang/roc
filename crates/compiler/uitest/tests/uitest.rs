@@ -29,9 +29,8 @@ lazy_static! {
     static ref UITEST_PATH: PathBuf = PathBuf::from(std::env!("ROC_WORKSPACE_DIR"))
         .join("crates")
         .join("compiler")
-        .join("solve")
-        .join("tests")
-        .join("uitest");
+        .join("uitest")
+        .join("tests");
 
     /// # +opt infer:<opt>
     static ref RE_OPT_INFER: Regex =
@@ -67,7 +66,7 @@ fn collect_uitest_files() -> io::Result<Vec<PathBuf>> {
 
 fn into_test(path: PathBuf) -> io::Result<Trial> {
     let name = path
-        .strip_prefix(UITEST_PATH.as_path().parent().unwrap())
+        .strip_prefix(UITEST_PATH.as_path())
         .expect("collected path does not have uitest prefix")
         .display()
         .to_string();

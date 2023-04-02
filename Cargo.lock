@@ -5072,6 +5072,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e79c4d996edb816c91e4308506774452e55e95c3c9de07b6729e17e15a5ef81"
 
 [[package]]
+name = "uitest"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "insta",
+ "lazy_static",
+ "libtest-mimic",
+ "pretty_assertions",
+ "regex",
+ "roc_builtins",
+ "roc_derive",
+ "roc_load",
+ "roc_parse",
+ "roc_problem",
+ "roc_reporting",
+ "roc_solve",
+ "roc_target",
+ "tempfile",
+ "test_solve_helpers",
+]
+
+[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

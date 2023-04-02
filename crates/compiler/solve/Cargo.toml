@@ -7,11 +7,6 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
-[[test]]
-name = "uitest"
-path = "tests/uitest.rs"
-harness = false
-
 [dependencies]
 roc_can = { path = "../can" }
 roc_collections = { path = "../collections" }
