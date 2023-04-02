@@ -411,7 +411,7 @@ fromUtf8Range = \bytes, config ->
         Err OutOfBounds
 
 expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 0, count: 2 }) == Ok "Hi"
-expect (Str.fromUtf8Range [233, 185, 143, 224, 174, 154, 224, 174, 191] { start: 3, count: 3 }) == Ok "சி"
+expect (Str.fromUtf8Range [233, 185, 143, 224, 174, 154, 224, 174, 191] { start: 3, count: 3 }) == Ok "ச"
 expect (Str.fromUtf8Range [240, 159, 144, 166] { start: 0, count: 4 }) == Ok "🐦"
 expect (Str.fromUtf8Range [] { start: 0, count: 0 }) == Ok ""
 expect (Str.fromUtf8Range [72, 105, 80, 103] { start: 2, count: 3 }) |> Result.isErr
