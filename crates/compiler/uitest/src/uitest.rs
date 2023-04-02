@@ -139,7 +139,7 @@ impl TestCase {
             match opt.trim() {
                 "allow_errors" => infer_opts.allow_errors = true,
                 "print_only_under_alias" => infer_opts.print_only_under_alias = true,
-                other => return Err(format!("unknown infer option: {other}").into()),
+                other => return Err(format!("unknown infer option: {other:?}").into()),
             }
         }
 
@@ -154,7 +154,7 @@ impl TestCase {
             let opt = infer_opt.name("opt").unwrap().as_str();
             match opt.trim() {
                 "can_decls" => print_opts.can_decls = true,
-                other => return Err(format!("unknown print option: {other}").into()),
+                other => return Err(format!("unknown print option: {other:?}").into()),
             }
         }
 
