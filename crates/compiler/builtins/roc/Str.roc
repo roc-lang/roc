@@ -1,3 +1,21 @@
+## Roc strings are sequences of text values. This module includes functions for combining strings,
+## as well as breaking them up into smaller units—most commonly [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
+## (referred to in this module's documentation as "graphemes" rather than "characters" for clarity;
+## "characters" can mean very different things in different languages).
+##
+## This module focuses on graphemes (as opposed to, say, Unicode code points or LATIN-1 bytes)
+## because graphemes avoid common classes of bugs. Breaking strings up using code points often
+## leads to bugs around things like emoji, where multiple code points combine to form to a
+## single rendered glyph. Graphemes avoid these bugs by treating multi-code-point things like
+## emojis as indivisible units.
+##
+## Because graphemes can have variable length (there's no upper limit on how many code points one
+## grapheme can represent), it takes linear time to count the number of graphemes in a string,
+## and also linear time to find an individual grapheme within a string by its position (or "index")
+## among the string's other graphemes. The only way to get constant-time access to these is in a way
+## that can result in bugs if the string contains multi-code-point things like emojis, which is why
+## this module does not offer those.
+##
 ##
 ## ## Working with Unicode strings in Roc
 ##
