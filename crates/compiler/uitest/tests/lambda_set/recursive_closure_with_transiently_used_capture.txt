@@ -1,0 +1,14 @@
+app "test" provides [f] to "./platform"
+
+thenDo = \x, callback ->
+    callback x
+
+f = \{} ->
+    code = 10u16
+
+    bf = \{} ->
+    #^^{-1} {} -[[bf(5) U16]]-> *
+        thenDo code \_ -> bf {}
+        #           ^^^^^^^^^^^ U16 -[[6 U16]]-> *
+
+    bf {}

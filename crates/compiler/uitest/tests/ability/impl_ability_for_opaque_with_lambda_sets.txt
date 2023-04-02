@@ -1,0 +1,9 @@
+app "test" provides [isEqQ] to "./platform"
+
+Q := [ F (Str -> Str), G ] has [Eq { isEq: isEqQ }]
+
+isEqQ = \@Q q1, @Q q2 -> when T q1 q2 is
+#^^^^^{-1} Q, Q -[[isEqQ(0)]]-> Bool
+    T (F _) (F _) -> Bool.true
+    T G G -> Bool.true
+    _ -> Bool.false
