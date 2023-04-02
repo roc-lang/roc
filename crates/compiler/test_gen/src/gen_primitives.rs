@@ -4421,3 +4421,42 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
         u8
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn reset_recursive_type_wraps_in_named_type() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            main : Str
+            main =
+              newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
+              printLinkedList newList Num.toStr
+
+            LinkedList a : [Cons a (LinkedList a), Nil]
+
+            mapLinkedList : LinkedList a, (a -> b) -> LinkedList b
+            mapLinkedList = \linkedList, f -> when linkedList is
+              Nil -> Nil
+              Cons x xs ->
+                s = if Bool.true then "true" else "false"
+                expect s == "true"
+
+                Cons (f x) (mapLinkedList xs f)
+
+            printLinkedList : LinkedList a, (a -> Str) -> Str
+            printLinkedList = \linkedList, f ->
+              when linkedList is
+                Nil -> "Nil"
+                Cons x xs ->
+                  strX = f x
+                  strXs = printLinkedList xs f
+                  "Cons \(strX) (\(strXs))"
+            "###
+        ),
+        RocStr::from("Cons 2 (Cons 3 (Cons 4 (Nil)))"),
+        RocStr
+    );
+}

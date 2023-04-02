@@ -305,8 +305,8 @@ where
                 debug_assert_eq!(variant_types.len(), 1);
                 variant_types[0]
             } else {
-                let data_type = builder.add_union_type(&variant_types)?;
                 let cell_type = builder.add_heap_cell_type();
+                let data_type = builder.add_union_type(&variant_types)?;
 
                 builder.add_tuple_type(&[cell_type, data_type])?
             };
@@ -1472,7 +1472,8 @@ fn expr_spec<'a>(
 
             let _unit = builder.add_update(block, update_mode_var, heap_cell)?;
 
-            with_new_heap_cell(builder, block, union_data)
+            let value = with_new_heap_cell(builder, block, union_data)?;
+            builder.add_make_named(block, MOD_APP, type_name, value)
         }
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(env, builder, interner, layout)?;
