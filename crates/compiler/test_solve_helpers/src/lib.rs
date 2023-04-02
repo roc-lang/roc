@@ -1,12 +1,16 @@
 use std::{error::Error, io, path::PathBuf};
 
+use bumpalo::Bump;
 use lazy_static::lazy_static;
 use regex::Regex;
 use roc_can::{
     abilities::AbilitiesStore,
     expr::Declarations,
+    module::ExposedByModule,
     traverse::{find_declaration, find_symbol_at, find_type_at, FoundSymbol},
 };
+use roc_derive::SharedDerivedModule;
+use roc_late_solve::AbilitiesView;
 use roc_load::LoadedModule;
 use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
@@ -44,7 +48,6 @@ pub fn run_load_and_infer(
     src: &str,
     no_promote: bool,
 ) -> Result<(LoadedModule, String), std::io::Error> {
-    use bumpalo::Bump;
     use tempfile::tempdir;
 
     let arena = &Bump::new();
@@ -144,6 +147,9 @@ lazy_static! {
         Regex::new(r#"(?:-(?P<sub>\d+))|(?P<inst>inst)"#).unwrap();
 }
 
+/// Markers of nested query lines, that should be skipped.
+pub const MUTLILINE_MARKER: &str = "│";
+
 #[derive(Debug, Clone)]
 pub struct TypeQuery {
     query_region: Region,
@@ -173,7 +179,7 @@ fn parse_queries(src: &str, line_info: &LineInfo) -> Vec<TypeQuery> {
 
         let mut queries_on_line = RE_TYPE_QUERY.captures_iter(line).into_iter().peekable();
 
-        if queries_on_line.peek().is_none() {
+        if queries_on_line.peek().is_none() || line.contains(MUTLILINE_MARKER) {
             consecutive_query_lines = 0;
             continue;
         } else {
@@ -248,6 +254,7 @@ pub struct InferOptions {
     pub no_promote: bool,
 }
 
+#[derive(Debug)]
 pub enum Elaboration {
     Specialization {
         specialized_name: String,
@@ -265,6 +272,7 @@ pub enum Elaboration {
     },
 }
 
+#[derive(Debug)]
 pub struct InferredQuery {
     pub elaboration: Elaboration,
     /// Where the comment before the query string was written in the source.
@@ -369,9 +377,12 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
     }
 
     let mut inferred_queries = Vec::with_capacity(queries.len());
+    let exposed_by_module = ExposedByModule::default();
+    let arena = Bump::new();
 
     let mut ctx = QueryCtx {
         all_queries: &queries,
+        arena: &arena,
         source: &src,
         declarations: &declarations,
         subs,
@@ -379,6 +390,8 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
         home,
         interns: &interns,
         line_info,
+        derived_module: Default::default(),
+        exposed_by_module,
         options,
     };
 
@@ -399,6 +412,7 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
 
 struct QueryCtx<'a> {
     all_queries: &'a [TypeQuery],
+    arena: &'a Bump,
     source: &'a str,
     declarations: &'a Declarations,
     subs: &'a mut Subs,
@@ -406,6 +420,8 @@ struct QueryCtx<'a> {
     home: ModuleId,
     interns: &'a Interns,
     line_info: LineInfo,
+    derived_module: SharedDerivedModule,
+    exposed_by_module: ExposedByModule,
     options: InferOptions,
 }
 
@@ -422,8 +438,13 @@ impl<'a> QueryCtx<'a> {
         let start = query_region.start().offset;
         let end = query_region.end().offset;
         let text = &self.source[start as usize..end as usize];
-        let var = find_type_at(*query_region, self.declarations)
-            .ok_or_else(|| format!("No type for {:?} ({:?})!", &text, query_region))?;
+        let var = find_type_at(*query_region, self.declarations).ok_or_else(|| {
+            format!(
+                "No type for {:?} ({:?})!",
+                &text,
+                self.line_info.convert_region(*query_region)
+            )
+        })?;
 
         let snapshot = self.subs.snapshot();
 
@@ -498,7 +519,7 @@ impl<'a> QueryCtx<'a> {
             .ok_or_else(|| format!("No def found for {text:?}"))?;
 
         let region = def.region();
-        let lc_region @ LineColumnRegion { start, end } = self.line_info.convert_region(region);
+        let LineColumnRegion { start, end } = self.line_info.convert_region(region);
 
         let start_pos = self.line_info.convert_line_column(LineColumn {
             line: start.line,
@@ -508,12 +529,25 @@ impl<'a> QueryCtx<'a> {
             line: end.line + 1,
             column: 0,
         });
+        let def_region = Region::new(start_pos, end_pos);
         let def_source = &self.source[start_pos.offset as usize..end_pos.offset as usize];
+
+        roc_late_solve::unify(
+            self.home,
+            self.arena,
+            self.subs,
+            &AbilitiesView::Module(self.abilities_store),
+            &self.derived_module,
+            &self.exposed_by_module,
+            var,
+            def.var(),
+        )
+        .map_err(|_| "does not unify")?;
 
         let queries_in_instantiation = self
             .all_queries
             .iter()
-            .filter(|query| lc_region.includes(query.source_line_column))
+            .filter(|query| def_region.contains(&query.query_region))
             .map(|query| self.answer(query))
             .collect::<Result<Vec<_>, _>>()?;
 

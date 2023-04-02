@@ -63,6 +63,15 @@ impl<'a> DeclarationInfo<'a> {
             } => Region::span_across(&loc_pattern.region, &loc_expr.region),
         }
     }
+
+    fn var(&self) -> Variable {
+        match self {
+            DeclarationInfo::Value { expr_var, .. } => *expr_var,
+            DeclarationInfo::Expectation { .. } => Variable::BOOL,
+            DeclarationInfo::Function { expr_var, .. } => *expr_var,
+            DeclarationInfo::Destructure { expr_var, .. } => *expr_var,
+        }
+    }
 }
 
 pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
@@ -805,6 +814,13 @@ impl<'a> FoundDeclaration<'a> {
         match self {
             FoundDeclaration::Decl(decl) => decl.region(),
             FoundDeclaration::Def(def) => def.region(),
+        }
+    }
+
+    pub fn var(&self) -> Variable {
+        match self {
+            FoundDeclaration::Decl(decl) => decl.var(),
+            FoundDeclaration::Def(def) => def.expr_var,
         }
     }
 }

@@ -10,7 +10,7 @@ use lazy_static::lazy_static;
 use libtest_mimic::{run, Arguments, Failed, Trial};
 use regex::Regex;
 use test_solve_helpers::{
-    infer_queries, Elaboration, InferOptions, InferredProgram, InferredQuery,
+    infer_queries, Elaboration, InferOptions, InferredProgram, InferredQuery, MUTLILINE_MARKER,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -101,7 +101,6 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
 }
 
 const EMIT_HEADER: &str = "# -emit:";
-const MUTLILINE_MARKER: &str = "│";
 
 struct TestCase {
     infer_options: InferOptions,
@@ -196,7 +195,7 @@ fn assemble_query_output(
     sorted_queries.reverse();
 
     let mut reflow = Reflow::new_unindented(writer);
-    write_source_with_answers(&mut reflow, source, sorted_queries)?;
+    write_source_with_answers(&mut reflow, source, sorted_queries, 0)?;
 
     // Finish up with any remaining print options we were asked to provide.
     let PrintOptions { can_decls } = print_options;
@@ -212,10 +211,12 @@ fn write_source_with_answers<W: io::Write>(
     reflow: &mut Reflow<'_, W>,
     source: &str,
     mut sorted_queries: Vec<InferredQuery>,
+    offset_line: usize,
 ) -> io::Result<()> {
     for (i, line) in source.lines().enumerate() {
+        let i = i + offset_line;
+
         let mut is_query_line = false;
-        reflow.reset();
 
         // Write all elaborated query lines if applicable.
         while matches!(
@@ -227,8 +228,8 @@ fn write_source_with_answers<W: io::Write>(
         ) {
             let inferred = sorted_queries.pop().unwrap();
 
-            reconstruct_comment_line(reflow, inferred)?;
-            reflow.reset();
+            reflow.scoped(|reflow| reconstruct_comment_line(reflow, inferred))?;
+
             reflow.write("\n")?;
 
             is_query_line = true;
@@ -247,6 +248,18 @@ fn write_source_with_answers<W: io::Write>(
         }
     }
 
+    let mut sorted_queries = sorted_queries.into_iter().peekable();
+    while let Some(sorted_query) = sorted_queries.next() {
+        reflow.scoped(|reflow| reconstruct_comment_line(reflow, sorted_query))?;
+
+        // Only write a newline if we're not yet at the end of the source.
+        // Otherwise, a newline will be written for us after exiting the reconstruction of the
+        // comment line, since this must happen in the reconsutrction of a multi-line query.
+        if sorted_queries.peek().is_some() {
+            reflow.write("\n")?;
+        }
+    }
+
     Ok(())
 }
 
@@ -261,8 +274,7 @@ fn reconstruct_comment_line<W: io::Write>(
         elaboration,
     } = inferred;
 
-    reflow.set_comment(comment_column as _);
-    reflow.set_content(source_line_column.column as _);
+    reflow.add_layer(comment_column as _, source_line_column.column as _);
     reflow.write_and_bump(&format!("{source} "))?;
 
     match elaboration {
@@ -278,51 +290,96 @@ fn reconstruct_comment_line<W: io::Write>(
             typ,
             source,
             offset_line,
-            queries_in_instantiation,
+            mut queries_in_instantiation,
         } => {
             reflow.write(&typ)?;
 
             // Write the source on new line, but at the reflow column the comment is aligned at.
             reflow.set_content(source_line_column.column as _);
             reflow.write("\n")?;
-            reflow.write(&source.trim_end())
+            queries_in_instantiation.reverse();
+
+            write_source_with_answers(
+                reflow,
+                source.trim_end(),
+                queries_in_instantiation,
+                offset_line as _,
+            )
         }
     }
 }
 
 struct Reflow<'a, W: io::Write> {
     writer: &'a mut W,
+    state: ReflowState,
+}
+
+#[derive(Clone, Debug)]
+struct ReflowState {
+    /// true if the first line of the elaboration comment has been written.
     top_line_written: bool,
-    line_prefix_written: bool,
+    /// Number of `content columns` prefixes written.
+    /// If this equals the number of content columns, the whole prefix for a line has been written.
+    content_prefixes_written: usize,
+    /// The column at which to insert the comment prefix "#".
     comment_column: usize,
-    content_column: usize,
+    /// The columns at which content occurs.
+    /// If the stack is >1, then
+    ///   - at the first content column, the [MUTLILINE_MARKER] may be written as appropriate
+    ///   - for subsequent columns, spaces are inserted until the column is reached.
+    content_columns: Vec<usize>,
+}
+
+impl<'a, W: io::Write> std::ops::Deref for Reflow<'a, W> {
+    type Target = ReflowState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl<'a, W: io::Write> std::ops::DerefMut for Reflow<'a, W> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
 }
 
 impl<'a, W: io::Write> Reflow<'a, W> {
     fn new_unindented(writer: &'a mut W) -> Self {
         Self {
             writer,
-            top_line_written: false,
-            line_prefix_written: false,
-            comment_column: 0,
-            content_column: 0,
+            state: ReflowState {
+                top_line_written: false,
+                content_prefixes_written: 0,
+                comment_column: 0,
+                content_columns: vec![],
+            },
         }
     }
 
-    /// Reset to base state.
-    fn reset(&mut self) {
-        self.top_line_written = false;
-        self.line_prefix_written = false;
-        self.comment_column = 0;
-        self.content_column = 0;
+    fn scoped<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let state = self.state.clone();
+        let result = f(self);
+        self.state = state;
+        result
     }
 
-    fn set_comment(&mut self, comment_column: usize) {
-        self.comment_column = comment_column;
+    fn add_layer(&mut self, comment_column: usize, content_column: usize) {
+        if self.comment_column == 0 {
+            // If the comment column is not yet set, this is the top-level and we should update the
+            // state; otherwise, we already have a comment column, only add to the content-ful
+            // layer.
+            self.comment_column = comment_column;
+        }
+        self.content_columns.push(content_column);
     }
 
     fn set_content(&mut self, content_column: usize) {
-        self.content_column = content_column;
+        let latest_column = self
+            .content_columns
+            .last_mut()
+            .expect("cannot set content before adding a layer");
+        *latest_column = content_column;
     }
 
     fn write(&mut self, content: &str) -> io::Result<()> {
@@ -330,22 +387,37 @@ impl<'a, W: io::Write> Reflow<'a, W> {
             if i > 0 {
                 // new line
                 writeln!(self.writer)?;
-                self.line_prefix_written = false;
+                self.content_prefixes_written = 0;
             }
-            if !self.line_prefix_written && self.content_column > 0 {
-                for _ in 0..self.comment_column {
-                    write!(self.writer, " ")?;
-                }
-                write!(self.writer, "#")?;
-                for _ in 0..(self.content_column - self.comment_column - 1) {
-                    write!(self.writer, " ")?;
+
+            // If the content columns are empty, this is top-level and we
+            // have no prefix to write.
+            if self.content_prefixes_written != self.content_columns.len() {
+                if self.content_prefixes_written == 0 {
+                    self.write_n_spaces(self.comment_column)?;
+                    write!(self.writer, "#")?;
+
+                    // For the first column content - write spaces up to the column, and then if we are
+                    // in a multiline context, add the multi-line marker.
+                    {
+                        self.write_n_spaces(self.content_columns[0] - self.comment_column - 1)?;
+
+                        if self.top_line_written {
+                            write!(self.writer, "{MUTLILINE_MARKER} ")?;
+                        }
+                    }
+
+                    self.content_prefixes_written = 1;
                 }
 
-                if self.top_line_written {
-                    write!(self.writer, "{MUTLILINE_MARKER} ")?;
-                }
+                // For all remaining content columns, fill them in with spaces.
+                let remaining_content_columns = self
+                    .content_columns
+                    .iter()
+                    .skip(self.content_prefixes_written);
+                self.write_n_spaces(remaining_content_columns.sum())?;
 
-                self.line_prefix_written = true;
+                self.content_prefixes_written = self.content_columns.len();
                 self.top_line_written = true;
             }
 
@@ -362,7 +434,20 @@ impl<'a, W: io::Write> Reflow<'a, W> {
         );
 
         self.write(content)?;
-        self.content_column += content.len();
+
+        let column = self
+            .content_columns
+            .last_mut()
+            .expect("cannot write_and_bump before adding layer");
+        *column += content.len();
+
+        Ok(())
+    }
+
+    fn write_n_spaces(&mut self, n: usize) -> io::Result<()> {
+        for _ in 0..n {
+            write!(self.writer, " ")?;
+        }
         Ok(())
     }
 }

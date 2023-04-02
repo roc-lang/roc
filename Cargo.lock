@@ -4746,6 +4746,8 @@ dependencies = [
  "pretty_assertions",
  "regex",
  "roc_can",
+ "roc_derive",
+ "roc_late_solve",
  "roc_load",
  "roc_module",
  "roc_packaging",
