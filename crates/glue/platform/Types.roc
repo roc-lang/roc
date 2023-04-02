@@ -22,7 +22,6 @@ Types := {
 
     ## Names and types of the entry points of the program (e.g. mainForHost)
     entrypoints : List Tuple1,
-
     target : Target,
 }
 
@@ -30,7 +29,7 @@ target : Types -> Target
 target = \@Types types -> types.target
 
 entryPoints : Types -> List Tuple1
-entryPoints = \@Types { entrypoints} -> entrypoints
+entryPoints = \@Types { entrypoints } -> entrypoints
 
 walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
 walkShapes = \@Types { types: shapes }, originalState, update ->

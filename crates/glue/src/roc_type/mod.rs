@@ -568,6 +568,7 @@ pub struct RocFn {
     pub functionName: roc_std::RocStr,
     pub lambdaSet: u32,
     pub ret: u32,
+    pub is_toplevel: bool,
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -714,6 +715,7 @@ pub struct RocFn {
     pub functionName: roc_std::RocStr,
     pub lambdaSet: u64,
     pub ret: u64,
+    pub isToplevel: bool,
 }
 
 impl Tuple1 {
