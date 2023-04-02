@@ -202,7 +202,7 @@ fn parse_queries(src: &str, line_info: &LineInfo) -> Vec<TypeQuery> {
                 for directive in directives.as_str().split(',') {
                     let directive = RE_DIRECTIVE
                         .captures(directive)
-                        .expect(&format!("directive {directive} must match RE_DIRECTIVE"));
+                        .unwrap_or_else(|| panic!("directive {directive} must match RE_DIRECTIVE"));
                     if let Some(sub) = directive.name("sub") {
                         subtract_col += sub.as_str().parse::<u32>().expect("must be a number");
                     }

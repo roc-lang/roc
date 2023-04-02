@@ -826,10 +826,7 @@ impl<'a> FoundDeclaration<'a> {
 }
 
 /// Finds the declaration of `symbol`.
-pub fn find_declaration<'a>(
-    symbol: Symbol,
-    decls: &'a Declarations,
-) -> Option<FoundDeclaration<'a>> {
+pub fn find_declaration(symbol: Symbol, decls: &'_ Declarations) -> Option<FoundDeclaration<'_>> {
     let mut visitor = Finder {
         symbol,
         found: None,
