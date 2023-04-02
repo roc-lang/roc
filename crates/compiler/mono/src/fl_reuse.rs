@@ -283,16 +283,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 .retain(|_, reuse_tokens| !reuse_tokens.is_empty());
 
             // Propagate jump reuse tokens upwards.
-            for (joinpoint_id, layout_reuse_tokens) in new_branches
-                .iter()
-                .map(|(_, _, _, branch_env)| branch_env)
-                .chain(std::iter::once(&new_default_branch.2))
-                .flat_map(|branch_env| branch_env.jump_reuse_tokens.iter())
-            {
-                for layout_reuse_token in layout_reuse_tokens.iter() {
-                    environment.add_jump_reuse_tokens(*joinpoint_id, layout_reuse_token.clone());
-                }
-            }
+            environment.propagate_jump_reuse_tokens(
+                new_branches
+                    .into_iter()
+                    .map(|(_, _, _, branch_env)| branch_env)
+                    .chain(std::iter::once(new_default_branch.2)),
+            );
 
             arena.alloc(Stmt::Switch {
                 cond_symbol: *cond_symbol,
@@ -610,6 +606,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 // TODO verify if this works as intended.
                 *environment = first_pass_remainder_environment.clone();
 
+                // Propagate jump reuse tokens upwards.
+                environment
+                    .propagate_jump_reuse_tokens(std::iter::once(first_pass_body_environment));
+
                 return arena.alloc(Stmt::Join {
                     id: *joinpoint_id,
                     parameters: parameters.clone(),
@@ -686,6 +686,11 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             if let None = first_pass_body_environment.get_jump_reuse_tokens(*joinpoint_id) {
                 // The body has no jumps to this join point. So we can just return the body and remainder as is.
                 // As there are no jumps to update.
+
+                // Propagate jump reuse tokens upwards.
+                environment
+                    .propagate_jump_reuse_tokens(std::iter::once(first_pass_body_environment));
+
                 return arena.alloc(Stmt::Join {
                     id: *joinpoint_id,
                     parameters: extended_parameters,
@@ -694,7 +699,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 });
             }
 
-            let second_pass_body = {
+            let (second_pass_body_environment, second_pass_body) = {
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut body_environment = ReuseEnvironment {
                     layout_tags: environment.layout_tags.clone(),
@@ -727,8 +732,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                 body_environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
 
-                second_pass_body
+                (body_environment, second_pass_body)
             };
+
+            environment.propagate_jump_reuse_tokens(std::iter::once(second_pass_body_environment));
 
             arena.alloc(Stmt::Join {
                 id: *joinpoint_id,
@@ -824,7 +831,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     // Wrap the jump in a let statement for each void pointer token layout.
                     void_pointer_layout_symbols.into_iter().fold(
                         arena.alloc(Stmt::Jump(*id, extended_arguments)),
-                        |child, (layout, symbol)| arena.alloc(Stmt::Jump(*id, extended_arguments)),
+                        |child, (layout, symbol)| {
+                            arena.alloc(Stmt::Let(symbol, Expr::NullPointer, layout, child))
+                        },
                     )
                 }
             }
@@ -1000,6 +1009,19 @@ impl<'a> ReuseEnvironment<'a> {
                     .insert(joinpoint_id, vec![reuse_tokens]);
             }
         };
+    }
+
+    /**
+    Propagate the reuse tokens of jumps from multiple environments to the current environment.
+    */
+    fn propagate_jump_reuse_tokens(&mut self, envs: impl Iterator<Item = ReuseEnvironment<'a>>) {
+        for (joinpoint_id, layout_reuse_tokens) in
+            envs.flat_map(|env| env.jump_reuse_tokens.into_iter())
+        {
+            for layout_reuse_token in layout_reuse_tokens.iter() {
+                self.add_jump_reuse_tokens(joinpoint_id, layout_reuse_token.clone());
+            }
+        }
     }
 
     /**
