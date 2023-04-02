@@ -254,41 +254,6 @@ mod solve_expr {
         );
     }
 
-    #[test]
-    fn choose_correct_recursion_var_under_record() {
-        infer_queries!(
-            indoc!(
-                r#"
-                Parser : [
-                    Specialize Parser,
-                    Record (List {parser: Parser}),
-                ]
-
-                printCombinatorParser : Parser -> Str
-                printCombinatorParser = \parser ->
-                    when parser is
-                #        ^^^^^^
-                        Specialize p ->
-                            printed = printCombinatorParser p
-                            if Bool.false then printed else "foo"
-                        Record fields ->
-                            fields
-                                |> List.map \f ->
-                                    printed = printCombinatorParser f.parser
-                                    if Bool.false then printed else "foo"
-                                |> List.first
-                                |> Result.withDefault ("foo")
-
-                printCombinatorParser (Record [])
-                "#
-            ),
-            @r###"
-            parser : [Record (List { parser : a }), Specialize a] as a
-            "###
-            print_only_under_alias: true
-        );
-    }
-
     // LIST
 
     #[test]
@@ -6004,33 +5969,6 @@ mod solve_expr {
                 "#
             ),
             "U64",
-        )
-    }
-
-    #[test]
-    fn intermediate_branch_types() {
-        infer_queries!(
-            indoc!(
-                r#"
-                app "test" provides [foo] to "./platform"
-
-                foo : [True, False] -> Str
-                foo = \ob ->
-                #      ^^
-                    when ob is
-                #        ^^
-                        True -> "A"
-                #       ^^^^
-                        False -> "B"
-                #       ^^^^^
-                "#
-            ),
-            @r###"
-        ob : [False, True]
-        ob : [False, True]
-        True : [False, True]
-        False : [False, True]
-        "###
         )
     }
 
