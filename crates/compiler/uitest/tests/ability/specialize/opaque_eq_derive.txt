@@ -1,0 +1,6 @@
+app "test" provides [main] to "./platform"
+
+N := U8 has [Eq]
+
+main = Bool.isEq (@N 15) (@N 23)
+#      ^^^^^^^^^ N#Bool.isEq(3): N, N -[[#N_isEq(3)]]-> Bool
