@@ -1,0 +1,20 @@
+app "test" provides [main] to "./platform"
+
+F has f : a -> ({} -> b) | a has F, b has G
+G has g : {} -> b | b has G
+
+Fo := {} has [F {f}]
+f = \@Fo {} -> g
+#^{-1} Fo#f(7): Fo -[[f(7)]]-> ({} -[[] + b:g(4):1]-> b) | b has G
+
+Go := {} has [G {g}]
+g = \{} -> @Go {}
+#^{-1} Go#g(8): {} -[[g(8)]]-> Go
+
+main =
+    foo = 1
+    @Go it = (f (@Fo {})) {}
+    #         ^ Fo#f(7): Fo -[[f(7)]]-> ({} -[[g(8)]]-> Go)
+    #         ^^^^^^^^^^ {} -[[g(8)]]-> Go
+
+    {foo, it}
