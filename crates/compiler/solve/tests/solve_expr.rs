@@ -9,9 +9,7 @@ extern crate bumpalo;
 mod solve_expr {
     use roc_can::abilities::ImplKey;
     use roc_load::LoadedModule;
-    use test_solve_helpers::{
-        format_problems, infer_queries_help, run_load_and_infer, InferOptions,
-    };
+    use test_solve_helpers::{format_problems, run_load_and_infer};
 
     use roc_types::{
         pretty_print::{name_and_print_var, DebugPrint},
@@ -92,14 +90,6 @@ mod solve_expr {
             );
         }
         assert_eq!(actual, expected.to_string());
-    }
-
-    macro_rules! infer_queries {
-        ($program:expr, @$queries:literal $($option:ident: $value:expr)*) => {
-            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), InferOptions {
-                $($option: $value,)* ..InferOptions::default()
-            })
-        };
     }
 
     fn check_inferred_abilities<'a, I>(src: &'a str, expected_specializations: I)
