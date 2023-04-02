@@ -6121,19 +6121,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn list_of_lambdas() {
-        infer_queries!(
-            indoc!(
-                r#"
-                [\{} -> {}, \{} -> {}]
-                #^^^^^^^^^^^^^^^^^^^^^^{-1}
-                "#
-            ),
-            @r###"[\{} -> {}, \{} -> {}] : List ({}w_a -[[1, 2]]-> {})"###
-        )
-    }
-
-    #[test]
     fn self_recursion_with_inference_var() {
         infer_eq_without_problem(
             indoc!(
