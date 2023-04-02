@@ -1,0 +1,20 @@
+app "test" provides [main] to "./platform"
+
+Id has id : a -> a | a has Id
+
+A := {} has [Id {id}]
+id = \@A {} -> @A {}
+#^^{-1} A#id(4): A -[[id(4)]]-> A
+
+main =
+    choice : [T, U]
+
+    # Should not get generalized
+    idChoice =
+    #^^^^^^^^{-1} A -[[id(4)]]-> A
+        when choice is
+            T -> id
+            U -> id
+
+    idChoice (@A {})
+    #^^^^^^^^{-1} A -[[id(4)]]-> A
