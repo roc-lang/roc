@@ -42,6 +42,7 @@ pub struct File {
 pub struct Types {
     pub aligns: roc_std::RocList<u32>,
     pub deps: roc_std::RocList<Tuple2>,
+    pub entrypoints: roc_std::RocList<Tuple1>,
     pub sizes: roc_std::RocList<u32>,
     pub types: roc_std::RocList<RocType>,
     pub typesByName: roc_std::RocList<Tuple1>,

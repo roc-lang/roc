@@ -453,7 +453,7 @@ pub fn load_types(
             }
         }
 
-        let types = Types::new(
+        let types = Types::new_with_entry_points(
             arena,
             subs,
             variables.clone(),
@@ -461,6 +461,7 @@ pub fn load_types(
             glue_procs_by_layout,
             layout_cache,
             target_info,
+            exposed_to_host.clone(),
         );
 
         arch_types.push(types);

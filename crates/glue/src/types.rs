@@ -81,7 +81,7 @@ impl Types {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new<'a, I: Iterator<Item = Variable>>(
+    pub(crate) fn new_with_entry_points<'a, I: Iterator<Item = Variable>>(
         arena: &'a Bump,
         subs: &'a Subs,
         variables: I,
@@ -89,6 +89,7 @@ impl Types {
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
+        mut entry_points: MutMap<Symbol, Variable>,
     ) -> Self {
         let mut types = Self::with_capacity(variables.size_hint().0, target);
         let mut env = Env::new(
@@ -102,8 +103,36 @@ impl Types {
 
         for var in variables {
             env.lambda_set_ids = env.find_lambda_sets(var);
-            env.add_type(var, &mut types);
+            let id = env.add_type(var, &mut types);
+
+            let key = entry_points
+                .iter()
+                .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+
+            if let Some((k, id)) = key {
+                let name = k.as_str(env.interns).to_string();
+                types.entry_points.push((name, id));
+                entry_points.remove(&k);
+            }
         }
+
+        let variables: Vec<_> = entry_points.values().copied().collect();
+        for var in variables {
+            env.lambda_set_ids = env.find_lambda_sets(var);
+            let id = env.add_type(var, &mut types);
+
+            let key = entry_points
+                .iter()
+                .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+
+            if let Some((k, id)) = key {
+                let name = k.as_str(env.interns).to_string();
+                types.entry_points.push((name, id));
+                entry_points.remove(&k);
+            }
+        }
+
+        debug_assert!(entry_points.is_empty());
 
         env.resolve_pending_recursive_types(&mut types);
 
@@ -626,9 +655,17 @@ impl From<&Types> for roc_type::Types {
             .iter()
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
+
+        let entrypoints = types
+            .entry_points()
+            .iter()
+            .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
+            .collect();
+
         roc_type::Types {
             aligns: types.aligns.as_slice().into(),
             deps,
+            entrypoints,
             sizes: types.sizes.as_slice().into(),
             types: types.types.iter().map(|t| t.into()).collect(),
             typesByName: types_by_name,
