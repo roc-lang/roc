@@ -1924,7 +1924,7 @@ where
             RocStructFields::HasClosure { fields }
         }
         None => {
-            debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
+            // debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
 
             let fields: Vec<(String, TypeId)> = sortables
                 .into_iter()

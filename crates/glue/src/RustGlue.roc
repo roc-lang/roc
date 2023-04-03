@@ -1,6 +1,6 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.Shape.{ RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId }]
+    imports [pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId }]
     provides [makeGlue] to pf
 
 makeGlue : List Types -> Result (List File) Str
@@ -182,11 +182,19 @@ generateFunction = \buf, types, rocFn ->
             "arg\(c): \(type)"
         |> Str.joinWith ", "
 
-    externArguments =
+    externDefArguments =
+        rocFn.args
+        |> List.mapWithIndex \argId, i ->
+            type = typeName types argId
+            c = Num.toStr i
+            "arg\(c): *const \(type)"
+        |> Str.joinWith ", "
+
+    externCallArguments =
         rocFn.args
         |> List.mapWithIndex \_, i ->
             c = Num.toStr i
-            "arg\(c)"
+            "&arg\(c)"
         |> Str.joinWith ", "
 
     externComma = if Str.isEmpty publicArguments then "" else ", "
@@ -197,6 +205,7 @@ generateFunction = \buf, types, rocFn ->
     \(buf)
 
     #[repr(C)]
+    #[derive(Debug, Clone)]
     pub struct \(name) {
         closure_data: \(lambdaSet),
     }
@@ -204,13 +213,16 @@ generateFunction = \buf, types, rocFn ->
     impl \(name) {
         pub fn force_thunk(mut self, \(publicArguments)) -> \(ret) {
             extern "C" {
-                fn \(externName)(\(publicArguments)\(externComma) closure_data: *mut u8, output: *mut \(ret));
+                fn \(externName)(\(externDefArguments)\(externComma) closure_data: *mut u8, output: *mut \(ret));
             }
 
             let mut output = std::mem::MaybeUninit::uninit();
             let ptr = &mut self.closure_data as *mut _ as *mut u8;
 
-            unsafe { \(externName)(\(externArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
+            unsafe { \(externName)(\(externCallArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
+
+            // ownership of the closure is transferred back to roc
+            core::mem::forget(self.closure_data);
 
             unsafe { output.assume_init() }
         }
@@ -799,35 +811,80 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
         """
 
 generateDeriveStr = \buf, types, type, includeDebug ->
+    condWrite = \b, cond, str ->
+        if cond then
+            Str.concat b str
+        else
+            b
+
+    deriveDebug = when includeDebug is
+        IncludeDebug -> Bool.true
+        ExcludeDebug -> Bool.false
+
     buf
     |> Str.concat "#[derive(Clone, "
-    |> \b ->
-        if !(cannotDeriveCopy types type) then
-            Str.concat b "Copy, "
-        else
-            b
-    |> \b ->
-        if !(cannotDeriveDefault types type) then
-            Str.concat b "Default, "
-        else
-            b
-    |> \b ->
-        when includeDebug is
-            IncludeDebug ->
-                Str.concat b "Debug, "
+    |> condWrite (!(cannotDeriveCopy types type)) "Copy, "
+    |> condWrite (!(cannotDeriveDefault types type)) "Default, "
+    |> condWrite deriveDebug "Debug, "
+    |> condWrite (canDerivePartialEq types type) "PartialEq, PartialOrd, "
+    |> condWrite (!(hasFloat types type) && (canDerivePartialEq types type)) "Eq, Ord, Hash, "
+    |> Str.concat ")]\n"
 
-            ExcludeDebug ->
-                b
-    |> \b ->
-        if !(hasFloat types type) then
-            Str.concat b "Eq, Ord, Hash, "
-        else
-            b
-    |> Str.concat "PartialEq, PartialOrd)]\n"
+canDerivePartialEq : Types, Shape -> Bool
+canDerivePartialEq = \types, type ->
+    when type is
+        Function rocFn ->
+            runtimeRepresentation = Types.shape types rocFn.lambdaSet
+            canDerivePartialEq types runtimeRepresentation
 
+        Unsized -> Bool.false
+
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _)  -> Bool.true
+        RocStr -> Bool.true
+        RocList inner | RocSet inner | RocBox inner ->
+            innerType = Types.shape types inner
+            canDerivePartialEq types innerType
+
+        RocDict k v ->
+            kType = Types.shape types k
+            vType = Types.shape types v
+
+            canDerivePartialEq types kType && canDerivePartialEq types vType
+
+        TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> crash "TODO"
+        TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
+
+        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
+
+        TagUnion (NonRecursive { tags }) ->
+            List.all tags \{ payload } ->
+                when payload is
+                    Some id -> canDerivePartialEq types (Types.shape types id)
+                    None -> Bool.true
+
+        RocResult okId errId ->
+            canDerivePartialEq types (Types.shape types okId)
+            && canDerivePartialEq types (Types.shape types errId)
+
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
+
+        Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
+
+cannotDeriveCopy : Types, Shape -> Bool
 cannotDeriveCopy = \types, type ->
     when type is
-        Unit | Unsized | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
+        Function rocFn ->
+            runtimeRepresentation = Types.shape types rocFn.lambdaSet
+            cannotDeriveCopy types runtimeRepresentation
+
+        # unsized values are heap-allocated
+        Unsized -> Bool.true
+
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _)  -> Bool.false
         RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.true
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
             List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
