@@ -660,11 +660,7 @@ impl From<&Types> for roc_type::Types {
             deps,
             entrypoints,
             sizes: types.sizes.as_slice().into(),
-            types: types
-                .types
-                .iter()
-                .map(|t| roc_type::RocType::from(t))
-                .collect(),
+            types: types.types.iter().map(roc_type::RocType::from).collect(),
             typesByName: types_by_name,
             target: types.target.into(),
         }
