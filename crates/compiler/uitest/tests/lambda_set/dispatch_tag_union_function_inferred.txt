@@ -1,0 +1,6 @@
+app "test" provides [main] to "./platform"
+
+g = if Bool.true then A else B
+
+main = g ""
+#      ^ Str -[[2, 3]]-> [A Str, B Str]w_a

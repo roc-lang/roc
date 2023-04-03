@@ -1878,6 +1878,7 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
+    NullPointer,
 
     StructAtIndex {
         index: u64,
@@ -2016,6 +2017,7 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            NullPointer => alloc.text("NullPointer"),
             Reuse {
                 symbol,
                 tag_id,
@@ -3506,6 +3508,7 @@ fn specialize_proc_help<'a>(
                                 UnionLayout::NonRecursive(_)
                                     | UnionLayout::Recursive(_)
                                     | UnionLayout::NullableUnwrapped { .. }
+                                    | UnionLayout::NullableWrapped { .. }
                             ));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 
@@ -4961,9 +4964,6 @@ pub fn with_hole<'a>(
                 Layout::Struct { field_layouts, .. } => field_layouts,
                 _ => arena.alloc([record_layout]),
             };
-
-            debug_assert_eq!(field_layouts.len(), symbols.len());
-            debug_assert_eq!(fields.len(), symbols.len());
 
             if symbols.len() == 1 {
                 // TODO we can probably special-case this more, skippiing the generation of
@@ -7463,6 +7463,8 @@ fn substitute_in_expr<'a>(
                 None
             }
         }
+
+        NullPointer => None,
 
         Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
 

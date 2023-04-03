@@ -992,7 +992,6 @@ struct State<'a> {
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     pub arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
-    #[allow(unused)]
     pub derived_module: SharedDerivedModule,
 
     pub ident_ids_by_module: SharedIdentIdsByModule,

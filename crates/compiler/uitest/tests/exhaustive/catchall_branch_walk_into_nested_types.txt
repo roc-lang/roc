@@ -1,0 +1,7 @@
+app "test" provides [main] to "./platform"
+
+main =
+    \x -> when x is
+    #^ { a : [A { b : [B]w_a }*]w_b }*
+        { a: A { b: B } } -> ""
+        _ -> ""

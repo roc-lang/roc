@@ -1461,7 +1461,10 @@ mod test_reporting {
 
     But `f` needs its 1st argument to be:
 
-        [Green, Red]
+        [
+            Green,
+            Red,
+        ]
 
     Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1495,7 +1498,10 @@ mod test_reporting {
 
     But `f` needs its 1st argument to be:
 
-        [Green Str, Red (Int *)]
+        [
+            Green Str,
+            Red (Int *),
+        ]
 
     Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -2528,11 +2534,11 @@ mod test_reporting {
 
     This `a` value is a:
 
-        [A]
+        […]
 
     But the type annotation on `f` says it should be:
 
-        [A, B]
+        [B, …]
 
     Tip: Looks like a closed tag union does not have the `B` tag.
 
@@ -2562,11 +2568,15 @@ mod test_reporting {
 
     This `a` value is a:
 
-        [A]
+        […]
 
     But the type annotation on `f` says it should be:
 
-        [A, B, C]
+        [
+            B,
+            C,
+            …
+        ]
 
     Tip: Looks like a closed tag union does not have the `B` and `C` tags.
 
@@ -2631,11 +2641,11 @@ mod test_reporting {
 
     This `x` value is a:
 
-        [Left {}, Right Str]
+        [Right Str, …]
 
     But you are trying to use it as:
 
-        [Left *]
+        […]
 
     Tip: Looks like a closed tag union does not have the `Right` tag.
 
@@ -3380,11 +3390,23 @@ mod test_reporting {
 
     This `Cons` tag application has the type:
 
-        [Cons {} [Cons Str [Cons {} a, Nil]b as a, Nil]b, Nil]b
+        [
+            Cons {} [
+                Cons Str [
+                    Cons {} a,
+                    Nil,
+                ]b as a,
+                Nil,
+            ]b,
+            Nil,
+        ]b
 
     But the type annotation on `x` says it should be:
 
-        [Cons {} a, Nil] as a
+        [
+            Cons {} a,
+            Nil,
+        ] as a
     "###
     );
 
@@ -3417,12 +3439,29 @@ mod test_reporting {
 
     This `ACons` tag application has the type:
 
-        [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
-        ANil]b as ∞, BNil]c, ANil]b, BNil]c, ANil]b
+        [
+            ACons (Int Signed64) [
+                BCons (Int Signed64) [
+                    ACons Str [
+                        BCons I64 [
+                            ACons I64 (BList I64 I64),
+                            ANil,
+                        ]b as ∞,
+                        BNil,
+                    ]c,
+                    ANil,
+                ]b,
+                BNil,
+            ]c,
+            ANil,
+        ]b
 
     But the type annotation on `x` says it should be:
 
-        [ACons I64 (BList I64 I64), ANil] as a
+        [
+            ACons I64 (BList I64 I64),
+            ANil,
+        ] as a
     "###
     );
 
@@ -7946,11 +7985,11 @@ In roc, functions are always written as a lambda, like{}
 
     This `v` value is a:
 
-        F [A, B, C]
+        F [C, …]
 
     But the branch patterns have type:
 
-        F [A, B]
+        F […]
 
     The branches must be cases of the `when` condition's type!
 
@@ -8976,26 +9015,30 @@ In roc, functions are always written as a lambda, like{}
             foo
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        The branches of this `when` expression don't match the condition:
+    The branches of this `when` expression don't match the condition:
 
-        6│>          when bool is
-        7│               True -> "true"
-        8│               False -> "false"
-        9│               Wat -> "surprise!"
+    6│>          when bool is
+    7│               True -> "true"
+    8│               False -> "false"
+    9│               Wat -> "surprise!"
 
-        This `bool` value is a:
+    This `bool` value is a:
 
-            Bool
+        Bool
 
-        But the branch patterns have type:
+    But the branch patterns have type:
 
-            [False, True, Wat]
+        [
+            False,
+            True,
+            Wat,
+        ]
 
-        The branches must be cases of the `when` condition's type!
-        "#
+    The branches must be cases of the `when` condition's type!
+    "###
     );
 
     // from https://github.com/roc-lang/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
@@ -9976,7 +10019,10 @@ In roc, functions are always written as a lambda, like{}
 
     This `lst` value is a:
 
-        [Cons {} ∞, Nil] as ∞
+        [
+            Cons {} ∞,
+            Nil,
+        ] as ∞
 
     But the type annotation on `olist` says it should be:
 
@@ -10543,11 +10589,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `u8` value is a:
 
-        [Bad [DecodeProblem], Good (List U8)]
+        [Good …, …]
 
     But the branch patterns have type:
 
-        [Bad [DecodeProblem], Good (List U8) *]
+        [Good … *, …]
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -12119,7 +12165,10 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     The `when` condition is a list of type:
 
-        List [A, B]
+        List [
+            A,
+            B,
+        ]
 
     But the branch patterns have type:
 
@@ -13102,11 +13151,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `map` call produces:
 
-        List [One, Two]
+        List [Two, …]
 
     But the type annotation on `main` says it should be:
 
-        List [One]
+        List […]
     "###
     );
 
@@ -13140,11 +13189,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `map` call produces:
 
-        List [One, Two]
+        List [Two, …]
 
     But the type annotation on `main` says it should be:
 
-        List [One]
+        List […]
     "###
     );
 

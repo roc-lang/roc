@@ -1,4 +1,5 @@
 use crate::enums::Enums;
+use crate::roc_type;
 use crate::structs::Structs;
 use bumpalo::Bump;
 use fnv::FnvHashMap;
@@ -18,12 +19,19 @@ use roc_mono::{
         InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
     },
 };
-use roc_target::TargetInfo;
+use roc_target::{Architecture, OperatingSystem, TargetInfo};
 use roc_types::{
     subs::{Content, FlatType, GetSubsSlice, Label, Subs, UnionLabels, Variable},
     types::{AliasKind, RecordField},
 };
+use std::convert::From;
 use std::fmt::Display;
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct File {
+    pub name: String,
+    pub content: String,
+}
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
@@ -38,6 +46,8 @@ impl TypeId {
     const MAX: Self = Self(Self::PENDING.0 - 1);
 }
 
+// TODO: remove this and instead generate directly into roc_type::Types
+// Probably want to fix roc_std::RocDict and update roc_type::Types to use it first.
 #[derive(Debug, Clone)]
 pub struct Types {
     // These are all indexed by TypeId
@@ -54,11 +64,13 @@ pub struct Types {
     /// This is important for declaration order in C; we need to output a
     /// type declaration earlier in the file than where it gets referenced by another type.
     deps: VecMap<TypeId, Vec<TypeId>>,
+    target: TargetInfo,
 }
 
 impl Types {
-    pub fn with_capacity(cap: usize) -> Self {
+    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
         Self {
+            target: target_info,
             types: Vec::with_capacity(cap),
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             entry_points: Vec::new(),
@@ -78,7 +90,7 @@ impl Types {
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
     ) -> Self {
-        let mut types = Self::with_capacity(variables.size_hint().0);
+        let mut types = Self::with_capacity(variables.size_hint().0, target);
         let mut env = Env::new(
             arena,
             subs,
@@ -594,6 +606,292 @@ impl Types {
                 groups: _,
                 nodes_in_cycle,
             } => unreachable!("Cyclic type definitions: {:?}", nodes_in_cycle),
+        }
+    }
+
+    pub fn target(&self) -> TargetInfo {
+        self.target
+    }
+}
+
+impl From<&Types> for roc_type::Types {
+    fn from(types: &Types) -> Self {
+        let deps = types
+            .deps
+            .iter()
+            .map(|(k, v)| roc_type::Tuple2::T(k.0 as _, v.iter().map(|x| x.0 as _).collect()))
+            .collect();
+        let types_by_name = types
+            .types_by_name
+            .iter()
+            .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
+            .collect();
+        roc_type::Types {
+            aligns: types.aligns.as_slice().into(),
+            deps,
+            sizes: types.sizes.as_slice().into(),
+            types: types.types.iter().map(|t| t.into()).collect(),
+            typesByName: types_by_name,
+            target: types.target.into(),
+        }
+    }
+}
+
+impl From<&RocType> for roc_type::RocType {
+    fn from(rc: &RocType) -> Self {
+        match rc {
+            RocType::RocStr => roc_type::RocType::RocStr,
+            RocType::Bool => roc_type::RocType::Bool,
+            RocType::RocResult(ok, err) => roc_type::RocType::RocResult(ok.0 as _, err.0 as _),
+            RocType::Num(num_type) => roc_type::RocType::Num(num_type.into()),
+            RocType::RocList(elem) => roc_type::RocType::RocList(elem.0 as _),
+            RocType::RocDict(k, v) => roc_type::RocType::RocDict(k.0 as _, v.0 as _),
+            RocType::RocSet(elem) => roc_type::RocType::RocSet(elem.0 as _),
+            RocType::RocBox(elem) => roc_type::RocType::RocBox(elem.0 as _),
+            RocType::TagUnion(union) => roc_type::RocType::TagUnion(union.into()),
+            RocType::EmptyTagUnion => roc_type::RocType::EmptyTagUnion,
+            RocType::Struct { name, fields } => roc_type::RocType::Struct(roc_type::R1 {
+                fields: fields.into(),
+                name: name.as_str().into(),
+            }),
+            RocType::TagUnionPayload { name, fields } => {
+                roc_type::RocType::TagUnionPayload(roc_type::R1 {
+                    fields: fields.into(),
+                    name: name.as_str().into(),
+                })
+            }
+            RocType::RecursivePointer(elem) => roc_type::RocType::RecursivePointer(elem.0 as _),
+            RocType::Function(RocFn {
+                function_name,
+                extern_name,
+                args,
+                lambda_set,
+                ret,
+            }) => roc_type::RocType::Function(roc_type::RocFn {
+                args: args.iter().map(|arg| arg.0 as _).collect(),
+                functionName: function_name.as_str().into(),
+                externName: extern_name.as_str().into(),
+                ret: ret.0 as _,
+                lambdaSet: lambda_set.0 as _,
+            }),
+            RocType::Unit => roc_type::RocType::Unit,
+            RocType::Unsized => roc_type::RocType::Unsized,
+        }
+    }
+}
+
+impl From<&RocNum> for roc_type::RocNum {
+    fn from(rn: &RocNum) -> Self {
+        match rn {
+            RocNum::I8 => roc_type::RocNum::I8,
+            RocNum::U8 => roc_type::RocNum::U8,
+            RocNum::I16 => roc_type::RocNum::I16,
+            RocNum::U16 => roc_type::RocNum::U16,
+            RocNum::I32 => roc_type::RocNum::I32,
+            RocNum::U32 => roc_type::RocNum::U32,
+            RocNum::I64 => roc_type::RocNum::I64,
+            RocNum::U64 => roc_type::RocNum::U64,
+            RocNum::I128 => roc_type::RocNum::I128,
+            RocNum::U128 => roc_type::RocNum::U128,
+            RocNum::F32 => roc_type::RocNum::F32,
+            RocNum::F64 => roc_type::RocNum::F64,
+            RocNum::Dec => roc_type::RocNum::Dec,
+        }
+    }
+}
+
+impl From<&RocTagUnion> for roc_type::RocTagUnion {
+    fn from(rtu: &RocTagUnion) -> Self {
+        match rtu {
+            RocTagUnion::Enumeration { name, tags, size } => {
+                roc_type::RocTagUnion::Enumeration(roc_type::R5 {
+                    name: name.as_str().into(),
+                    tags: tags.iter().map(|name| name.as_str().into()).collect(),
+                    size: *size,
+                })
+            }
+            RocTagUnion::NonRecursive {
+                name,
+                tags,
+                discriminant_size,
+                discriminant_offset,
+            } => roc_type::RocTagUnion::NonRecursive(roc_type::R7 {
+                name: name.as_str().into(),
+                tags: tags
+                    .iter()
+                    .map(|(name, payload)| roc_type::R8 {
+                        name: name.as_str().into(),
+                        payload: payload.into(),
+                    })
+                    .collect(),
+                discriminantSize: *discriminant_size,
+                discriminantOffset: *discriminant_offset,
+            }),
+            RocTagUnion::Recursive {
+                name,
+                tags,
+                discriminant_size,
+                discriminant_offset,
+            } => roc_type::RocTagUnion::Recursive(roc_type::R7 {
+                name: name.as_str().into(),
+                tags: tags
+                    .iter()
+                    .map(|(name, payload)| roc_type::R8 {
+                        name: name.as_str().into(),
+                        payload: payload.into(),
+                    })
+                    .collect(),
+                discriminantSize: *discriminant_size,
+                discriminantOffset: *discriminant_offset,
+            }),
+            RocTagUnion::NonNullableUnwrapped {
+                name,
+                tag_name,
+                payload,
+            } => roc_type::RocTagUnion::NonNullableUnwrapped(roc_type::R6 {
+                name: name.as_str().into(),
+                tagName: tag_name.as_str().into(),
+                payload: payload.0 as _,
+            }),
+            RocTagUnion::SingleTagStruct {
+                name,
+                tag_name,
+                payload,
+            } => roc_type::RocTagUnion::SingleTagStruct(roc_type::R14 {
+                name: name.as_str().into(),
+                tagName: tag_name.as_str().into(),
+                payload: payload.into(),
+            }),
+            RocTagUnion::NullableWrapped {
+                name,
+                index_of_null_tag,
+                tags,
+                discriminant_size,
+                discriminant_offset,
+            } => roc_type::RocTagUnion::NullableWrapped(roc_type::R10 {
+                name: name.as_str().into(),
+                indexOfNullTag: *index_of_null_tag,
+                tags: tags
+                    .iter()
+                    .map(|(name, payload)| roc_type::R8 {
+                        name: name.as_str().into(),
+                        payload: payload.into(),
+                    })
+                    .collect(),
+                discriminantSize: *discriminant_size,
+                discriminantOffset: *discriminant_offset,
+            }),
+            RocTagUnion::NullableUnwrapped {
+                name,
+                null_tag,
+                non_null_tag,
+                non_null_payload,
+                null_represents_first_tag,
+            } => roc_type::RocTagUnion::NullableUnwrapped(roc_type::R9 {
+                name: name.as_str().into(),
+                nonNullPayload: non_null_payload.0 as _,
+                nonNullTag: non_null_tag.as_str().into(),
+                nullTag: null_tag.as_str().into(),
+                whichTagIsNull: if *null_represents_first_tag {
+                    roc_type::U2::FirstTagIsNull
+                } else {
+                    roc_type::U2::SecondTagIsNull
+                },
+            }),
+        }
+    }
+}
+
+impl From<&RocStructFields> for roc_type::RocStructFields {
+    fn from(struct_fields: &RocStructFields) -> Self {
+        match struct_fields {
+            RocStructFields::HasNoClosure { fields } => roc_type::RocStructFields::HasNoClosure(
+                fields
+                    .iter()
+                    .map(|(name, id)| roc_type::R4 {
+                        name: name.as_str().into(),
+                        id: id.0 as _,
+                    })
+                    .collect(),
+            ),
+            RocStructFields::HasClosure { fields } => roc_type::RocStructFields::HasClosure(
+                fields
+                    .iter()
+                    .map(|(name, id, accessors)| roc_type::R2 {
+                        name: name.as_str().into(),
+                        id: id.0 as _,
+                        accessors: roc_type::R3 {
+                            getter: accessors.getter.as_str().into(),
+                        },
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl From<&RocSingleTagPayload> for roc_type::RocSingleTagPayload {
+    fn from(struct_fields: &RocSingleTagPayload) -> Self {
+        match struct_fields {
+            RocSingleTagPayload::HasNoClosure { payload_fields } => {
+                roc_type::RocSingleTagPayload::HasNoClosure(
+                    payload_fields
+                        .iter()
+                        .map(|id| roc_type::R16 { id: id.0 as _ })
+                        .collect(),
+                )
+            }
+            RocSingleTagPayload::HasClosure { payload_getters } => {
+                roc_type::RocSingleTagPayload::HasClosure(
+                    payload_getters
+                        .iter()
+                        .map(|(id, name)| roc_type::R4 {
+                            id: id.0 as _,
+                            name: name.as_str().into(),
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
+}
+
+impl From<&Option<TypeId>> for roc_type::U1 {
+    fn from(opt: &Option<TypeId>) -> Self {
+        match opt {
+            Some(x) => roc_type::U1::Some(x.0 as _),
+            None => roc_type::U1::None,
+        }
+    }
+}
+
+impl From<TargetInfo> for roc_type::Target {
+    fn from(target: TargetInfo) -> Self {
+        roc_type::Target {
+            architecture: target.architecture.into(),
+            operatingSystem: target.operating_system.into(),
+        }
+    }
+}
+
+impl From<Architecture> for roc_type::Architecture {
+    fn from(arch: Architecture) -> Self {
+        match arch {
+            Architecture::Aarch32 => roc_type::Architecture::Aarch32,
+            Architecture::Aarch64 => roc_type::Architecture::Aarch64,
+            Architecture::Wasm32 => roc_type::Architecture::Wasm32,
+            Architecture::X86_32 => roc_type::Architecture::X86x32,
+            Architecture::X86_64 => roc_type::Architecture::X86x64,
+        }
+    }
+}
+
+impl From<OperatingSystem> for roc_type::OperatingSystem {
+    fn from(os: OperatingSystem) -> Self {
+        match os {
+            OperatingSystem::Windows => roc_type::OperatingSystem::Windows,
+            OperatingSystem::Unix => roc_type::OperatingSystem::Unix,
+            OperatingSystem::Wasi => roc_type::OperatingSystem::Wasi,
         }
     }
 }

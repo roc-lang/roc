@@ -28,8 +28,8 @@ procedure Num.22 (#Attr.2, #Attr.3):
     ret Num.275;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.267 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.267;
+    let Str.299 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.299;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";

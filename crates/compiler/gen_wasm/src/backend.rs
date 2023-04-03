@@ -1041,6 +1041,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         match expr {
             Expr::Literal(lit) => self.expr_literal(lit, storage),
 
+            Expr::NullPointer => self.expr_null_pointer(),
+
             Expr::Call(roc_mono::ir::Call {
                 call_type,
                 arguments,
@@ -1230,6 +1232,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.module.data.append_segment(segment);
 
         elements_addr
+    }
+
+    fn expr_null_pointer(&mut self) {
+        self.code_builder.i32_const(0);
     }
 
     /*******************************************************************
