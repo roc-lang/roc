@@ -1120,7 +1120,7 @@ fn can_reuse_layout_tag<'a, 'i>(
 
 /**
 Drop the reuse tokens that are not used anymore.
-Usefull when reuse tokens are used in a branch, and thus should be created.
+Useful when reuse tokens are used in a branch, and thus should be created.
 But not in all branches, and thus should be dropped in those branches.
 */
 fn drop_unused_reuse_tokens<'a>(

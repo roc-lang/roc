@@ -569,7 +569,7 @@ impl<'v> RefcountEnvironment<'v> {
 
     /**
     Remove non reference counted variables from an iterator.
-    Usefull when we want to insert reference count operations for symbols that might not be rc.
+    Useful when we want to insert reference count operations for symbols that might not be rc.
     */
     fn filter_rc_variables<'a>(
         self: &RefcountEnvironment<'v>,
@@ -718,7 +718,7 @@ fn insert_refcount_operations_proc<'a, 'i>(
 
 /**
 Given an environment, insert the reference counting operations for a statement.
-Assuming that a symbol can only be defined once (no binding to the same variable mutliple times).
+Assuming that a symbol can only be defined once (no binding to the same variable multiple times).
 */
 fn insert_refcount_operations_stmt<'v, 'a>(
     arena: &'a Bump,
