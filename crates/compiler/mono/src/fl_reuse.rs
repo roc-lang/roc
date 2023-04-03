@@ -1,15 +1,17 @@
 // Frame limited reuse
 // Based on Reference Counting with Frame Limited Reuse
 
+use crate::borrow::Ownership;
 use crate::ir::{
-    BranchInfo, Expr, JoinPointId, ModifyRc, Proc, ProcLayout, Stmt, UpdateModeId, UpdateModeIds,
+    BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt, UpdateModeId,
+    UpdateModeIds,
 };
 use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
 
 use bumpalo::Bump;
 
 use bumpalo::collections::vec::Vec;
-use roc_collections::MutMap;
+use roc_collections::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 /**
@@ -237,7 +239,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             // Then we drop any unused reuse tokens in branches where the minimum is not reached.
             let newer_branches = Vec::from_iter_in(
                 new_branches
-                    .into_iter()
+                    .iter()
                     .map(|(label, info, branch, branch_env)| {
                         let unused_tokens=  branch_env.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
                             let min_reuse_tokens = layout_min_reuse_tokens.get(&layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
@@ -247,23 +249,24 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                         let newer_branch = drop_unused_reuse_tokens(arena, unused_tokens.copied(), branch);
 
-                        (label, info, newer_branch.clone())
+                        (*label, info.clone(), newer_branch.clone())
                     }),
                 arena,
             )
             .into_bump_slice();
 
             let newer_default_branch = {
-                let (info, branch, branch_env) = new_default_branch;
-                let unused_tokens=  branch_env.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
+                // let (info, branch, branch_env) = new_default_branch;
+                let unused_tokens=  new_default_branch.2.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
                     let min_reuse_tokens = layout_min_reuse_tokens.get(&layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
                     let unused_tokens = &reuse_tokens[*min_reuse_tokens..];
                     unused_tokens
                 });
 
-                let newer_branch = drop_unused_reuse_tokens(arena, unused_tokens.copied(), branch);
+                let newer_branch =
+                    drop_unused_reuse_tokens(arena, unused_tokens.copied(), new_default_branch.1);
 
-                (info, newer_branch)
+                (new_default_branch.0, newer_branch)
             };
 
             // And finally we update the current environment to reflect the correct number of reuse tokens.
@@ -273,10 +276,19 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 );
                 reuse_tokens.truncate(*min_reuse_tokens)
             }
+
             // And remove any layouts that are no longer used.
             environment
                 .reuse_tokens
                 .retain(|_, reuse_tokens| !reuse_tokens.is_empty());
+
+            // Propagate jump reuse tokens upwards.
+            environment.propagate_jump_reuse_tokens(
+                new_branches
+                    .into_iter()
+                    .map(|(_, _, _, branch_env)| branch_env)
+                    .chain(std::iter::once(new_default_branch.2)),
+            );
 
             arena.alloc(Stmt::Switch {
                 cond_symbol: *cond_symbol,
@@ -309,7 +321,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 symbol: Symbol::new(home, ident_ids.gen_unique()),
                                 update_mode_id: update_mode_ids.next_id(),
                             };
-                            environment.push_reuse_token(&layout_clone, reuse_token);
 
                             let dec_ref = match rc {
                                 ModifyRc::Dec(_) => false,
@@ -317,6 +328,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 _ => unreachable!(),
                             };
 
+                            environment.push_reuse_token(arena, &layout_clone, reuse_token);
                             Some((layout_clone, *symbol, reuse_token, dec_ref))
                         }
                         _ => None,
@@ -454,98 +466,392 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             })
         }
         Stmt::Join {
-            id,
+            id: joinpoint_id,
             parameters,
             body,
             remainder,
         } => {
-            // let joinpoint_reuse_tokens: MutMap<InLayout<'a>, u16> = MutMap::default();
+            // First we evaluate the remainder, to see what reuse tokens are available at each jump. We generate code as if no reuse tokens are used.
+            // Then we evaluate the body, to see what reuse tokens are consumed by the body.
+            // - If no reuse tokens are consumed (or when there were no available in the previous step), we stop here and return the first pass variables.
+            // Then we evaluate the body and remainder again, given the consumed reuse tokens. And we update the joinpoint parameters.
 
-            // let new_remainder = loop {
-            //     let mut new_environment = environment.clone();
-            //     new_environment.add_joinpoint_reuse_tokens(*id, joinpoint_reuse_tokens);
+            let (first_pass_remainder_environment, first_pass_remainder) = {
+                let mut first_pass_environment = environment.clone();
 
-            //     let new_remainder = insert_reset_reuse_operations_stmt(
-            //         arena,
-            //         layout_interner,
-            //         home,
-            //         ident_ids,
-            //         update_mode_ids,
-            //         &mut new_environment,
-            //         remainder,
-            //     );
+                first_pass_environment.add_joinpoint_reuse_tokens(
+                    *joinpoint_id,
+                    JoinPointReuseTokens::RemainderFirstPass,
+                );
 
-            //     let all_reuse_tokens = new_environment.get_jump_reuse_tokens(*id);
-            //     let all_reuse_layouts = all_reuse_tokens.iter().flat_map(|foo| foo.keys());
-            //     let reuse_layouts_max_tokens = all_reuse_layouts;
+                let first_pass_remainder = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    &mut first_pass_environment,
+                    remainder,
+                );
 
-            //     let new_joinpoint_reuse_tokens = todo!();
+                first_pass_environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
 
-            //     // TODO pass new reuse_tokens to body.
-
-            //     if (joinpoint_reuse_tokens != new_joinpoint_reuse_tokens) {
-            //         break new_remainder;
-            //     }
-
-            //     joinpoint_reuse_tokens = new_joinpoint_reuse_tokens;
-            // };
-
-            // TODO how to deal with joinpoints?
-            // We could like to reuse any memory before the jump, but we don't know wherefrom we will jump yet.
-            // Perhaps evaluate the body first, see what layouts could be reused, and then at the jump actually use some of them. While giving that back to here so we can only insert the used ones.
-            // Or evaluate the remainder first, see what is available at each jump to this join point. And then reuse those available from all jumps. (would require fixed point over the whole remainder...).
-            // And we need to pass the parameter to the join point as well, so we can reuse it.
-
-            // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
-            let mut body_environment = ReuseEnvironment {
-                layout_tags: environment.layout_tags.clone(),
-                reuse_tokens: ReuseTokens::default(),
-                symbol_layouts: environment.symbol_layouts.clone(),
-                joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
-                jump_reuse_tokens: environment.jump_reuse_tokens.clone(),
+                (first_pass_environment, first_pass_remainder)
             };
 
-            // Add the parameters to the body environment as well.
-            for param in parameters.iter() {
-                body_environment.add_symbol_layout(param.symbol, &param.layout);
+            let max_reuse_tokens = {
+                let all_reuse_maps = first_pass_remainder_environment
+                    .get_jump_reuse_tokens(*joinpoint_id)
+                    .expect(
+                        "Expected join point to be jumped to at least once from the remainder.",
+                    );
+                let all_reuse_layouts = all_reuse_maps
+                    .iter()
+                    .flat_map(|reuse_map| reuse_map.keys())
+                    // PERF: replace this collect with an unique iterator. To make sure every layout is only used once.
+                    .collect::<MutSet<_>>()
+                    .into_iter();
+                let reuse_layouts_max_tokens = all_reuse_layouts.map(|reuse_layout| {
+                    let max_token = all_reuse_maps
+                        .iter()
+                        .map(|reuse_map| {
+                            reuse_map
+                                .get(reuse_layout)
+                                .map(|tokens| tokens.len())
+                                .unwrap_or(0)
+                        })
+                        .max()
+                        .expect("all layouts should be in at least one of the reuse maps");
+                    (reuse_layout, max_token)
+                });
+                Vec::from_iter_in(reuse_layouts_max_tokens, arena)
+            };
+
+            let (first_pass_body_environment, first_pass_body, used_reuse_tokens) = {
+                // For each possibly available reuse token, create a reuse token to add to the join point environment.
+                let max_reuse_token_symbols = max_reuse_tokens
+                    .iter()
+                    .map(|(layout, size)| {
+                        (
+                            **layout,
+                            Vec::from_iter_in(
+                                (0..*size).map(|_| ReuseToken {
+                                    symbol: Symbol::new(home, ident_ids.gen_unique()),
+                                    update_mode_id: update_mode_ids.next_id(),
+                                }),
+                                arena,
+                            ),
+                        )
+                    })
+                    .collect::<ReuseTokens>();
+
+                // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
+                let mut first_pass_body_environment = ReuseEnvironment {
+                    layout_tags: environment.layout_tags.clone(),
+                    reuse_tokens: max_reuse_token_symbols.clone(),
+                    symbol_layouts: environment.symbol_layouts.clone(),
+                    joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
+                    jump_reuse_tokens: environment.jump_reuse_tokens.clone(),
+                };
+
+                // Add the parameters to the body environment as well.
+                for param in parameters.iter() {
+                    first_pass_body_environment.add_symbol_layout(param.symbol, &param.layout);
+                }
+
+                // Add a entry so that the body knows any jumps to this join point is recursive.
+                first_pass_body_environment
+                    .add_joinpoint_reuse_tokens(*joinpoint_id, JoinPointReuseTokens::BodyFirstPass);
+
+                let first_pass_body = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    &mut first_pass_body_environment,
+                    body,
+                );
+
+                first_pass_body_environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
+
+                let used_reuse_tokens = {
+                    max_reuse_token_symbols
+                        .iter()
+                        .filter_map(|(layout, reuse_tokens)| {
+                            match first_pass_body_environment.reuse_tokens.get(layout) {
+                                Some(remaining_tokens) => {
+                                    // There are tokens left, remove those from the bottom of the stack and retun the consumed ones.
+                                    let mut consumed_reuse_tokens = reuse_tokens
+                                        .iter()
+                                        .skip(remaining_tokens.len())
+                                        .copied()
+                                        .peekable();
+                                    match consumed_reuse_tokens.peek() {
+                                        // If there are no consumed tokens, remove the layout from the map.
+                                        None => None,
+                                        // Otherwise return the layout and the consumed tokens.
+                                        Some(_) => Some((
+                                            *layout,
+                                            Vec::from_iter_in(consumed_reuse_tokens, arena),
+                                        )),
+                                    }
+                                }
+                                None => {
+                                    // All tokens were consumed. Meaning all of them should be passed from the jump. Keep tokens as is.
+                                    Some((*layout, reuse_tokens.clone()))
+                                }
+                            }
+                        })
+                        .collect::<ReuseTokens>()
+                };
+
+                (
+                    first_pass_body_environment,
+                    first_pass_body,
+                    used_reuse_tokens,
+                )
+            };
+
+            // In the evaluation of the body and remainder we assumed no reuse tokens to be used.
+            // So if there indeed are no reuse tokens used, we can just return the body and remainder as is.
+            if used_reuse_tokens.is_empty() {
+                // We evaluated the first pass using a cloned environment to be able to do a second pass with the same environment.
+                // But if we don't need a second environment, we override the passed env with the first pass env.
+                // TODO verify if this works as intended.
+                *environment = first_pass_remainder_environment.clone();
+
+                // Propagate jump reuse tokens upwards.
+                environment
+                    .propagate_jump_reuse_tokens(std::iter::once(first_pass_body_environment));
+
+                return arena.alloc(Stmt::Join {
+                    id: *joinpoint_id,
+                    parameters: parameters.clone(),
+                    body: first_pass_body,
+                    remainder: first_pass_remainder,
+                });
             }
 
-            let new_body = insert_reset_reuse_operations_stmt(
-                arena,
-                layout_interner,
-                home,
-                ident_ids,
-                update_mode_ids,
-                &mut body_environment,
-                body,
-            );
+            let layouts_for_reuse = {
+                let mut layouts = Vec::from_iter_in(
+                    used_reuse_tokens
+                        .iter()
+                        .flat_map(|(layout, tokens)| tokens.iter().map(|_| *layout)),
+                    arena,
+                );
+                // Make sure the layouts are sorted, so that we can provide them from the jump.
+                // In the same order as we consume them from the join point.
+                layouts.sort();
+                layouts
+            };
 
-            let new_remainder = insert_reset_reuse_operations_stmt(
-                arena,
-                layout_interner,
-                home,
-                ident_ids,
-                update_mode_ids,
-                environment,
-                remainder,
-            );
+            let second_pass_remainder = {
+                environment.add_joinpoint_reuse_tokens(
+                    *joinpoint_id,
+                    JoinPointReuseTokens::RemainderSecondPass(layouts_for_reuse.clone()),
+                );
+
+                let second_pass_remainder = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    environment,
+                    remainder,
+                );
+
+                environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
+
+                second_pass_remainder
+            };
+
+            let extended_parameters = {
+                let layouts_for_reuse_with_token = {
+                    let mut layout_with_tokens = Vec::from_iter_in(
+                        used_reuse_tokens.iter().flat_map(|(layout, tokens)| {
+                            tokens.iter().map(|token| (*layout, *token))
+                        }),
+                        arena,
+                    );
+                    // Make sure the layouts are sorted, so that we can provide them from the jump.
+                    // In the same order as we consume them from the join point.
+                    layout_with_tokens.sort_by_key(|(layout, _)| *layout);
+                    layout_with_tokens
+                };
+
+                let token_params =
+                    layouts_for_reuse_with_token
+                        .into_iter()
+                        .map(|(layout, token)| Param {
+                            symbol: token.symbol,
+                            ownership: Ownership::Owned,
+                            layout,
+                        });
+
+                // Add the void tokens to the jump arguments to match the expected arguments of the join point.
+                let extended_parameters =
+                    Vec::from_iter_in(parameters.iter().copied().chain(token_params), arena)
+                        .into_bump_slice();
+
+                extended_parameters
+            };
+
+            if let None = first_pass_body_environment.get_jump_reuse_tokens(*joinpoint_id) {
+                // The body has no jumps to this join point. So we can just return the body and remainder as is.
+                // As there are no jumps to update.
+
+                // Propagate jump reuse tokens upwards.
+                environment
+                    .propagate_jump_reuse_tokens(std::iter::once(first_pass_body_environment));
+
+                return arena.alloc(Stmt::Join {
+                    id: *joinpoint_id,
+                    parameters: extended_parameters,
+                    body: first_pass_body,
+                    remainder: second_pass_remainder,
+                });
+            }
+
+            let (second_pass_body_environment, second_pass_body) = {
+                // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
+                let mut body_environment = ReuseEnvironment {
+                    layout_tags: environment.layout_tags.clone(),
+                    reuse_tokens: used_reuse_tokens.clone(),
+                    symbol_layouts: environment.symbol_layouts.clone(),
+                    joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
+                    jump_reuse_tokens: environment.jump_reuse_tokens.clone(),
+                };
+
+                // Add the parameters to the body environment as well.
+                for param in parameters.iter() {
+                    body_environment.add_symbol_layout(param.symbol, &param.layout);
+                }
+
+                // Add a entry so that the body knows any jumps to this join point is recursive.
+                body_environment.add_joinpoint_reuse_tokens(
+                    *joinpoint_id,
+                    JoinPointReuseTokens::BodySecondPass(layouts_for_reuse),
+                );
+
+                let second_pass_body = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    &mut body_environment,
+                    body,
+                );
+
+                body_environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
+
+                (body_environment, second_pass_body)
+            };
+
+            environment.propagate_jump_reuse_tokens(std::iter::once(second_pass_body_environment));
 
             arena.alloc(Stmt::Join {
-                id: *id,
-                parameters: parameters.clone(),
-                body: new_body,
-                remainder: new_remainder,
+                id: *joinpoint_id,
+                parameters: extended_parameters,
+                body: second_pass_body,
+                remainder: second_pass_remainder,
             })
         }
         Stmt::Jump(id, arguments) => {
-            environment.add_jump_reuse_tokens(*id, environment.reuse_tokens.clone());
+            // TODO make sure that the reuse tokens that are provided by most jumps are the tokens that are used in most paths.
+            let joinpoint_tokens = environment.get_joinpoint_reuse_tokens(*id);
 
-            // let reuse_token_amount = environment.get_joinpoint_reuse_tokens(*id);
-            // TODO pop the amount of reuse tokens so code above knows they are consumed.
-            // TODO pass the popped tokens to the jump as argument so it can reuse them.
-            // TODO if token amount is below max tokens, pass fresh allocation token instead.
+            match joinpoint_tokens {
+                JoinPointReuseTokens::RemainderFirstPass | JoinPointReuseTokens::BodyFirstPass => {
+                    // For both the first pass of the continuation and the body, act as if there are no tokens to reuse.
+                    environment.add_jump_reuse_tokens(*id, environment.reuse_tokens.clone());
+                    arena.alloc(Stmt::Jump(*id, arguments.clone()))
+                }
+                JoinPointReuseTokens::RemainderSecondPass(token_layouts) => {
+                    // If there are no tokens to reuse, we can just jump.
+                    if token_layouts.is_empty() {
+                        return arena.alloc(Stmt::Jump(*id, arguments.clone()));
+                    }
 
-            arena.alloc(Stmt::Jump(*id, arguments.clone()))
+                    let token_layouts_clone = token_layouts.clone();
+
+                    let mut void_pointer_layout_symbols: std::vec::Vec<(InLayout, Symbol)> = vec![];
+
+                    // See what tokens we can get from the env, if none are available, use a void pointer.
+                    let tokens = token_layouts_clone.iter().map(|token_layout| {
+                        environment.pop_reuse_token(&token_layout).map_or_else(
+                            || match void_pointer_layout_symbols
+                                .iter()
+                                .find(|(layout, _)| layout == token_layout)
+                            {
+                                Some(existing_symbol) => existing_symbol.1,
+                                None => {
+                                    let new_symbol = Symbol::new(home, ident_ids.gen_unique());
+                                    void_pointer_layout_symbols.push((*token_layout, new_symbol));
+                                    new_symbol
+                                }
+                            },
+                            |reuse_token| reuse_token.symbol,
+                        )
+                    });
+
+                    // Add the void tokens to the jump arguments to match the expected arguments of the join point.
+                    let extended_arguments =
+                        Vec::from_iter_in(arguments.iter().copied().chain(tokens), arena)
+                            .into_bump_slice();
+
+                    // Wrap the jump in a let statement for each void pointer token layout.
+                    void_pointer_layout_symbols.into_iter().fold(
+                        arena.alloc(Stmt::Jump(*id, extended_arguments)),
+                        |child, (layout, symbol)| {
+                            arena.alloc(Stmt::Let(symbol, Expr::NullPointer, layout, child))
+                        },
+                    )
+                }
+                JoinPointReuseTokens::BodySecondPass(token_layouts) => {
+                    // If there are no tokens to reuse, we can just jump.
+                    if token_layouts.is_empty() {
+                        return arena.alloc(Stmt::Jump(*id, arguments.clone()));
+                    }
+
+                    // We currently don't pass any reuse tokens to recursive jumps.
+                    // This is to avoid keeping reuse tokens alive for too long. But it could be changed.
+                    let mut void_pointer_layout_symbols: std::vec::Vec<(InLayout, Symbol)> = vec![];
+
+                    let void_tokens =
+                        token_layouts
+                            .iter()
+                            .map(|token_layout| {
+                                match void_pointer_layout_symbols
+                                    .iter()
+                                    .find(|(layout, _)| layout == token_layout)
+                                {
+                                    Some(existing_symbol) => existing_symbol.1,
+                                    None => {
+                                        let new_symbol = Symbol::new(home, ident_ids.gen_unique());
+                                        void_pointer_layout_symbols
+                                            .push((*token_layout, new_symbol));
+                                        new_symbol
+                                    }
+                                }
+                            });
+
+                    // Add the void tokens to the jump arguments to match the expected arguments of the join point.
+                    let extended_arguments =
+                        Vec::from_iter_in(arguments.iter().copied().chain(void_tokens), arena)
+                            .into_bump_slice();
+
+                    // Wrap the jump in a let statement for each void pointer token layout.
+                    void_pointer_layout_symbols.into_iter().fold(
+                        arena.alloc(Stmt::Jump(*id, extended_arguments)),
+                        |child, (layout, symbol)| {
+                            arena.alloc(Stmt::Let(symbol, Expr::NullPointer, layout, child))
+                        },
+                    )
+                }
+            }
         }
         Stmt::Crash(symbol, tag) => stmt,
     }
@@ -570,7 +876,7 @@ type LayoutTags<'a> = MutMap<&'a InLayout<'a>, Tag>;
 Map containing the reuse tokens of a layout.
 A vec is used as a stack as we want to use the latest reuse token available.
 */
-type ReuseTokens<'a> = MutMap<InLayout<'a>, std::vec::Vec<ReuseToken>>;
+type ReuseTokens<'a> = MutMap<InLayout<'a>, Vec<'a, ReuseToken>>;
 
 /**
 A reuse token is a symbol that is used to reset a layout.
@@ -602,13 +908,32 @@ enum LayoutOption<'a> {
     GloballyDefined,
 }
 
+#[derive(Clone)]
+enum JoinPointReuseTokens<'a> {
+    // The body indicates that we currently in the body of the join point.
+    // This means that (for now) don't pass any reuse tokens from the jump.
+    // As we only use reuse tokens from jumps outside the join point.
+    BodyFirstPass,
+
+    // Second body pass, to update any jump calls to pass void pointer parameters instead of no parameters.
+    BodySecondPass(Vec<'a, InLayout<'a>>),
+
+    // The first pass is used to determine the amount of reuse tokens a join point can expect.
+    // Therefore, we don't know the amount of reuse tokens yet.
+    RemainderFirstPass,
+
+    // In the second pass, we determined the amount of reuse tokens a join point can expect.
+    // Therefore, we know the amount of reuse tokens and can use.
+    RemainderSecondPass(Vec<'a, InLayout<'a>>),
+}
+
 #[derive(Default, Clone)]
 struct ReuseEnvironment<'a> {
     layout_tags: LayoutTags<'a>,
     reuse_tokens: ReuseTokens<'a>,
     symbol_layouts: SymbolLayout<'a>,
     // A map containing the amount of reuse tokens a join point expects for each layout.
-    joinpoint_reuse_tokens: MutMap<JoinPointId, MutMap<InLayout<'a>, u16>>,
+    joinpoint_reuse_tokens: MutMap<JoinPointId, JoinPointReuseTokens<'a>>,
     // A map containing the reuse tokens for each jump.
     jump_reuse_tokens: MutMap<JoinPointId, std::vec::Vec<ReuseTokens<'a>>>,
 }
@@ -657,7 +982,7 @@ impl<'a> ReuseEnvironment<'a> {
     /**
     Push a reuse token for a layout on the stack for said layout.
     */
-    fn push_reuse_token(&mut self, layout: &InLayout<'a>, token: ReuseToken) {
+    fn push_reuse_token(&mut self, arena: &'a Bump, layout: &InLayout<'a>, token: ReuseToken) {
         match self.reuse_tokens.get_mut(layout) {
             Some(reuse_tokens) => {
                 // If the layout is already in the map, push the token on the stack.
@@ -665,7 +990,8 @@ impl<'a> ReuseEnvironment<'a> {
             }
             None => {
                 // If the layout is not in the map, create a new stack with the token.
-                self.reuse_tokens.insert(*layout, vec![token]);
+                self.reuse_tokens
+                    .insert(*layout, Vec::from_iter_in(std::iter::once(token), arena));
             }
         };
     }
@@ -701,34 +1027,54 @@ impl<'a> ReuseEnvironment<'a> {
     }
 
     /**
-    Get the all available reuse tokens from all jumps to a join point.
+    Propagate the reuse tokens of jumps from multiple environments to the current environment.
     */
-    fn get_jump_reuse_tokens(&self, joinpoint_id: JoinPointId) -> &std::vec::Vec<ReuseTokens<'a>> {
-        // TODO might be empty if no jumps are made to the current join point.
-        self.jump_reuse_tokens
-            .get(&joinpoint_id)
-            .expect("Expected join point to have reuse tokens.")
+    fn propagate_jump_reuse_tokens(&mut self, envs: impl Iterator<Item = ReuseEnvironment<'a>>) {
+        for (joinpoint_id, layout_reuse_tokens) in
+            envs.flat_map(|env| env.jump_reuse_tokens.into_iter())
+        {
+            for layout_reuse_token in layout_reuse_tokens.iter() {
+                self.add_jump_reuse_tokens(joinpoint_id, layout_reuse_token.clone());
+            }
+        }
     }
 
     /**
-    Insert the amount of reuse tokens a specific join point expects for a layout.
+    Get the all available reuse tokens from all jumps to a join point.
+    */
+    fn get_jump_reuse_tokens(
+        &self,
+        joinpoint_id: JoinPointId,
+    ) -> Option<&std::vec::Vec<ReuseTokens<'a>>> {
+        self.jump_reuse_tokens.get(&joinpoint_id)
+    }
+
+    /**
+    Insert join_point_reuse_tokens for a join point.
     */
     fn add_joinpoint_reuse_tokens(
         &mut self,
         joinpoint_id: JoinPointId,
-        reuse_tokens: MutMap<InLayout<'a>, u16>,
+        join_point_reuse_tokens: JoinPointReuseTokens<'a>,
     ) {
         self.joinpoint_reuse_tokens
-            .insert(joinpoint_id, reuse_tokens);
+            .insert(joinpoint_id, join_point_reuse_tokens);
     }
 
     /**
     Retrieve the reuse tokens amount of a join point.
     */
-    fn get_joinpoint_reuse_tokens(&self, joinpoint_id: JoinPointId) -> &MutMap<InLayout<'a>, u16> {
+    fn get_joinpoint_reuse_tokens(&self, joinpoint_id: JoinPointId) -> &JoinPointReuseTokens<'a> {
         self.joinpoint_reuse_tokens
             .get(&joinpoint_id)
             .expect("Expected join point to have reuse tokens.")
+    }
+
+    /**
+     Remove the reuse tokens of a joinpoint for cleanup
+    */
+    fn remove_joinpoint_reuse_tokens(&mut self, joinpoint_id: JoinPointId) {
+        self.joinpoint_reuse_tokens.remove(&joinpoint_id);
     }
 }
 
