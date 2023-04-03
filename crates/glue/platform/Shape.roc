@@ -101,7 +101,7 @@ RocTagUnion : [
         {
             name : Str,
             tagName : Str,
-            payload: RocSingleTagPayload,
+            payload : RocSingleTagPayload,
         },
     ## A recursive tag union with only two variants, where one is empty.
     ## Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
@@ -117,19 +117,20 @@ RocTagUnion : [
 ]
 
 RocStructFields : [
-    HasNoClosure (List { name: Str, id: TypeId }),
-    HasClosure (List { name: Str, id: TypeId, accessors: { getter: Str } }),
+    HasNoClosure (List { name : Str, id : TypeId }),
+    HasClosure (List { name : Str, id : TypeId, accessors : { getter : Str } }),
 ]
 
-RocSingleTagPayload: [
-    HasClosure (List { name: Str, id: TypeId }),
-    HasNoClosure (List { id: TypeId }),
+RocSingleTagPayload : [
+    HasClosure (List { name : Str, id : TypeId }),
+    HasNoClosure (List { id : TypeId }),
 ]
 
 RocFn : {
-    functionName: Str,
-    externName: Str,
-    args: List TypeId,
-    lambdaSet: TypeId,
-    ret: TypeId,
+    functionName : Str,
+    externName : Str,
+    args : List TypeId,
+    lambdaSet : TypeId,
+    ret : TypeId,
+    isToplevel : Bool,
 }

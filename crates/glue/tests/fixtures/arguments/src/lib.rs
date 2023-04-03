@@ -2,35 +2,9 @@ mod test_glue;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    use std::cmp::Ordering;
-    use std::collections::hash_set::HashSet;
+    let answer = test_glue::mainForHost(42i64);
 
-    let tag_union = test_glue::mainForHost();
-
-    // Verify that it has all the expected traits.
-
-    assert!(tag_union == tag_union); // PartialEq
-    assert!(tag_union.clone() == tag_union.clone()); // Clone
-
-    // Since this is a move, later uses of `tag_union` will fail unless `tag_union` has Copy
-    let union2 = tag_union; // Copy
-
-    assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
-    assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
-
-    let mut set = HashSet::new();
-
-    set.insert(tag_union); // Eq, Hash
-    set.insert(union2);
-
-    assert_eq!(set.len(), 1);
-
-    println!(
-        "tag_union was: {:?}, Bar is: {:?}, Baz is: {:?}",
-        tag_union,
-        test_glue::MyEnum::Bar,
-        test_glue::MyEnum::Baz,
-    ); // Debug
+    println!("Answer was: {:?}", answer); // Debug
 
     // Exit code
     0

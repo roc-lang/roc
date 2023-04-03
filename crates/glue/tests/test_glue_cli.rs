@@ -122,6 +122,9 @@ mod glue_cli_run {
         multiple_modules:"multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
         "#),
+        arguments:"arguments" => indoc!(r#"
+            Answer was: 84
+        "#),
     }
 
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {

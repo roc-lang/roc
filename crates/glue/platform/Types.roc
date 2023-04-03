@@ -1,5 +1,5 @@
 interface Types
-    exposes [Types, shape, size, alignment, target, walkShapes]
+    exposes [Types, shape, size, alignment, target, walkShapes, entryPoints]
     imports [Shape.{ Shape }, TypeId.{ TypeId }, Target.{ Target }, InternalTypeId]
 
 # TODO: switch AssocList uses to Dict once roc_std is updated.
@@ -19,11 +19,17 @@ Types := {
     ## This is important for declaration order in C; we need to output a
     ## type declaration earlier in the file than where it gets referenced by another type.
     deps : List Tuple2,
+
+    ## Names and types of the entry points of the program (e.g. mainForHost)
+    entrypoints : List Tuple1,
     target : Target,
 }
 
 target : Types -> Target
 target = \@Types types -> types.target
+
+entryPoints : Types -> List Tuple1
+entryPoints = \@Types { entrypoints } -> entrypoints
 
 walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
 walkShapes = \@Types { types: shapes }, originalState, update ->

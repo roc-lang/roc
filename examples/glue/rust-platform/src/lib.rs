@@ -10,10 +10,7 @@ use std::io::Write;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
-extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut Op);
-}
+use glue::mainForHost as roc_main;
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
@@ -93,13 +90,7 @@ pub extern "C" fn rust_main() -> i32 {
 
     println!("Let's do things!");
 
-    let mut op: Op = unsafe {
-        let mut mem = MaybeUninit::uninit();
-
-        roc_main(mem.as_mut_ptr());
-
-        mem.assume_init()
-    };
+    let mut op: Op = roc_main();
 
     loop {
         match dbg!(op.discriminant()) {

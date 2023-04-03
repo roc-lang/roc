@@ -21,7 +21,7 @@ use roc_mono::{
 };
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
 use roc_types::{
-    subs::{Content, FlatType, GetSubsSlice, Label, Subs, UnionLabels, Variable},
+    subs::{Content, FlatType, GetSubsSlice, Label, Subs, SubsSlice, UnionLabels, Variable},
     types::{AliasKind, RecordField},
 };
 use std::convert::From;
@@ -68,10 +68,16 @@ pub struct Types {
 }
 
 impl Types {
+    const UNIT: TypeId = TypeId(0);
+
     pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
+        let mut types = Vec::with_capacity(cap);
+
+        types.push(RocType::Unit);
+
         Self {
             target: target_info,
-            types: Vec::with_capacity(cap),
+            types,
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             entry_points: Vec::new(),
             sizes: Vec::new(),
@@ -81,16 +87,16 @@ impl Types {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new<'a, I: Iterator<Item = Variable>>(
+    pub(crate) fn new_with_entry_points<'a>(
         arena: &'a Bump,
         subs: &'a Subs,
-        variables: I,
         interns: &'a Interns,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
+        mut entry_points: MutMap<Symbol, Variable>,
     ) -> Self {
-        let mut types = Self::with_capacity(variables.size_hint().0, target);
+        let mut types = Self::with_capacity(entry_points.len(), target);
         let mut env = Env::new(
             arena,
             subs,
@@ -100,10 +106,23 @@ impl Types {
             target,
         );
 
+        let variables: Vec<_> = entry_points.values().copied().collect();
         for var in variables {
             env.lambda_set_ids = env.find_lambda_sets(var);
-            env.add_type(var, &mut types);
+            let id = env.add_toplevel_type(var, &mut types);
+
+            let key = entry_points
+                .iter()
+                .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+
+            if let Some((k, id)) = key {
+                let name = k.as_str(env.interns).to_string();
+                types.entry_points.push((name, id));
+                entry_points.remove(&k);
+            }
         }
+
+        debug_assert!(entry_points.is_empty());
 
         env.resolve_pending_recursive_types(&mut types);
 
@@ -412,6 +431,7 @@ impl Types {
                     args: args_a,
                     lambda_set: lambda_a,
                     ret: ret_a,
+                    is_toplevel: is_toplevel_a,
                 }),
                 Function(RocFn {
                     function_name: name_b,
@@ -419,12 +439,14 @@ impl Types {
                     args: args_b,
                     lambda_set: lambda_b,
                     ret: ret_b,
+                    is_toplevel: is_toplevel_b,
                 }),
             ) => {
                 // for functions, the name is actually important because two functions
                 // with the same type could have completely different implementations!
                 if name_a == name_b
                     && extern_a == extern_b
+                    && is_toplevel_a == is_toplevel_b
                     && args_a.len() == args_b.len()
                     && self.is_equivalent_help(
                         self.get_type_or_pending(*lambda_a),
@@ -626,9 +648,17 @@ impl From<&Types> for roc_type::Types {
             .iter()
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
+
+        let entrypoints = types
+            .entry_points()
+            .iter()
+            .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
+            .collect();
+
         roc_type::Types {
             aligns: types.aligns.as_slice().into(),
             deps,
+            entrypoints,
             sizes: types.sizes.as_slice().into(),
             types: types.types.iter().map(|t| t.into()).collect(),
             typesByName: types_by_name,
@@ -667,12 +697,14 @@ impl From<&RocType> for roc_type::RocType {
                 args,
                 lambda_set,
                 ret,
+                is_toplevel,
             }) => roc_type::RocType::Function(roc_type::RocFn {
                 args: args.iter().map(|arg| arg.0 as _).collect(),
                 functionName: function_name.as_str().into(),
                 externName: extern_name.as_str().into(),
                 ret: ret.0 as _,
                 lambdaSet: lambda_set.0 as _,
+                isToplevel: *is_toplevel,
             }),
             RocType::Unit => roc_type::RocType::Unit,
             RocType::Unsized => roc_type::RocType::Unsized,
@@ -937,6 +969,7 @@ impl RocStructFields {
 pub struct RocFn {
     pub function_name: String,
     pub extern_name: String,
+    pub is_toplevel: bool,
     pub args: Vec<TypeId>,
     pub lambda_set: TypeId,
     pub ret: TypeId,
@@ -1261,16 +1294,97 @@ impl<'a> Env<'a> {
         result
     }
 
-    fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
-        roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding type");
+    fn add_toplevel_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+        roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding toplevel type");
 
         let layout = self
             .layout_cache
             .from_var(self.arena, var, self.subs)
             .expect("Something weird ended up in the content");
 
-        add_type_help(self, layout, var, None, types)
+        match self.subs.get_content_without_compacting(var) {
+            Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+                // this is a toplevel type, so the closure must be empty
+                let is_toplevel = true;
+                add_function_type(
+                    self,
+                    layout,
+                    types,
+                    args,
+                    *closure_var,
+                    *ret_var,
+                    is_toplevel,
+                )
+            }
+            _ => add_type_help(self, layout, var, None, types),
+        }
     }
+}
+
+fn add_function_type<'a>(
+    env: &mut Env<'a>,
+    layout: InLayout<'a>,
+    types: &mut Types,
+    args: &SubsSlice<Variable>,
+    closure_var: Variable,
+    ret_var: Variable,
+    is_toplevel: bool,
+) -> TypeId {
+    let args = env.subs.get_subs_slice(*args);
+    let mut arg_type_ids = Vec::with_capacity(args.len());
+
+    let name = format!("RocFunction_{:?}", closure_var);
+
+    let id = env.lambda_set_ids.get(&closure_var).unwrap();
+    let extern_name = format!("roc__mainForHost_{}_caller", id.0);
+
+    for arg_var in args {
+        let arg_layout = env
+            .layout_cache
+            .from_var(env.arena, *arg_var, env.subs)
+            .expect("Something weird ended up in the content");
+
+        arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
+    }
+
+    let lambda_set_type_id = if is_toplevel {
+        Types::UNIT
+    } else {
+        let lambda_set_layout = env
+            .layout_cache
+            .from_var(env.arena, closure_var, env.subs)
+            .expect("Something weird ended up in the content");
+
+        add_type_help(env, lambda_set_layout, closure_var, None, types)
+    };
+
+    let ret_type_id = {
+        let ret_layout = env
+            .layout_cache
+            .from_var(env.arena, ret_var, env.subs)
+            .expect("Something weird ended up in the content");
+
+        add_type_help(env, ret_layout, ret_var, None, types)
+    };
+
+    let fn_type_id = add_function(env, name, types, layout, |name| {
+        RocType::Function(RocFn {
+            function_name: name,
+            extern_name,
+            args: arg_type_ids.clone(),
+            lambda_set: lambda_set_type_id,
+            ret: ret_type_id,
+            is_toplevel,
+        })
+    });
+
+    types.depends(fn_type_id, ret_type_id);
+
+    for arg_type_id in arg_type_ids {
+        types.depends(fn_type_id, arg_type_id);
+    }
+
+    fn_type_id
 }
 
 fn add_type_help<'a>(
@@ -1352,62 +1466,17 @@ fn add_type_help<'a>(
             }
         },
         Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
-            let args = env.subs.get_subs_slice(*args);
-            let mut arg_type_ids = Vec::with_capacity(args.len());
+            let is_toplevel = false; // or in any case, we cannot assume that we are
 
-            let name = format!("RocFunction_{:?}", closure_var);
-
-            let lambda_set_layout = env
-                .layout_cache
-                .from_var(env.arena, *closure_var, env.subs)
-                .expect("Something weird ended up in the content");
-
-            let _lambda_set = match env.layout_cache.interner.get(lambda_set_layout) {
-                Layout::LambdaSet(lambda_set) => lambda_set,
-                _ => unreachable!(),
-            };
-
-            let id = env.lambda_set_ids.get(closure_var).unwrap();
-            let extern_name = format!("roc__mainForHost_{}_caller", id.0);
-
-            for arg_var in args {
-                let arg_layout = env
-                    .layout_cache
-                    .from_var(env.arena, *arg_var, env.subs)
-                    .expect("Something weird ended up in the content");
-
-                arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
-            }
-
-            let lambda_set_type_id =
-                add_type_help(env, lambda_set_layout, *closure_var, None, types);
-
-            let ret_type_id = {
-                let ret_layout = env
-                    .layout_cache
-                    .from_var(env.arena, *ret_var, env.subs)
-                    .expect("Something weird ended up in the content");
-
-                add_type_help(env, ret_layout, *ret_var, None, types)
-            };
-
-            let fn_type_id = add_function(env, name, types, layout, |name| {
-                RocType::Function(RocFn {
-                    function_name: name,
-                    extern_name,
-                    args: arg_type_ids.clone(),
-                    lambda_set: lambda_set_type_id,
-                    ret: ret_type_id,
-                })
-            });
-
-            types.depends(fn_type_id, ret_type_id);
-
-            for arg_type_id in arg_type_ids {
-                types.depends(fn_type_id, arg_type_id);
-            }
-
-            fn_type_id
+            add_function_type(
+                env,
+                layout,
+                types,
+                args,
+                *closure_var,
+                *ret_var,
+                is_toplevel,
+            )
         }
         Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
             todo!()

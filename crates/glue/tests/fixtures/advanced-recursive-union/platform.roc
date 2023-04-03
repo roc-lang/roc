@@ -7,7 +7,7 @@ platform "test-platform"
 
 Tool : [
     SystemTool { name : Str, num : U32 },
-    FromJob { job : Job, num : U32 }
+    FromJob { job : Job, num : U32 },
 ]
 
 Command : [Command { tool : Tool }]
@@ -20,7 +20,7 @@ Job : [
     # WithTool Tool # Mutual recursion; Tool also references Job
 ]
 
-Rbt : { default: Job }
+Rbt : { default : Job }
 
 mainForHost : Rbt
 mainForHost = main
