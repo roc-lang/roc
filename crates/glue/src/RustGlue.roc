@@ -1,6 +1,6 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.File.{ File }, pf.TypeId.{ TypeId }]
+    imports [pf.Types.{ Types }, pf.Shape.{ RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId }]
     provides [makeGlue] to pf
 
 makeGlue : List Types -> Result (List File) Str
@@ -8,7 +8,7 @@ makeGlue = \typesByArch ->
     modFileContent =
         List.walk typesByArch "" \content, types ->
             arch = (Types.target types).architecture
-            archStr = archName arch 
+            archStr = archName arch
 
             Str.concat
                 content
@@ -17,7 +17,7 @@ makeGlue = \typesByArch ->
                 mod \(archStr);
                 #[cfg(target_arch = "\(archStr)")]
                 pub use \(archStr)::*;
-                
+
                 """
 
     typesByArch
@@ -63,9 +63,11 @@ convertTypesToFile = \types ->
                 TagUnion (NonNullableUnwrapped { name, tagName, payload }) ->
                     generateRecursiveTagUnion buf types id name [{ name: tagName, payload: Some payload }] 0 0 None
 
-                Function _ ->
-                    # TODO: actually generate glue functions.
-                    buf
+                Function rocFn ->
+                    if rocFn.isToplevel then
+                        buf
+                    else
+                        generateFunction buf types rocFn
 
                 RecursivePointer _ ->
                     # This is recursively pointing to a type that should already have been added,
@@ -88,12 +90,132 @@ convertTypesToFile = \types ->
                     buf
 
     arch = (Types.target types).architecture
-    archStr = archName arch 
+    archStr = archName arch
 
     {
         name: "\(archStr).rs",
-        content,
+        content: content |> generateEntryPoints types,
     }
+
+generateEntryPoints : Str, Types -> Str
+generateEntryPoints = \buf, types ->
+    List.walk (Types.entryPoints types) buf \accum, T name id -> generateEntryPoint accum types name id
+
+generateEntryPoint : Str, Types, Str, TypeId -> Str
+generateEntryPoint = \buf, types, name, id ->
+    publicSignature =
+        when Types.shape types id is
+            Function rocFn ->
+                arguments =
+                    rocFn.args
+                    |> List.mapWithIndex \argId, i ->
+                        type = typeName types argId
+                        c = Num.toStr i
+                        "arg\(c): \(type)"
+                    |> Str.joinWith ", "
+
+                ret = typeName types rocFn.ret
+
+                "(\(arguments)) -> \(ret)"
+
+            _ ->
+                ret = typeName types id
+                "() -> \(ret)"
+
+    externSignature =
+        when Types.shape types id is
+            Function rocFn ->
+                arguments =
+                    rocFn.args
+                    |> List.map \argId ->
+                        type = typeName types argId
+                        "_: \(type)"
+                    |> Str.joinWith ", "
+
+                ret = typeName types rocFn.ret
+                "(_: *mut \(ret), \(arguments))"
+
+            _ ->
+                ret = typeName types id
+                "(_: *mut \(ret))"
+
+    externArguments =
+        when Types.shape types id is
+            Function rocFn ->
+                rocFn.args
+                |> List.mapWithIndex \_, i ->
+                    c = Num.toStr i
+                    "arg\(c)"
+                |> Str.joinWith ", "
+
+            _ ->
+                ""
+
+    """
+    \(buf)
+
+    pub fn \(name)\(publicSignature) {
+        extern "C" {
+            fn roc__\(name)_1_exposed_generic\(externSignature);
+        }
+
+        let mut ret = std::mem::MaybeUninit::uninit();
+
+        unsafe { roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments)) };
+
+        unsafe { ret.assume_init() }
+    }
+    """
+
+generateFunction : Str, Types, RocFn -> Str
+generateFunction = \buf, types, rocFn ->
+    name = rocFn.functionName
+    externName = rocFn.externName
+
+    lambdaSet = typeName types rocFn.lambdaSet
+
+    publicArguments =
+        rocFn.args
+        |> List.mapWithIndex \argId, i ->
+            type = typeName types argId
+            c = Num.toStr i
+            "arg\(c): \(type)"
+        |> Str.joinWith ", "
+
+    externArguments =
+        rocFn.args
+        |> List.mapWithIndex \_, i ->
+            c = Num.toStr i
+            "arg\(c)"
+        |> Str.joinWith ", "
+
+    externComma = if Str.isEmpty publicArguments then "" else ", "
+
+    ret = typeName types rocFn.ret
+
+    """
+    \(buf)
+
+    #[repr(C)]
+    pub struct \(name) {
+        closure_data: \(lambdaSet),
+    }
+
+    impl \(name) {
+        pub fn force_thunk(mut self, \(publicArguments)) -> \(ret) {
+            extern "C" {
+                fn \(externName)(\(publicArguments)\(externComma) closure_data: *mut u8, output: *mut \(ret));
+            }
+
+            let mut output = std::mem::MaybeUninit::uninit();
+            let ptr = &mut self.closure_data as *mut _ as *mut u8;
+
+            unsafe { \(externName)(\(externArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
+
+            unsafe { output.assume_init() }
+        }
+    }
+    """
 
 generateStruct : Str, Types, TypeId, _, _, _ -> Str
 generateStruct = \buf, types, id, name, structFields, visibility ->
@@ -125,6 +247,7 @@ generateStructFields = \buf, types, visibility, structFields ->
     when structFields is
         HasNoClosure fields ->
             List.walk fields buf (generateStructFieldWithoutClosure types visibility)
+
         HasClosure _ ->
             Str.concat buf "// TODO: Struct fields with closures"
 
@@ -147,6 +270,7 @@ nameTagUnionPayloadFields = \payloadFields ->
         HasNoClosure fields ->
             renamedFields = List.map fields \{ name, id } -> { name: "f\(name)", id }
             HasNoClosure renamedFields
+
         HasClosure fields ->
             renamedFields = List.map fields \{ name, id, accessors } -> { name: "f\(name)", id, accessors }
             HasClosure renamedFields
@@ -169,7 +293,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
         impl core::fmt::Debug for \(escapedName) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
-        
+
         """
     |> \b -> List.walk tags b (generateEnumTagsDebug name)
     |> Str.concat "\(indent)\(indent)}\n\(indent)}\n}\n\n"
@@ -222,7 +346,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
             }
         }
 
-        
+
         """
     |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
     |> \b ->
@@ -235,7 +359,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                 impl Drop for \(escapedName) {
                     fn drop(&mut self) {
                         // Drop the payloads
-                
+
                 """
             |> generateTagUnionDropPayload types selfMut tags discriminantName discriminantSize 2
             |> Str.concat
@@ -243,7 +367,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                     }
                 }
 
-                
+
                 """
         else
             b
@@ -371,7 +495,7 @@ generateUnionField = \types ->
                     else
                         typeStr
 
-                Str.concat accum "\(indent)\(escapedFieldName): \(fullTypeStr),\n"
+                Str.concat accum "\(indent)\(escapedFieldName): std::mem::ManuallyDrop<\(fullTypeStr)>,\n"
 
             None ->
                 # If there's no payload, we don't need a discriminant for it.
@@ -417,6 +541,7 @@ generateSingleTagStruct = \buf, types, name, tagName, payload ->
                     generateZeroElementSingleTagStruct b escapedName tagName
                 else
                     generateMultiElementSingleTagStruct b types escapedName tagName fields asStructFields
+
         HasClosure _ ->
             Str.concat buf "\\TODO: SingleTagStruct with closures"
 
@@ -428,7 +553,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
     |> Str.concat
         """
         impl \(name) {
-        
+
         """
     |> \b ->
         fieldTypes =
@@ -475,7 +600,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
                 \(indent)    }
                 \(indent)}
 
-                
+
                 """,
             fieldTypes,
             fieldAccesses,
@@ -494,7 +619,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
                 \(indent)    \(retExpr)
                 \(indent)}
 
-                
+
                 """,
             fieldTypes,
             fieldAccesses,
@@ -517,7 +642,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             \(indent)pub fn as_\(tagName)(&self) -> \(retType) {
             \(indent)    \(retExpr)
             \(indent)}
-            
+
             """
     |> Str.concat
         """
@@ -527,7 +652,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         impl core::fmt::Debug for \(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.debug_tuple("\(name)::\(tagName)")
-        
+
         """
     |> \b ->
         payloadFields
@@ -542,7 +667,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             }
         }
 
-        
+
         """
 
 asRustTuple = \list ->
@@ -585,7 +710,7 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
             }
         }
 
-        
+
         """
 
 generateDeriveStr = \buf, types, type, includeDebug ->
@@ -854,7 +979,7 @@ fileHeader =
     #![allow(clippy::clone_on_copy)]
 
 
-    
+
     """
 
 indent = "    "

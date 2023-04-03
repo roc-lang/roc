@@ -380,11 +380,8 @@ pub fn load_types(
 
     // Get the variables for all the exposed_to_host symbols
     let variables = (0..decls.len()).filter_map(|index| {
-        if exposed_to_host.contains_key(&decls.symbols[index].value) {
-            Some(decls.variables[index])
-        } else {
-            None
-        }
+        let symbol = decls.symbols[index].value;
+        exposed_to_host.get(&symbol).copied()
     });
 
     let operating_system = target_info.operating_system;
@@ -453,14 +450,14 @@ pub fn load_types(
             }
         }
 
-        let types = Types::new(
+        let types = Types::new_with_entry_points(
             arena,
             subs,
-            variables.clone(),
             arena.alloc(interns),
             glue_procs_by_layout,
             layout_cache,
             target_info,
+            exposed_to_host.clone(),
         );
 
         arch_types.push(types);
