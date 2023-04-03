@@ -1926,6 +1926,13 @@ pub enum Expr<'a> {
         update_mode: UpdateModeId,
     },
 
+    // Just like Reset, but does not recursively decrement the children.
+    // Used in reuse analysis to replace a decref with a resetRef to avoid decrementing when the dec ref didn't.
+    ResetRef {
+        symbol: Symbol,
+        update_mode: UpdateModeId,
+    },
+
     RuntimeErrorFunction(&'a str),
 }
 
@@ -2049,7 +2056,13 @@ impl<'a> Expr<'a> {
                 "Reset {{ symbol: {:?}, id: {} }}",
                 symbol, update_mode.id
             )),
-
+            ResetRef {
+                symbol,
+                update_mode,
+            } => alloc.text(format!(
+                "ResetRef {{ symbol: {:?}, id: {} }}",
+                symbol, update_mode.id
+            )),
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
@@ -7464,7 +7477,9 @@ fn substitute_in_expr<'a>(
 
         NullPointer => None,
 
-        Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
+        Reuse { .. } | Reset { .. } | ResetRef { .. } => {
+            unreachable!("reset/resetref/reuse have not been introduced yet")
+        }
 
         Struct(args) => {
             let mut did_change = false;

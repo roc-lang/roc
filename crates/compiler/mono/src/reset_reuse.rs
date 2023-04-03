@@ -327,6 +327,7 @@ fn insert_reset<'a>(
             | EmptyArray
             | Reuse { .. }
             | Reset { .. }
+            | ResetRef { .. }
             | RuntimeErrorFunction(_) => break,
         }
     }
@@ -864,7 +865,7 @@ fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
         Expr::Reuse {
             symbol, arguments, ..
         } => needle == *symbol || arguments.iter().any(|s| *s == needle),
-        Expr::Reset { symbol, .. } => needle == *symbol,
+        Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => needle == *symbol,
         Expr::ExprBox { symbol, .. } => needle == *symbol,
         Expr::ExprUnbox { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
