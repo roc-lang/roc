@@ -1047,7 +1047,26 @@ canDerivePartialEq = \types, type ->
 
             canDerivePartialEq types kType && canDerivePartialEq types vType
 
-        TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> crash "TODO"
+        TagUnion (Recursive { tags }) -> 
+            List.all tags \{ payload } ->
+                when payload is
+                    None -> Bool.true
+                    Some id -> canDerivePartialEq types (Types.shape types id)
+
+        TagUnion (NullableWrapped { tags }) -> 
+            List.all tags \{ payload } ->
+                when payload is
+                    None -> Bool.true
+                    Some id -> canDerivePartialEq types (Types.shape types id)
+
+        TagUnion (NonNullableUnwrapped { payload }) ->
+            canDerivePartialEq types (Types.shape types payload)
+
+        TagUnion (NullableUnwrapped { nonNullPayload }) -> 
+            canDerivePartialEq types (Types.shape types nonNullPayload)
+
+        RecursivePointer _ -> Bool.true
+
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
             List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
@@ -1061,8 +1080,10 @@ canDerivePartialEq = \types, type ->
                     None -> Bool.true
 
         RocResult okId errId ->
-            canDerivePartialEq types (Types.shape types okId)
-            && canDerivePartialEq types (Types.shape types errId)
+            okShape = Types.shape types okId
+            errShape = Types.shape types errId
+
+            canDerivePartialEq types okShape && canDerivePartialEq types errShape
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
