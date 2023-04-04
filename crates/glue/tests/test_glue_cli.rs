@@ -74,24 +74,24 @@ mod glue_cli_run {
         basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
         nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
         enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
-        // union_with_padding:"union-with-padding" => indoc!(r#"
-        //     tag_union was: NonRecursive::Foo("This is a test")
-        //     `Foo "small str"` is: NonRecursive::Foo("small str")
-        //     `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
-        //     `Bar 123` is: NonRecursive::Bar(123)
-        //     `Baz` is: NonRecursive::Baz
-        //     `Blah 456` is: NonRecursive::Blah(456)
-        // "#),
         single_tag_union:"single-tag-union" => indoc!(r#"
             tag_union was: SingleTagUnion::OneTag
         "#),
-        // union_without_padding:"union-without-padding" => indoc!(r#"
-        //     tag_union was: NonRecursive::Foo("This is a test")
-        //     `Foo "small str"` is: NonRecursive::Foo("small str")
-        //     `Bar 123` is: NonRecursive::Bar(123)
-        //     `Baz` is: NonRecursive::Baz
-        //     `Blah 456` is: NonRecursive::Blah(456)
-        // "#),
+        //        union_with_padding:"union-with-padding" => indoc!(r#"
+        //            tag_union was: NonRecursive::Foo("This is a test")
+        //            `Foo "small str"` is: NonRecursive::Foo("small str")
+        //            `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
+        //            `Bar 123` is: NonRecursive::Bar(123)
+        //            `Baz` is: NonRecursive::Baz
+        //            `Blah 456` is: NonRecursive::Blah(456)
+        //        "#),
+        //        union_without_padding:"union-without-padding" => indoc!(r#"
+        //            tag_union was: NonRecursive::Foo("This is a test")
+        //            `Foo "small str"` is: NonRecursive::Foo("small str")
+        //            `Bar 123` is: NonRecursive::Bar(123)
+        //            `Baz` is: NonRecursive::Baz
+        //            `Blah 456` is: NonRecursive::Blah(456)
+        //        "#),
         // nullable_wrapped:"nullable-wrapped" => indoc!(r#"
         //     tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
         //     `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
@@ -124,6 +124,14 @@ mod glue_cli_run {
         "#),
         arguments:"arguments" => indoc!(r#"
             Answer was: 84
+        "#),
+        rocresult:"rocresult" => indoc!(r#"
+            Answer was: RocOk(ManuallyDrop { value: "Hello World!" })
+            Answer was: RocErr(ManuallyDrop { value: 42 })
+        "#),
+        option:"option" => indoc!(r#"
+            Answer was: "Hello World!"
+            Answer was: discriminant_U1::None
         "#),
     }
 

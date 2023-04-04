@@ -41,7 +41,7 @@ convertTypesToFile = \types ->
 
                 TagUnion (NonRecursive { name, tags, discriminantSize, discriminantOffset }) ->
                     if !(List.isEmpty tags) then
-                        generateNonRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset None
+                        generateNonRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset
                     else
                         buf
 
@@ -307,15 +307,89 @@ generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
-generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, discriminantOffset, _nullTagIndex ->
+generateConstructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+generateConstructorFunctions = \buf, types, tagUnionType, tags ->
+    buf
+        |> Str.concat "\n\nimpl \(tagUnionType) {\n"
+        |> \b -> List.walk tags b \accum, r -> generateConstructorFunction accum types tagUnionType r.name r.payload
+        |> Str.concat "\n}\n\n"
+
+generateConstructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
+generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
+    when optPayload is
+        None ->
+            """
+            \(buf)
+
+                pub fn \(name)() -> Self {
+                    Self {
+                        discriminant: discriminant_\(tagUnionType)::\(name),
+                        payload: union_\(tagUnionType) {
+                            \(name): (),
+                        }
+                    }
+                }
+            """
+
+        Some payloadId ->
+            payloadType = typeName types payloadId
+
+            """
+            \(buf)
+
+                pub fn \(name)(payload: \(payloadType)) -> Self {
+                    Self {
+                        discriminant: discriminant_\(tagUnionType)::\(name),
+                        payload: union_\(tagUnionType) {
+                            \(name): core::mem::ManuallyDrop::new(payload),
+                        }
+                    }
+                }
+            """
+
+generateDestructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+generateDestructorFunctions = \buf, types, tagUnionType, tags ->
+    buf
+        |> Str.concat "\n\nimpl \(tagUnionType) {\n"
+        |> \b -> List.walk tags b \accum, r -> generateDestructorFunction accum types tagUnionType r.name r.payload
+        |> Str.concat "\n}\n\n"
+
+generateDestructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
+generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
+    when optPayload is
+        None ->
+            """
+            \(buf)
+
+                pub fn is_\(name)(&self) -> bool {
+                    matches!(self.discriminant, discriminant_\(tagUnionType)::\(name))
+                }
+            """
+
+        Some payloadId ->
+            payloadType = typeName types payloadId
+
+            """
+            \(buf)
+
+                pub fn unwrap_\(name)(mut self) -> \(payloadType) {
+                    debug_assert_eq!(self.discriminant, discriminant_\(tagUnionType)::\(name));
+                    unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }
+                }
+
+                pub fn is_\(name)(&self) -> bool {
+                    matches!(self.discriminant, discriminant_\(tagUnionType)::\(name))
+                }
+            """
+
+generateNonRecursiveTagUnion : Str, Types, TypeId, Str, List { name : Str, payload : [Some TypeId, None] }, U32, U32 -> Str
+generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, discriminantOffset ->
     escapedName = escapeKW name
     discriminantName = "discriminant_\(escapedName)"
+    unionName = "union_\(escapedName)"
     discriminantOffsetStr = Num.toStr discriminantOffset
     tagNames = List.map tags \{ name: n } -> n
-    # self = "self"
     selfMut = "self"
-    # other = "other"
-    unionName = escapedName
 
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
@@ -349,6 +423,16 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
 
         """
     |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
+    |> Str.concat
+        """
+        #[repr(C)]
+        pub struct \(escapedName) {
+            payload: union_\(escapedName),
+            discriminant: discriminant_\(escapedName),
+        }
+        """
+    |> generateDestructorFunctions types escapedName tags
+    |> generateConstructorFunctions types escapedName tags
     |> \b ->
         type = Types.shape types id
         if cannotDeriveCopy types type then
@@ -415,7 +499,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
                 Some id if cannotDeriveCopy types (Types.shape types id) ->
-                    "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).\(name)) }},"
+                    "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) }},"
 
                 _ ->
                     # If it had no payload, or if the payload had no pointers,
@@ -480,10 +564,11 @@ generateDiscriminant = \buf, types, name, tags, size ->
 
 generateUnionField = \types ->
     \accum, { name: fieldName, payload } ->
+        escapedFieldName = escapeKW fieldName
+
         when payload is
             Some id ->
                 typeStr = typeName types id
-                escapedFieldName = escapeKW fieldName
 
                 type = Types.shape types id
                 fullTypeStr =
@@ -495,11 +580,11 @@ generateUnionField = \types ->
                     else
                         typeStr
 
-                Str.concat accum "\(indent)\(escapedFieldName): std::mem::ManuallyDrop<\(fullTypeStr)>,\n"
+                Str.concat accum "\(indent)\(escapedFieldName): \(fullTypeStr),\n"
 
             None ->
-                # If there's no payload, we don't need a discriminant for it.
-                accum
+                # use unit as the payload
+                Str.concat accum "\(indent)\(escapedFieldName): (),\n"
 
 generateNullableUnwrapped = \buf, _types, _id, _name, _nullTag, _nonNullTag, _nonNullPayload, _whichTagIsNull ->
     Str.concat buf "// TODO: TagUnion NullableUnwrapped\n\n"
