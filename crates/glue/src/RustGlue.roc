@@ -345,6 +345,13 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
 
         Some payloadId ->
             payloadType = typeName types payloadId
+            shape = Types.shape types payloadId
+
+            new =
+                if canDeriveCopy types shape then
+                    "payload"
+                else
+                    "core::mem::ManuallyDrop::new(payload)"
 
             """
             \(buf)
@@ -353,7 +360,7 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
                     Self {
                         discriminant: discriminant_\(tagUnionType)::\(name),
                         payload: union_\(tagUnionType) {
-                            \(name): core::mem::ManuallyDrop::new(payload),
+                            \(name): \(new),
                         }
                     }
                 }
@@ -380,13 +387,21 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
 
         Some payloadId ->
             payloadType = typeName types payloadId
+            shape = Types.shape types payloadId
+
+            take =
+                if canDeriveCopy types shape then
+                    "unsafe { self.payload.\(name) }"
+
+                else
+                    "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }"
 
             """
             \(buf)
 
                 pub fn unwrap_\(name)(mut self) -> \(payloadType) {
                     debug_assert_eq!(self.discriminant, discriminant_\(tagUnionType)::\(name));
-                    unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }
+                    \(take)
                 }
 
                 pub fn is_\(name)(&self) -> bool {
@@ -876,37 +891,41 @@ canDerivePartialEq = \types, type ->
 
 cannotDeriveCopy : Types, Shape -> Bool
 cannotDeriveCopy = \types, type ->
+    !(canDeriveCopy types type)
+
+canDeriveCopy : Types, Shape -> Bool
+canDeriveCopy = \types, type ->
     when type is
         Function rocFn ->
             runtimeRepresentation = Types.shape types rocFn.lambdaSet
-            cannotDeriveCopy types runtimeRepresentation
+            canDeriveCopy types runtimeRepresentation
 
         # unsized values are heap-allocated
-        Unsized -> Bool.true
+        Unsized -> Bool.false
 
-        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _)  -> Bool.false
-        RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.true
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _)  -> Bool.true
+        RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.false
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
 
         TagUnion (NonRecursive { tags }) ->
-            List.any tags \{ payload } ->
+            List.all tags \{ payload } ->
                 when payload is
-                    Some id -> cannotDeriveCopy types (Types.shape types id)
-                    None -> Bool.false
+                    Some id -> canDeriveCopy types (Types.shape types id)
+                    None -> Bool.true
 
         RocResult okId errId ->
-            cannotDeriveCopy types (Types.shape types okId)
-            || cannotDeriveCopy types (Types.shape types errId)
+            canDeriveCopy types (Types.shape types okId)
+            && canDeriveCopy types (Types.shape types errId)
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
 
 cannotDeriveDefault = \types, type ->
     when type is
