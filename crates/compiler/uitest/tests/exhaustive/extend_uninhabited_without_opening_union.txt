@@ -1,0 +1,7 @@
+app "test" provides [main] to "./platform"
+
+walkHelp : {} -> [Continue {}, Break []]
+
+main = when walkHelp {} is
+#           ^^^^^^^^^^^ [Break [], Continue {}]
+    Continue {} -> {}

@@ -2845,3 +2845,47 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
          "#
     )
 }
+
+#[mono_test]
+fn issue_4759() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            update { a : { x : "x", y: "y" } }
+
+        update = \state -> { state & a : { x : "ux", y: "uy" } }
+        "#
+    )
+}
+
+#[mono_test]
+fn layout_cache_structure_with_multiple_recursive_structures() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Chain : [
+            End,
+            Link Chain,
+        ]
+
+        LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
+
+        main =
+            base : LinkedList 
+            base = Nil
+
+            walker : LinkedList, Chain -> LinkedList
+            walker = \rest, first -> Cons { first, rest } 
+
+            list : List Chain
+            list = []
+
+            r = List.walk list base walker
+
+            r
+        "#
+    )
+}

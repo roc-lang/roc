@@ -1,0 +1,5 @@
+app "test" provides [main] to "./platform"
+
+main =
+    \h -> Hash.hash h Bool.true
+    #     ^^^^^^^^^ Hash#Hash.hash(1): a, Bool -[[Hash.hashBool(9)]]-> a | a has Hasher

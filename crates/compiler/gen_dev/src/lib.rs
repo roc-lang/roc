@@ -1501,6 +1501,7 @@ trait Backend<'a> {
                 self.set_last_seen(*sym, stmt);
                 match expr {
                     Expr::Literal(_) => {}
+                    Expr::NullPointer => {}
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 

@@ -4386,3 +4386,77 @@ fn recursive_lambda_set_resolved_only_upon_specialization() {
         u64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn layout_cache_structure_with_multiple_recursive_structures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Chain : [
+                End,
+                Link Chain,
+            ]
+
+            LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
+
+            main =
+                base : LinkedList 
+                base = Nil
+
+                walker : LinkedList, Chain -> LinkedList
+                walker = \rest, first -> Cons { first, rest } 
+
+                list : List Chain
+                list = []
+
+                r = List.walk list base walker
+                
+                if r == base then 11u8 else 22u8
+            "#
+        ),
+        11,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn reset_recursive_type_wraps_in_named_type() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            main : Str
+            main =
+              newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
+              printLinkedList newList Num.toStr
+
+            LinkedList a : [Cons a (LinkedList a), Nil]
+
+            mapLinkedList : LinkedList a, (a -> b) -> LinkedList b
+            mapLinkedList = \linkedList, f -> when linkedList is
+              Nil -> Nil
+              Cons x xs ->
+                s = if Bool.true then "true" else "false"
+                expect s == "true"
+
+                Cons (f x) (mapLinkedList xs f)
+
+            printLinkedList : LinkedList a, (a -> Str) -> Str
+            printLinkedList = \linkedList, f ->
+              when linkedList is
+                Nil -> "Nil"
+                Cons x xs ->
+                  strX = f x
+                  strXs = printLinkedList xs f
+                  "Cons \(strX) (\(strXs))"
+            "###
+        ),
+        RocStr::from("Cons 2 (Cons 3 (Cons 4 (Nil)))"),
+        RocStr
+    );
+}

@@ -200,6 +200,7 @@ pub enum LlvmBackendMode {
     BinaryDev,
     /// Creates a test wrapper around the main roc function to catch and report panics.
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    BinaryGlue,
     GenTest,
     WasmGenTest,
     CliTest,
@@ -210,6 +211,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => true,
             LlvmBackendMode::BinaryDev => true,
+            LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => false,
@@ -221,6 +223,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => false,
             LlvmBackendMode::BinaryDev => false,
+            LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => true,
@@ -231,6 +234,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => false,
             LlvmBackendMode::BinaryDev => true,
+            LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => false,
             LlvmBackendMode::CliTest => true,
@@ -1078,6 +1082,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
     match expr {
         Literal(literal) => build_exp_literal(env, layout_interner, parent, layout, literal),
+        NullPointer => {
+            let basic_type = basic_type_from_layout(env, layout_interner, layout);
+
+            debug_assert!(basic_type.is_pointer_type());
+            basic_type.into_pointer_type().const_zero().into()
+        }
 
         Call(call) => build_exp_call(
             env,
@@ -4116,7 +4126,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             )
         }
 
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {}
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -4169,7 +4179,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             roc_call_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {
             basic_type_from_layout(env, layout_interner, return_layout)
         }
     };
@@ -5250,7 +5260,7 @@ fn build_proc<'a, 'ctx, 'env>(
                 GenTest | WasmGenTest | CliTest => {
                     /* no host, or exposing types is not supported */
                 }
-                Binary | BinaryDev => {
+                Binary | BinaryDev | BinaryGlue => {
                     for (alias_name, hels) in aliases.iter() {
                         let ident_string = proc.name.name().as_str(&env.interns);
                         let fn_name: String = format!("{}_{}", ident_string, hels.id.0);

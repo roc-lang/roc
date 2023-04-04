@@ -1878,6 +1878,7 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
+    NullPointer,
 
     StructAtIndex {
         index: u64,
@@ -2016,6 +2017,7 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            NullPointer => alloc.text("NullPointer"),
             Reuse {
                 symbol,
                 tag_id,
@@ -4963,9 +4965,6 @@ pub fn with_hole<'a>(
                 _ => arena.alloc([record_layout]),
             };
 
-            debug_assert_eq!(field_layouts.len(), symbols.len());
-            debug_assert_eq!(fields.len(), symbols.len());
-
             if symbols.len() == 1 {
                 // TODO we can probably special-case this more, skippiing the generation of
                 // UpdateExisting
@@ -7464,6 +7463,8 @@ fn substitute_in_expr<'a>(
                 None
             }
         }
+
+        NullPointer => None,
 
         Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
 
