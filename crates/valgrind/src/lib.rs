@@ -20,6 +20,12 @@ fn build_host() {
     // the preprocessed host is stored beside the platform's main.roc
     let preprocessed_host_path =
         platform_main_roc.with_file_name(preprocessed_host_filename(&target).unwrap());
+    
+    // valgrind does not support avx512 yet: https://bugs.kde.org/show_bug.cgi?id=383010
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if is_x86_feature_detected!("avx512f") {
+        std::env::set_var("NO_AVX512", "1");
+    }
 
     build_and_preprocess_host(
         roc_mono::ir::OptLevel::Normal,
