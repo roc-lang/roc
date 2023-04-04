@@ -30,8 +30,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
-    TypeExtension, TypeTag, Types,
+    AliasCommon, AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason,
+    RecordField, TypeExtension, TypeTag, Types,
 };
 
 /// This is for constraining Defs
@@ -375,12 +375,37 @@ pub fn constrain_expr(
             let expected_index = expected;
             constraints.equal_types(str_index, expected_index, Category::Str, region)
         }
-        IngestedFile(_, _) => {
-            // This is probably where real type checking happens?
-            let str_index = constraints.push_type(types, Types::STR);
-            let expected_index = expected;
-            constraints.equal_types(str_index, expected_index, Category::Str, region)
-        }
+        IngestedFile(_, anno) => match &anno.typ {
+            Type::Apply(Symbol::STR_STR, _, _) => {
+                let str_index = constraints.push_type(types, Types::STR);
+                let expected_index = expected;
+                constraints.equal_types(str_index, expected_index, Category::Str, region)
+
+                // TODO: I believe we also should check to make sure they bytes are valid utf8 and bubble up an error.
+                // I am just not sure how the error would get bubbled up.
+            }
+            Type::Apply(Symbol::LIST_LIST, elem_type, _)
+                if matches!(
+                    elem_type[0].value,
+                    Type::DelayedAlias(AliasCommon {
+                        symbol: Symbol::NUM_U8,
+                        ..
+                    })
+                ) =>
+            {
+                let elem_var = Variable::U8;
+                let list_elem_type = Type::Variable(elem_var);
+                let elem_type_index = {
+                    let typ = types.from_old_type(&list_type(list_elem_type));
+                    constraints.push_type(types, typ)
+                };
+                constraints.equal_types(elem_type_index, expected, Category::List, region)
+            }
+            x => todo!(
+                "Unsupported requested type for ingested file, give proper error: {:?}",
+                x
+            ),
+        },
         SingleQuote(num_var, precision_var, _, bound) => single_quote_literal(
             types,
             constraints,

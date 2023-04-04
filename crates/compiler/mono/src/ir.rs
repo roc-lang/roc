@@ -31,9 +31,13 @@ use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
-use roc_types::subs::{
-    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
-    StorageSubs, Subs, Variable, VariableSubsSlice,
+use roc_types::types::AliasCommon;
+use roc_types::{
+    subs::{
+        instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
+        StorageSubs, Subs, Variable, VariableSubsSlice,
+    },
+    types::Type,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -4158,16 +4162,44 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        // TODO: Actually generate for multiple types here.
-        // Should this be able to fail with utf8 or should that have been checked already?
-        IngestedFile(bytes, _) => Stmt::Let(
-            assigned,
-            Expr::Literal(Literal::Str(
-                arena.alloc(std::str::from_utf8(&bytes).unwrap().to_owned()),
-            )),
-            Layout::STR,
-            hole,
-        ),
+        IngestedFile(bytes, anno) => match &anno.typ {
+            Type::Apply(Symbol::STR_STR, _, _) => Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Str(
+                    // This is safe because we ensure the utf8 bytes are valid earlier in the compiler pipeline.
+                    arena.alloc(unsafe { std::str::from_utf8_unchecked(&bytes) }.to_owned()),
+                )),
+                Layout::STR,
+                hole,
+            ),
+            Type::Apply(Symbol::LIST_LIST, elem_type, _)
+                if matches!(
+                    elem_type[0].value,
+                    Type::DelayedAlias(AliasCommon {
+                        symbol: Symbol::NUM_U8,
+                        ..
+                    })
+                ) =>
+            {
+                let elem_layout = Layout::U8;
+                let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
+                for byte in bytes {
+                    elements.push(ListLiteralElement::Literal(Literal::Byte(byte)));
+                }
+                let expr = Expr::Array {
+                    elem_layout,
+                    elems: elements.into_bump_slice(),
+                };
+
+                let list_layout = layout_cache.put_in(Layout::Builtin(Builtin::List(elem_layout)));
+
+                Stmt::Let(assigned, expr, list_layout, hole)
+            }
+            x => todo!(
+                "Unsupported requested type for ingested file, give proper error: {:?}",
+                x
+            ),
+        },
 
         SingleQuote(_, _, character, _) => {
             let layout = layout_cache
