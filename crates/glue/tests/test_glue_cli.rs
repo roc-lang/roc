@@ -134,7 +134,7 @@ mod glue_cli_run {
             Answer was: discriminant_U1::None
         "#),
         return_function:"return-function" => indoc!(r#"
-            Answer was: 43
+            Answer was: 43 41
         "#),
     }
 

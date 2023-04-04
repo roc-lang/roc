@@ -260,8 +260,8 @@ generateStructFields = \buf, types, visibility, structFields ->
         HasNoClosure fields ->
             List.walk fields buf (generateStructFieldWithoutClosure types visibility)
 
-        HasClosure _ ->
-            Str.concat buf "// TODO: Struct fields with closures"
+        HasClosure fields ->
+            List.walk fields buf (generateStructFieldWithoutClosure types visibility)
 
 generateStructFieldWithoutClosure = \types, visibility ->
     \accum, { name: fieldName, id } ->
@@ -911,13 +911,15 @@ cannotDeriveCopy = \types, type ->
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
-        RocStr | Bool | Num _ | Struct { fields: HasClosure _ } | TagUnionPayload { fields: HasClosure _ } -> Bool.false
+        RocStr | Bool | Num _ |  TagUnionPayload { fields: HasClosure _ } -> Bool.false
         RocList id | RocSet id | RocBox id ->
             cannotDeriveDefault types (Types.shape types id)
 
         RocDict keyId valId ->
             cannotDeriveCopy types (Types.shape types keyId)
             || cannotDeriveCopy types (Types.shape types valId)
+
+        Struct { fields: HasClosure _ } -> Bool.true
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (Types.shape types id)

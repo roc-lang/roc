@@ -3,9 +3,10 @@ mod test_glue;
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     let record = test_glue::mainForHost();
-    let answer = record.f.force_thunk(42i64, 1);
+    let answer1 = record.f.force_thunk(42i64, 1);
+    let answer2 = record.g.force_thunk(42i64, 1);
 
-    println!("Answer was: {:?}", answer); // Debug
+    println!("Answer was: {:?} {:?}", answer1, answer2);
 
     // Exit code
     0

@@ -3,8 +3,11 @@ app "app"
     imports []
     provides [main] to pf
 
-main : { f: I64, I64 -> I64 }
-main = { f: increment } 
+main : { f: I64, I64 -> I64, g: I64, I64 -> I64 }
+main = { f: add, g: sub }
 
-increment : I64, I64 -> I64
-increment = \x, y -> x + y 
+add : I64, I64 -> I64
+add = \x, y -> x + y
+
+sub : I64, I64 -> I64
+sub = \x, y -> x - y
