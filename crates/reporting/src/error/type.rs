@@ -1655,6 +1655,12 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" a Unicode scalar value")]),
             alloc.text(" of type:"),
         ),
+        IngestedFile => (
+            // TODO: is this what we actually want for the error message here.
+            // Should we somehow get the file name piped to here or type annotation?
+            alloc.concat([this_is, alloc.text(" an ingested file")]),
+            alloc.text(" of type:"),
+        ),
         Lambda => (
             alloc.concat([this_is, alloc.text(" an anonymous function")]),
             alloc.text(" of type:"),

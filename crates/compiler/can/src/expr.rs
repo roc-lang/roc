@@ -302,19 +302,7 @@ impl Expr {
             Self::Int(..) => Category::Int,
             Self::Float(..) => Category::Frac,
             Self::Str(..) => Category::Str,
-            Self::IngestedFile(_, anno) => {
-                dbg!(&anno);
-                todo!()
-                // if let Type::Apply(0, 1, 2) = anno.typ {
-                //     Category::Str
-                // } else if let Type::Apply(_, _, _) = anno.typ {
-                //     Category::List
-                // } else {
-                //     todo!(
-                //         "Not sure how we should handle other types here that are probably invalid"
-                //     )
-                // }
-            }
+            Self::IngestedFile(..) => Category::IngestedFile,
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),

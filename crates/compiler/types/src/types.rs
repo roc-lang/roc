@@ -3781,6 +3781,7 @@ pub enum Category {
     List,
     Str,
     Character,
+    IngestedFile,
 
     // records
     Record,
