@@ -1093,6 +1093,7 @@ fn fix_values_captured_in_closure_expr(
         | Float(..)
         | Str(_)
         | SingleQuote(..)
+        | IngestedFile(..)
         | Var(..)
         | AbilityMember(..)
         | EmptyRecord

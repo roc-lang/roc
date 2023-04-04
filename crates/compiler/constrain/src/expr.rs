@@ -375,6 +375,12 @@ pub fn constrain_expr(
             let expected_index = expected;
             constraints.equal_types(str_index, expected_index, Category::Str, region)
         }
+        IngestedFile(_, _) => {
+            // This is probably where real type checking happens?
+            let str_index = constraints.push_type(types, Types::STR);
+            let expected_index = expected;
+            constraints.equal_types(str_index, expected_index, Category::Str, region)
+        }
         SingleQuote(num_var, precision_var, _, bound) => single_quote_literal(
             types,
             constraints,
@@ -3943,6 +3949,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
             Str(_)
+            | IngestedFile(_, _)
             | List { .. }
             | SingleQuote(_, _, _, _)
             | When { .. }

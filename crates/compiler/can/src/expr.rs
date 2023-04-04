@@ -1,5 +1,5 @@
 use crate::abilities::SpecializationId;
-use crate::annotation::{freshen_opaque_def, IntroducedVariables};
+use crate::annotation::{self, freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Annotation, Def};
 use crate::env::Env;
@@ -101,6 +101,9 @@ pub enum Expr {
         elem_var: Variable,
         loc_elems: Vec<Loc<Expr>>,
     },
+
+    // The bytes of a file and the expected type annotation.
+    IngestedFile(Vec<u8>, annotation::Annotation),
 
     // Lookups
     Var(Symbol, Variable),
@@ -299,6 +302,19 @@ impl Expr {
             Self::Int(..) => Category::Int,
             Self::Float(..) => Category::Frac,
             Self::Str(..) => Category::Str,
+            Self::IngestedFile(_, anno) => {
+                dbg!(&anno);
+                todo!()
+                // if let Type::Apply(0, 1, 2) = anno.typ {
+                //     Category::Str
+                // } else if let Type::Apply(_, _, _) = anno.typ {
+                //     Category::List
+                // } else {
+                //     todo!(
+                //         "Not sure how we should handle other types here that are probably invalid"
+                //     )
+                // }
+            }
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
@@ -732,50 +748,25 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
 
         ast::Expr::IngestedFile(file_path, type_ann) => {
-            use ast::TypeAnnotation::Apply;
-
-            if let Apply("", "Str", &[]) = type_ann.value {
-                match std::fs::read_to_string(file_path) {
-                    Ok(data) => (Expr::Str(data.into_boxed_str()), Output::default()),
-                    // TODO: Also handle when it returns an error converting to UTF8 explicitly.
-                    Err(e) => todo!("Handle err case of loading a string from a file: {:?}", e),
-                }
-            } else if let Apply(
-                "",
-                "List",
-                &[Loc {
-                    value: Apply("", "U8", &[]),
-                    ..
-                }],
-            ) = type_ann.value
-            {
-                let mut file =
-                    File::open(file_path).expect("file should exist due to earlier check");
-                let mut bytes = vec![];
-                match file.read_to_end(&mut bytes) {
-                    Ok(_) => (
-                        Expr::List {
-                            elem_var: Variable::U8,
-                            loc_elems: bytes
-                                .iter()
-                                .map(|b| {
-                                    Loc::at_zero(Expr::Int(
-                                        Variable::U8,
-                                        Variable::U8,
-                                        b.to_string().into_boxed_str(),
-                                        IntValue::U128((*b as u128).to_ne_bytes()),
-                                        IntBound::None,
-                                    ))
-                                })
-                                .collect(),
-                        },
-                        Output::default(),
+            let mut file = File::open(file_path).expect("file should exist due to earlier check. In the rare case the file got deleted, we should create a can error here too.");
+            let mut bytes = vec![];
+            match file.read_to_end(&mut bytes) {
+                Ok(_) => (
+                    Expr::IngestedFile(
+                        bytes,
+                        annotation::canonicalize_annotation(
+                            env,
+                            scope,
+                            &type_ann.value,
+                            region,
+                            var_store,
+                            &VecMap::default(),
+                            annotation::AnnotationFor::Value,
+                        ),
                     ),
-                    Err(e) => todo!("Handle err case of loading bytes from a file: {:?}", e),
-                }
-            } else {
-                // env.problems.push(Problem::BadTypeArguments)
-                todo!("properly return a type error")
+                    Output::default(),
+                ),
+                Err(e) => todo!("failed to load file emit can error: {}", e),
             }
         }
 
@@ -1904,6 +1895,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ Int(..)
         | other @ Float(..)
         | other @ Str { .. }
+        | other @ IngestedFile(..)
         | other @ SingleQuote(..)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
@@ -3035,6 +3027,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::Float(_, _, _, _, _)
             | Expr::Int(_, _, _, _, _)
             | Expr::Str(_)
+            | Expr::IngestedFile(_, _)
             | Expr::ZeroArgumentTag { .. }
             | Expr::RecordAccessor(_)
             | Expr::SingleQuote(..)

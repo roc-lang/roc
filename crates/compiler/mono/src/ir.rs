@@ -4158,6 +4158,17 @@ pub fn with_hole<'a>(
             hole,
         ),
 
+        // TODO: Actually generate for multiple types here.
+        // Should this be able to fail with utf8 or should that have been checked already?
+        IngestedFile(bytes, _) => Stmt::Let(
+            assigned,
+            Expr::Literal(Literal::Str(
+                arena.alloc(std::str::from_utf8(&bytes).unwrap().to_owned()),
+            )),
+            Layout::STR,
+            hole,
+        ),
+
         SingleQuote(_, _, character, _) => {
             let layout = layout_cache
                 .from_var(env.arena, variable, env.subs)
