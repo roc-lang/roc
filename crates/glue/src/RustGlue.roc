@@ -319,10 +319,175 @@ generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
+deriveCloneTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveCloneTagUnion = \buf, tagUnionType, tags ->
+    clones =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => union_\(tagUnionType) {
+                                \(tagName): self.payload.\(tagName).clone(),
+                            },
+            """
+
+    """
+    \(buf)
+
+    impl Clone for \(tagUnionType) {
+        fn clone(&self) -> Self {
+            use discriminant_\(tagUnionType)::*;
+
+            let payload = unsafe {
+                match self.discriminant {\(clones)
+                }
+            };
+
+            Self {
+                discriminant: self.discriminant,
+                payload,
+            }
+        }
+    }
+    """
+
+deriveDebugTagUnion : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName, payload } ->
+            type = when payload is
+                Some id -> typeName types id
+                None -> "()"
+
+            """
+            \(accum)
+                            \(tagName) => {
+                                let field: &\(type) = &self.payload.\(tagName);
+                                f.debug_tuple("\(tagUnionType)::\(tagName)").field(field).finish()
+                            },
+            """
+
+    """
+    \(buf)
+
+    impl core::fmt::Debug for \(tagUnionType) {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            use discriminant_\(tagUnionType)::*;
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
+deriveEqTagUnion : Str, Str -> Str
+deriveEqTagUnion = \buf, tagUnionType ->
+    """
+    \(buf)
+
+    impl Eq for \(tagUnionType) {}
+    """
+
+
+derivePartialEqTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+derivePartialEqTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => self.payload.\(tagName) == other.payload.\(tagName),
+            """
+
+    """
+    \(buf)
+
+    impl PartialEq for \(tagUnionType) {
+        fn eq(&self, other: &Self) -> bool {
+            use discriminant_\(tagUnionType)::*;
+
+            if self.discriminant != other.discriminant {
+                return false;
+            }
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
+deriveOrdTagUnion : Str, Str -> Str
+deriveOrdTagUnion = \buf, tagUnionType ->
+    """
+    \(buf)
+
+    impl Ord for \(tagUnionType) {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.partial_cmp(other).unwrap()
+        }
+    }
+    """
+
+derivePartialOrdTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+derivePartialOrdTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                                \(tagName) => self.payload.\(tagName).partial_cmp(&other.payload.\(tagName)),
+            """
+
+    """
+    \(buf)
+
+    impl PartialOrd for \(tagUnionType) {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            use discriminant_\(tagUnionType)::*;
+
+            use std::cmp::Ordering::*;
+
+            match self.discriminant.cmp(&other.discriminant) {
+                Less => Option::Some(Less),
+                Greater => Option::Some(Greater),
+                Equal => unsafe {
+                    match self.discriminant {\(checks)
+                    }
+                },
+            }
+        }
+    }
+    """
+
+deriveHashTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveHashTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => self.payload.\(tagName).hash(state),
+            """
+
+    """
+    \(buf)
+
+    impl core::hash::Hash for \(tagUnionType) {
+        fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+            use discriminant_\(tagUnionType)::*;
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
 generateConstructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateConstructorFunctions = \buf, types, tagUnionType, tags ->
     buf
-        |> Str.concat "\n\nimpl \(tagUnionType) {\n"
+        |> Str.concat "\n\nimpl \(tagUnionType) {"
         |> \b -> List.walk tags b \accum, r -> generateConstructorFunction accum types tagUnionType r.name r.payload
         |> Str.concat "\n}\n\n"
 
@@ -369,7 +534,7 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
 generateDestructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateDestructorFunctions = \buf, types, tagUnionType, tags ->
     buf
-        |> Str.concat "\n\nimpl \(tagUnionType) {\n"
+        |> Str.concat "\n\nimpl \(tagUnionType) {"
         |> \b -> List.walk tags b \accum, r -> generateDestructorFunction accum types tagUnionType r.name r.payload
         |> Str.concat "\n}\n\n"
 
@@ -418,9 +583,19 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     tagNames = List.map tags \{ name: n } -> n
     selfMut = "self"
 
+    max = \a, b -> if a >= b then a else b
+
+    # TODO: this value can be different than the alignment of `id`
+    align =
+        List.walk tags 1 \accum, { payload } ->
+            when payload is
+                Some payloadId -> max accum (Types.alignment types payloadId)
+                None -> accum
+        |> Num.toStr
+
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
-    |> Str.concat "#[repr(C)]\npub union \(unionName) {\n"
+    |> Str.concat "#[repr(C, align(\(align)))]\npub union \(unionName) {\n"
     |> \b -> List.walk tags b (generateUnionField types)
     |> generateTagUnionSizer types id tags
     |> Str.concat
@@ -449,7 +624,6 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
 
 
         """
-    |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
     |> Str.concat
         """
         #[repr(C)]
@@ -458,6 +632,13 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
             discriminant: discriminant_\(escapedName),
         }
         """
+    |> deriveCloneTagUnion escapedName tags
+    |> deriveDebugTagUnion types escapedName tags
+    |> deriveEqTagUnion escapedName
+    |> derivePartialEqTagUnion escapedName tags
+    |> deriveOrdTagUnion escapedName
+    |> derivePartialOrdTagUnion escapedName tags
+    |> deriveHashTagUnion escapedName tags
     |> generateDestructorFunctions types escapedName tags
     |> generateConstructorFunctions types escapedName tags
     |> \b ->
@@ -526,7 +707,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
                 Some id if cannotDeriveCopy types (Types.shape types id) ->
-                    "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) }},"
+                    "unsafe { core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) },"
 
                 _ ->
                     # If it had no payload, or if the payload had no pointers,

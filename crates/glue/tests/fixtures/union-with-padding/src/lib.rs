@@ -12,13 +12,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<NonRecursive> = core::mem::MaybeUninit::uninit();
-
-        roc_main(ret.as_mut_ptr());
-
-        ret.assume_init()
-    };
+    let tag_union = test_glue::mainForHost(());
 
     // Verify that it has all the expected traits.
 
@@ -29,14 +23,14 @@ pub extern "C" fn rust_main() -> i32 {
     assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
 
     println!(
-        "tag_union was: {:?}\n`Foo \"small str\"` is: {:?}\n`Foo \"A long enough string to not be small\"` is: {:?}\n`Bar 123` is: {:?}\n`Baz` is: {:?}\n`Blah 456` is: {:?}",
-        tag_union,
-        NonRecursive::Foo("small str".into()),
-        NonRecursive::Foo("A long enough string to not be small".into()),
-        NonRecursive::Bar(123.into()),
-        NonRecursive::Baz,
-        NonRecursive::Blah(456),
-    ); // Debug
+            "tag_union was: {:?}\n`Foo \"small str\"` is: {:?}\n`Foo \"A long enough string to not be small\"` is: {:?}\n`Bar 123` is: {:?}\n`Baz` is: {:?}\n`Blah 456` is: {:?}",
+            tag_union,
+            NonRecursive::Foo("small str".into()),
+            NonRecursive::Foo("A long enough string to not be small".into()),
+            NonRecursive::Bar(123),
+            NonRecursive::Baz(),
+            NonRecursive::Blah(456),
+        ); // Debug
 
     let mut set = HashSet::new();
 

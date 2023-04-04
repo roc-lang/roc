@@ -77,21 +77,21 @@ mod glue_cli_run {
         single_tag_union:"single-tag-union" => indoc!(r#"
             tag_union was: SingleTagUnion::OneTag
         "#),
-        //        union_with_padding:"union-with-padding" => indoc!(r#"
-        //            tag_union was: NonRecursive::Foo("This is a test")
-        //            `Foo "small str"` is: NonRecursive::Foo("small str")
-        //            `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
-        //            `Bar 123` is: NonRecursive::Bar(123)
-        //            `Baz` is: NonRecursive::Baz
-        //            `Blah 456` is: NonRecursive::Blah(456)
-        //        "#),
-        //        union_without_padding:"union-without-padding" => indoc!(r#"
-        //            tag_union was: NonRecursive::Foo("This is a test")
-        //            `Foo "small str"` is: NonRecursive::Foo("small str")
-        //            `Bar 123` is: NonRecursive::Bar(123)
-        //            `Baz` is: NonRecursive::Baz
-        //            `Blah 456` is: NonRecursive::Blah(456)
-        //        "#),
+        union_with_padding:"union-with-padding" => indoc!(r#"
+            tag_union was: NonRecursive::Foo("This is a test")
+            `Foo "small str"` is: NonRecursive::Foo("small str")
+            `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
+            `Bar 123` is: NonRecursive::Bar(123)
+            `Baz` is: NonRecursive::Baz(())
+            `Blah 456` is: NonRecursive::Blah(456)
+        "#),
+        union_without_padding:"union-without-padding" => indoc!(r#"
+            tag_union was: NonRecursive::Foo("This is a test")
+            `Foo "small str"` is: NonRecursive::Foo("small str")
+            `Bar 123` is: NonRecursive::Bar(123)
+            `Baz` is: NonRecursive::Baz(())
+            `Blah 456` is: NonRecursive::Blah(456)
+        "#),
         // nullable_wrapped:"nullable-wrapped" => indoc!(r#"
         //     tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
         //     `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
