@@ -354,9 +354,10 @@ deriveDebugTagUnion : Str, Types, Str, List { name : Str, payload : [Some TypeId
 deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
     checks =
         List.walk tags "" \accum, { name: tagName, payload } ->
-            type = when payload is
-                Some id -> typeName types id
-                None -> "()"
+            type =
+                when payload is
+                    Some id -> typeName types id
+                    None -> "()"
 
             """
             \(accum)
@@ -388,7 +389,6 @@ deriveEqTagUnion = \buf, tagUnionType ->
 
     impl Eq for \(tagUnionType) {}
     """
-
 
 derivePartialEqTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 derivePartialEqTagUnion = \buf, tagUnionType, tags ->
@@ -487,9 +487,9 @@ deriveHashTagUnion = \buf, tagUnionType, tags ->
 generateConstructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateConstructorFunctions = \buf, types, tagUnionType, tags ->
     buf
-        |> Str.concat "\n\nimpl \(tagUnionType) {"
-        |> \b -> List.walk tags b \accum, r -> generateConstructorFunction accum types tagUnionType r.name r.payload
-        |> Str.concat "\n}\n\n"
+    |> Str.concat "\n\nimpl \(tagUnionType) {"
+    |> \b -> List.walk tags b \accum, r -> generateConstructorFunction accum types tagUnionType r.name r.payload
+    |> Str.concat "\n}\n\n"
 
 generateConstructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
 generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
@@ -534,9 +534,9 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
 generateDestructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateDestructorFunctions = \buf, types, tagUnionType, tags ->
     buf
-        |> Str.concat "\n\nimpl \(tagUnionType) {"
-        |> \b -> List.walk tags b \accum, r -> generateDestructorFunction accum types tagUnionType r.name r.payload
-        |> Str.concat "\n}\n\n"
+    |> Str.concat "\n\nimpl \(tagUnionType) {"
+    |> \b -> List.walk tags b \accum, r -> generateDestructorFunction accum types tagUnionType r.name r.payload
+    |> Str.concat "\n}\n\n"
 
 generateDestructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
 generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
@@ -557,7 +557,6 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
             take =
                 if canDeriveCopy types shape then
                     "unsafe { self.payload.\(name) }"
-
                 else
                     "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }"
 
@@ -1013,9 +1012,10 @@ generateDeriveStr = \buf, types, type, includeDebug ->
         else
             b
 
-    deriveDebug = when includeDebug is
-        IncludeDebug -> Bool.true
-        ExcludeDebug -> Bool.false
+    deriveDebug =
+        when includeDebug is
+            IncludeDebug -> Bool.true
+            ExcludeDebug -> Bool.false
 
     buf
     |> Str.concat "#[derive(Clone, "
@@ -1034,8 +1034,7 @@ canDerivePartialEq = \types, type ->
             canDerivePartialEq types runtimeRepresentation
 
         Unsized -> Bool.false
-
-        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _)  -> Bool.true
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) -> Bool.true
         RocStr -> Bool.true
         RocList inner | RocSet inner | RocBox inner ->
             innerType = Types.shape types inner
@@ -1047,13 +1046,13 @@ canDerivePartialEq = \types, type ->
 
             canDerivePartialEq types kType && canDerivePartialEq types vType
 
-        TagUnion (Recursive { tags }) -> 
+        TagUnion (Recursive { tags }) ->
             List.all tags \{ payload } ->
                 when payload is
                     None -> Bool.true
                     Some id -> canDerivePartialEq types (Types.shape types id)
 
-        TagUnion (NullableWrapped { tags }) -> 
+        TagUnion (NullableWrapped { tags }) ->
             List.all tags \{ payload } ->
                 when payload is
                     None -> Bool.true
@@ -1062,11 +1061,10 @@ canDerivePartialEq = \types, type ->
         TagUnion (NonNullableUnwrapped { payload }) ->
             canDerivePartialEq types (Types.shape types payload)
 
-        TagUnion (NullableUnwrapped { nonNullPayload }) -> 
+        TagUnion (NullableUnwrapped { nonNullPayload }) ->
             canDerivePartialEq types (Types.shape types nonNullPayload)
 
         RecursivePointer _ -> Bool.true
-
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
             List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
@@ -1104,8 +1102,7 @@ canDeriveCopy = \types, type ->
 
         # unsized values are heap-allocated
         Unsized -> Bool.false
-
-        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _)  -> Bool.true
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) -> Bool.true
         RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.false
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
             List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
@@ -1132,7 +1129,7 @@ canDeriveCopy = \types, type ->
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
-        RocStr | Bool | Num _ |  TagUnionPayload { fields: HasClosure _ } -> Bool.false
+        RocStr | Bool | Num _ | TagUnionPayload { fields: HasClosure _ } -> Bool.false
         RocList id | RocSet id | RocBox id ->
             cannotDeriveDefault types (Types.shape types id)
 
@@ -1141,7 +1138,6 @@ cannotDeriveDefault = \types, type ->
             || cannotDeriveCopy types (Types.shape types valId)
 
         Struct { fields: HasClosure _ } -> Bool.true
-
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (Types.shape types id)
 

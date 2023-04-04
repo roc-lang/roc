@@ -99,11 +99,11 @@ mod glue_cli_run {
         //     `Single "small str"` is: StrFingerTree::Single("small str")
         //     `Empty` is: StrFingerTree::Empty
         // "#),
-        // nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
-        //     tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
-        //     `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
-        //     `Nil` is: StrConsList::Nil
-        // "#),
+        nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
+            tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
+            `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
+            `Nil` is: StrConsList::Nil
+        "#),
         // nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
         //     tag_union was: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "root", f1: [StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf1", f1: [] } }), StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf2", f1: [] } })] } })
         //     Tree "foo" [] is: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "foo", f1: [] } })

@@ -7,5 +7,5 @@ platform "test-platform"
 
 StrFingerTree : [Empty, Single Str, More Str StrFingerTree]
 
-mainForHost : StrFingerTree
-mainForHost = main
+mainForHost : {} -> StrFingerTree
+mainForHost = \{} -> main
