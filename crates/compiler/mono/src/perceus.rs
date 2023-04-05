@@ -15,6 +15,7 @@ use crate::{
         ModifyRc, Param, Proc, ProcLayout, Stmt, UpdateModeIds,
     },
     layout::{InLayout, LayoutInterner, STLayoutInterner},
+    low_level::HigherOrder,
 };
 
 /**
@@ -230,268 +231,6 @@ impl Clone for VariableRcTypesEnv<'_, '_> {
 type VariablesOwnership = MutMap<Symbol, Ownership>;
 
 /**
-Enum to keep track of the variable usage of an expression.
-*/
-#[derive(Default)]
-struct VariableUsage {
-    // A map keeping track of how many times a variable is used as owned.
-    owned: MutMap<Symbol, u64>,
-    // Structure to keep track of the borrowed variable usage of an expression.
-    borrowed: MutSet<Symbol>,
-}
-
-impl VariableUsage {
-    /**
-    Retrieve how much a variable is used in an expression.
-    Variables can be borrowed by lowlevel function calls which take borrowed arguments and by indexing/unboxing.
-    */
-    fn get_reference_counted_variable_usage_expr<'a>(
-        arena: &Bump,
-        variable_rc_types: &VariableRcTypes,
-        expr: &Expr<'a>,
-    ) -> VariableUsage {
-        match expr {
-            Expr::Literal(_)
-            | Expr::NullPointer
-            | Expr::EmptyArray
-            | Expr::RuntimeErrorFunction(_) => {
-                // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
-                VariableUsage::default()
-            }
-            Expr::Call(Call {
-                arguments,
-                call_type,
-            }) => match call_type {
-                // A by name call refers to a normal function call.
-                // Normal functions take all their parameters as owned, so we can mark them all as such.
-                CallType::ByName { .. } => VariableUsage {
-                    owned: Self::owned_usages(variable_rc_types, arguments.iter().copied()),
-                    borrowed: MutSet::default(),
-                },
-                // A foreign function call is responsible for managing the reference counts of its arguments.
-                // TODO make sure this is true.
-                CallType::Foreign { .. } => VariableUsage {
-                    owned: Self::owned_usages(variable_rc_types, arguments.iter().copied()),
-                    borrowed: MutSet::default(),
-                },
-                // Doesn't include higher order
-                CallType::LowLevel {
-                    op: operator,
-                    update_mode,
-                } => {
-                    let borrow_signature = lowlevel_borrow_signature(arena, operator);
-                    let arguments_with_borrow_signature = arguments
-                        .iter()
-                        .copied()
-                        .zip(borrow_signature.iter().copied());
-                    let (owned_arguments, borrowed_arguments) = arguments_with_borrow_signature
-                        .partition::<std::vec::Vec<_>, _>(
-                        |(_, ownership)| matches!(ownership, Ownership::Owned),
-                    );
-
-                    return VariableUsage {
-                        owned: Self::owned_usages(
-                            variable_rc_types,
-                            owned_arguments.iter().map(|(symbol, _)| symbol).copied(),
-                        ),
-                        borrowed: Self::borrowed_usages(
-                            variable_rc_types,
-                            borrowed_arguments.iter().map(|(symbol, _)| symbol).copied(),
-                        ),
-                    };
-                }
-                CallType::HigherOrder(HigherOrderLowLevel {
-                    op: operator,
-
-                    closure_env_layout,
-
-                    /// update mode of the higher order lowlevel itself
-                    update_mode,
-
-                    passed_function,
-                }) => {
-                    // Functions always take their arguments as owned.
-                    // (Except lowlevels, but those are wrapped in functions that take their arguments as owned and perform rc.)
-
-                    // This should always be true, not sure where this could be set to false.
-                    debug_assert!(passed_function.owns_captured_environment);
-
-                    match operator {
-                        crate::low_level::HigherOrder::ListMap { xs } => {
-                            if let [_xs_symbol, _function_symboll, closure_symbol] = &arguments {
-                                VariableUsage {
-                                    owned: Self::owned_usages(
-                                        variable_rc_types,
-                                        [*xs, *closure_symbol].into_iter(),
-                                    ),
-                                    borrowed: MutSet::default(),
-                                }
-                            } else {
-                                panic!("ListMap should have 3 arguments");
-                            }
-                        }
-                        crate::low_level::HigherOrder::ListMap2 { xs, ys } => {
-                            if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
-                                &arguments
-                            {
-                                VariableUsage {
-                                    owned: Self::owned_usages(
-                                        variable_rc_types,
-                                        [*xs, *ys, *closure_symbol].into_iter(),
-                                    ),
-                                    borrowed: MutSet::default(),
-                                }
-                            } else {
-                                panic!("ListMap2 should have 4 arguments");
-                            }
-                        }
-                        crate::low_level::HigherOrder::ListMap3 { xs, ys, zs } => {
-                            if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
-                                &arguments
-                            {
-                                VariableUsage {
-                                    owned: Self::owned_usages(
-                                        variable_rc_types,
-                                        [*xs, *ys, *zs, *closure_symbol].into_iter(),
-                                    ),
-                                    borrowed: MutSet::default(),
-                                }
-                            } else {
-                                panic!("ListMap3 should have 5 arguments");
-                            }
-                        }
-                        crate::low_level::HigherOrder::ListMap4 { xs, ys, zs, ws } => {
-                            if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
-                                &arguments
-                            {
-                                VariableUsage {
-                                    owned: Self::owned_usages(
-                                        variable_rc_types,
-                                        [*xs, *ys, *zs, *ws, *closure_symbol].into_iter(),
-                                    ),
-                                    borrowed: MutSet::default(),
-                                }
-                            } else {
-                                panic!("ListMap4 should have 6 arguments");
-                            }
-                        }
-                        crate::low_level::HigherOrder::ListSortWith { xs } => {
-                            // TODO if non-unique, elements have been consumed, must still consume the list itself
-                            if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                                VariableUsage {
-                                    owned: Self::owned_usages(
-                                        variable_rc_types,
-                                        [*xs, *closure_symbol].into_iter(),
-                                    ),
-                                    borrowed: MutSet::default(),
-                                }
-                            } else {
-                                panic!("ListSortWith should have 3 arguments");
-                            }
-                        }
-                    }
-                }
-            },
-            Expr::Tag { arguments, .. } | Expr::Struct(arguments) => VariableUsage {
-                owned: Self::owned_usages(variable_rc_types, arguments.iter().copied()),
-                borrowed: MutSet::default(),
-            },
-            Expr::ExprBox { symbol } => VariableUsage {
-                owned: Self::owned_usages(variable_rc_types, iter::once(*symbol)),
-                borrowed: MutSet::default(),
-            },
-            Expr::GetTagId { structure, .. }
-            | Expr::StructAtIndex { structure, .. }
-            | Expr::UnionAtIndex { structure, .. }
-            | Expr::ExprUnbox { symbol: structure } => {
-                // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
-                // But we do want to make sure to decrement this item if it is the last reference.
-                // VariableUsage::Borrowed(*structure)
-                VariableUsage {
-                    owned: MutMap::default(),
-                    borrowed: Self::borrowed_usages(variable_rc_types, iter::once(*structure)),
-                }
-            }
-            Expr::Array {
-                elem_layout: _,
-                elems,
-            } => {
-                // For an array creation, we insert all the used elements.
-                VariableUsage {
-                    owned: Self::owned_usages(
-                        variable_rc_types,
-                        elems.iter().filter_map(|element| match element {
-                            // Literal elements are not reference counted.
-                            ListLiteralElement::Literal(_) => None,
-                            // Symbol elements are reference counted.
-                            ListLiteralElement::Symbol(symbol) => Some(*symbol),
-                        }),
-                    ),
-                    borrowed: MutSet::default(),
-                }
-            }
-            Expr::Reuse { .. } | Expr::Reset { .. } | Expr::ResetRef { .. } => {
-                unreachable!("Reset(ref) and reuse should not exist at this point")
-            }
-        }
-    }
-
-    /**
-    Return owned usages.
-    Collect the usage of all the reference counted symbols in the iterator and return as a map.
-    */
-    fn owned_usages(
-        variable_rc_types: &VariableRcTypes,
-        symbols: impl IntoIterator<Item = Symbol>,
-    ) -> MutMap<Symbol, u64> {
-        // A groupby or something similar would be nice here.
-        let mut variable_usage = MutMap::default();
-        for symbol in symbols {
-            match {
-                variable_rc_types
-                    .get(&symbol)
-                    .expect("Expected variable to be in the map")
-            } {
-                // If the variable is reference counted, we need to increment the usage count.
-                VarRcType::ReferenceCounted => {
-                    match variable_usage.get(&symbol) {
-                        Some(count) => variable_usage.insert(symbol, count + 1),
-                        None => variable_usage.insert(symbol, 1),
-                    };
-                }
-                // If the variable is not reference counted, we don't need to do anything.
-                VarRcType::NotReferenceCounted => continue,
-            }
-        }
-        variable_usage
-    }
-
-    /**
-    Filter the given symbols to only contain reference counted symbols.
-    */
-    fn borrowed_usages(
-        variable_rc_types: &VariableRcTypes,
-        symbols: impl IntoIterator<Item = Symbol>,
-    ) -> MutSet<Symbol> {
-        symbols
-            .into_iter()
-            .filter_map(|symbol| {
-                match {
-                    variable_rc_types
-                        .get(&symbol)
-                        .expect("Expected variable to be in the map")
-                } {
-                    // If the variable is reference counted, we need to increment the usage count.
-                    VarRcType::ReferenceCounted => Some(symbol),
-                    // If the variable is not reference counted, we don't need to do anything.
-                    VarRcType::NotReferenceCounted => None,
-                }
-            })
-            .collect()
-    }
-}
-
-/**
 Type containing data about the variable consumption of a join point.
 */
 type JoinPointConsumption = MutSet<Symbol>;
@@ -661,6 +400,60 @@ impl<'v> RefcountEnvironment<'v> {
             "Expected closure to be in environment"
         );
     }
+
+    /**
+    Return owned usages.
+    Collect the usage of all the reference counted symbols in the iterator and return as a map.
+    */
+    fn owned_usages(
+        self: &RefcountEnvironment<'v>,
+        symbols: impl IntoIterator<Item = Symbol>,
+    ) -> MutMap<Symbol, u64> {
+        // A groupby or something similar would be nice here.
+        let mut variable_usage = MutMap::default();
+        for symbol in symbols {
+            match {
+                self.variables_rc_types
+                    .get(&symbol)
+                    .expect("Expected variable to be in the map")
+            } {
+                // If the variable is reference counted, we need to increment the usage count.
+                VarRcType::ReferenceCounted => {
+                    match variable_usage.get(&symbol) {
+                        Some(count) => variable_usage.insert(symbol, count + 1),
+                        None => variable_usage.insert(symbol, 1),
+                    };
+                }
+                // If the variable is not reference counted, we don't need to do anything.
+                VarRcType::NotReferenceCounted => continue,
+            }
+        }
+        variable_usage
+    }
+
+    /**
+    Filter the given symbols to only contain reference counted symbols.
+    */
+    fn borrowed_usages(
+        self: &RefcountEnvironment<'v>,
+        symbols: impl IntoIterator<Item = Symbol>,
+    ) -> MutSet<Symbol> {
+        symbols
+            .into_iter()
+            .filter_map(|symbol| {
+                match {
+                    self.variables_rc_types
+                        .get(&symbol)
+                        .expect("Expected variable to be in the map")
+                } {
+                    // If the variable is reference counted, we need to increment the usage count.
+                    VarRcType::ReferenceCounted => Some(symbol),
+                    // If the variable is not reference counted, we don't need to do anything.
+                    VarRcType::NotReferenceCounted => None,
+                }
+            })
+            .collect()
+    }
 }
 
 /**
@@ -731,10 +524,6 @@ fn insert_refcount_operations_stmt<'v, 'a>(
     match &stmt {
         // The expression borrows the values owned (used) by the continuation.
         Stmt::Let(binding, expr, layout, stmt) => {
-            // INFO The Koka implementation (instead of calculating the owned environment beforehand)
-            // First evaluates the continuation with the owned environment, setting the variables to dead (not alive).
-            // And in the rest of the code, the dead variables are treated as borrowed (because not alive).
-
             // First evaluate the continuation and let it consume it's free variables.
             environment.add_variable(*binding); // Add the bound variable to the environment. As it can be used in the continuation.
             let new_stmt = insert_refcount_operations_stmt(arena, environment, stmt);
@@ -751,46 +540,14 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             // And as the variable should not be in scope before this let binding, remove it from the environment.
             environment.remove_variable(*binding);
 
-            // Get the variables used in the expression.
-            let VariableUsage { owned, borrowed } =
-                VariableUsage::get_reference_counted_variable_usage_expr(
-                    arena,
-                    &environment.variables_rc_types,
-                    expr,
-                );
-
-            // Insert decrement operations for borrowed variables if they are currently owned.
-            let new_stmt_with_owned_dec =
-                consume_and_insert_dec_stmts(arena, environment, borrowed, new_stmt_without_unused);
-
-            // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
-            let new_stmt_with_inc_index = if !matches!(
-                environment.get_variable_rc_type(binding),
-                VarRcType::ReferenceCounted
-            ) {
-                // If the variable is not reference counted, we don't need to increment it.
-                new_stmt_with_owned_dec
-            } else {
-                match expr {
-                    Expr::StructAtIndex { .. }
-                    | Expr::UnionAtIndex { .. }
-                    | Expr::ExprUnbox { .. } => {
-                        insert_inc_stmt(arena, *binding, 1, new_stmt_with_owned_dec)
-                    }
-                    // No usage of an element of a reference counted variable. No need to increment.
-                    _ => new_stmt_with_owned_dec,
-                }
-            };
-
-            let new_let = arena.alloc(Stmt::Let(
-                *binding,
-                expr.clone(),
-                *layout,
-                new_stmt_with_inc_index,
-            ));
-
-            // Insert increment operations for the owned variables used in the expression.
-            consume_and_insert_inc_stmts(arena, environment, owned, new_let)
+            insert_refcount_operations_binding(
+                arena,
+                environment,
+                binding,
+                expr,
+                layout,
+                new_stmt_without_unused,
+            )
         }
         Stmt::Switch {
             cond_symbol,
@@ -929,10 +686,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
-                VariableUsage::owned_usages(
-                    environment.variables_rc_types,
-                    lookups.iter().copied(),
-                ),
+                environment.owned_usages(lookups.iter().copied()),
                 new_expect,
             )
         }
@@ -956,10 +710,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
-                VariableUsage::owned_usages(
-                    environment.variables_rc_types,
-                    lookups.iter().copied(),
-                ),
+                environment.owned_usages(lookups.iter().copied()),
                 new_expectfx,
             )
         }
@@ -981,10 +732,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
-                VariableUsage::owned_usages(
-                    environment.variables_rc_types,
-                    std::iter::once(symbol).copied(),
-                ),
+                environment.owned_usages(std::iter::once(symbol).copied()),
                 new_debug,
             )
         }
@@ -1089,10 +837,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
-                VariableUsage::owned_usages(
-                    environment.variables_rc_types,
-                    arguments.iter().copied(),
-                ),
+                environment.owned_usages(arguments.iter().copied()),
                 new_jump,
             )
         }
@@ -1105,12 +850,231 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
-                VariableUsage::owned_usages(
-                    environment.variables_rc_types,
-                    std::iter::once(symbol).copied(),
-                ),
+                environment.owned_usages(std::iter::once(symbol).copied()),
                 new_crash,
             )
+        }
+    }
+}
+
+fn insert_refcount_operations_binding<'a>(
+    arena: &'a Bump,
+    environment: &mut RefcountEnvironment,
+    binding: &Symbol,
+    expr: &Expr<'a>,
+    layout: &InLayout<'a>,
+    stmt: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    macro_rules! dec_borrowed {
+        ($symbols:expr,$stmt:expr) => {
+            // Insert decrement operations for borrowed variables if they are currently owned.
+            consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages($symbols),
+                stmt,
+            )
+        };
+    }
+
+    macro_rules! new_let {
+        ($stmt:expr) => {
+            arena.alloc(Stmt::Let(*binding, expr.clone(), *layout, $stmt))
+        };
+    }
+
+    macro_rules! inc_owned {
+        ($symbols:expr, $stmt:expr) => {
+            // Insert increment operations for the owned variables used in the expression.
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                environment.owned_usages($symbols),
+                $stmt,
+            )
+        };
+    }
+
+    match expr {
+        Expr::Literal(_) | Expr::NullPointer | Expr::EmptyArray | Expr::RuntimeErrorFunction(_) => {
+            // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
+            new_let!(stmt)
+        }
+        Expr::Call(Call {
+            arguments,
+            call_type,
+        }) => match call_type {
+            // A by name call refers to a normal function call.
+            // Normal functions take all their parameters as owned, so we can mark them all as such.
+            CallType::ByName { .. } => {
+                let new_let = new_let!(stmt);
+
+                inc_owned!(arguments.iter().copied(), new_let)
+            }
+            // A foreign function call is responsible for managing the reference counts of its arguments.
+            // TODO make sure this is true.
+            CallType::Foreign { .. } => {
+                let new_let = new_let!(stmt);
+
+                inc_owned!(arguments.iter().copied(), new_let)
+            }
+            // Doesn't include higher order
+            CallType::LowLevel {
+                op: operator,
+                update_mode,
+            } => {
+                let borrow_signature = lowlevel_borrow_signature(arena, operator);
+                let arguments_with_borrow_signature = arguments
+                    .iter()
+                    .copied()
+                    .zip(borrow_signature.iter().copied());
+                let (owned_arguments, borrowed_arguments) = arguments_with_borrow_signature
+                    .partition::<std::vec::Vec<_>, _>(
+                    |(_, ownership)| matches!(ownership, Ownership::Owned),
+                );
+
+                let new_stmt = dec_borrowed!(
+                    borrowed_arguments.iter().map(|(symbol, _)| symbol).copied(),
+                    stmt
+                );
+
+                let new_let = new_let!(new_stmt);
+
+                inc_owned!(
+                    owned_arguments.iter().map(|(symbol, _)| symbol).copied(),
+                    new_let
+                )
+            }
+            CallType::HigherOrder(HigherOrderLowLevel {
+                op: operator,
+
+                closure_env_layout,
+
+                /// update mode of the higher order lowlevel itself
+                update_mode,
+
+                passed_function,
+            }) => {
+                // Functions always take their arguments as owned.
+                // (Except lowlevels, but those are wrapped in functions that take their arguments as owned and perform rc.)
+
+                // This should always be true, not sure where this could be set to false.
+                debug_assert!(passed_function.owns_captured_environment);
+
+                match operator {
+                    HigherOrder::ListMap { xs } => {
+                        if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
+                            let new_let = new_let!(stmt);
+
+                            inc_owned!([*xs, *closure_symbol].into_iter(), new_let)
+                        } else {
+                            panic!("ListMap should have 3 arguments");
+                        }
+                    }
+                    HigherOrder::ListMap2 { xs, ys } => {
+                        if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
+                            &arguments
+                        {
+                            let new_let = new_let!(stmt);
+
+                            inc_owned!([*xs, *ys, *closure_symbol].into_iter(), new_let)
+                        } else {
+                            panic!("ListMap2 should have 4 arguments");
+                        }
+                    }
+                    HigherOrder::ListMap3 { xs, ys, zs } => {
+                        if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
+                            &arguments
+                        {
+                            let new_let = new_let!(stmt);
+
+                            inc_owned!([*xs, *ys, *zs, *closure_symbol].into_iter(), new_let)
+                        } else {
+                            panic!("ListMap3 should have 5 arguments");
+                        }
+                    }
+                    HigherOrder::ListMap4 { xs, ys, zs, ws } => {
+                        if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
+                            &arguments
+                        {
+                            let new_let = new_let!(stmt);
+
+                            inc_owned!([*xs, *ys, *zs, *ws, *closure_symbol].into_iter(), new_let)
+                        } else {
+                            panic!("ListMap4 should have 6 arguments");
+                        }
+                    }
+                    HigherOrder::ListSortWith { xs } => {
+                        // TODO if non-unique, elements have been consumed, must still consume the list itself
+                        if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
+                            let new_let = new_let!(stmt);
+
+                            inc_owned!([*xs, *closure_symbol].into_iter(), new_let)
+                        } else {
+                            panic!("ListSortWith should have 3 arguments");
+                        }
+                    }
+                }
+            }
+        },
+        Expr::Tag { arguments, .. } | Expr::Struct(arguments) => {
+            let new_let = new_let!(stmt);
+
+            inc_owned!(arguments.iter().copied(), new_let)
+        }
+        Expr::ExprBox { symbol } => {
+            let new_let = new_let!(stmt);
+
+            inc_owned!(iter::once(*symbol), new_let)
+        }
+        Expr::GetTagId { structure, .. }
+        | Expr::StructAtIndex { structure, .. }
+        | Expr::UnionAtIndex { structure, .. }
+        | Expr::ExprUnbox { symbol: structure } => {
+            // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
+            // But we do want to make sure to decrement this item if it is the last reference.
+
+            let new_stmt = dec_borrowed!(iter::once(*structure), stmt);
+
+            // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
+            let newer_stmt = if matches!(
+                environment.get_variable_rc_type(binding),
+                VarRcType::ReferenceCounted
+            ) {
+                match expr {
+                    Expr::StructAtIndex { .. }
+                    | Expr::UnionAtIndex { .. }
+                    | Expr::ExprUnbox { .. } => insert_inc_stmt(arena, *binding, 1, new_stmt),
+                    // No usage of an element of a reference counted variable. No need to increment.
+                    Expr::GetTagId { .. } => new_stmt,
+                    _ => unreachable!("Unexpected expression type"),
+                }
+            } else {
+                // If the variable is not reference counted, we don't need to increment it.
+                new_stmt
+            };
+
+            new_let!(newer_stmt)
+        }
+        Expr::Array {
+            elem_layout: _,
+            elems,
+        } => {
+            // For an array creation, we insert all the used elements.
+            let new_let = new_let!(stmt);
+
+            inc_owned!(
+                elems.iter().filter_map(|element| match element {
+                    // Literal elements are not reference counted.
+                    ListLiteralElement::Literal(_) => None,
+                    // Symbol elements might be reference counted.
+                    ListLiteralElement::Symbol(symbol) => Some(*symbol),
+                }),
+                new_let
+            )
+        }
+        Expr::Reuse { .. } | Expr::Reset { .. } | Expr::ResetRef { .. } => {
+            unreachable!("Reset(ref) and reuse should not exist at this point")
         }
     }
 }
