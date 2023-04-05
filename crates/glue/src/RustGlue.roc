@@ -61,7 +61,7 @@ convertTypesToFile = \types ->
                     generateSingleTagStruct buf types name tagName payload
 
                 TagUnion (NonNullableUnwrapped { name, tagName, payload }) ->
-                    generateRecursiveTagUnion buf types id name [{ name: tagName, payload: Some payload }] 0 0 None
+                    generateNonNullableUnwrapped buf types name tagName payload 0 0 None
 
                 Function rocFn ->
                     if rocFn.isToplevel then
@@ -663,6 +663,63 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
         else
             b
 
+generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminantSize, _discriminantOffset, _nullTagIndex ->
+    escapedName = escapeKW name
+    discriminantName = "discriminant_\(escapedName)"
+
+    payloadFields =
+        when Types.shape types payload is
+            TagUnionPayload { fields } ->
+                when fields is
+                    HasNoClosure xs -> List.map xs .id
+                    HasClosure xs -> List.map xs .id
+
+            _ ->
+                []
+
+    payloadFieldNames =
+        commaSeparated "" payloadFields \_, i ->
+            n = Num.toStr i
+            "f\(n)"
+
+    constructorArguments =
+        commaSeparated "" payloadFields \id, i ->
+            n = Num.toStr i
+            type = typeName types id
+            "f\(n): \(type)"
+
+    debugFields =
+        payloadFields
+        |> List.mapWithIndex \_, i ->
+            n = Num.toStr i
+            ".field(&node.f\(n))"
+        |> Str.joinWith ""
+
+    buf1 = buf |> generateDiscriminant types discriminantName [tagName] discriminantSize
+
+    """
+    \(buf1)
+
+    #[repr(transparent)]
+    #[derive(Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+    pub struct \(escapedName)(roc_std::RocBox<\(name)_\(tagName)>);
+
+    impl \(escapedName) {
+        pub fn \(tagName)(\(constructorArguments)) -> Self {
+            let payload = \(name)_\(tagName) { \(payloadFieldNames) };
+
+            Self(roc_std::RocBox::new(payload))
+        }
+    }
+
+    impl core::fmt::Debug for \(escapedName) {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let node = &self.0;
+            f.debug_tuple("\(escapedName)::\(tagName)")\(debugFields).finish()
+        }
+    }
+    """
+
 generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, _nullTagIndex ->
     escapedName = escapeKW name
     discriminantName = "discriminant_\(escapedName)"
@@ -678,7 +735,7 @@ generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _disc
         """
         #[repr(transparent)]
         pub struct \(escapedName) {
-            pointer: *mut \(unionName),
+            pointer: roc_std::RocBox<\(unionName)>,
         }
 
         #[repr(C)]

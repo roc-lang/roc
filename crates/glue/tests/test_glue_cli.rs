@@ -104,10 +104,10 @@ mod glue_cli_run {
             `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
             `Nil` is: StrConsList::Nil
         "#),
-        // nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
-        //     tag_union was: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "root", f1: [StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf1", f1: [] } }), StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf2", f1: [] } })] } })
-        //     Tree "foo" [] is: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "foo", f1: [] } })
-        // "#),
+        nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
+            tag_union was: StrRoseTree::Tree("root", [StrRoseTree::Tree("leaf1", []), StrRoseTree::Tree("leaf2", [])])
+            Tree "foo" [] is: StrRoseTree::Tree("foo", [])
+        "#),
         // basic_recursive_union:"basic-recursive-union" => indoc!(r#"
         //     tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
         //     `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))

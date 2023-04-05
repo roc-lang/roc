@@ -119,6 +119,12 @@ where
     }
 }
 
+impl<T: core::hash::Hash> core::hash::Hash for RocBox<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.contents.hash(state)
+    }
+}
+
 impl<T> Debug for RocBox<T>
 where
     T: Debug,
