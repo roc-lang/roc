@@ -1248,12 +1248,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 
-            // reset is only generated for union values
-            let union_layout = match layout_interner.get(layout) {
-                Layout::Union(ul) => ul,
-                _ => unreachable!(),
-            };
-
             let ctx = env.context;
             let not_unique_block = ctx.append_basic_block(parent, "else_decref");
             let cont_block = ctx.append_basic_block(parent, "cont");

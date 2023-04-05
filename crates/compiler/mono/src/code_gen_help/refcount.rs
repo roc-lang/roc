@@ -575,44 +575,6 @@ pub fn refcount_resetref_proc_body<'a>(
     rc_ptr_stmt
 }
 
-// Check if refcounting is implemented yet. In the long term, this will be deleted.
-// In the short term, it helps us to skip refcounting and let it leak, so we can make
-// progress incrementally. Kept in sync with generate_procs using assertions.
-pub fn is_rc_implemented_yet<'a, I>(interner: &I, layout: InLayout<'a>) -> bool
-where
-    I: LayoutInterner<'a>,
-{
-    use UnionLayout::*;
-
-    match interner.get(layout) {
-        Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(interner, elem_layout),
-        Layout::Builtin(_) => true,
-        Layout::Struct { field_layouts, .. } => field_layouts
-            .iter()
-            .all(|l| is_rc_implemented_yet(interner, *l)),
-        Layout::Union(union_layout) => match union_layout {
-            NonRecursive(tags) => tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            Recursive(tags) => tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            NonNullableUnwrapped(fields) => {
-                fields.iter().all(|l| is_rc_implemented_yet(interner, *l))
-            }
-            NullableWrapped { other_tags, .. } => other_tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            NullableUnwrapped { other_fields, .. } => other_fields
-                .iter()
-                .all(|l| is_rc_implemented_yet(interner, *l)),
-        },
-        Layout::LambdaSet(lambda_set) => is_rc_implemented_yet(interner, lambda_set.representation),
-        Layout::RecursivePointer(_) => true,
-        Layout::Boxed(_) => true,
-    }
-}
-
 fn rc_return_stmt<'a>(
     root: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,

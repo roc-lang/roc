@@ -5,7 +5,7 @@ use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
     LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout,
-    STLayoutInterner, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -406,50 +406,6 @@ impl<'a> Proc<'a> {
             .unwrap();
         w.push(b'\n');
         String::from_utf8(w).unwrap()
-    }
-
-    pub fn insert_refcount_operations<'i>(
-        arena: &'a Bump,
-        layout_interner: &'i STLayoutInterner<'a>,
-        home: ModuleId,
-        ident_ids: &'i mut IdentIds,
-        update_mode_ids: &'i mut UpdateModeIds,
-        procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-        host_exposed_procs: &[Symbol],
-    ) {
-        let borrow_params =
-            crate::borrow::infer_borrow(arena, layout_interner, procs, host_exposed_procs);
-
-        crate::inc_dec::visit_procs(
-            arena,
-            layout_interner,
-            home,
-            ident_ids,
-            update_mode_ids,
-            arena.alloc(borrow_params),
-            procs,
-        );
-    }
-
-    pub fn insert_reset_reuse_operations<'i>(
-        arena: &'a Bump,
-        layout_interner: &'i mut STLayoutInterner<'a>,
-        home: ModuleId,
-        ident_ids: &'i mut IdentIds,
-        update_mode_ids: &'i mut UpdateModeIds,
-        procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    ) {
-        for proc in procs.values_mut() {
-            let new_proc = crate::reset_reuse::insert_reset_reuse(
-                arena,
-                layout_interner,
-                home,
-                ident_ids,
-                update_mode_ids,
-                proc.clone(),
-            );
-            *proc = new_proc;
-        }
     }
 
     fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
