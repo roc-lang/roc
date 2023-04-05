@@ -1,43 +1,12 @@
 mod test_glue;
 
-use test_glue::NonRecursive;
-
-extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut NonRecursive);
-}
-
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    use std::cmp::Ordering;
-    use std::collections::hash_set::HashSet;
+    let record = test_glue::mainForHost();
+    let answer1 = record.f.force_thunk(42i64, 1);
+    let answer2 = record.g.force_thunk(42i64, 1);
 
-    let tag_union = test_glue::mainForHost(());
-
-    // Verify that it has all the expected traits.
-
-    assert!(tag_union == tag_union); // PartialEq
-    assert!(tag_union.clone() == tag_union.clone()); // Clone
-
-    assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
-    assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
-
-    println!(
-            "tag_union was: {:?}\n`Foo \"small str\"` is: {:?}\n`Foo \"A long enough string to not be small\"` is: {:?}\n`Bar 123` is: {:?}\n`Baz` is: {:?}\n`Blah 456` is: {:?}",
-            tag_union,
-            NonRecursive::Foo("small str".into()),
-            NonRecursive::Foo("A long enough string to not be small".into()),
-            NonRecursive::Bar(123),
-            NonRecursive::Baz(),
-            NonRecursive::Blah(456),
-        ); // Debug
-
-    let mut set = HashSet::new();
-
-    set.insert(tag_union.clone()); // Eq, Hash
-    set.insert(tag_union);
-
-    assert_eq!(set.len(), 1);
+    println!("Answer was: {:?} {:?}", answer1, answer2);
 
     // Exit code
     0

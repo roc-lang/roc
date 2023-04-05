@@ -1,6 +1,6 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.Shape.{ RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId }]
+    imports [pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId }]
     provides [makeGlue] to pf
 
 makeGlue : List Types -> Result (List File) Str
@@ -182,11 +182,19 @@ generateFunction = \buf, types, rocFn ->
             "arg\(c): \(type)"
         |> Str.joinWith ", "
 
-    externArguments =
+    externDefArguments =
+        rocFn.args
+        |> List.mapWithIndex \argId, i ->
+            type = typeName types argId
+            c = Num.toStr i
+            "arg\(c): *const \(type)"
+        |> Str.joinWith ", "
+
+    externCallArguments =
         rocFn.args
         |> List.mapWithIndex \_, i ->
             c = Num.toStr i
-            "arg\(c)"
+            "&arg\(c)"
         |> Str.joinWith ", "
 
     externComma = if Str.isEmpty publicArguments then "" else ", "
@@ -197,6 +205,7 @@ generateFunction = \buf, types, rocFn ->
     \(buf)
 
     #[repr(C)]
+    #[derive(Debug, Clone)]
     pub struct \(name) {
         closure_data: \(lambdaSet),
     }
@@ -204,13 +213,16 @@ generateFunction = \buf, types, rocFn ->
     impl \(name) {
         pub fn force_thunk(mut self, \(publicArguments)) -> \(ret) {
             extern "C" {
-                fn \(externName)(\(publicArguments)\(externComma) closure_data: *mut u8, output: *mut \(ret));
+                fn \(externName)(\(externDefArguments)\(externComma) closure_data: *mut u8, output: *mut \(ret));
             }
 
             let mut output = std::mem::MaybeUninit::uninit();
             let ptr = &mut self.closure_data as *mut _ as *mut u8;
 
-            unsafe { \(externName)(\(externArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
+            unsafe { \(externName)(\(externCallArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
+
+            // ownership of the closure is transferred back to roc
+            core::mem::forget(self.closure_data);
 
             unsafe { output.assume_init() }
         }
@@ -248,8 +260,8 @@ generateStructFields = \buf, types, visibility, structFields ->
         HasNoClosure fields ->
             List.walk fields buf (generateStructFieldWithoutClosure types visibility)
 
-        HasClosure _ ->
-            Str.concat buf "// TODO: Struct fields with closures"
+        HasClosure fields ->
+            List.walk fields buf (generateStructFieldWithoutClosure types visibility)
 
 generateStructFieldWithoutClosure = \types, visibility ->
     \accum, { name: fieldName, id } ->
@@ -307,10 +319,175 @@ generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
+deriveCloneTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveCloneTagUnion = \buf, tagUnionType, tags ->
+    clones =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => union_\(tagUnionType) {
+                                \(tagName): self.payload.\(tagName).clone(),
+                            },
+            """
+
+    """
+    \(buf)
+
+    impl Clone for \(tagUnionType) {
+        fn clone(&self) -> Self {
+            use discriminant_\(tagUnionType)::*;
+
+            let payload = unsafe {
+                match self.discriminant {\(clones)
+                }
+            };
+
+            Self {
+                discriminant: self.discriminant,
+                payload,
+            }
+        }
+    }
+    """
+
+deriveDebugTagUnion : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName, payload } ->
+            type = when payload is
+                Some id -> typeName types id
+                None -> "()"
+
+            """
+            \(accum)
+                            \(tagName) => {
+                                let field: &\(type) = &self.payload.\(tagName);
+                                f.debug_tuple("\(tagUnionType)::\(tagName)").field(field).finish()
+                            },
+            """
+
+    """
+    \(buf)
+
+    impl core::fmt::Debug for \(tagUnionType) {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            use discriminant_\(tagUnionType)::*;
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
+deriveEqTagUnion : Str, Str -> Str
+deriveEqTagUnion = \buf, tagUnionType ->
+    """
+    \(buf)
+
+    impl Eq for \(tagUnionType) {}
+    """
+
+
+derivePartialEqTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+derivePartialEqTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => self.payload.\(tagName) == other.payload.\(tagName),
+            """
+
+    """
+    \(buf)
+
+    impl PartialEq for \(tagUnionType) {
+        fn eq(&self, other: &Self) -> bool {
+            use discriminant_\(tagUnionType)::*;
+
+            if self.discriminant != other.discriminant {
+                return false;
+            }
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
+deriveOrdTagUnion : Str, Str -> Str
+deriveOrdTagUnion = \buf, tagUnionType ->
+    """
+    \(buf)
+
+    impl Ord for \(tagUnionType) {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.partial_cmp(other).unwrap()
+        }
+    }
+    """
+
+derivePartialOrdTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+derivePartialOrdTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                                \(tagName) => self.payload.\(tagName).partial_cmp(&other.payload.\(tagName)),
+            """
+
+    """
+    \(buf)
+
+    impl PartialOrd for \(tagUnionType) {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            use discriminant_\(tagUnionType)::*;
+
+            use std::cmp::Ordering::*;
+
+            match self.discriminant.cmp(&other.discriminant) {
+                Less => Option::Some(Less),
+                Greater => Option::Some(Greater),
+                Equal => unsafe {
+                    match self.discriminant {\(checks)
+                    }
+                },
+            }
+        }
+    }
+    """
+
+deriveHashTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveHashTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => self.payload.\(tagName).hash(state),
+            """
+
+    """
+    \(buf)
+
+    impl core::hash::Hash for \(tagUnionType) {
+        fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+            use discriminant_\(tagUnionType)::*;
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
 generateConstructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateConstructorFunctions = \buf, types, tagUnionType, tags ->
     buf
-        |> Str.concat "\n\nimpl \(tagUnionType) {\n"
+        |> Str.concat "\n\nimpl \(tagUnionType) {"
         |> \b -> List.walk tags b \accum, r -> generateConstructorFunction accum types tagUnionType r.name r.payload
         |> Str.concat "\n}\n\n"
 
@@ -333,6 +510,13 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
 
         Some payloadId ->
             payloadType = typeName types payloadId
+            shape = Types.shape types payloadId
+
+            new =
+                if canDeriveCopy types shape then
+                    "payload"
+                else
+                    "core::mem::ManuallyDrop::new(payload)"
 
             """
             \(buf)
@@ -341,7 +525,7 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
                     Self {
                         discriminant: discriminant_\(tagUnionType)::\(name),
                         payload: union_\(tagUnionType) {
-                            \(name): core::mem::ManuallyDrop::new(payload),
+                            \(name): \(new),
                         }
                     }
                 }
@@ -350,7 +534,7 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
 generateDestructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateDestructorFunctions = \buf, types, tagUnionType, tags ->
     buf
-        |> Str.concat "\n\nimpl \(tagUnionType) {\n"
+        |> Str.concat "\n\nimpl \(tagUnionType) {"
         |> \b -> List.walk tags b \accum, r -> generateDestructorFunction accum types tagUnionType r.name r.payload
         |> Str.concat "\n}\n\n"
 
@@ -368,13 +552,21 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
 
         Some payloadId ->
             payloadType = typeName types payloadId
+            shape = Types.shape types payloadId
+
+            take =
+                if canDeriveCopy types shape then
+                    "unsafe { self.payload.\(name) }"
+
+                else
+                    "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }"
 
             """
             \(buf)
 
                 pub fn unwrap_\(name)(mut self) -> \(payloadType) {
                     debug_assert_eq!(self.discriminant, discriminant_\(tagUnionType)::\(name));
-                    unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }
+                    \(take)
                 }
 
                 pub fn is_\(name)(&self) -> bool {
@@ -391,9 +583,19 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     tagNames = List.map tags \{ name: n } -> n
     selfMut = "self"
 
+    max = \a, b -> if a >= b then a else b
+
+    # TODO: this value can be different than the alignment of `id`
+    align =
+        List.walk tags 1 \accum, { payload } ->
+            when payload is
+                Some payloadId -> max accum (Types.alignment types payloadId)
+                None -> accum
+        |> Num.toStr
+
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
-    |> Str.concat "#[repr(C)]\npub union \(unionName) {\n"
+    |> Str.concat "#[repr(C, align(\(align)))]\npub union \(unionName) {\n"
     |> \b -> List.walk tags b (generateUnionField types)
     |> generateTagUnionSizer types id tags
     |> Str.concat
@@ -422,7 +624,6 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
 
 
         """
-    |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
     |> Str.concat
         """
         #[repr(C)]
@@ -431,6 +632,13 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
             discriminant: discriminant_\(escapedName),
         }
         """
+    |> deriveCloneTagUnion escapedName tags
+    |> deriveDebugTagUnion types escapedName tags
+    |> deriveEqTagUnion escapedName
+    |> derivePartialEqTagUnion escapedName tags
+    |> deriveOrdTagUnion escapedName
+    |> derivePartialOrdTagUnion escapedName tags
+    |> deriveHashTagUnion escapedName tags
     |> generateDestructorFunctions types escapedName tags
     |> generateConstructorFunctions types escapedName tags
     |> \b ->
@@ -499,7 +707,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
                 Some id if cannotDeriveCopy types (Types.shape types id) ->
-                    "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) }},"
+                    "unsafe { core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) },"
 
                 _ ->
                     # If it had no payload, or if the payload had no pointers,
@@ -799,68 +1007,119 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
         """
 
 generateDeriveStr = \buf, types, type, includeDebug ->
+    condWrite = \b, cond, str ->
+        if cond then
+            Str.concat b str
+        else
+            b
+
+    deriveDebug = when includeDebug is
+        IncludeDebug -> Bool.true
+        ExcludeDebug -> Bool.false
+
     buf
     |> Str.concat "#[derive(Clone, "
-    |> \b ->
-        if !(cannotDeriveCopy types type) then
-            Str.concat b "Copy, "
-        else
-            b
-    |> \b ->
-        if !(cannotDeriveDefault types type) then
-            Str.concat b "Default, "
-        else
-            b
-    |> \b ->
-        when includeDebug is
-            IncludeDebug ->
-                Str.concat b "Debug, "
+    |> condWrite (!(cannotDeriveCopy types type)) "Copy, "
+    |> condWrite (!(cannotDeriveDefault types type)) "Default, "
+    |> condWrite deriveDebug "Debug, "
+    |> condWrite (canDerivePartialEq types type) "PartialEq, PartialOrd, "
+    |> condWrite (!(hasFloat types type) && (canDerivePartialEq types type)) "Eq, Ord, Hash, "
+    |> Str.concat ")]\n"
 
-            ExcludeDebug ->
-                b
-    |> \b ->
-        if !(hasFloat types type) then
-            Str.concat b "Eq, Ord, Hash, "
-        else
-            b
-    |> Str.concat "PartialEq, PartialOrd)]\n"
-
-cannotDeriveCopy = \types, type ->
+canDerivePartialEq : Types, Shape -> Bool
+canDerivePartialEq = \types, type ->
     when type is
-        Unit | Unsized | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
-        RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.true
+        Function rocFn ->
+            runtimeRepresentation = Types.shape types rocFn.lambdaSet
+            canDerivePartialEq types runtimeRepresentation
+
+        Unsized -> Bool.false
+
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _)  -> Bool.true
+        RocStr -> Bool.true
+        RocList inner | RocSet inner | RocBox inner ->
+            innerType = Types.shape types inner
+            canDerivePartialEq types innerType
+
+        RocDict k v ->
+            kType = Types.shape types k
+            vType = Types.shape types v
+
+            canDerivePartialEq types kType && canDerivePartialEq types vType
+
+        TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> crash "TODO"
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
         TagUnion (NonRecursive { tags }) ->
-            List.any tags \{ payload } ->
+            List.all tags \{ payload } ->
                 when payload is
-                    Some id -> cannotDeriveCopy types (Types.shape types id)
-                    None -> Bool.false
+                    Some id -> canDerivePartialEq types (Types.shape types id)
+                    None -> Bool.true
 
         RocResult okId errId ->
-            cannotDeriveCopy types (Types.shape types okId)
-            || cannotDeriveCopy types (Types.shape types errId)
+            canDerivePartialEq types (Types.shape types okId)
+            && canDerivePartialEq types (Types.shape types errId)
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
+
+cannotDeriveCopy : Types, Shape -> Bool
+cannotDeriveCopy = \types, type ->
+    !(canDeriveCopy types type)
+
+canDeriveCopy : Types, Shape -> Bool
+canDeriveCopy = \types, type ->
+    when type is
+        Function rocFn ->
+            runtimeRepresentation = Types.shape types rocFn.lambdaSet
+            canDeriveCopy types runtimeRepresentation
+
+        # unsized values are heap-allocated
+        Unsized -> Bool.false
+
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _)  -> Bool.true
+        RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.false
+        TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+
+        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+
+        TagUnion (NonRecursive { tags }) ->
+            List.all tags \{ payload } ->
+                when payload is
+                    Some id -> canDeriveCopy types (Types.shape types id)
+                    None -> Bool.true
+
+        RocResult okId errId ->
+            canDeriveCopy types (Types.shape types okId)
+            && canDeriveCopy types (Types.shape types errId)
+
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+
+        Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
 
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
-        RocStr | Bool | Num _ | Struct { fields: HasClosure _ } | TagUnionPayload { fields: HasClosure _ } -> Bool.false
+        RocStr | Bool | Num _ |  TagUnionPayload { fields: HasClosure _ } -> Bool.false
         RocList id | RocSet id | RocBox id ->
             cannotDeriveDefault types (Types.shape types id)
 
         RocDict keyId valId ->
             cannotDeriveCopy types (Types.shape types keyId)
             || cannotDeriveCopy types (Types.shape types valId)
+
+        Struct { fields: HasClosure _ } -> Bool.true
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (Types.shape types id)

@@ -1355,6 +1355,8 @@ fn add_function_type<'a>(
             .from_var(env.arena, closure_var, env.subs)
             .expect("Something weird ended up in the content");
 
+        // TODO this treats any lambda set as unsized. We should be able to figure out whether a
+        // lambda set is unsized in practice, and use the runtime representation otherwise.
         add_type_help(env, lambda_set_layout, closure_var, None, types)
     };
 
@@ -1920,7 +1922,7 @@ where
             RocStructFields::HasClosure { fields }
         }
         None => {
-            debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
+            // debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
 
             let fields: Vec<(String, TypeId)> = sortables
                 .into_iter()
