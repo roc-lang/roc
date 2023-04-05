@@ -902,12 +902,12 @@ fn insert_refcount_operations_binding<'a>(
 
                 inc_owned!(arguments.iter().copied(), new_let)
             }
-            // A foreign function call is responsible for managing the reference counts of its arguments.
-            // TODO make sure this is true.
             CallType::Foreign { .. } => {
-                let new_let = new_let!(stmt);
+                // Foreign functions should be responsible for their own memory management.
+                // But previously they were assumed to be called with borrowed parameters, so we do the same now.
+                let new_stmt = dec_borrowed!(arguments.iter().copied(), stmt);
 
-                inc_owned!(arguments.iter().copied(), new_let)
+                new_let!(new_stmt)
             }
             // Doesn't include higher order
             CallType::LowLevel {
