@@ -4195,10 +4195,7 @@ pub fn with_hole<'a>(
 
                 Stmt::Let(assigned, expr, list_layout, hole)
             }
-            x => todo!(
-                "Unsupported requested type for ingested file, give proper error: {:?}",
-                x
-            ),
+            _ => unreachable!("All of these cases should be dealt with earlier in the compiler, generating proper errors"),
         },
 
         SingleQuote(_, _, character, _) => {

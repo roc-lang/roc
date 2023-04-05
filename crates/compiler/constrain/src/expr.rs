@@ -375,14 +375,15 @@ pub fn constrain_expr(
             let expected_index = expected;
             constraints.equal_types(str_index, expected_index, Category::Str, region)
         }
-        IngestedFile(_, anno) => match &anno.typ {
+        IngestedFile(bytes, anno) => match &anno.typ {
             Type::Apply(Symbol::STR_STR, _, _) => {
+                if let Err(_) = std::str::from_utf8(bytes) {
+                    todo!("cause an error for the type being wrong due to not being a utf8 string");
+                }
+
                 let str_index = constraints.push_type(types, Types::STR);
                 let expected_index = expected;
                 constraints.equal_types(str_index, expected_index, Category::Str, region)
-
-                // TODO: I believe we also should check to make sure they bytes are valid utf8 and bubble up an error.
-                // I am just not sure how the error would get bubbled up.
             }
             Type::Apply(Symbol::LIST_LIST, elem_type, _)
                 if matches!(
