@@ -377,7 +377,7 @@ pub fn constrain_expr(
         }
         IngestedFile(bytes, anno) => match &anno.typ {
             Type::Apply(Symbol::STR_STR, _, _) => {
-                if let Err(_) = std::str::from_utf8(bytes) {
+                if std::str::from_utf8(bytes).is_err() {
                     todo!("cause an error for the type being wrong due to not being a utf8 string");
                 }
 
