@@ -961,10 +961,23 @@ fn insert_refcount_operations_binding<'a>(
                 // This should always be true, not sure where this could be set to false.
                 debug_assert!(passed_function.owns_captured_environment);
 
+                // define macro that inserts a decref statement for a variable amount of symbols
+                macro_rules! decref_lists {
+                    ($stmt:expr, $symbol:expr) => {
+                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef($symbol), $stmt))
+                    };
+
+                    ($stmt:expr, $symbol:expr, $($symbols:expr),+) => {{
+                        decref_lists!(decref_lists!($stmt, $symbol), $($symbols),+)
+                    }};
+                }
+
                 match operator {
                     HigherOrder::ListMap { xs } => {
                         if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                            let new_let = new_let!(stmt);
+                            let new_stmt = decref_lists!(stmt, *xs);
+
+                            let new_let = new_let!(new_stmt);
 
                             inc_owned!([*xs, *closure_symbol].into_iter(), new_let)
                         } else {
@@ -975,7 +988,9 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_let = new_let!(stmt);
+                            let new_stmt = decref_lists!(stmt, *xs, *ys);
+
+                            let new_let = new_let!(new_stmt);
 
                             inc_owned!([*xs, *ys, *closure_symbol].into_iter(), new_let)
                         } else {
@@ -986,7 +1001,9 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_let = new_let!(stmt);
+                            let new_stmt = decref_lists!(stmt, *xs, *ys, *zs);
+
+                            let new_let = new_let!(new_stmt);
 
                             inc_owned!([*xs, *ys, *zs, *closure_symbol].into_iter(), new_let)
                         } else {
@@ -997,7 +1014,9 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_let = new_let!(stmt);
+                            let new_stmt = decref_lists!(stmt, *xs, *ys, *zs, *ws);
+
+                            let new_let = new_let!(new_stmt);
 
                             inc_owned!([*xs, *ys, *zs, *ws, *closure_symbol].into_iter(), new_let)
                         } else {
