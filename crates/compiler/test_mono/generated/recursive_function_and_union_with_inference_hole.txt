@@ -1,18 +1,21 @@
 procedure List.5 (#Attr.2, #Attr.3):
     let List.494 : List [<rnnu>C List *self] = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.2 #Attr.3;
+    decref #Attr.2;
     ret List.494;
 
 procedure Test.2 (Test.5):
     let Test.6 : List [<rnnu>C List *self] = UnionAtIndex (Id 0) (Index 0) Test.5;
+    inc Test.6;
+    let #Derived_gen.1 : [<rnnu>C List *self] = Reset { symbol: `#UserApp.after`, id: 1 };
     let Test.15 : {} = Struct {};
     let Test.7 : List [<rnnu>C List *self] = CallByName List.5 Test.6 Test.15;
-    let Test.14 : [<rnnu>C List *self] = TagId(0) Test.7;
+    let Test.14 : [<rnnu>C List *self] = Reuse #Derived_gen.1 UpdateModeId { id: 1 } TagId(0) Test.7;
     ret Test.14;
 
 procedure Test.0 ():
     let Test.16 : List [<rnnu>C List *self] = Array [];
     let Test.12 : [<rnnu>C List *self] = TagId(0) Test.16;
     let Test.10 : [<rnnu>C List *self] = CallByName Test.2 Test.12;
-    dec Test.12;
+    dec Test.10;
     let Test.11 : Str = "";
     ret Test.11;

@@ -1,4 +1,5 @@
 procedure List.2 (List.96, List.97):
+    inc List.96;
     let List.516 : U64 = CallByName List.6 List.96;
     let List.513 : Int1 = CallByName Num.22 List.97 List.516;
     if List.513 then
@@ -6,6 +7,7 @@ procedure List.2 (List.96, List.97):
         let List.514 : [C {}, C I64] = TagId(1) List.515;
         ret List.514;
     else
+        dec List.96;
         let List.512 : {} = Struct {};
         let List.511 : [C {}, C I64] = TagId(0) List.512;
         ret List.511;
@@ -19,9 +21,11 @@ procedure List.3 (List.104, List.105, List.106):
 
 procedure List.6 (#Attr.2):
     let List.501 : U64 = lowlevel ListLen #Attr.2;
+    dec #Attr.2;
     ret List.501;
 
 procedure List.64 (List.101, List.102, List.103):
+    inc List.101;
     let List.500 : U64 = CallByName List.6 List.101;
     let List.497 : Int1 = CallByName Num.22 List.102 List.500;
     if List.497 then
@@ -33,6 +37,7 @@ procedure List.64 (List.101, List.102, List.103):
 
 procedure List.66 (#Attr.2, #Attr.3):
     let List.509 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    dec #Attr.2;
     ret List.509;
 
 procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
@@ -45,8 +50,10 @@ procedure Num.22 (#Attr.2, #Attr.3):
 
 procedure Test.1 (Test.2):
     let Test.28 : U64 = 0i64;
+    inc Test.2;
     let Test.26 : [C {}, C I64] = CallByName List.2 Test.2 Test.28;
     let Test.27 : U64 = 0i64;
+    inc Test.2;
     let Test.25 : [C {}, C I64] = CallByName List.2 Test.2 Test.27;
     let Test.8 : {[C {}, C I64], [C {}, C I64]} = Struct {Test.25, Test.26};
     joinpoint Test.22:

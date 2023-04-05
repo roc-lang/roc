@@ -4,6 +4,7 @@ procedure Num.20 (#Attr.2, #Attr.3):
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.300 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    dec #Attr.3;
     ret Str.300;
 
 procedure Test.11 (Test.29, #Attr.12):
@@ -41,11 +42,8 @@ procedure Test.2 ():
     let Test.21 : Str = ", ";
     let Test.23 : Str = "!";
     let Test.22 : Str = CallByName Str.3 Test.7 Test.23;
-    dec Test.23;
     let Test.20 : Str = CallByName Str.3 Test.21 Test.22;
-    dec Test.22;
     let Test.19 : Str = CallByName Str.3 Test.6 Test.20;
-    dec Test.20;
     ret Test.19;
 
 procedure Test.3 (Test.8):
@@ -81,5 +79,6 @@ procedure Test.9 (Test.44, Test.8):
 procedure Test.0 ():
     let Test.24 : I64 = 4i64;
     let Test.17 : [<r>C {}, C I64 {}] = CallByName Test.3 Test.24;
+    dec Test.17;
     let Test.18 : Str = CallByName Test.2;
     ret Test.18;

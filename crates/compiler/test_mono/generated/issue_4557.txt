@@ -1,5 +1,7 @@
 procedure Bool.11 (#Attr.2, #Attr.3):
     let Bool.24 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    dec #Attr.3;
+    dec #Attr.2;
     ret Bool.24;
 
 procedure Bool.4 (#Attr.2, #Attr.3):
@@ -16,8 +18,6 @@ procedure Test.1 (Test.2, Test.3):
         let Test.23 : {} = Struct {};
         joinpoint Test.24 Test.22:
             let Test.20 : Int1 = CallByName Bool.11 Test.21 Test.22;
-            dec Test.22;
-            dec Test.21;
             let Test.18 : Int1 = CallByName Bool.4 Test.19 Test.20;
             ret Test.18;
         in

@@ -1,9 +1,12 @@
 procedure Bool.11 (#Attr.2, #Attr.3):
     let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    dec #Attr.3;
+    dec #Attr.2;
     ret Bool.23;
 
 procedure Test.2 (Test.5):
     let Test.14 : U8 = GetTagId Test.5;
+    dec Test.5;
     switch Test.14:
         case 2:
             let Test.11 : Str = "a";
@@ -21,9 +24,6 @@ procedure Test.2 (Test.5):
 procedure Test.0 ():
     let Test.10 : [<rnw><null>, C Str, C *self] = TagId(0) ;
     let Test.8 : Str = CallByName Test.2 Test.10;
-    dec Test.10;
     let Test.9 : Str = "c";
     let Test.7 : Int1 = CallByName Bool.11 Test.8 Test.9;
-    dec Test.9;
-    dec Test.8;
     ret Test.7;
