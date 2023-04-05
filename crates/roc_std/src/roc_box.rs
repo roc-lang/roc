@@ -44,6 +44,15 @@ impl<T> RocBox<T> {
         Self { contents }
     }
 
+    /// # Safety
+    ///
+    /// The box must be unique in order to leak it safely
+    pub unsafe fn leak(self) -> *mut T {
+        let ptr = self.contents.as_ptr() as *mut T;
+        core::mem::forget(self);
+        ptr
+    }
+
     #[inline(always)]
     fn alloc_alignment() -> usize {
         mem::align_of::<T>().max(mem::align_of::<Storage>())

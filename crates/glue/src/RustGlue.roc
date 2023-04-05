@@ -793,8 +793,163 @@ generateUnionField = \types ->
                 # use unit as the payload
                 Str.concat accum "\(indent)\(escapedFieldName): (),\n"
 
-generateNullableUnwrapped = \buf, _types, _id, _name, _nullTag, _nonNullTag, _nonNullPayload, _whichTagIsNull ->
-    Str.concat buf "// TODO: TagUnion NullableUnwrapped\n\n"
+commaSeparated : Str, List a, (a, Nat -> Str) -> Str
+commaSeparated = \buf, items, step ->
+    length = List.len items
+    List.walk items { buf, count: 0 } \accum, item ->
+        if accum.count + 1 == length then
+            { buf: Str.concat accum.buf (step item accum.count), count: length }
+        else
+            { buf: Str.concat accum.buf (step item accum.count) |> Str.concat ", ", count: accum.count + 1 }
+    |> .buf
+
+generateNullableUnwrapped : Str, Types, TypeId, Str, Str, Str, TypeId, [FirstTagIsNull, SecondTagIsNull] -> Str
+generateNullableUnwrapped = \buf, types, _id, name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull ->
+    payloadFields =
+        when Types.shape types nonNullPayload is
+            TagUnionPayload { fields } ->
+                when fields is
+                    HasNoClosure xs -> List.map xs .id
+                    HasClosure xs -> List.map xs .id
+
+            _ ->
+                []
+
+    payloadFieldNames =
+        commaSeparated "" payloadFields \_, i ->
+            n = Num.toStr i
+            "f\(n)"
+
+    constructorArguments =
+        commaSeparated "" payloadFields \id, i ->
+            n = Num.toStr i
+            type = typeName types id
+            "f\(n): \(type)"
+
+    debugFields =
+        payloadFields
+        |> List.mapWithIndex \_, i ->
+            n = Num.toStr i
+            ".field(&node.f\(n))"
+        |> Str.joinWith ""
+
+    discriminant =
+        when whichTagIsNull is
+            FirstTagIsNull ->
+                """
+                #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                enum discriminant_\(name) {
+                    \(nullTag) = 0,
+                    \(nonNullTag) = 1,
+                }
+                """
+
+            SecondTagIsNull ->
+                """
+                #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                enum discriminant_\(name) {
+                    \(nonNullTag) = 0,
+                    \(nullTag) = 1,
+                }
+                """
+
+    """
+    \(buf)
+
+    #[derive(PartialOrd, Ord)]
+    #[repr(C)]
+    pub struct \(name)(*mut \(name)_\(nonNullTag));
+
+    \(discriminant)
+
+    impl \(name) {
+        pub fn \(nullTag)() -> Self {
+            Self(core::ptr::null_mut())
+        }
+
+        pub fn \(nonNullTag)(\(constructorArguments)) -> Self {
+            let payload = \(name)_\(nonNullTag) { \(payloadFieldNames) };
+
+            let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+
+            Self(ptr)
+        }
+
+        pub fn discriminant(&self) -> discriminant_\(name) {
+            if self.is_\(nullTag)() {
+                discriminant_\(name)::\(nullTag)
+            } else {
+                discriminant_\(name)::\(nonNullTag)
+            }
+        }
+
+        pub fn is_\(nullTag)(&self) -> bool {
+            self.0.is_null()
+        }
+
+        pub fn is_\(nonNullTag)(&self) -> bool {
+            !self.0.is_null()
+        }
+    }
+
+    impl core::fmt::Debug for \(name) {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            if self.is_\(nullTag)() {
+                f.debug_tuple("\(name)::\(nullTag)").finish()
+            } else {
+                let node = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
+                f.debug_tuple("\(name)::\(nonNullTag)")\(debugFields).finish()
+            }
+        }
+    }
+
+    impl Clone for \(name) {
+        fn clone(&self) -> Self {
+            if self.is_\(nullTag)() {
+                Self::\(nullTag)()
+            } else {
+                use std::ops::Deref;
+
+                let node_ref = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
+                let payload : \(name)_\(nonNullTag) = (node_ref.deref()).clone();
+
+                let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+
+                Self(ptr)
+            }
+        }
+    }
+
+    impl PartialEq for \(name) {
+        fn eq(&self, other: &Self) -> bool {
+            if self.discriminant() != other.discriminant() {
+                return false;
+            }
+
+            if self.is_\(nullTag)() {
+                return true;
+            }
+
+            let payload1 = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
+            let payload2 = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(other.0) });
+
+            payload1 == payload2
+        }
+    }
+
+    impl Eq for \(name) {}
+
+    impl core::hash::Hash for \(name) {
+        fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+            self.discriminant().hash(state);
+
+            if self.is_\(nonNullTag)() {
+                let payload = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
+                payload.hash(state);
+            }
+        }
+    }
+    """
 
 generateSingleTagStruct = \buf, types, name, tagName, payload ->
     # Store single-tag unions as structs rather than enums,
