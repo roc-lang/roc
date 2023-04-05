@@ -12,7 +12,7 @@ use roc_types::types::AliasKind;
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
+use crate::report::{to_file_problem_report, Annotation, Report, RocDocAllocator, RocDocBuilder};
 use ven_pretty::DocAllocator;
 
 const SYNTAX_PROBLEM: &str = "SYNTAX PROBLEM";
@@ -1092,6 +1092,11 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = "OVERAPPLIED CRASH".to_string();
+        }
+        Problem::FileProblem { filename, error } => {
+            let report = to_file_problem_report(&alloc, &filename, error);
+            doc = report.doc;
+            title = report.title;
         }
     };
 

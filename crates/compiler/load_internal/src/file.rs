@@ -51,7 +51,7 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::{Annotation, Palette, RenderTarget};
+use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
@@ -1791,7 +1791,7 @@ fn state_thread_step<'a>(
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
                 Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report(&filename, error);
+                    let buf = to_file_problem_report_string(&filename, error);
                     Err(LoadingProblem::FormattedReport(buf))
                 }
 
@@ -1939,7 +1939,9 @@ pub fn report_loading_problem(
             )
         }
         LoadingProblem::FormattedReport(report) => report,
-        LoadingProblem::FileProblem { filename, error } => to_file_problem_report(&filename, error),
+        LoadingProblem::FileProblem { filename, error } => {
+            to_file_problem_report_string(&filename, error)
+        }
         err => todo!("Loading error: {:?}", err),
     }
 }
@@ -5688,15 +5690,19 @@ fn value_def_from_imports<'a>(
     let value = match entry.value {
         Module(_, _) => None,
         Package(_, _, _) => None,
-        IngestedFile(file_name, typed_ident) => {
-            let file_path = if let StrLiteral::PlainLine(filename) = file_name {
-                let file_path = header_path.to_path_buf().with_file_name(filename);
+        IngestedFile(ingested_path, typed_ident) => {
+            let file_path = if let StrLiteral::PlainLine(ingested_path) = ingested_path {
+                let mut file_path = header_path.to_path_buf();
+                // Remove the header file name and push the new path.
+                file_path.pop();
+                file_path.push(ingested_path);
+
                 match fs::metadata(&file_path) {
                     Ok(md) => {
-                        if !md.is_file() {
-                            // TODO: is there a better loading problem to return when not a file.
+                        if md.is_dir() {
                             return Err(LoadingProblem::FileProblem {
                                 filename: file_path,
+                                // TODO: change to IsADirectory once that is stable.
                                 error: io::ErrorKind::InvalidInput,
                             });
                         }
@@ -6549,87 +6555,6 @@ fn run_task<'a>(
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
     Ok(())
-}
-
-fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
-    use ven_pretty::DocAllocator;
-
-    let src_lines: Vec<&str> = Vec::new();
-
-    let mut module_ids = ModuleIds::default();
-
-    let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
-
-    let interns = Interns::default();
-
-    // Report parsing and canonicalization problems
-    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
-
-    let report = match error {
-        io::ErrorKind::NotFound => {
-            let doc = alloc.stack([
-                alloc.reflow(r"I am looking for this file, but it's not there:"),
-                alloc
-                    .parser_suggestion(filename.to_str().unwrap())
-                    .indent(4),
-                alloc.concat([
-                    alloc.reflow(r"Is the file supposed to be there? "),
-                    alloc.reflow("Maybe there is a typo in the file name?"),
-                ]),
-            ]);
-
-            Report {
-                filename: "UNKNOWN.roc".into(),
-                doc,
-                title: "FILE NOT FOUND".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-        io::ErrorKind::PermissionDenied => {
-            let doc = alloc.stack([
-                alloc.reflow(r"I don't have the required permissions to read this file:"),
-                alloc
-                    .parser_suggestion(filename.to_str().unwrap())
-                    .indent(4),
-                alloc
-                    .concat([alloc.reflow(r"Is it the right file? Maybe change its permissions?")]),
-            ]);
-
-            Report {
-                filename: "UNKNOWN.roc".into(),
-                doc,
-                title: "FILE PERMISSION DENIED".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-        _ => {
-            let error = std::io::Error::from(error);
-            let formatted = format!("{}", error);
-            let doc = alloc.stack([
-                alloc.reflow(r"I tried to read this file:"),
-                alloc
-                    .text(filename.to_str().unwrap())
-                    .annotate(Annotation::Error)
-                    .indent(4),
-                alloc.reflow(r"But ran into:"),
-                alloc.text(formatted).annotate(Annotation::Error).indent(4),
-            ]);
-
-            Report {
-                filename: "UNKNOWN.roc".into(),
-                doc,
-                title: "FILE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-    };
-
-    let mut buf = String::new();
-    let palette = DEFAULT_PALETTE;
-    report.render_color_terminal(&mut buf, &alloc, &palette);
-
-    buf
 }
 
 fn to_import_cycle_report(

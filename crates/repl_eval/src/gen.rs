@@ -136,7 +136,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
                     Severity::Warning => {
                         warnings.push(buf);
                     }
-                    Severity::RuntimeError => {
+                    Severity::Fatal | Severity::RuntimeError => {
                         errors.push(buf);
                     }
                 }
@@ -154,7 +154,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
                     Severity::Warning => {
                         warnings.push(buf);
                     }
-                    Severity::RuntimeError => {
+                    Severity::Fatal | Severity::RuntimeError => {
                         errors.push(buf);
                     }
                 }

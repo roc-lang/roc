@@ -735,28 +735,54 @@ pub fn canonicalize_expr<'a>(
 
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
 
-        ast::Expr::IngestedFile(file_path, type_ann) => {
-            let mut file = File::open(file_path).expect("file should exist due to earlier check. In the rare case the file got deleted, we should create a can error here too.");
-            let mut bytes = vec![];
-            match file.read_to_end(&mut bytes) {
-                Ok(_) => (
-                    Expr::IngestedFile(
-                        bytes,
-                        annotation::canonicalize_annotation(
-                            env,
-                            scope,
-                            &type_ann.value,
-                            region,
-                            var_store,
-                            &VecMap::default(),
-                            annotation::AnnotationFor::Value,
+        ast::Expr::IngestedFile(file_path, type_ann) => match File::open(file_path) {
+            Ok(mut file) => {
+                let mut bytes = vec![];
+                match file.read_to_end(&mut bytes) {
+                    Ok(_) => (
+                        Expr::IngestedFile(
+                            bytes,
+                            annotation::canonicalize_annotation(
+                                env,
+                                scope,
+                                &type_ann.value,
+                                region,
+                                var_store,
+                                &VecMap::default(),
+                                annotation::AnnotationFor::Value,
+                            ),
                         ),
+                        Output::default(),
                     ),
-                    Output::default(),
-                ),
-                Err(e) => todo!("failed to load file emit can error: {}", e),
+                    Err(e) => {
+                        env.problems.push(Problem::FileProblem {
+                            filename: file_path.to_path_buf(),
+                            error: e.kind(),
+                        });
+
+                        // This will not manifest as a real runtime error and is just returned to have a value here.
+                        // The pushed FileProblem will be fatal to compilation.
+                        (
+                            Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
+                            Output::default(),
+                        )
+                    }
+                }
             }
-        }
+            Err(e) => {
+                env.problems.push(Problem::FileProblem {
+                    filename: file_path.to_path_buf(),
+                    error: e.kind(),
+                });
+
+                // This will not manifest as a real runtime error and is just returned to have a value here.
+                // The pushed FileProblem will be fatal to compilation.
+                (
+                    Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
+                    Output::default(),
+                )
+            }
+        },
 
         ast::Expr::SingleQuote(string) => {
             let mut it = string.chars().peekable();

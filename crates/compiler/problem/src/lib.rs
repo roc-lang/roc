@@ -6,6 +6,10 @@ pub mod can;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Severity {
+    /// This should stop compilation in all cases.
+    /// Due to delayed loading of ingested files, this is wanted behaviour over a runtime error.
+    Fatal,
+
     /// This will cause a runtime error if some code get srun
     /// (e.g. type mismatch, naming error)
     RuntimeError,
