@@ -1,5 +1,6 @@
 use std::{collections::HashMap, hash::BuildHasherDefault, iter};
 
+use bitvec::vec;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, default_hasher, MutMap, MutSet};
@@ -518,36 +519,60 @@ fn insert_refcount_operations_stmt<'v, 'a>(
     environment: &mut RefcountEnvironment<'v>,
     stmt: &Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    // TODO: Deal with potentially stack overflowing let chains with an explicit loop.
-    // Koka has a list for let bindings.
-
     match &stmt {
         // The expression borrows the values owned (used) by the continuation.
-        Stmt::Let(binding, expr, layout, stmt) => {
-            // First evaluate the continuation and let it consume it's free variables.
-            environment.add_variable(*binding); // Add the bound variable to the environment. As it can be used in the continuation.
-            let new_stmt = insert_refcount_operations_stmt(arena, environment, stmt);
+        Stmt::Let(_, _, _, _) => {
+            // Collect all the subsequent let bindings (including the current one).
+            // To prevent the stack from overflowing when there are many let bindings.
+            let mut triples = vec![];
+            let mut current_stmt = stmt;
+            while let Stmt::Let(binding, expr, layout, next_stmt) = current_stmt {
+                triples.push((binding, expr, layout));
+                current_stmt = next_stmt
+            }
 
-            // If the binding is still owned in the environment, it is not used in the continuation and we can drop it right away.
-            let new_stmt_without_unused = match matches!(
-                environment.get_variable_ownership(binding),
-                Some(Ownership::Owned)
-            ) {
-                true => insert_dec_stmt(arena, *binding, new_stmt),
-                false => new_stmt,
-            };
+            debug_assert!(
+                !triples.is_empty(),
+                "Expected at least one let binding in the vector"
+            );
+            debug_assert!(
+                !matches!(current_stmt, Stmt::Let(_, _, _, _)),
+                "All let bindings should be in the vector"
+            );
 
-            // And as the variable should not be in scope before this let binding, remove it from the environment.
-            environment.remove_variable(*binding);
+            for (binding, _, _) in triples.iter() {
+                environment.add_variable(**binding); // Add the bound variable to the environment. As it can be used in the continuation.
+            }
 
-            insert_refcount_operations_binding(
-                arena,
-                environment,
-                binding,
-                expr,
-                layout,
-                new_stmt_without_unused,
-            )
+            triples
+                .into_iter()
+                .rev()
+                // First evaluate the continuation and let it consume it's free variables.
+                .fold(
+                    insert_refcount_operations_stmt(arena, environment, current_stmt),
+                    |new_stmt, (binding, expr, layout)| {
+                        // If the binding is still owned in the environment, it is not used in the continuation and we can drop it right away.
+                        let new_stmt_without_unused = match matches!(
+                            environment.get_variable_ownership(binding),
+                            Some(Ownership::Owned)
+                        ) {
+                            true => insert_dec_stmt(arena, *binding, new_stmt),
+                            false => new_stmt,
+                        };
+
+                        // And as the variable should not be in scope before this let binding, remove it from the environment.
+                        environment.remove_variable(*binding);
+
+                        insert_refcount_operations_binding(
+                            arena,
+                            environment,
+                            binding,
+                            expr,
+                            layout,
+                            new_stmt_without_unused,
+                        )
+                    },
+                )
         }
         Stmt::Switch {
             cond_symbol,

@@ -93,40 +93,63 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     match stmt {
-        Stmt::Let(binding, expr, layout, continuation) => {
-            let new_expr = match expr {
-                Expr::Tag {
-                    tag_layout,
-                    tag_id,
-                    arguments,
-                } => {
-                    // The value of the tag is currently only used in the case of nullable recursive unions.
-                    // But for completeness we add every kind of union to the layout_tags.
-                    environment.add_layout_tag(layout, *tag_id);
+        Stmt::Let(_, _, _, _) => {
+            // Collect all the subsequent let bindings (including the current one).
+            // To prevent the stack from overflowing when there are many let bindings.
+            let mut triples = vec![];
+            let mut current_stmt = stmt;
+            while let Stmt::Let(binding, expr, layout, next_stmt) = current_stmt {
+                triples.push((binding, expr, layout));
+                current_stmt = next_stmt
+            }
 
-                    // See if we have a reuse token
-                    match environment.pop_reuse_token(layout) {
-                        // We have a reuse token for this layout, use it.
-                        Some(reuse_token) => {
-                            Expr::Reuse {
-                                symbol: reuse_token.symbol,
-                                update_mode: reuse_token.update_mode_id,
-                                // for now, always overwrite the tag ID just to be sure
-                                update_tag_id: true,
-                                tag_layout: *tag_layout,
-                                tag_id: *tag_id,
-                                arguments,
+            debug_assert!(
+                !triples.is_empty(),
+                "Expected at least one let binding in the vector"
+            );
+            debug_assert!(
+                !matches!(current_stmt, Stmt::Let(_, _, _, _)),
+                "All let bindings should be in the vector"
+            );
+
+            // Update the triplets with reuse operations. Making sure to update the environment before the next let binding.
+            let mut new_triplets = vec![];
+            for (binding, expr, layout) in triples {
+                let new_expr = match expr {
+                    Expr::Tag {
+                        tag_layout,
+                        tag_id,
+                        arguments,
+                    } => {
+                        // The value of the tag is currently only used in the case of nullable recursive unions.
+                        // But for completeness we add every kind of union to the layout_tags.
+                        environment.add_layout_tag(layout, *tag_id);
+
+                        // See if we have a reuse token
+                        match environment.pop_reuse_token(layout) {
+                            // We have a reuse token for this layout, use it.
+                            Some(reuse_token) => {
+                                Expr::Reuse {
+                                    symbol: reuse_token.symbol,
+                                    update_mode: reuse_token.update_mode_id,
+                                    // for now, always overwrite the tag ID just to be sure
+                                    update_tag_id: true,
+                                    tag_layout: *tag_layout,
+                                    tag_id: *tag_id,
+                                    arguments,
+                                }
                             }
+
+                            // We have no reuse token available, keep the old expression with a fresh allocation.
+                            None => expr.clone(),
                         }
-
-                        // We have no reuse token available, keep the old expression with a fresh allocation.
-                        None => expr.clone(),
                     }
-                }
-                _ => expr.clone(),
-            };
+                    _ => expr.clone(),
+                };
 
-            environment.add_symbol_layout(*binding, layout);
+                environment.add_symbol_layout(*binding, layout);
+                new_triplets.push((binding, new_expr, layout))
+            }
 
             let new_continuation = insert_reset_reuse_operations_stmt(
                 arena,
@@ -135,13 +158,15 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 ident_ids,
                 update_mode_ids,
                 environment,
-                continuation,
+                current_stmt,
             );
 
-            //  // for now, always overwrite the tag ID just to be sure
-            //  let update_tag_id = true;
-
-            arena.alloc(Stmt::Let(*binding, new_expr, *layout, new_continuation))
+            new_triplets.into_iter().rev().fold(
+                new_continuation,
+                |new_continuation, (binding, new_expr, layout)| {
+                    arena.alloc(Stmt::Let(*binding, new_expr, *layout, new_continuation))
+                },
+            )
         }
         Stmt::Switch {
             cond_symbol,
