@@ -528,33 +528,34 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 (first_pass_environment, first_pass_remainder)
             };
 
-            let max_reuse_tokens = {
-                let all_reuse_maps = first_pass_remainder_environment
-                    .get_jump_reuse_tokens(*joinpoint_id)
-                    .expect(
-                        "Expected join point to be jumped to at least once from the remainder.",
-                    );
-                let all_reuse_layouts = all_reuse_maps
-                    .iter()
-                    .flat_map(|reuse_map| reuse_map.keys())
-                    // PERF: replace this collect with an unique iterator. To make sure every layout is only used once.
-                    .collect::<MutSet<_>>()
-                    .into_iter();
-                let reuse_layouts_max_tokens = all_reuse_layouts.map(|reuse_layout| {
-                    let max_token = all_reuse_maps
-                        .iter()
-                        .map(|reuse_map| {
-                            reuse_map
-                                .get(reuse_layout)
-                                .map(|tokens| tokens.len())
-                                .unwrap_or(0)
-                        })
-                        .max()
-                        .expect("all layouts should be in at least one of the reuse maps");
-                    (reuse_layout, max_token)
-                });
-                Vec::from_iter_in(reuse_layouts_max_tokens, arena)
-            };
+            let max_reuse_tokens =
+                match first_pass_remainder_environment.get_jump_reuse_tokens(*joinpoint_id) {
+                    Some(all_reuse_maps) => {
+                        let all_reuse_layouts = all_reuse_maps
+                            .iter()
+                            .flat_map(|reuse_map| reuse_map.keys())
+                            // PERF: replace this collect with an unique iterator. To make sure every layout is only used once.
+                            .collect::<MutSet<_>>()
+                            .into_iter();
+                        let reuse_layouts_max_tokens = all_reuse_layouts.map(|reuse_layout| {
+                            let max_token = all_reuse_maps
+                                .iter()
+                                .map(|reuse_map| {
+                                    reuse_map
+                                        .get(reuse_layout)
+                                        .map(|tokens| tokens.len())
+                                        .unwrap_or(0)
+                                })
+                                .max()
+                                .expect("all layouts should be in at least one of the reuse maps");
+                            (reuse_layout, max_token)
+                        });
+                        Vec::from_iter_in(reuse_layouts_max_tokens, arena)
+                    }
+                    // Normally the remainder should always have jumps and this would not be None,
+                    // But for testing this might not be the case, so default to no available reuse tokens.
+                    None => Vec::from_iter_in(std::iter::empty(), arena),
+                };
 
             let (first_pass_body_environment, first_pass_body, used_reuse_tokens) = {
                 // For each possibly available reuse token, create a reuse token to add to the join point environment.
