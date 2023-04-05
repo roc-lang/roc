@@ -584,6 +584,25 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
 
     max = \a, b -> if a >= b then a else b
 
+    alignOfUnion =
+        List.walk tags 1 \accum, { payload } ->
+            when payload is
+                Some payloadId -> max accum (Types.alignment types payloadId)
+                None -> accum
+
+    alignOfUnionStr = Num.toStr alignOfUnion
+
+    sizeOfUnionStr =
+        List.walk tags 1 \accum, { payload } ->
+            when payload is
+                Some payloadId -> max accum (Types.size types payloadId)
+                None -> accum
+        |> nextMultipleOf alignOfUnion
+        |> Num.toStr
+
+    sizeOfSelf = Num.toStr (Types.size types id)
+    alignOfSelf = Num.toStr (Types.alignment types id)
+
     # TODO: this value can be different than the alignment of `id`
     align =
         List.walk tags 1 \accum, { payload } ->
@@ -596,10 +615,15 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     |> generateDiscriminant types discriminantName tagNames discriminantSize
     |> Str.concat "#[repr(C, align(\(align)))]\npub union \(unionName) {\n"
     |> \b -> List.walk tags b (generateUnionField types)
-    |> generateTagUnionSizer types id tags
     |> Str.concat
         """
         }
+
+        const _SIZE_CHECK_\(unionName): () = assert!(core::mem::size_of::<\(unionName)>() == \(sizeOfUnionStr));
+        const _ALIGN_CHECK_\(unionName): () = assert!(core::mem::align_of::<\(unionName)>() == \(alignOfUnionStr));
+
+        const _SIZE_CHECK_\(escapedName): () = assert!(core::mem::size_of::<\(escapedName)>() == \(sizeOfSelf));
+        const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(alignOfSelf));
 
         impl \(escapedName) {
             \(discriminantDocComment)
@@ -720,8 +744,8 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
     }
     """
 
-generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, _nullTagIndex ->
-    escapedName = escapeKW name
+generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSize, _discriminantOffset, nullTagIndex ->
+    escapedName = escapeKW tagUnionName
     discriminantName = "discriminant_\(escapedName)"
     tagNames = List.map tags \{ name: n } -> n
     # self = "(&*self.union_pointer())"
@@ -729,13 +753,348 @@ generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _disc
     # other = "(&*other.union_pointer())"
     unionName = "union_\(escapedName)"
 
+    discriminants =
+        tagNames
+        |> Str.joinWith ", "
+        |> \b -> "[ \(b) ]"
+
+    nullTagId =
+        when nullTagIndex is
+            Some index ->
+                n = Num.toStr index
+                "discriminants[\(n)]"
+
+            None ->
+                """
+                unreachable!("this pointer cannot be NULL")
+                """
+
+    isFunction = \{ name: tagName, payload: optPayload }, index ->
+        payloadFields =
+            when optPayload is
+                Some payload ->
+                    when Types.shape types payload is
+                        TagUnionPayload { fields } ->
+                            when fields is
+                                HasNoClosure xs -> List.map xs .id
+                                HasClosure xs -> List.map xs .id
+
+                        _ ->
+                            []
+
+                None ->
+                    []
+
+        payloadFieldNames =
+            commaSeparated "" payloadFields \_, i ->
+                n = Num.toStr i
+                "f\(n)"
+
+        constructorArguments =
+            commaSeparated "" payloadFields \payloadId, i ->
+                n = Num.toStr i
+                type = typeName types payloadId
+                "f\(n): \(type)"
+
+        fixManuallyDrop =
+            when optPayload is
+                Some payload ->
+                    shape = Types.shape types payload
+
+                    if canDeriveCopy types shape then
+                        "payload"
+                    else
+                        "core::mem::ManuallyDrop::new(payload)"
+
+                None ->
+                    "payload"
+
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                pub fn is_\(tagName)(&self) -> bool {
+                    matches!(self.discriminant(), discriminant_\(escapedName)::\(tagName))
+                }
+
+                pub fn \(tagName)(\(constructorArguments)) -> Self {
+                    Self(std::ptr::null_mut())
+                }
+            """
+        else
+            """
+                pub fn is_\(tagName)(&self) -> bool {
+                    matches!(self.discriminant(), discriminant_\(escapedName)::\(tagName))
+                }
+
+                pub fn \(tagName)(\(constructorArguments)) -> Self {
+                    let tag_id = discriminant_\(escapedName)::\(tagName);
+
+                    let payload = \(escapedName)_\(tagName) { \(payloadFieldNames) } ;
+
+                    let union_payload = union_\(escapedName) { \(tagName): \(fixManuallyDrop) };
+
+                    let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(union_payload)) };
+
+                    Self((ptr as usize | tag_id as usize) as *mut _)
+                }
+            """
+
+    constructors =
+        tags
+        |> List.mapWithIndex isFunction
+        |> Str.joinWith "\n\n"
+
+    cloneCase = \{ name: tagName }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => Self::\(tagName)(),
+            """
+        else
+            """
+                        \(tagName) => {
+                            let tag_id = discriminant_\(escapedName)::\(tagName);
+
+                            let payload_union = unsafe { self.ptr_read_union() };
+                            let payload = union_\(escapedName) { 
+                                \(tagName): unsafe { payload_union.\(tagName).clone() },
+                            };
+
+                            let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+
+                            Self((ptr as usize | tag_id as usize) as *mut _)
+                        },
+            """
+
+    cloneCases =
+        tags
+        |> List.mapWithIndex cloneCase
+        |> Str.joinWith "\n"
+
+    partialEqCase = \{ name: tagName }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => true,
+            """
+        else
+            """
+                        \(tagName) => {
+                            let payload_union1 = unsafe { self.ptr_read_union() };
+                            let payload_union2 = unsafe { other.ptr_read_union() };
+
+                            unsafe { 
+                                payload_union1.\(tagName) == payload_union2.\(tagName)
+                            }
+                        },
+            """
+
+    partialEqCases =
+        tags
+        |> List.mapWithIndex partialEqCase
+        |> Str.joinWith "\n"
+
+    debugCase = \{ name: tagName, payload: optPayload }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => f.debug_tuple("\(escapedName)::\(tagName)").finish(),
+            """
+        else
+            payloadFields =
+                when optPayload is
+                    Some payload ->
+                        when Types.shape types payload is
+                            TagUnionPayload { fields } ->
+                                when fields is
+                                    HasNoClosure xs -> List.map xs .id
+                                    HasClosure xs -> List.map xs .id
+
+                            _ ->
+                                []
+
+                    None ->
+                        []
+
+            debugFields =
+                payloadFields
+                |> List.mapWithIndex \_, i ->
+                    n = Num.toStr i
+                    ".field(&payload_union.\(tagName).f\(n))"
+                |> Str.joinWith ""
+
+            """
+                        \(tagName) => {
+                            let payload_union = unsafe { self.ptr_read_union() };
+
+                            unsafe { 
+                                f.debug_tuple("\(escapedName)::\(tagName)")\(debugFields).finish()
+                            }
+                        },
+            """
+
+    debugCases =
+        tags
+        |> List.mapWithIndex debugCase
+        |> Str.joinWith "\n"
+
+    hashCase = \{ name: tagName }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => {} 
+            """
+        else
+            """
+                        \(tagName) => {
+                            let payload_union = unsafe { self.ptr_read_union() };
+                            unsafe { payload_union.\(tagName).hash(state) };
+                        },
+            """
+
+    hashCases =
+        tags
+        |> List.mapWithIndex hashCase
+        |> Str.joinWith "\n"
+
+    partialOrdCase = \{ name: tagName }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => std::cmp::Ordering::Equal,
+            """
+        else
+            """
+                        \(tagName) => {
+                            let payload_union1 = unsafe { self.ptr_read_union() };
+                            let payload_union2 = unsafe { other.ptr_read_union() };
+
+                            unsafe { 
+                                payload_union1.\(tagName).cmp(&payload_union2.\(tagName))
+                            }
+                        },
+            """
+
+    partialOrdCases =
+        tags
+        |> List.mapWithIndex partialOrdCase
+        |> Str.joinWith "\n"
+
+    sizeOfSelf = Num.toStr (Types.size types id)
+    alignOfSelf = Num.toStr (Types.alignment types id)
+
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
     |> Str.concat
         """
         #[repr(transparent)]
-        pub struct \(escapedName) {
-            pointer: roc_std::RocBox<\(unionName)>,
+        pub struct \(escapedName)(*mut \(unionName));
+
+        const _SIZE_CHECK_\(escapedName): () = assert!(core::mem::size_of::<\(escapedName)>() == \(sizeOfSelf));
+        const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(alignOfSelf));
+
+        impl \(escapedName) {
+            fn discriminant(&self) -> discriminant_\(escapedName) { 
+                let discriminants = {
+                    use \(discriminantName)::*;
+
+                    \(discriminants)
+                };
+
+                if self.0.is_null() {
+                    \(nullTagId)
+                } else  {
+                    match std::mem::size_of::<usize>() {
+                        4 => discriminants[self.0 as usize & 0b011],
+                        8 => discriminants[self.0 as usize & 0b111],
+                        _ => unreachable!(),
+                    }
+                }
+            }
+
+            unsafe fn ptr_read_union(&self) -> core::mem::ManuallyDrop<union_\(escapedName)> {
+                debug_assert!(!self.0.is_null());
+
+                let mask = match std::mem::size_of::<usize>() {
+                    4 => !0b011usize,
+                    8 => !0b111usize,
+                    _ => unreachable!(),
+                };
+
+                let ptr = ((self.0 as usize) & mask) as *mut union_\(escapedName);
+
+                core::mem::ManuallyDrop::new(unsafe { std::ptr::read(ptr) })
+            }
+
+            \(constructors)
+        }
+
+        impl Clone for \(escapedName) {
+            fn clone(&self) -> Self {
+                use discriminant_\(escapedName)::*;
+
+                let discriminant = self.discriminant();
+
+                match discriminant {
+                \(cloneCases)
+                }
+            }
+        }
+
+        impl PartialEq for \(escapedName) {
+            fn eq(&self, other: &Self) -> bool {
+                use discriminant_\(escapedName)::*;
+
+                if self.discriminant() != other.discriminant() {
+                    return false;
+                }
+
+                match self.discriminant() {
+                    \(partialEqCases)
+                }
+            }
+        }
+
+        impl Eq for \(escapedName) {}
+
+        impl core::fmt::Debug for \(escapedName) {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                use discriminant_\(escapedName)::*;
+
+                match self.discriminant() {
+                    \(debugCases)
+                }
+            }
+        }
+
+        impl core::hash::Hash for \(escapedName) {
+            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                use discriminant_\(escapedName)::*;
+
+                self.discriminant().hash(state);
+
+                match self.discriminant() {
+                    \(hashCases)
+                }
+            }
+        }
+
+        impl PartialOrd for \(escapedName) {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(<Self as Ord>::cmp(self, other))
+            }
+        }
+
+        impl Ord for \(escapedName) {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                use discriminant_\(escapedName)::*;
+
+                use std::cmp::Ordering::*;
+
+                match self.discriminant().cmp(&other.discriminant()) {
+                    Less => Less,
+                    Greater => Greater,
+                    Equal => unsafe {
+                        match self.discriminant() {
+                            \(partialOrdCases)
+                        }
+                    },
+                }
+            }
         }
 
         #[repr(C)]
@@ -744,7 +1103,6 @@ generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _disc
     |> \b -> List.walk tags b (generateUnionField types)
     |> generateTagUnionSizer types id tags
     |> Str.concat "}\n\n"
-    |> Str.concat "// TODO: Recursive TagUnion impls\n\n"
 
 generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, discriminantSize, indents ->
     if discriminantSize == 0 then
@@ -861,7 +1219,7 @@ commaSeparated = \buf, items, step ->
     |> .buf
 
 generateNullableUnwrapped : Str, Types, TypeId, Str, Str, Str, TypeId, [FirstTagIsNull, SecondTagIsNull] -> Str
-generateNullableUnwrapped = \buf, types, _id, name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull ->
+generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull ->
     payloadFields =
         when Types.shape types nonNullPayload is
             TagUnionPayload { fields } ->
@@ -910,6 +1268,9 @@ generateNullableUnwrapped = \buf, types, _id, name, nullTag, nonNullTag, nonNull
                 }
                 """
 
+    sizeOfSelf = Num.toStr (Types.size types tagUnionid)
+    alignOfSelf = Num.toStr (Types.alignment types tagUnionid)
+
     """
     \(buf)
 
@@ -918,6 +1279,9 @@ generateNullableUnwrapped = \buf, types, _id, name, nullTag, nonNullTag, nonNull
     pub struct \(name)(*mut \(name)_\(nonNullTag));
 
     \(discriminant)
+
+    const _SIZE_CHECK_\(name): () = assert!(core::mem::size_of::<\(name)>() == \(sizeOfSelf));
+    const _ALIGN_CHECK_\(name): () = assert!(core::mem::align_of::<\(name)>() == \(alignOfSelf));
 
     impl \(name) {
         pub fn \(nullTag)() -> Self {
@@ -1620,3 +1984,8 @@ escapeKW = \input ->
         "r#\(input)"
     else
         input
+
+nextMultipleOf = \lhs, rhs ->
+    when lhs % rhs is
+        0 -> lhs
+        r -> lhs + (rhs - r)

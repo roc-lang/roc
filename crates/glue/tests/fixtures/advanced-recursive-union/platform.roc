@@ -22,5 +22,5 @@ Job : [
 
 Rbt : { default : Job }
 
-mainForHost : Rbt
-mainForHost = main
+mainForHost : {} -> Rbt
+mainForHost = \{} -> main
