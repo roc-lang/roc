@@ -12,9 +12,6 @@ use roc_collections::ReferenceMatrix;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
-pub(crate) const OWNED: bool = false;
-pub(crate) const BORROWED: bool = true;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ownership {
     Owned,
@@ -471,11 +468,11 @@ impl<'a> BorrowInfState<'a> {
     /// This looks at an application `f x1 x2 x3`
     /// If the parameter (based on the definition of `f`) is owned,
     /// then the argument must also be owned
-    fn own_args_using_bools(&mut self, xs: &[Symbol], ps: &[bool]) {
+    fn own_args_using_bools(&mut self, xs: &[Symbol], ps: &[Ownership]) {
         debug_assert_eq!(xs.len(), ps.len());
 
-        for (x, borrow) in xs.iter().zip(ps.iter()) {
-            if !borrow {
+        for (x, ownership) in xs.iter().zip(ps.iter()) {
+            if matches!(ownership, Ownership::Owned) {
                 self.own_var(*x);
             }
         }
@@ -926,22 +923,22 @@ impl<'a> BorrowInfState<'a> {
     }
 }
 
-pub fn foreign_borrow_signature(arena: &Bump, arity: usize) -> &[bool] {
+pub fn foreign_borrow_signature(arena: &Bump, arity: usize) -> &[Ownership] {
     // NOTE this means that Roc is responsible for cleaning up resources;
     // the host cannot (currently) take ownership
-    let all = bumpalo::vec![in arena; BORROWED; arity];
+    let all = bumpalo::vec![in arena; Ownership::Borrowed; arity];
     all.into_bump_slice()
 }
 
-pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
+pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
     use LowLevel::*;
 
     // TODO is true or false more efficient for non-refcounted layouts?
-    let irrelevant = OWNED;
+    let irrelevant = Ownership::Owned;
     let function = irrelevant;
     let closure_data = irrelevant;
-    let owned = OWNED;
-    let borrowed = BORROWED;
+    let owned = Ownership::Owned;
+    let borrowed = Ownership::Borrowed;
 
     // Here we define the borrow signature of low-level operations
     //
