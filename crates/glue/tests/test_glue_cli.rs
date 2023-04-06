@@ -92,33 +92,33 @@ mod glue_cli_run {
             `Baz` is: NonRecursive::Baz(())
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
-        // nullable_wrapped:"nullable-wrapped" => indoc!(r#"
-        //     tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
-        //     `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
-        //     `More "small str" Empty` is: StrFingerTree::More("small str", StrFingerTree::Empty)
-        //     `Single "small str"` is: StrFingerTree::Single("small str")
-        //     `Empty` is: StrFingerTree::Empty
-        // "#),
-        // nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
-        //     tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
-        //     `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
-        //     `Nil` is: StrConsList::Nil
-        // "#),
-        // nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
-        //     tag_union was: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "root", f1: [StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf1", f1: [] } }), StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf2", f1: [] } })] } })
-        //     Tree "foo" [] is: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "foo", f1: [] } })
-        // "#),
-        // basic_recursive_union:"basic-recursive-union" => indoc!(r#"
-        //     tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
-        //     `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
-        //     `String "this is a test"` is: Expr::String("this is a test")
-        // "#),
-        // advanced_recursive_union:"advanced-recursive-union" => indoc!(r#"
-        //     rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
-        // "#),
-        // list_recursive_union:"list-recursive-union" => indoc!(r#"
-        //     rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
-        // "#),
+        nullable_wrapped:"nullable-wrapped" => indoc!(r#"
+            tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
+            `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
+            `More "small str" Empty` is: StrFingerTree::More("small str", StrFingerTree::Empty)
+            `Single "small str"` is: StrFingerTree::Single("small str")
+            `Empty` is: StrFingerTree::Empty
+        "#),
+        nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
+            tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
+            `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
+            `Nil` is: StrConsList::Nil
+        "#),
+        nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
+            tag_union was: StrRoseTree::Tree("root", [StrRoseTree::Tree("leaf1", []), StrRoseTree::Tree("leaf2", [])])
+            Tree "foo" [] is: StrRoseTree::Tree("foo", [])
+        "#),
+        basic_recursive_union:"basic-recursive-union" => indoc!(r#"
+            tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
+            `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
+            `String "this is a test"` is: Expr::String("this is a test")
+        "#),
+        advanced_recursive_union:"advanced-recursive-union" => indoc!(r#"
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
+        "#),
+        list_recursive_union:"list-recursive-union" => indoc!(r#"
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
+        "#),
         multiple_modules:"multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
         "#),
