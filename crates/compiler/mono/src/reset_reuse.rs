@@ -24,7 +24,7 @@ To allow for the reuse of memory allocation when said memory is no longer used.
  */
 pub fn insert_reset_reuse_operations<'a, 'i>(
     arena: &'a Bump,
-    layout_interner: &'i mut STLayoutInterner<'a>,
+    layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
@@ -51,7 +51,7 @@ pub fn insert_reset_reuse_operations<'a, 'i>(
 
 fn insert_reset_reuse_operations_proc<'a, 'i>(
     arena: &'a Bump,
-    layout_interner: &'i mut STLayoutInterner<'a>,
+    layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
@@ -89,7 +89,7 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
 
 fn insert_reset_reuse_operations_stmt<'a, 'i>(
     arena: &'a Bump,
-    layout_interner: &'i mut STLayoutInterner<'a>,
+    layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
@@ -1109,7 +1109,7 @@ impl<'a> ReuseEnvironment<'a> {
 }
 
 fn can_reuse_layout_tag<'a, 'i>(
-    layout_interner: &'i mut STLayoutInterner<'a>,
+    layout_interner: &'i STLayoutInterner<'a>,
     environment: &ReuseEnvironment<'a>,
     layout: &InLayout<'a>,
 ) -> Reuse {

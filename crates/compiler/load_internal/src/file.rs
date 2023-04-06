@@ -3106,7 +3106,7 @@ fn update<'a>(
 
                     reset_reuse::insert_reset_reuse_operations(
                         arena,
-                        &mut layout_interner,
+                        &layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
