@@ -271,9 +271,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     .iter()
                     .map(|(label, info, branch, branch_env)| {
                         let unused_tokens=  branch_env.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
-                            let min_reuse_tokens = layout_min_reuse_tokens.get(&layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
-                            let unused_tokens = &reuse_tokens[*min_reuse_tokens..];
-                            unused_tokens
+                            let min_reuse_tokens = layout_min_reuse_tokens.get(layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
+                             &reuse_tokens[*min_reuse_tokens..] 
                         });
 
                         let newer_branch = drop_unused_reuse_tokens(arena, unused_tokens.copied(), branch);
@@ -287,9 +286,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             let newer_default_branch = {
                 // let (info, branch, branch_env) = new_default_branch;
                 let unused_tokens=  new_default_branch.2.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
-                    let min_reuse_tokens = layout_min_reuse_tokens.get(&layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
-                    let unused_tokens = &reuse_tokens[*min_reuse_tokens..];
-                    unused_tokens
+                    let min_reuse_tokens = layout_min_reuse_tokens.get(layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
+                       &reuse_tokens[*min_reuse_tokens..]
+                     
                 });
 
                 let newer_branch =
@@ -300,7 +299,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
             // And finally we update the current environment to reflect the correct number of reuse tokens.
             for (layout, reuse_tokens) in environment.reuse_tokens.iter_mut() {
-                let min_reuse_tokens = layout_min_reuse_tokens.get(&layout).expect(
+                let min_reuse_tokens = layout_min_reuse_tokens.get(layout).expect(
                     "All layouts in the environment should be in the layout_min_reuse_tokens map.",
                 );
                 reuse_tokens.truncate(*min_reuse_tokens)
@@ -338,14 +337,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     let layout_option = environment.get_symbol_layout(*symbol);
 
                     // If the symbol is defined in the current proc, we can use the layout from the environment.
-                    match layout_option {
+                    match layout_option.clone() {
                         LayoutOption::Layout(layout)
                             if matches!(
-                                can_reuse_layout_tag(layout_interner, &environment, &layout),
+                                can_reuse_layout_tag(layout_interner, environment, layout),
                                 Reuse::Reusable
                             ) =>
                         {
-                            let layout_clone = layout.clone();
                             let reuse_token = ReuseToken {
                                 symbol: Symbol::new(home, ident_ids.gen_unique()),
                                 update_mode_id: update_mode_ids.next_id(),
@@ -357,8 +355,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 _ => unreachable!(),
                             };
 
-                            environment.push_reuse_token(arena, &layout_clone, reuse_token);
-                            Some((layout_clone, *symbol, reuse_token, dec_ref))
+                            environment.push_reuse_token(arena, layout, reuse_token);
+                            Some((layout, *symbol, reuse_token, dec_ref))
                         }
                         _ => None,
                     }
@@ -377,13 +375,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
             // If we inserted a reuse token, we need to insert a reset reuse operation if the reuse token is consumed.
             if let Some((layout, symbol, reuse_token, dec_ref)) = reuse_pair {
-                let stack_reuse_token = environment.peek_reuse_token(&layout);
+                let stack_reuse_token = environment.peek_reuse_token(layout);
 
                 match stack_reuse_token {
                     Some(reuse_symbol) if reuse_symbol == reuse_token => {
                         // The token we inserted is still on the stack, so we don't need to insert a reset operation.
                         // We do need to remove the token from the environment. To prevent errors higher in the tree.
-                        let _ = environment.pop_reuse_token(&layout);
+                        let _ = environment.pop_reuse_token(layout);
                     }
                     _ => {
                         // The token we inserted is no longer on the stack, it must have been consumed.
@@ -417,7 +415,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
             // TODO update jump join points for the returned environment.
 
-            arena.alloc(Stmt::Refcounting(rc.clone(), new_continuation))
+            arena.alloc(Stmt::Refcounting(*rc, new_continuation))
         }
         Stmt::Ret(_) => {
             // The return statement just doesn't consume any tokens. Dropping these tokens will be handled before.
@@ -443,8 +441,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             arena.alloc(Stmt::Expect {
                 condition: *condition,
                 region: *region,
-                lookups: lookups.clone(),
-                variables: variables.clone(),
+                lookups,
+                variables,
                 remainder: new_remainder,
             })
         }
@@ -468,8 +466,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             arena.alloc(Stmt::ExpectFx {
                 condition: *condition,
                 region: *region,
-                lookups: lookups.clone(),
-                variables: variables.clone(),
+                lookups,
+                variables,
                 remainder: new_remainder,
             })
         }
@@ -510,7 +508,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                 first_pass_environment.add_joinpoint_reuse_tokens(
                     *joinpoint_id,
-                    JoinPointReuseTokens::RemainderFirstPass,
+                    JoinPointReuseTokens::RemainderFirst,
                 );
 
                 let first_pass_remainder = insert_reset_reuse_operations_stmt(
@@ -591,7 +589,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                 // Add a entry so that the body knows any jumps to this join point is recursive.
                 first_pass_body_environment
-                    .add_joinpoint_reuse_tokens(*joinpoint_id, JoinPointReuseTokens::BodyFirstPass);
+                    .add_joinpoint_reuse_tokens(*joinpoint_id, JoinPointReuseTokens::BodyFirst);
 
                 let first_pass_body = insert_reset_reuse_operations_stmt(
                     arena,
@@ -611,12 +609,14 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         .filter_map(|(layout, reuse_tokens)| {
                             match first_pass_body_environment.reuse_tokens.get(layout) {
                                 Some(remaining_tokens) => {
-                                    // There are tokens left, remove those from the bottom of the stack and retun the consumed ones.
+                                    // There are tokens left, remove those from the bottom of the stack and return the consumed ones.
                                     let mut consumed_reuse_tokens = reuse_tokens
                                         .iter()
                                         .skip(remaining_tokens.len())
                                         .copied()
                                         .peekable();
+
+                                    #[allow(clippy::manual_map)]
                                     match consumed_reuse_tokens.peek() {
                                         // If there are no consumed tokens, remove the layout from the map.
                                         None => None,
@@ -657,7 +657,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                 return arena.alloc(Stmt::Join {
                     id: *joinpoint_id,
-                    parameters: parameters.clone(),
+                    parameters,
                     body: first_pass_body,
                     remainder: first_pass_remainder,
                 });
@@ -679,7 +679,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             let second_pass_remainder = {
                 environment.add_joinpoint_reuse_tokens(
                     *joinpoint_id,
-                    JoinPointReuseTokens::RemainderSecondPass(layouts_for_reuse.clone()),
+                    JoinPointReuseTokens::RemainderSecond(layouts_for_reuse.clone()),
                 );
 
                 let second_pass_remainder = insert_reset_reuse_operations_stmt(
@@ -728,7 +728,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 extended_parameters
             };
 
-            if let None = first_pass_body_environment.get_jump_reuse_tokens(*joinpoint_id) {
+            if  first_pass_body_environment.get_jump_reuse_tokens(*joinpoint_id).is_none() {
                 // The body has no jumps to this join point. So we can just return the body and remainder as is.
                 // As there are no jumps to update.
 
@@ -762,7 +762,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 // Add a entry so that the body knows any jumps to this join point is recursive.
                 body_environment.add_joinpoint_reuse_tokens(
                     *joinpoint_id,
-                    JoinPointReuseTokens::BodySecondPass(layouts_for_reuse),
+                    JoinPointReuseTokens::BodySecond(layouts_for_reuse),
                 );
 
                 let second_pass_body = insert_reset_reuse_operations_stmt(
@@ -794,15 +794,15 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             let joinpoint_tokens = environment.get_joinpoint_reuse_tokens(*id);
 
             match joinpoint_tokens {
-                JoinPointReuseTokens::RemainderFirstPass | JoinPointReuseTokens::BodyFirstPass => {
+                JoinPointReuseTokens::RemainderFirst | JoinPointReuseTokens::BodyFirst => {
                     // For both the first pass of the continuation and the body, act as if there are no tokens to reuse.
                     environment.add_jump_reuse_tokens(*id, environment.reuse_tokens.clone());
-                    arena.alloc(Stmt::Jump(*id, arguments.clone()))
+                    arena.alloc(Stmt::Jump(*id, arguments))
                 }
-                JoinPointReuseTokens::RemainderSecondPass(token_layouts) => {
+                JoinPointReuseTokens::RemainderSecond(token_layouts) => {
                     // If there are no tokens to reuse, we can just jump.
                     if token_layouts.is_empty() {
-                        return arena.alloc(Stmt::Jump(*id, arguments.clone()));
+                        return arena.alloc(Stmt::Jump(*id, arguments));
                     }
 
                     let token_layouts_clone = token_layouts.clone();
@@ -811,7 +811,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                     // See what tokens we can get from the env, if none are available, use a void pointer.
                     let tokens = token_layouts_clone.iter().map(|token_layout| {
-                        environment.pop_reuse_token(&token_layout).map_or_else(
+                        environment.pop_reuse_token(token_layout).map_or_else(
                             || match void_pointer_layout_symbols
                                 .iter()
                                 .find(|(layout, _)| layout == token_layout)
@@ -840,10 +840,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         },
                     )
                 }
-                JoinPointReuseTokens::BodySecondPass(token_layouts) => {
+                JoinPointReuseTokens::BodySecond(token_layouts) => {
                     // If there are no tokens to reuse, we can just jump.
                     if token_layouts.is_empty() {
-                        return arena.alloc(Stmt::Jump(*id, arguments.clone()));
+                        return arena.alloc(Stmt::Jump(*id, arguments));
                     }
 
                     // We currently don't pass any reuse tokens to recursive jumps.
@@ -943,18 +943,18 @@ enum JoinPointReuseTokens<'a> {
     // The body indicates that we currently in the body of the join point.
     // This means that (for now) don't pass any reuse tokens from the jump.
     // As we only use reuse tokens from jumps outside the join point.
-    BodyFirstPass,
+    BodyFirst,
 
     // Second body pass, to update any jump calls to pass void pointer parameters instead of no parameters.
-    BodySecondPass(Vec<'a, InLayout<'a>>),
+    BodySecond(Vec<'a, InLayout<'a>>),
 
     // The first pass is used to determine the amount of reuse tokens a join point can expect.
     // Therefore, we don't know the amount of reuse tokens yet.
-    RemainderFirstPass,
+    RemainderFirst,
 
     // In the second pass, we determined the amount of reuse tokens a join point can expect.
     // Therefore, we know the amount of reuse tokens and can use.
-    RemainderSecondPass(Vec<'a, InLayout<'a>>),
+    RemainderSecond(Vec<'a, InLayout<'a>>),
 }
 
 #[derive(Default, Clone)]

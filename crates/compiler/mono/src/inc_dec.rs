@@ -26,7 +26,7 @@ pub fn insert_inc_dec_operations<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i STLayoutInterner<'a>,
     procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
-) -> () {
+) {
     // Create a VariableRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
     let mut variable_rc_types_env = VariableRcTypesEnv::from_layout_interner(layout_interner);
     variable_rc_types_env.insert_proc_symbols(procedures.keys().map(|(symbol, _layout)| *symbol));
@@ -112,7 +112,7 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
                 layout,
                 continuation,
             ) => {
-                self.insert_symbol_layout_rc_type(&binding, layout);
+                self.insert_symbol_layout_rc_type(binding, layout);
                 self.insert_variables_rc_type_stmt(continuation);
             }
             Stmt::Switch {
@@ -225,7 +225,7 @@ struct RefcountEnvironment<'v> {
     jointpoint_closures: MutMap<JoinPointId, JoinPointConsumption>,
 }
 
-impl<'v, 'a> Clone for RefcountEnvironment<'v> {
+impl<'v> Clone for RefcountEnvironment<'v> {
     fn clone(&self) -> Self {
         RefcountEnvironment {
             variables_rc_types: self.variables_rc_types,
@@ -407,17 +407,15 @@ impl<'v> RefcountEnvironment<'v> {
     ) -> MutSet<Symbol> {
         symbols
             .into_iter()
-            .filter_map(|symbol| {
-                match {
+            .filter(|symbol| {
+                // If the variable is reference counted, we need to increment the usage count.
+                // If the variable is not reference counted, we don't need to do anything.
+                matches!(
                     self.variables_rc_types
-                        .get(&symbol)
-                        .expect("Expected variable to be in the map")
-                } {
-                    // If the variable is reference counted, we need to increment the usage count.
-                    VarRcType::ReferenceCounted => Some(symbol),
-                    // If the variable is not reference counted, we don't need to do anything.
-                    VarRcType::NotReferenceCounted => None,
-                }
+                        .get(symbol)
+                        .expect("Expected variable to be in the map"),
+                    VarRcType::ReferenceCounted
+                )
             })
             .collect()
     }
@@ -433,7 +431,7 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
 ) {
     // Clone the variable_rc_types_env and insert the variables in the current procedure.
     // As the variables should be limited in scope for the current proc.
-    variable_rc_types_env.insert_variables_rc_type_proc(&proc);
+    variable_rc_types_env.insert_variables_rc_type_proc(proc);
 
     let mut environment = RefcountEnvironment {
         variables_rc_types: &variable_rc_types_env.variables_rc_type,
@@ -811,7 +809,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
 
             arena.alloc(Stmt::Join {
                 id: *joinpoint_id,
-                parameters: parameters.clone(),
+                parameters,
                 body: new_body,
                 remainder: new_remainder,
             })
@@ -822,7 +820,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 environment.consume_variable(consumed_variable);
             }
 
-            let new_jump = arena.alloc(Stmt::Jump(*joinpoint_id, arguments.clone()));
+            let new_jump = arena.alloc(Stmt::Jump(*joinpoint_id, arguments));
 
             // Note that this should only insert increments if a later join point has a current parameter as consumed closure.
             consume_and_insert_inc_stmts(
@@ -1128,7 +1126,7 @@ fn consume_and_insert_inc_stmt<'a>(
 /**
 Insert a increment statement for the given symbol.
 */
-fn insert_inc_stmt<'a, 's>(
+fn insert_inc_stmt<'a>(
     arena: &'a Bump,
     symbol: Symbol,
     count: u64,
@@ -1179,7 +1177,7 @@ fn consume_and_insert_dec_stmt<'a>(
 /**
 Insert decrement statements for the given symbols.
 */
-fn insert_dec_stmts<'a, 's>(
+fn insert_dec_stmts<'a>(
     arena: &'a Bump,
     symbols: impl Iterator<Item = Symbol>,
     continuation: &'a Stmt<'a>,
@@ -1192,7 +1190,7 @@ fn insert_dec_stmts<'a, 's>(
 /**
 Insert a decrement statement for the given symbol.
 */
-fn insert_dec_stmt<'a, 's>(
+fn insert_dec_stmt<'a>(
     arena: &'a Bump,
     symbol: Symbol,
     continuation: &'a Stmt<'a>,
