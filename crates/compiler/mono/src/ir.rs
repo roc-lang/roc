@@ -308,7 +308,6 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<InLayout<'a>>,
     pub ret_layout: InLayout<'a>,
     pub is_self_recursive: SelfRecursive,
-    // pub must_own_arguments: bool,
     pub host_exposed_layouts: HostExposedLayouts<'a>,
 }
 
@@ -3171,7 +3170,6 @@ fn generate_runtime_error_function<'a>(
         closure_data_layout: None,
         ret_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        // must_own_arguments: false,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
     }
 }
@@ -3424,7 +3422,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout: Some(closure_data_layout),
                 ret_layout,
                 is_self_recursive: recursivity,
-                // must_own_arguments: false,
                 host_exposed_layouts,
             }
         }
@@ -3624,7 +3621,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
-                // must_own_arguments: false,
                 host_exposed_layouts,
             }
         }

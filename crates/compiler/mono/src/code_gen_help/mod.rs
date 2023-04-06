@@ -184,7 +184,6 @@ impl<'a> CodeGenHelp<'a> {
         (expr, ctx.new_linker_data)
     }
 
-    // TODO update to not decrement children.
     pub fn call_resetref_refcount(
         &mut self,
         ident_ids: &mut IdentIds,
@@ -416,7 +415,6 @@ impl<'a> CodeGenHelp<'a> {
             closure_data_layout: None,
             ret_layout,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            // must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         });
 
