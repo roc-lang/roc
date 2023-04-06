@@ -470,3 +470,36 @@ fn lowlevel_list_calls() {
         "#
     ));
 }
+
+#[test]
+fn joinpoint_nullpointer() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            LinkedList a : [Cons a (LinkedList a), Nil]
+          
+            printLinkedList : LinkedList Str -> Str
+            printLinkedList = \linkedList->
+                when linkedList is
+                    Nil -> "Nil"
+                    Cons x xs ->
+                        strXs = printLinkedList xs
+                        "Cons \(x) (\(strXs))"
+          
+            linkedListHead : LinkedList Str -> LinkedList Str
+            linkedListHead = \linkedList ->
+                string = when linkedList is
+                    Cons s _ -> s
+                    Nil -> ""
+                Cons string Nil
+
+            test =
+                cons = printLinkedList (linkedListHead (Cons "foo" Nil))
+                nil = printLinkedList (linkedListHead (Nil))
+                "\(cons) - \(nil)"
+      
+            test
+        )
+        "#
+    ));
+}
