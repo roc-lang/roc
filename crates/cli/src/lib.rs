@@ -33,6 +33,7 @@ use target_lexicon::{
 use tempfile::TempDir;
 
 mod format;
+pub mod global_allocator;
 pub use format::format;
 
 pub const CMD_BUILD: &str = "build";

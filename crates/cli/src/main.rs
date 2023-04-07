@@ -1,6 +1,7 @@
 //! The `roc` binary that brings together all functionality in the Roc toolset.
 use roc_build::link::LinkType;
 use roc_build::program::check_file;
+use roc_cli::global_allocator::RocGlobalAlloc;
 use roc_cli::{
     build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
     CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST,
@@ -20,13 +21,19 @@ use target_lexicon::Triple;
 extern crate const_format;
 
 #[global_allocator]
-static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: RocGlobalAlloc = RocGlobalAlloc;
 
 use std::ffi::{OsStr, OsString};
 
 use roc_cli::build;
 
 fn main() -> io::Result<()> {
+    // Default to bump allocation for all allocations, and only switch to MiMalloc if
+    // we're running the editor.
+    unsafe {
+        RocGlobalAlloc::enable_bump_mode();
+    }
+
     let _tracing_guards = roc_tracing::setup_tracing!();
 
     let matches = build_app().get_matches();
@@ -42,6 +49,11 @@ fn main() -> io::Result<()> {
                     LinkType::Executable,
                 )
             } else {
+                // It's safe to disable the bump allocator because there are no other threads running.
+                unsafe {
+                    RocGlobalAlloc::disable_bump_mode();
+                }
+
                 launch_editor(None)?;
 
                 Ok(0)
