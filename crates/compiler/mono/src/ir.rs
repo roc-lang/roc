@@ -4165,8 +4165,8 @@ pub fn with_hole<'a>(
             match layout {
                 Layout::Builtin(Builtin::List(elem_layout)) if elem_layout == Layout::U8 => {
                     let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
-                    for byte in bytes {
-                        elements.push(ListLiteralElement::Literal(Literal::Byte(byte)));
+                    for byte in bytes.iter() {
+                        elements.push(ListLiteralElement::Literal(Literal::Byte(*byte)));
                     }
                     let expr = Expr::Array {
                         elem_layout,
@@ -4179,7 +4179,9 @@ pub fn with_hole<'a>(
                     assigned,
                     Expr::Literal(Literal::Str(
                         // This is safe because we ensure the utf8 bytes are valid earlier in the compiler pipeline.
-                        arena.alloc(unsafe { std::str::from_utf8_unchecked(&bytes) }.to_owned()),
+                        arena.alloc(
+                            unsafe { std::str::from_utf8_unchecked(bytes.as_ref()) }.to_owned(),
+                        ),
                     )),
                     Layout::STR,
                     hole,

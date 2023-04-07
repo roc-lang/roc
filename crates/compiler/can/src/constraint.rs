@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
@@ -680,14 +681,14 @@ impl Constraints {
         &mut self,
         type_index: TypeOrVar,
         file_path: Box<Path>,
-        bytes: Vec<u8>,
+        bytes: Arc<Vec<u8>>,
     ) -> Constraint {
         Constraint::IngestedFile(type_index, file_path, bytes)
     }
 }
 
-roc_error_macros::assert_sizeof_default!(Constraint, 6 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Constraint, 6 * 8);
+roc_error_macros::assert_sizeof_default!(Constraint, 4 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Constraint, 4 * 8);
 
 impl std::ops::Index<ExpectedTypeIndex> for Constraints {
     type Output = Expected<TypeOrVar>;
@@ -785,9 +786,7 @@ pub enum Constraint {
     Resolve(OpportunisticResolve),
     CheckCycle(Index<Cycle>, IllegalCycleMark),
 
-    // This is terrible and could be a huge cost to copy.
-    // Not sure a better way to get the bytes here so we can check if they are valid utf8 or decode properly.
-    IngestedFile(TypeOrVar, Box<Path>, Vec<u8>),
+    IngestedFile(TypeOrVar, Box<Path>, Arc<Vec<u8>>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]

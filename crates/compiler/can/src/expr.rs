@@ -30,6 +30,7 @@ use std::fmt::{Debug, Display};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 use std::{char, u32};
 
 /// Derives that an opaque type has claimed, to checked and recorded after solving.
@@ -103,8 +104,8 @@ pub enum Expr {
         loc_elems: Vec<Loc<Expr>>,
     },
 
-    // The bytes of a file and the expected type annotation.
-    IngestedFile(Box<Path>, Vec<u8>, Variable),
+    // An ingested files, it's bytes, and the type variable.
+    IngestedFile(Box<Path>, Arc<Vec<u8>>, Variable),
 
     // Lookups
     Var(Symbol, Variable),
@@ -741,7 +742,7 @@ pub fn canonicalize_expr<'a>(
                 let mut bytes = vec![];
                 match file.read_to_end(&mut bytes) {
                     Ok(_) => (
-                        Expr::IngestedFile((*file_path).into(), bytes, var_store.fresh()),
+                        Expr::IngestedFile((*file_path).into(), Arc::new(bytes), var_store.fresh()),
                         Output::default(),
                     ),
                     Err(e) => {
