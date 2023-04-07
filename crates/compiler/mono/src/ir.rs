@@ -31,13 +31,9 @@ use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
-use roc_types::types::AliasCommon;
-use roc_types::{
-    subs::{
-        instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
-        StorageSubs, Subs, Variable, VariableSubsSlice,
-    },
-    types::Type,
+use roc_types::subs::{
+    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
+    StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
