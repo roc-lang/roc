@@ -20,8 +20,14 @@ use target_lexicon::Triple;
 #[macro_use]
 extern crate const_format;
 
+#[cfg(not(wasm))]
 #[global_allocator]
 static GLOBAL: RocGlobalAlloc = RocGlobalAlloc;
+
+// bump mode requires calling mmap, which fails in wasm; just use MiMalloc instead for wasm.
+#[cfg(wasm)]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::ffi::{OsStr, OsString};
 
