@@ -30,8 +30,8 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasCommon, AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason,
-    RecordField, TypeExtension, TypeTag, Types,
+    AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
+    TypeExtension, TypeTag, Types,
 };
 
 /// This is for constraining Defs
@@ -375,38 +375,20 @@ pub fn constrain_expr(
             let expected_index = expected;
             constraints.equal_types(str_index, expected_index, Category::Str, region)
         }
-        IngestedFile(bytes, anno) => match &anno.typ {
-            Type::Apply(Symbol::STR_STR, _, _) => {
-                if std::str::from_utf8(bytes).is_err() {
-                    todo!("cause an error for the type being wrong due to not being a utf8 string");
-                }
+        IngestedFile(file_path, bytes, var) => {
+            let index = constraints.push_variable(*var);
+            let eq_con = constraints.equal_types(
+                index,
+                expected,
+                Category::IngestedFile(file_path.clone()),
+                region,
+            );
+            let ingested_con = constraints.ingested_file(index, file_path.clone(), bytes.clone());
 
-                let str_index = constraints.push_type(types, Types::STR);
-                let expected_index = expected;
-                constraints.equal_types(str_index, expected_index, Category::Str, region)
-            }
-            Type::Apply(Symbol::LIST_LIST, elem_type, _)
-                if matches!(
-                    elem_type[0].value,
-                    Type::DelayedAlias(AliasCommon {
-                        symbol: Symbol::NUM_U8,
-                        ..
-                    })
-                ) =>
-            {
-                let elem_var = Variable::U8;
-                let list_elem_type = Type::Variable(elem_var);
-                let elem_type_index = {
-                    let typ = types.from_old_type(&list_type(list_elem_type));
-                    constraints.push_type(types, typ)
-                };
-                constraints.equal_types(elem_type_index, expected, Category::List, region)
-            }
-            x => todo!(
-                "Unsupported requested type for ingested file, give proper error: {:?}",
-                x
-            ),
-        },
+            // First resolve the type variable with the eq_con then try to ingest a file into the correct type.
+            let and_constraint = constraints.and_constraint(vec![eq_con, ingested_con]);
+            constraints.exists([*var], and_constraint)
+        }
         SingleQuote(num_var, precision_var, _, bound) => single_quote_literal(
             types,
             constraints,
@@ -3975,7 +3957,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
             Str(_)
-            | IngestedFile(_, _)
+            | IngestedFile(..)
             | List { .. }
             | SingleQuote(_, _, _, _)
             | When { .. }

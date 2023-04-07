@@ -1,5 +1,5 @@
 use crate::abilities::SpecializationId;
-use crate::annotation::{self, freshen_opaque_def, IntroducedVariables};
+use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Annotation, Def};
 use crate::env::Env;
@@ -29,6 +29,7 @@ use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Typ
 use std::fmt::{Debug, Display};
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use std::{char, u32};
 
 /// Derives that an opaque type has claimed, to checked and recorded after solving.
@@ -103,7 +104,7 @@ pub enum Expr {
     },
 
     // The bytes of a file and the expected type annotation.
-    IngestedFile(Vec<u8>, annotation::Annotation),
+    IngestedFile(Box<Path>, Vec<u8>, Variable),
 
     // Lookups
     Var(Symbol, Variable),
@@ -302,7 +303,7 @@ impl Expr {
             Self::Int(..) => Category::Int,
             Self::Float(..) => Category::Frac,
             Self::Str(..) => Category::Str,
-            Self::IngestedFile(..) => Category::IngestedFile,
+            Self::IngestedFile(file_path, _, _) => Category::IngestedFile(file_path.clone()),
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
@@ -735,23 +736,12 @@ pub fn canonicalize_expr<'a>(
 
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
 
-        ast::Expr::IngestedFile(file_path, type_ann) => match File::open(file_path) {
+        ast::Expr::IngestedFile(file_path, _) => match File::open(file_path) {
             Ok(mut file) => {
                 let mut bytes = vec![];
                 match file.read_to_end(&mut bytes) {
                     Ok(_) => (
-                        Expr::IngestedFile(
-                            bytes,
-                            annotation::canonicalize_annotation(
-                                env,
-                                scope,
-                                &type_ann.value,
-                                region,
-                                var_store,
-                                &VecMap::default(),
-                                annotation::AnnotationFor::Value,
-                            ),
-                        ),
+                        Expr::IngestedFile((*file_path).into(), bytes, var_store.fresh()),
                         Output::default(),
                     ),
                     Err(e) => {
@@ -3041,7 +3031,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::Float(_, _, _, _, _)
             | Expr::Int(_, _, _, _, _)
             | Expr::Str(_)
-            | Expr::IngestedFile(_, _)
+            | Expr::IngestedFile(..)
             | Expr::ZeroArgumentTag { .. }
             | Expr::RecordAccessor(_)
             | Expr::SingleQuote(..)

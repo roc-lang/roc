@@ -1094,7 +1094,7 @@ pub fn can_problem<'b>(
             title = "OVERAPPLIED CRASH".to_string();
         }
         Problem::FileProblem { filename, error } => {
-            let report = to_file_problem_report(&alloc, &filename, error);
+            let report = to_file_problem_report(alloc, &filename, error);
             doc = report.doc;
             title = report.title;
         }

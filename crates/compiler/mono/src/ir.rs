@@ -4162,42 +4162,37 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        IngestedFile(bytes, anno) => match &anno.typ {
-            Type::Apply(Symbol::STR_STR, _, _) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Str(
-                    // This is safe because we ensure the utf8 bytes are valid earlier in the compiler pipeline.
-                    arena.alloc(unsafe { std::str::from_utf8_unchecked(&bytes) }.to_owned()),
-                )),
-                Layout::STR,
-                hole,
-            ),
-            Type::Apply(Symbol::LIST_LIST, elem_type, _)
-                if matches!(
-                    elem_type[0].value,
-                    Type::DelayedAlias(AliasCommon {
-                        symbol: Symbol::NUM_U8,
-                        ..
-                    })
-                ) =>
-            {
-                let elem_layout = Layout::U8;
-                let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
-                for byte in bytes {
-                    elements.push(ListLiteralElement::Literal(Literal::Byte(byte)));
+        IngestedFile(_, bytes, var) => {
+            let interned = layout_cache.from_var(env.arena, var, env.subs).unwrap();
+            let layout = layout_cache.get_in(interned);
+
+            match layout {
+                Layout::Builtin(Builtin::List(elem_layout)) if elem_layout == Layout::U8 => {
+                    let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
+                    for byte in bytes {
+                        elements.push(ListLiteralElement::Literal(Literal::Byte(byte)));
+                    }
+                    let expr = Expr::Array {
+                        elem_layout,
+                        elems: elements.into_bump_slice(),
+                    };
+
+                    Stmt::Let(assigned, expr, interned, hole)
                 }
-                let expr = Expr::Array {
-                    elem_layout,
-                    elems: elements.into_bump_slice(),
-                };
-
-                let list_layout = layout_cache.put_in(Layout::Builtin(Builtin::List(elem_layout)));
-
-                Stmt::Let(assigned, expr, list_layout, hole)
+                Layout::Builtin(Builtin::Str) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Str(
+                        // This is safe because we ensure the utf8 bytes are valid earlier in the compiler pipeline.
+                        arena.alloc(unsafe { std::str::from_utf8_unchecked(&bytes) }.to_owned()),
+                    )),
+                    Layout::STR,
+                    hole,
+                ),
+                _ => unreachable!(
+                    "All of these cases should be dealt during solve, generating proper errors"
+                ),
             }
-            _ => unreachable!("All of these cases should be dealt with earlier in the compiler, generating proper errors"),
-        },
-
+        }
         SingleQuote(_, _, character, _) => {
             let layout = layout_cache
                 .from_var(env.arena, variable, env.subs)

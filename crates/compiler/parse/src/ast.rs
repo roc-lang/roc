@@ -1474,7 +1474,6 @@ impl<'a> Malformed for Expr<'a> {
 
             Str(inner) => inner.is_malformed(),
 
-            // TODO: what is the scope of Malformed? Would this not being a real file make it malformed?
             RecordAccess(inner, _) |
             TupleAccess(inner, _) => inner.is_malformed(),
 

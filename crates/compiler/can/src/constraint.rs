@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::path::Path;
 
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
@@ -599,6 +600,7 @@ impl Constraints {
             | Constraint::PatternPresence(_, _, _, _)
             | Constraint::Exhaustive { .. }
             | Constraint::Resolve(..)
+            | Constraint::IngestedFile(..)
             | Constraint::CheckCycle(..) => false,
         }
     }
@@ -673,10 +675,19 @@ impl Constraints {
 
         Constraint::CheckCycle(cycle_index, cycle_mark)
     }
+
+    pub fn ingested_file(
+        &mut self,
+        type_index: TypeOrVar,
+        file_path: Box<Path>,
+        bytes: Vec<u8>,
+    ) -> Constraint {
+        Constraint::IngestedFile(type_index, file_path, bytes)
+    }
 }
 
-roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
+roc_error_macros::assert_sizeof_default!(Constraint, 6 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Constraint, 6 * 8);
 
 impl std::ops::Index<ExpectedTypeIndex> for Constraints {
     type Output = Expected<TypeOrVar>;
@@ -734,7 +745,7 @@ pub struct OpportunisticResolve {
     pub specialization_id: SpecializationId,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Constraint {
     Eq(Eq),
     Store(TypeOrVar, Variable, Index<&'static str>, u32),
@@ -773,6 +784,10 @@ pub enum Constraint {
     /// Attempt to resolve a specialization.
     Resolve(OpportunisticResolve),
     CheckCycle(Index<Cycle>, IllegalCycleMark),
+
+    // This is terrible and could be a huge cost to copy.
+    // Not sure a better way to get the bytes here so we can check if they are valid utf8 or decode properly.
+    IngestedFile(TypeOrVar, Box<Path>, Vec<u8>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -855,6 +870,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::CheckCycle(arg0, arg1) => {
                 write!(f, "CheckCycle({:?}, {:?})", arg0, arg1)
+            }
+            Self::IngestedFile(arg0, arg1, arg2) => {
+                write!(f, "IngestedFile({:?}, {:?}, {:?})", arg0, arg1, arg2)
             }
         }
     }

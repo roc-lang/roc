@@ -1771,6 +1771,55 @@ fn solve(
 
                 state
             }
+            IngestedFile(type_index, _, bytes) => {
+                let actual = either_type_index_to_var(
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *type_index,
+                );
+
+                if let Success { .. } = unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    Variable::LIST_U8,
+                    Mode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
+                    // List U8 always valid.
+                    state
+                } else if let Success { .. } = unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    Variable::STR,
+                    Mode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
+                    // Str only valid if valid utf8.
+                    if std::str::from_utf8(bytes).is_err() {
+                        todo!("add type error due to not being a utf8 string");
+                    }
+
+                    state
+                } else {
+                    // Unexpected type.
+                    todo!("Add type error for unsupported ingested file type");
+                    // let problem = TypeError::BadExpr(
+                    //     *region,
+                    //     Category::Lookup(*symbol),
+                    //     actual_type,
+                    //     expectation.replace_ref(expected_type),
+                    // );
+
+                    // problems.push(problem);
+                    // state
+                }
+            }
         };
     }
 

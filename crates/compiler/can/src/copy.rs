@@ -277,7 +277,9 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         Float(v1, v2, str, val, bound) => Float(sub!(*v1), sub!(*v2), str.clone(), *val, *bound),
         Str(str) => Str(str.clone()),
         SingleQuote(v1, v2, char, bound) => SingleQuote(sub!(*v1), sub!(*v2), *char, *bound),
-        IngestedFile(bytes, anno) => IngestedFile(bytes.clone(), anno.clone()),
+        IngestedFile(file_path, bytes, anno) => {
+            IngestedFile(file_path.clone(), bytes.clone(), anno.clone())
+        }
         List {
             elem_var,
             loc_elems,
