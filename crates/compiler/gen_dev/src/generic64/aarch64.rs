@@ -987,7 +987,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("registers to float for AArch64");
     }
 
-    // TODO: This next two are signed. Should they be?
     #[inline(always)]
     fn lte_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
@@ -1256,20 +1255,35 @@ impl ArithmeticShifted {
 #[derive(Copy, Clone, PartialEq)]
 #[allow(dead_code)]
 enum ConditionCode {
+    /// Equal
     EQ = 0b0000,
+    /// Not equal
     NE = 0b0001,
+    /// CS or HS: Carry set
     CSHS = 0b0010,
+    /// CC or LO: Carry clear
     CCLO = 0b0011,
+    /// Minus, negative
     MI = 0b0100,
+    /// Plus, positive or zero
     PL = 0b0101,
+    /// Overflow
     VS = 0b0110,
+    /// No overflow
     VC = 0b0111,
+    /// Unsigned higher
     HI = 0b1000,
+    /// Unsigned lower or same
     LS = 0b1001,
+    /// Signed greater than or equal
     GE = 0b1010,
+    /// Signed less than
     LT = 0b1011,
+    /// Signed greater than
     GT = 0b1100,
+    /// Signed less than or equal
     LE = 0b1101,
+    /// Always
     AL = 0b1110,
 }
 
@@ -1279,8 +1293,8 @@ impl ConditionCode {
         *self as u8
     }
 
+    /// The inverse of the condition code. For example, EQ becomes NE.
     fn invert(self) -> Self {
-        // TODO: check
         match self {
             ConditionCode::EQ => ConditionCode::NE,
             ConditionCode::NE => ConditionCode::EQ,
@@ -1678,6 +1692,7 @@ fn add_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
+/// `AND Xd, Xn, Xm` -> Bitwise AND Xn and Xm and place the result into Xd.
 #[inline(always)]
 fn and_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -1690,7 +1705,20 @@ fn and_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
-/// TODO
+/// `ASR Xd, Xn, Xn` -> Arithmetic shift right Xn by Xm and place the result into Xd.
+#[inline(always)]
+fn asr_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = DataProcessingTwoSource::new(0b001010, src2, src1, dst);
+
+    buf.extend(inst.bytes());
+}
+
+/// `B.cond imm19` -> Jump to PC + imm19 if cond is met.
 #[inline(always)]
 fn b_cond_imm19(buf: &mut Vec<'_, u8>, cond: ConditionCode, imm19: i32) {
     debug_assert!(imm19 & 0b11 == 0, "branch location must be 4-byte aligned");
@@ -1726,16 +1754,19 @@ fn b_imm26(buf: &mut Vec<'_, u8>, imm26: i32) {
     buf.extend(inst.bytes());
 }
 
+/// `CMP Xn, imm12` -> Compare Xn and imm12, setting condition flags.
 #[inline(always)]
 fn cmp_reg64_imm12(buf: &mut Vec<'_, u8>, src: AArch64GeneralReg, imm12: u16) {
     subs_reg64_reg64_imm12(buf, AArch64GeneralReg::ZRSP, src, imm12);
 }
 
+/// `CMP Xn, Xm` -> Compare Xn and Xm, setting condition flags.
 #[inline(always)]
 fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, src1: AArch64GeneralReg, src2: AArch64GeneralReg) {
     subs_reg64_reg64_reg64(buf, AArch64GeneralReg::ZRSP, src1, src2);
 }
 
+/// `CNEG Xd, Xn, cond` -> If cond is true, then Xd = -Xn, else Xd = Xn.
 #[inline(always)]
 fn cneg_reg64_reg64_cond(
     buf: &mut Vec<'_, u8>,
@@ -1746,6 +1777,7 @@ fn cneg_reg64_reg64_cond(
     csneg_reg64_reg64_reg64_cond(buf, dst, src, src, cond.invert());
 }
 
+/// `CSET Xd, cond` -> If cond is true, then Xd = 1, else Xd = 0.
 #[inline(always)]
 fn cset_reg64_cond(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, cond: ConditionCode) {
     csinc_reg64_reg64_reg64_cond(
@@ -1757,6 +1789,7 @@ fn cset_reg64_cond(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, cond: Conditio
     );
 }
 
+/// `CSINC Xd, Xn, Xm, cond` -> If cond is true, then Xd = Xn, else Xd = Xm + 1.
 #[inline(always)]
 fn csinc_reg64_reg64_reg64_cond(
     buf: &mut Vec<'_, u8>,
@@ -1770,6 +1803,7 @@ fn csinc_reg64_reg64_reg64_cond(
     buf.extend(inst.bytes());
 }
 
+/// `CSNEG Xd, Xn, Xm, cond` -> If cond is true, then Xd = Xn, else Xd = -Xm.
 #[inline(always)]
 fn csneg_reg64_reg64_reg64_cond(
     buf: &mut Vec<'_, u8>,
@@ -1783,6 +1817,7 @@ fn csneg_reg64_reg64_reg64_cond(
     buf.extend(inst.bytes());
 }
 
+/// `EOR Xd, Xn, Xm` -> Bitwise XOR Xn and Xm and place the result into Xd.
 #[inline(always)]
 fn eor_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -1809,6 +1844,7 @@ fn ldr_reg64_reg64_imm12(
     buf.extend(inst.bytes());
 }
 
+/// `LSL Xd, Xn, Xm` -> Logical shift Xn left by Xm and place the result into Xd.
 #[inline(always)]
 fn lsl_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -1821,6 +1857,7 @@ fn lsl_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
+/// `LSR Xd, Xn, Xm` -> Logical shift Xn right by Xm and place the result into Xd.
 #[inline(always)]
 fn lsr_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -1833,18 +1870,7 @@ fn lsr_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
-#[inline(always)]
-fn asr_reg64_reg64_reg64(
-    buf: &mut Vec<'_, u8>,
-    dst: AArch64GeneralReg,
-    src1: AArch64GeneralReg,
-    src2: AArch64GeneralReg,
-) {
-    let inst = DataProcessingTwoSource::new(0b001010, src2, src1, dst);
-
-    buf.extend(inst.bytes());
-}
-
+/// `MADD Xd, Xn, Xm, Xa` -> Multiply Xn and Xm, add Xa, and place the result into Xd.
 #[inline(always)]
 fn madd_reg64_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -1890,6 +1916,7 @@ fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
     buf.extend(inst.bytes());
 }
 
+/// `MUL Xd, Xn, Xm` -> Multiply Xn and Xm and place the result into Xd.
 #[inline(always)]
 fn mul_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -1900,11 +1927,13 @@ fn mul_reg64_reg64_reg64(
     madd_reg64_reg64_reg64_reg64(buf, dst, src1, src2, AArch64GeneralReg::ZRSP);
 }
 
+/// `NEG Xd, Xm` -> Negate Xm and place the result into Xd.
 #[inline(always)]
 fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
     sub_reg64_reg64_reg64(buf, dst, AArch64GeneralReg::ZRSP, src);
 }
 
+/// `ORR Xd, Xn, Xm` -> Bitwise OR Xn and Xm and place the result into Xd.
 #[inline(always)]
 fn orr_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -1917,6 +1946,8 @@ fn orr_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
+/// `SDIV Xd, Xn, Xm` -> Divide Xn by Xm and place the result into Xd.
+/// Xn, Xm, and Xd are signed integers.
 #[inline(always)]
 fn sdiv_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -1969,7 +2000,7 @@ fn sub_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
-/// `SUBS Xd, Xn, imm12` ->
+/// `SUBS Xd, Xn, imm12` -> Subtract Xn and imm12 and place the result into Xd. Set condition flags.
 #[inline(always)]
 fn subs_reg64_reg64_imm12(
     buf: &mut Vec<'_, u8>,
@@ -1982,6 +2013,7 @@ fn subs_reg64_reg64_imm12(
     buf.extend(inst.bytes());
 }
 
+/// `SUBS Xd, Xn, Xm` -> Subtract Xn and Xm and place the result into Xd. Set condition flags.
 #[inline(always)]
 fn subs_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -2002,6 +2034,8 @@ fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
     buf.extend(inst.bytes());
 }
 
+/// `UDIV Xd, Xn, Xm` -> Divide Xn by Xm and place the result into Xd.
+/// Xn, Xm, and Xd are unsigned integers.
 #[inline(always)]
 fn udiv_reg64_reg64_reg64(
     buf: &mut Vec<'_, u8>,
@@ -2113,6 +2147,11 @@ mod tests {
             .expect("Failed to create Capstone object");
         (buf, cs)
     }
+
+    // Many of these instructions are aliases for each other,
+    // and depending on their arguments, they might get disassembled to a different instruction.
+    // That's why we need `if` expressions in some of these tests.
+    // The "alias conditions" for each instruction are listed in the ARM manual.
 
     #[test]
     fn test_add_reg64_reg64_reg64() {
