@@ -1785,7 +1785,9 @@ fn solve(
                 );
 
                 if let Success { .. } = unify(
-                    &mut UEnv::new(subs),
+                    // TODO: if we don't clone and a later branch matches, we will get a failure in alias analysis.
+                    // That said, I assume cloning is expensive and should be avoided.
+                    &mut UEnv::new(&mut subs.clone()),
                     actual,
                     Variable::LIST_U8,
                     Mode::EQ,
@@ -1794,7 +1796,7 @@ fn solve(
                     // List U8 always valid.
                     state
                 } else if let Success { .. } = unify(
-                    &mut UEnv::new(subs),
+                    &mut UEnv::new(&mut subs.clone()),
                     actual,
                     Variable::STR,
                     Mode::EQ,
