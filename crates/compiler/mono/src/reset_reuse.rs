@@ -272,7 +272,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     .map(|(label, info, branch, branch_env)| {
                         let unused_tokens=  branch_env.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
                             let min_reuse_tokens = layout_min_reuse_tokens.get(layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
-                             &reuse_tokens[*min_reuse_tokens..] 
+                             &reuse_tokens[*min_reuse_tokens..]
                         });
 
                         let newer_branch = drop_unused_reuse_tokens(arena, unused_tokens.copied(), branch);
@@ -287,8 +287,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 // let (info, branch, branch_env) = new_default_branch;
                 let unused_tokens=  new_default_branch.2.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
                     let min_reuse_tokens = layout_min_reuse_tokens.get(layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
-                       &reuse_tokens[*min_reuse_tokens..]
-                     
+                    &reuse_tokens[*min_reuse_tokens..]
                 });
 
                 let newer_branch =
@@ -728,7 +727,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 extended_parameters
             };
 
-            if  first_pass_body_environment.get_jump_reuse_tokens(*joinpoint_id).is_none() {
+            if first_pass_body_environment
+                .get_jump_reuse_tokens(*joinpoint_id)
+                .is_none()
+            {
                 // The body has no jumps to this join point. So we can just return the body and remainder as is.
                 // As there are no jumps to update.
 
