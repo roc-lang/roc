@@ -785,9 +785,22 @@ impl<
                     FloatWidth::F32 => todo!(),
                 },
                 Builtin::Bool => {
-                    // same as 8-bit integer
-                    let reg = self.load_to_general_reg(buf, sym);
-                    ASM::mov_base32_reg8(buf, to_offset, reg);
+                    // same as 8-bit integer, but we special-case true/false because these symbols
+                    // are thunks and literal values
+                    match *sym {
+                        Symbol::BOOL_FALSE => {
+                            let reg = self.claim_general_reg(buf, sym);
+                            ASM::mov_reg64_imm64(buf, reg, false as i64)
+                        }
+                        Symbol::BOOL_TRUE => {
+                            let reg = self.claim_general_reg(buf, sym);
+                            ASM::mov_reg64_imm64(buf, reg, true as i64)
+                        }
+                        _ => {
+                            let reg = self.load_to_general_reg(buf, sym);
+                            ASM::mov_base32_reg8(buf, to_offset, reg);
+                        }
+                    }
                 }
                 Builtin::Decimal => todo!(),
                 Builtin::Str | Builtin::List(_) => {
@@ -1166,9 +1179,9 @@ impl<
             Some(storages) => storages,
             None => internal_error!("Jump: unknown point specified to jump to: {:?}", id),
         };
-        for ((sym, layout), wanted_storage) in
-            args.iter().zip(arg_layouts).zip(param_storage.iter())
-        {
+
+        let it = args.iter().zip(arg_layouts).zip(param_storage.iter());
+        for ((sym, layout), wanted_storage) in it {
             // Note: it is possible that the storage we want to move to is in use by one of the args we want to pass.
             if self.get_storage_for_sym(sym) == wanted_storage {
                 continue;
