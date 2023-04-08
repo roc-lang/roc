@@ -54,9 +54,7 @@ impl RocGlobalAlloc {
     /// This function is not thread-safe! Only call it when you are sure nothing else is potentially changing bump mode
     /// or performing allocations when the bump allocator is active.
     pub unsafe fn disable_bump_mode() {
-        unsafe {
-            USE_BUMP_ALLOCATOR = false;
-        }
+        USE_BUMP_ALLOCATOR = false;
     }
 }
 
