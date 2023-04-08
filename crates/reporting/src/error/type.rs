@@ -209,6 +209,45 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        IngestedFileBadUtf8(file_path, utf8_err) => {
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("Failed to load "),
+                    alloc.text(format!("{:?}", file_path)),
+                    alloc.reflow(" as Str:"),
+                ]),
+                alloc.text(format!("{}", utf8_err)),
+            ];
+            Some(Report {
+                title: "INVALID UTF-8".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        IngestedFileUnsupportedType(file_path, typ) => {
+            let stack = [
+                alloc.concat([
+                    alloc.text(format!("{:?}", file_path)),
+                    alloc.reflow(" is annotated to be a "),
+                    alloc.inline_type_block(error_type_to_doc(alloc, typ)),
+                    alloc.reflow("."),
+                ]),
+                alloc.concat([
+                    alloc.reflow("Ingested files can only be of type "),
+                    alloc.type_str("List U8"),
+                    alloc.reflow(" or "),
+                    alloc.type_str("Str"),
+                    alloc.reflow("."),
+                ]),
+            ];
+            Some(Report {
+                title: "INVALID TYPE FOR INGESTED FILE".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
     }
 }
 

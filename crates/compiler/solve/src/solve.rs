@@ -1771,7 +1771,7 @@ fn solve(
 
                 state
             }
-            IngestedFile(type_index, _, bytes) => {
+            IngestedFile(type_index, file_path, bytes) => {
                 let actual = either_type_index_to_var(
                     subs,
                     rank,
@@ -1794,34 +1794,37 @@ fn solve(
                 ) {
                     // List U8 always valid.
                     subs.rollback_to(snapshot);
-                    state
-                } else if let Success { .. } = unify(
+                    return state;
+                }
+                subs.rollback_to(snapshot);
+
+                let snapshot = subs.snapshot();
+                // We explicitly match on the last unify to get the type in the case it errors.
+                match unify(
                     &mut UEnv::new(subs),
                     actual,
                     Variable::STR,
                     Mode::EQ,
                     Polarity::OF_VALUE,
                 ) {
-                    // Str only valid if valid utf8.
-                    if std::str::from_utf8(bytes).is_err() {
-                        todo!("add type error due to not being a utf8 string");
+                    Success { .. } => {
+                        // Str only valid if valid utf8.
+                        if let Err(err) = std::str::from_utf8(bytes) {
+                            let problem = TypeError::IngestedFileBadUtf8(file_path.clone(), err);
+                            problems.push(problem);
+                        }
+
+                        subs.rollback_to(snapshot);
+                        state
                     }
+                    Failure(_, actual_type, _, _) => {
+                        subs.rollback_to(snapshot);
 
-                    subs.rollback_to(snapshot);
-                    state
-                } else {
-                    // Unexpected type.
-                    todo!("Add type error for unsupported ingested file type");
-                    // let problem = TypeError::BadExpr(
-                    //     *region,
-                    //     Category::Lookup(*symbol),
-                    //     actual_type,
-                    //     expectation.replace_ref(expected_type),
-                    // );
-
-                    // problems.push(problem);
-                    // subs.rollback_to(snapshot);
-                    // state
+                        let problem =
+                            TypeError::IngestedFileUnsupportedType(file_path.clone(), actual_type);
+                        problems.push(problem);
+                        state
+                    }
                 }
             }
         };

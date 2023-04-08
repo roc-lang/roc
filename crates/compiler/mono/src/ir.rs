@@ -4186,9 +4186,11 @@ pub fn with_hole<'a>(
                     Layout::STR,
                     hole,
                 ),
-                _ => unreachable!(
-                    "All of these cases should be dealt during solve, generating proper errors"
-                ),
+                _ => {
+                    // This will not manifest as a real runtime error and is just returned to have a value here.
+                    // The actual type error during solve will be fatal.
+                    runtime_error(env, "Invalid type for ingested file")
+                }
             }
         }
         SingleQuote(_, _, character, _) => {

@@ -757,10 +757,21 @@ pub fn build(
                     roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
+                    if problems.fatally_errored {
+                        problems.print_to_stdout(total_time);
+                        println!(
+                            ".\n\nCannot run program due to fatal error…\n\n\x1B[36m{}\x1B[39m",
+                            "─".repeat(80)
+                        );
+
+                        // Return a nonzero exit code due to falta problem
+                        return Ok(problems.exit_code());
+                    }
                     debug_assert_eq!(
                         problems.errors, 0,
-                        "if there are errors, they should have been returned as an error variant"
+                        "if there are non-fatal errors, they should have been returned as an error variant"
                     );
+
                     if problems.warnings > 0 {
                         problems.print_to_stdout(total_time);
                         println!(
