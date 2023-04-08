@@ -349,16 +349,10 @@ impl<
                 self.free_reference(sym);
                 reg
             }
-            Stack(Complex { size, base_offset }) => {
-                if size <= 8 {
-                    let reg = self.get_general_reg(buf);
-                    ASM::mov_reg64_base32(buf, reg, base_offset);
-                    reg
-                } else {
-                    internal_error!(
-                        "Cannot load large values (size {size}) into general registers: {sym:?}",
-                    )
-                }
+            Stack(Complex { size, .. }) => {
+                internal_error!(
+                    "Cannot load large values (size {size}) into general registers: {sym:?}",
+                )
             }
             NoData => {
                 internal_error!("Cannot load no data into general registers: {}", sym)
@@ -477,14 +471,10 @@ impl<
                     ASM::movzx_reg64_base32(buf, reg, *base_offset, *size as u8)
                 }
             }
-            Stack(Complex { size, base_offset }) => {
-                if *size <= 8 {
-                    ASM::mov_reg64_base32(buf, reg, *base_offset);
-                } else {
-                    internal_error!(
-                        "Cannot load large values (size {size}) into general registers: {sym:?}",
-                    )
-                }
+            Stack(Complex { size, .. }) => {
+                internal_error!(
+                    "Cannot load large values (size {size}) into general registers: {sym:?}",
+                )
             }
             NoData => {
                 internal_error!("Cannot load no data into general registers: {:?}", sym)

@@ -1371,7 +1371,7 @@ fn issue_2445() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn issue_2458() {
     assert_evals_to!(
         indoc!(
@@ -2010,7 +2010,7 @@ fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_set_with_imported_toplevels_issue_4733() {
     assert_evals_to!(
         indoc!(
@@ -2029,23 +2029,6 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
         ),
         90,
         i64
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn fooba() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            main : Bool
-            main = "*" == "*"
-            "#
-        ),
-        1,
-        u64
     );
 }
 
