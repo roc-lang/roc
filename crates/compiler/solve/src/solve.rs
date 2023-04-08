@@ -1784,19 +1784,19 @@ fn solve(
                     *type_index,
                 );
 
+                let snapshot = subs.snapshot();
                 if let Success { .. } = unify(
-                    // TODO: if we don't clone and a later branch matches, we will get a failure in alias analysis.
-                    // That said, I assume cloning is expensive and should be avoided.
-                    &mut UEnv::new(&mut subs.clone()),
+                    &mut UEnv::new(subs),
                     actual,
                     Variable::LIST_U8,
                     Mode::EQ,
                     Polarity::OF_VALUE,
                 ) {
                     // List U8 always valid.
+                    subs.rollback_to(snapshot);
                     state
                 } else if let Success { .. } = unify(
-                    &mut UEnv::new(&mut subs.clone()),
+                    &mut UEnv::new(subs),
                     actual,
                     Variable::STR,
                     Mode::EQ,
@@ -1807,6 +1807,7 @@ fn solve(
                         todo!("add type error due to not being a utf8 string");
                     }
 
+                    subs.rollback_to(snapshot);
                     state
                 } else {
                     // Unexpected type.
@@ -1819,6 +1820,7 @@ fn solve(
                     // );
 
                     // problems.push(problem);
+                    // subs.rollback_to(snapshot);
                     // state
                 }
             }
