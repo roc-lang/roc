@@ -553,7 +553,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
 //
-// Adapted from https://github.com/nlordell/ethnum-rs
+// Adapted from https://github.com/nlordell/ethnum-rs/blob/c9ed57e131bffde7bcc8274f376e5becf62ef9ac/src/intrinsics/native/divmod.rs
 // Copyright (c) 2020 Nicholas Rodrigues Lordello
 // Licensed under the Apache License version 2.0
 //
@@ -656,6 +656,9 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
     // 1 <= sr <= N_UTWORD_BITS - 1
     var carry: u128 = 0;
 
+    const i128_max: i128 = 170141183460469231731687303715884105727;
+    const i128_min: i128 = -170141183460469231731687303715884105728;
+    const u128_max: u128 = 340282366920938463463374607431768211455;
     while (sr > 0) {
         // r:q = ((r:q)  << 1) | carry
         r.hi = (r.hi << 1) | (r.lo >> (N_UDWORD_BITS - 1));
@@ -682,16 +685,34 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         lo_overflowed = @subWithOverflow(u128, lo, 1, &lo);
         hi = hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
 
-        // TODO this U256 was originally created by:
+        // NOTE: this U256 was originally created by:
         //
         // ((hi as i128) >> 127).as_u256()
         //
-        // ...however, I can't figure out where that function is defined.
-        // Maybe it's defined using a macro or something. Anyway, hopefully
-        // this is what it would do in this scenario.
+        // As an implementation of `as_u256`, we wrap a negative value around to the maximum value of U256.
+
+        var hi_i128: i128 = undefined;
+        if (hi > i128_max) {
+            var overflowed_amount: u128 = hi - @intCast(u128, i128_max) - 1;
+            var overflowed_amount_i128 = @intCast(i128, overflowed_amount);
+            hi_i128 = i128_min + overflowed_amount_i128;
+        } else {
+            hi_i128 = @intCast(i128, hi);
+        }
+        var s_i128: i128 = math.shr(i128, hi_i128, 127);
+        var s_i128_abs = math.absInt(s_i128) catch unreachable;
+        var s_hi: u128 = undefined;
+        var s_lo: u128 = undefined;
+        if (s_i128 < 0) {
+            s_hi = u128_max;
+            s_lo = u128_max - @intCast(u128, (s_i128_abs - 1));
+        } else {
+            s_hi = 0;
+            s_lo = @intCast(u128, s_i128_abs);
+        }
         var s = .{
-            .hi = 0,
-            .lo = math.shr(u128, hi, 127),
+            .hi = s_hi,
+            .lo = s_lo,
         };
 
         carry = s.lo & 1;
@@ -1053,6 +1074,32 @@ test "div: 10 / 3" {
     var res: RocDec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(res, numer.div(denom));
+}
+
+test "div: 341 / 341" {
+    var number1: RocDec = RocDec.fromU64(341);
+    var number2: RocDec = RocDec.fromU64(341);
+    try expectEqual(RocDec.fromU64(1), number1.div(number2));
+}
+
+test "div: 342 / 343" {
+    var number1: RocDec = RocDec.fromU64(342);
+    var number2: RocDec = RocDec.fromU64(343);
+    var roc_str = RocStr.init("0.997084548104956268", 20);
+    try expectEqual(RocDec.fromStr(roc_str), number1.div(number2));
+}
+
+test "div: 680 / 340" {
+    var number1: RocDec = RocDec.fromU64(680);
+    var number2: RocDec = RocDec.fromU64(340);
+    try expectEqual(RocDec.fromU64(2), number1.div(number2));
+}
+
+test "div: 500 / 1000" {
+    var number1: RocDec = RocDec.fromU64(500);
+    var number2: RocDec = RocDec.fromU64(1000);
+    var roc_str = RocStr.init("0.5", 3);
+    try expectEqual(RocDec.fromStr(roc_str), number1.div(number2));
 }
 
 // exports
