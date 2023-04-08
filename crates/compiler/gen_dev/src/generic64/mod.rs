@@ -27,6 +27,14 @@ use storage::{RegStorage, StorageManager};
 
 // TODO: on all number functions double check and deal with over/underflow.
 
+#[derive(Debug, Clone, Copy)]
+pub enum RegisterWidth {
+    W8,
+    W16,
+    W32,
+    W64,
+}
+
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
     Sized + Copy
 {
@@ -390,6 +398,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     fn eq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -397,20 +406,25 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     fn neq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
     );
 
-    fn ilt_reg64_reg64_reg64(
+    fn signed_compare_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        operation: CompareOperation,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
     );
 
-    fn ult_reg64_reg64_reg64(
+    fn unsigned_compare_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        operation: CompareOperation,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -423,20 +437,6 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src2: FloatReg,
         width: FloatWidth,
         operation: CompareOperation,
-    );
-
-    fn igt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
-    );
-
-    fn ugt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
     );
 
     fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
@@ -1191,6 +1191,14 @@ impl<
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
         match *arg_layout {
             single_register_int_builtins!() | Layout::BOOL => {
+                let width = match *arg_layout {
+                    Layout::BOOL | Layout::I8 | Layout::U8 => RegisterWidth::W8,
+                    Layout::I16 | Layout::U16 => RegisterWidth::W16,
+                    Layout::U32 | Layout::I32 => RegisterWidth::W32,
+                    Layout::I64 | Layout::U64 => RegisterWidth::W64,
+                    _ => unreachable!(),
+                };
+
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1198,7 +1206,7 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                ASM::eq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
             Layout::STR => {
                 // use a zig call
@@ -1208,7 +1216,17 @@ impl<
                     &[*src1, *src2],
                     &[Layout::STR, Layout::STR],
                     &Layout::BOOL,
-                )
+                );
+
+                // mask the result; we pass booleans around as 64-bit values, but branch on 0x0 and 0x1.
+                // Zig gives back values where not all of the upper bits are zero, so we must clear them ourselves
+                let tmp = &Symbol::DEV_TMP;
+                let tmp_reg = self.storage_manager.claim_general_reg(&mut self.buf, tmp);
+                ASM::mov_reg64_imm64(&mut self.buf, tmp_reg, true as i64);
+
+                let width = RegisterWidth::W8; // we're comparing booleans
+                let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
+                ASM::eq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
             }
             x => todo!("NumEq: layout, {:?}", x),
         }
@@ -1217,6 +1235,14 @@ impl<
     fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
         match *arg_layout {
             single_register_int_builtins!() | Layout::BOOL => {
+                let width = match *arg_layout {
+                    Layout::BOOL | Layout::I8 | Layout::U8 => RegisterWidth::W8,
+                    Layout::I16 | Layout::U16 => RegisterWidth::W16,
+                    Layout::U32 | Layout::I32 => RegisterWidth::W32,
+                    Layout::I64 | Layout::U64 => RegisterWidth::W64,
+                    _ => unreachable!(),
+                };
+
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1224,7 +1250,7 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::neq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                ASM::neq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
             Layout::STR => {
                 self.build_fn_call(
@@ -1238,10 +1264,11 @@ impl<
                 // negate the result
                 let tmp = &Symbol::DEV_TMP;
                 let tmp_reg = self.storage_manager.claim_general_reg(&mut self.buf, tmp);
-                ASM::mov_reg64_imm64(&mut self.buf, tmp_reg, 164);
+                ASM::mov_reg64_imm64(&mut self.buf, tmp_reg, true as i64);
 
+                let width = RegisterWidth::W8; // we're comparing booleans
                 let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
-                ASM::neq_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, tmp_reg);
+                ASM::neq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
             }
             x => todo!("NumNeq: layout, {:?}", x),
         }
@@ -1280,7 +1307,14 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::ilt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                ASM::signed_compare_reg64(
+                    &mut self.buf,
+                    RegisterWidth::W64,
+                    CompareOperation::LessThan,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
             }
             Layout::Builtin(Builtin::Int(IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
@@ -1290,7 +1324,14 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::ult_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                ASM::unsigned_compare_reg64(
+                    &mut self.buf,
+                    RegisterWidth::W64,
+                    CompareOperation::LessThan,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
             }
             Layout::Builtin(Builtin::Float(width)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
@@ -1326,7 +1367,14 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::igt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                ASM::signed_compare_reg64(
+                    &mut self.buf,
+                    RegisterWidth::W64,
+                    CompareOperation::GreaterThan,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
             }
             Layout::Builtin(Builtin::Int(IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
@@ -1336,7 +1384,14 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::ugt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                ASM::unsigned_compare_reg64(
+                    &mut self.buf,
+                    RegisterWidth::W64,
+                    CompareOperation::GreaterThan,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
             }
             Layout::Builtin(Builtin::Float(width)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
