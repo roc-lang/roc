@@ -2216,7 +2216,13 @@ impl<
     }
 
     fn load_literal(&mut self, sym: &Symbol, layout: &InLayout<'a>, lit: &Literal<'a>) {
-        match (lit, self.layout_interner.get(*layout)) {
+        let layout = self.layout_interner.get(*layout);
+
+        if let Layout::LambdaSet(lambda_set) = layout {
+            return self.load_literal(sym, &lambda_set.runtime_representation(), lit);
+        }
+
+        match (lit, layout) {
             (
                 Literal::Int(x),
                 Layout::Builtin(Builtin::Int(
@@ -2369,6 +2375,9 @@ impl<
                             sym,
                             CC::GENERAL_RETURN_REGS[0],
                         );
+                    }
+                    Layout::LambdaSet(lambda_set) => {
+                        self.return_symbol(sym, &lambda_set.runtime_representation())
                     }
                     _ => {
                         internal_error!("All primitive values should fit in a single register");
