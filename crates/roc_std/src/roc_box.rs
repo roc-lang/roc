@@ -33,7 +33,7 @@ impl<T> RocBox<T> {
         let contents = unsafe {
             let contents_ptr = ptr.cast::<u8>().add(alignment).cast::<T>();
 
-            *contents_ptr = contents;
+            core::ptr::write(contents_ptr, contents);
 
             // We already verified that the original alloc pointer was non-null,
             // and this one is the alloc pointer with `alignment` bytes added to it,
@@ -42,6 +42,15 @@ impl<T> RocBox<T> {
         };
 
         Self { contents }
+    }
+
+    /// # Safety
+    ///
+    /// The box must be unique in order to leak it safely
+    pub unsafe fn leak(self) -> *mut T {
+        let ptr = self.contents.as_ptr() as *mut T;
+        core::mem::forget(self);
+        ptr
     }
 
     #[inline(always)]
@@ -107,6 +116,12 @@ where
         let other_contents = unsafe { other.contents.as_ref() };
 
         self_contents.cmp(other_contents)
+    }
+}
+
+impl<T: core::hash::Hash> core::hash::Hash for RocBox<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.contents.hash(state)
     }
 }
 

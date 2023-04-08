@@ -72,16 +72,20 @@ impl Types {
 
     pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
         let mut types = Vec::with_capacity(cap);
+        let mut sizes = Vec::with_capacity(cap);
+        let mut aligns = Vec::with_capacity(cap);
 
         types.push(RocType::Unit);
+        sizes.push(1);
+        aligns.push(1);
 
         Self {
             target: target_info,
             types,
+            sizes,
+            aligns,
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             entry_points: Vec::new(),
-            sizes: Vec::new(),
-            aligns: Vec::new(),
             deps: VecMap::with_capacity(cap),
         }
     }
@@ -542,14 +546,19 @@ impl Types {
             }
         }
 
+        debug_assert_eq!(self.types.len(), self.sizes.len());
+        debug_assert_eq!(self.types.len(), self.aligns.len());
+
         let id = TypeId(self.types.len());
 
         assert!(id.0 <= TypeId::MAX.0);
 
+        let size = interner.stack_size(layout);
+        let align = interner.alignment_bytes(layout);
+
         self.types.push(typ);
-        self.sizes
-            .push(interner.stack_size_without_alignment(layout));
-        self.aligns.push(interner.alignment_bytes(layout));
+        self.sizes.push(size);
+        self.aligns.push(align);
 
         id
     }
@@ -660,7 +669,7 @@ impl From<&Types> for roc_type::Types {
             deps,
             entrypoints,
             sizes: types.sizes.as_slice().into(),
-            types: types.types.iter().map(|t| t.into()).collect(),
+            types: types.types.iter().map(roc_type::RocType::from).collect(),
             typesByName: types_by_name,
             target: types.target.into(),
         }
@@ -1355,6 +1364,8 @@ fn add_function_type<'a>(
             .from_var(env.arena, closure_var, env.subs)
             .expect("Something weird ended up in the content");
 
+        // TODO this treats any lambda set as unsized. We should be able to figure out whether a
+        // lambda set is unsized in practice, and use the runtime representation otherwise.
         add_type_help(env, lambda_set_layout, closure_var, None, types)
     };
 
@@ -1920,7 +1931,7 @@ where
             RocStructFields::HasClosure { fields }
         }
         None => {
-            debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
+            // debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
 
             let fields: Vec<(String, TypeId)> = sortables
                 .into_iter()

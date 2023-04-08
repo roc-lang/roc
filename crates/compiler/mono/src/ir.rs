@@ -9612,6 +9612,9 @@ where
                 lambda_set_id = lambda_set_id.next();
 
                 stack.push(layout_interner.get(lambda_set.runtime_representation()));
+
+                // TODO: figure out if we need to look at the other layouts
+                // stack.push(layout_interner.get(lambda_set.ret));
             }
             Layout::RecursivePointer(_) => {
                 /* do nothing, we've already generated for this type through the Union(_) */

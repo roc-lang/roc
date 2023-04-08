@@ -1,0 +1,24 @@
+# +opt infer:print_only_under_alias
+app "test" provides [main] to "./platform"
+
+main =
+    Lazy a : {} -> a
+
+    after : Lazy a, (a -> Lazy b) -> Lazy b
+    after = \effect, map ->
+        thunk = \{} ->
+            when map (effect {}) is
+                b -> b {}
+        thunk
+
+    f = \_ -> \_ -> ""
+    g = \{ s1 } -> \_ -> s1
+
+    x : [True, False]
+
+    fun =
+        when x is
+            True -> after (\{} -> "") f
+            False -> after (\{} -> {s1: "s1"}) g
+    fun
+#   ^^^ {} -[[thunk(9) (({} -[[15]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13 Str]]-> Str)), thunk(9) (({} -[[14]]-> Str)) (Str -[[f(3)]]-> ({} -[[11]]-> Str))]]-> Str
