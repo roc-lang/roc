@@ -785,9 +785,22 @@ impl<
                     FloatWidth::F32 => todo!(),
                 },
                 Builtin::Bool => {
-                    // same as 8-bit integer
-                    let reg = self.load_to_general_reg(buf, sym);
-                    ASM::mov_base32_reg8(buf, to_offset, reg);
+                    // same as 8-bit integer, but we special-case true/false because these symbols
+                    // are thunks and literal values
+                    match *sym {
+                        Symbol::BOOL_FALSE => {
+                            let reg = self.claim_general_reg(buf, sym);
+                            ASM::mov_reg64_imm64(buf, reg, false as i64)
+                        }
+                        Symbol::BOOL_TRUE => {
+                            let reg = self.claim_general_reg(buf, sym);
+                            ASM::mov_reg64_imm64(buf, reg, true as i64)
+                        }
+                        _ => {
+                            let reg = self.load_to_general_reg(buf, sym);
+                            ASM::mov_base32_reg8(buf, to_offset, reg);
+                        }
+                    }
                 }
                 Builtin::Decimal => todo!(),
                 Builtin::Str | Builtin::List(_) => {
