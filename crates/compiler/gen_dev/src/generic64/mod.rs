@@ -1201,7 +1201,7 @@ impl<
                 ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
             Layout::STR => {
-                // use a zig call
+                // use a zig call. This is a bit weird because the dev backend does not handle
                 self.build_fn_call(
                     dst,
                     bitcode::STR_EQUAL.to_string(),

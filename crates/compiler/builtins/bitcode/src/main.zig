@@ -141,6 +141,7 @@ comptime {
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strEqual, "equal");
+    exportStrFn(str.strEqualU64, "equalU64");
     exportStrFn(str.substringUnsafe, "substring_unsafe");
     exportStrFn(str.getUnsafe, "get_unsafe");
     exportStrFn(str.reserve, "reserve");

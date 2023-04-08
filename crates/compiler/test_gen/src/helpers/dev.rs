@@ -210,7 +210,7 @@ pub fn helper(
     let builtins_host_tempfile =
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
-    if false {
+    if true {
         std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
     }
 

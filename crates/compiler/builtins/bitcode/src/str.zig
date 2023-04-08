@@ -571,6 +571,16 @@ pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
     return self.eq(other);
 }
 
+// Str.equalU64
+pub fn strEqualU64(self: RocStr, other: RocStr) callconv(.C) u64 {
+    // required by the dev backend, which does not currently correctly handle C functions returning bools
+    if (strEqual(self, other)) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
 // Str.numberOfBytes
 pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
