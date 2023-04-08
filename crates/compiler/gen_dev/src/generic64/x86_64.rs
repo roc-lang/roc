@@ -1559,7 +1559,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        dbg!(register_width);
         cmp_reg64_reg64(buf, register_width, src1, src2);
         sete_reg64(buf, dst);
     }
@@ -1572,7 +1571,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        dbg!(register_width);
         cmp_reg64_reg64(buf, register_width, src1, src2);
         setne_reg64(buf, dst);
     }

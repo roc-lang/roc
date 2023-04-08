@@ -1131,6 +1131,9 @@ trait Backend<'a> {
         ret_layout: &InLayout<'a>,
     );
 
+    /// Move a returned value into `dst`
+    fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
+
     /// build_num_abs stores the absolute value of src into dst.
     fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>);
 

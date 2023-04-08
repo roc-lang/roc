@@ -769,6 +769,10 @@ impl<
         // Call function and generate reloc.
         ASM::call(&mut self.buf, &mut self.relocs, fn_name);
 
+        self.move_return_value(dst, ret_layout)
+    }
+
+    fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>) {
         // move return value to dst.
         match *ret_layout {
             single_register_integers!() => {
@@ -785,6 +789,9 @@ impl<
                     Layout::Boxed(_) => {
                         let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                         ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
+                    }
+                    Layout::LambdaSet(lambda_set) => {
+                        self.move_return_value(dst, &lambda_set.runtime_representation())
                     }
                     _ => {
                         CC::load_returned_complex_symbol(
