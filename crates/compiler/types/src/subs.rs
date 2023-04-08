@@ -3503,9 +3503,8 @@ fn occurs(
     } else if subs.get_mark_unchecked(root_var) == Mark::VISITED_IN_OCCURS_CHECK {
         Ok(())
     } else {
-        ctx.all_visited.push(root_var);
-        subs.set_mark_unchecked(root_var, Mark::VISITED_IN_OCCURS_CHECK);
         ctx.seen.push(root_var);
+        ctx.all_visited.push(root_var);
         let result = (|| match subs.get_content_without_compacting(root_var) {
             FlexVar(_)
             | RigidVar(_)
@@ -3584,6 +3583,12 @@ fn occurs(
             }
             RangedNumber(_range_vars) => Ok(()),
         })();
+
+        // Cache the variable's property of having no cycle, but only if it indeed has no cycle.
+        if result.is_ok() {
+            subs.set_mark_unchecked(root_var, Mark::VISITED_IN_OCCURS_CHECK);
+        }
+
         ctx.seen.pop();
         result
     }
