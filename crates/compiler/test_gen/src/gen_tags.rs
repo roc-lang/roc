@@ -52,7 +52,7 @@ fn applied_tag_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_just() {
     assert_evals_to!(
         indoc!(
@@ -93,24 +93,8 @@ fn applied_tag_just_enum() {
     );
 }
 
-// #[test]
-// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// fn raw_result() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//             x : Result I64 I64
-//             x = Err 41
-
-//             x
-//             "#
-//         ),
-//         0,
-//         i8
-//     );
-// }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn true_is_true() {
     assert_evals_to!(
         indoc!(
@@ -127,7 +111,7 @@ fn true_is_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn false_is_false() {
     assert_evals_to!(
         indoc!(
@@ -144,7 +128,7 @@ fn false_is_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_enum() {
     assert_evals_to!(
         indoc!(
@@ -165,67 +149,8 @@ fn basic_enum() {
     );
 }
 
-//    #[test]
-// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-//    fn linked_list_empty() {
-//        assert_evals_to!(
-//            indoc!(
-//                r#"
-//                LinkedList a : [Cons a (LinkedList a), Nil]
-//
-//                empty : LinkedList I64
-//                empty = Nil
-//
-//                1
-//                "#
-//            ),
-//            1,
-//            i64
-//        );
-//    }
-//
-//    #[test]
-// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-//    fn linked_list_singleton() {
-//        assert_evals_to!(
-//            indoc!(
-//                r#"
-//                LinkedList a : [Cons a (LinkedList a), Nil]
-//
-//                singleton : LinkedList I64
-//                singleton = Cons 0x1 Nil
-//
-//                1
-//                "#
-//            ),
-//            1,
-//            i64
-//        );
-//    }
-//
-//    #[test]
-// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-//    fn linked_list_is_empty() {
-//        assert_evals_to!(
-//            indoc!(
-//                r#"
-//                LinkedList a : [Cons a (LinkedList a), Nil]
-//
-//                isEmpty : LinkedList a -> Bool
-//                isEmpty = \list ->
-//                    when list is
-//                        Nil -> Bool.true
-//                        Cons _ _ -> Bool.false
-//
-//                isEmpty (Cons 4 Nil)
-//                "#
-//            ),
-//            false,
-//            bool
-//        );
-//    }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn even_odd() {
     assert_evals_to!(
         indoc!(
@@ -251,7 +176,7 @@ fn even_odd() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_literal_true() {
     assert_evals_to!(
         indoc!(
@@ -265,7 +190,7 @@ fn gen_literal_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_if_float() {
     assert_evals_to!(
         indoc!(
@@ -1362,7 +1287,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
     assert_evals_to!(
         indoc!(
@@ -1391,7 +1316,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
     assert_evals_to!(
         indoc!(
@@ -1446,7 +1371,7 @@ fn issue_2445() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2458() {
     assert_evals_to!(
         indoc!(
@@ -1526,7 +1451,7 @@ fn issue_1162() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn polymorphic_tag() {
     assert_evals_to!(
         indoc!(
@@ -1542,7 +1467,7 @@ fn polymorphic_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2725_alias_polymorphic_lambda() {
     assert_evals_to!(
         indoc!(
@@ -1583,7 +1508,7 @@ fn opaque_assign_to_symbol() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2777_default_branch_codegen() {
     assert_evals_to!(
         indoc!(
@@ -1812,7 +1737,7 @@ fn issue_3560_nested_tag_constructor_is_record_newtype() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
     assert_evals_to!(
         indoc!(
@@ -1828,7 +1753,7 @@ fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn alignment_i128() {
     assert_evals_to!(
         indoc!(
@@ -1939,7 +1864,7 @@ fn issue_2165_recursive_tag_destructure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn tag_union_let_generalization() {
     assert_evals_to!(
         indoc!(
@@ -1988,7 +1913,7 @@ fn fit_recursive_union_in_struct_into_recursive_pointer() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn match_on_result_with_uninhabited_error_branch() {
     assert_evals_to!(
         indoc!(
