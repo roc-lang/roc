@@ -20,6 +20,22 @@ static mut ARENA_PTR: *mut u8 = std::ptr::null_mut();
 
 pub struct RocGlobalAlloc;
 
+#[cfg(unix)]
+fn get_page_size() -> usize {
+    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+}
+
+#[cfg(windows)]
+fn get_page_size() -> usize {
+    let mut system_info = std::mem::MaybeUninit::uninit();
+
+    unsafe {
+        winapi::um::sysinfoapi::GetSystemInfo(system_info.as_mut_ptr());
+
+        system_info.assume_init().dwPageSize as usize
+    }
+}
+
 impl RocGlobalAlloc {
     /// # Safety
     /// This function is not thread-safe! Only call it when you are sure nothing else is potentially changing bump mode
@@ -27,21 +43,36 @@ impl RocGlobalAlloc {
     pub unsafe fn enable_bump_mode() {
         // The arena has never been initialized, so mmap it.
         if ARENA_PTR.is_null() {
-            // mmap requires that the requested size be a multiple of page size.
-            let page_size = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+            let page_size = get_page_size();
             let bytes_to_mmap = ARENA_CAPACITY + (ARENA_CAPACITY % page_size);
 
-            ARENA_PTR = libc::mmap(
-                std::ptr::null_mut(),
-                bytes_to_mmap,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            ) as *mut u8;
+            #[cfg(unix)]
+            {
+                ARENA_PTR = libc::mmap(
+                    std::ptr::null_mut(),
+                    bytes_to_mmap,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                ) as *mut u8;
+            }
 
-            if ARENA_PTR.cast() == libc::MAP_FAILED {
-                panic!("`mmap` failed when trying to initialize the global bump arena");
+            #[cfg(windows)]
+            {
+                use winapi::um::memoryapi::VirtualAlloc;
+                use winapi::um::winnt::{MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE};
+
+                ARENA_PTR = VirtualAlloc(
+                    std::ptr::null_mut(),
+                    bytes_to_mmap,
+                    MEM_COMMIT | MEM_RESERVE,
+                    PAGE_READWRITE,
+                ) as *mut u8;
+            }
+
+            if ARENA_PTR.is_null() {
+                panic!("Memory mapping failed when trying to initialize the global bump arena");
             }
         }
 

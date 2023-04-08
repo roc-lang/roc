@@ -3270,6 +3270,7 @@ dependencies = [
  "target-lexicon",
  "tempfile",
  "ven_pretty",
+ "winapi",
 ]
 
 [[package]]

@@ -81,6 +81,8 @@ tempfile.workspace = true
 [target.'cfg(not(windows))'.dependencies]
 roc_repl_expect = { path = "../repl_expect" }
 
+[target.'cfg(windows)'.dependencies]
+winapi = "0.3"
 
 [dev-dependencies]
 cli_utils = { path = "../cli_utils" }
