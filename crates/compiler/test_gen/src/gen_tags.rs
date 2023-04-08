@@ -632,7 +632,7 @@ fn if_guard_switch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_pattern_true() {
     assert_evals_to!(
         indoc!(
