@@ -656,9 +656,6 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
     // 1 <= sr <= N_UTWORD_BITS - 1
     var carry: u128 = 0;
 
-    const i128_max: i128 = 170141183460469231731687303715884105727;
-    const i128_min: i128 = -170141183460469231731687303715884105728;
-    const u128_max: u128 = 340282366920938463463374607431768211455;
     while (sr > 0) {
         // r:q = ((r:q)  << 1) | carry
         r.hi = (r.hi << 1) | (r.lo >> (N_UDWORD_BITS - 1));
@@ -691,24 +688,15 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         //
         // As an implementation of `as_u256`, we wrap a negative value around to the maximum value of U256.
 
-        var hi_i128: i128 = undefined;
-        if (hi > i128_max) {
-            var overflowed_amount: u128 = hi - @intCast(u128, i128_max) - 1;
-            var overflowed_amount_i128 = @intCast(i128, overflowed_amount);
-            hi_i128 = i128_min + overflowed_amount_i128;
-        } else {
-            hi_i128 = @intCast(i128, hi);
-        }
-        var s_i128: i128 = math.shr(i128, hi_i128, 127);
-        var s_i128_abs = math.absInt(s_i128) catch unreachable;
+        var s_u128 = math.shr(u128, hi, 127);
         var s_hi: u128 = undefined;
         var s_lo: u128 = undefined;
-        if (s_i128 < 0) {
-            s_hi = u128_max;
-            s_lo = u128_max - @intCast(u128, (s_i128_abs - 1));
+        if (s_u128 == 1) {
+            s_hi = math.maxInt(u128);
+            s_lo = math.maxInt(u128) - 2;
         } else {
             s_hi = 0;
-            s_lo = @intCast(u128, s_i128_abs);
+            s_lo = s_u128;
         }
         var s = .{
             .hi = s_hi,
