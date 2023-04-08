@@ -11,7 +11,7 @@ use crate::helpers::wasm::assert_evals_to;
 use indoc::indoc;
 
 use roc_mono::layout::STLayoutInterner;
-#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+#[cfg(test)]
 use roc_std::{RocList, RocStr, U128};
 
 #[test]
@@ -480,7 +480,7 @@ fn nested_pattern_match() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_vanilla() {
     assert_evals_to!(
         indoc!(
@@ -496,7 +496,7 @@ fn if_guard_vanilla() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_single_value_tag() {
     assert_evals_to!(
         indoc!(
@@ -512,7 +512,7 @@ fn when_on_single_value_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_multiple() {
     assert_evals_to!(
         indoc!(
@@ -533,7 +533,7 @@ fn if_guard_multiple() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_constructor_switch() {
     assert_evals_to!(
         indoc!(
@@ -577,7 +577,7 @@ fn if_guard_constructor_switch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_constructor_chain() {
     assert_evals_to!(
         indoc!(
@@ -594,7 +594,7 @@ fn if_guard_constructor_chain() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_pattern_false() {
     assert_evals_to!(
         indoc!(
@@ -613,7 +613,7 @@ fn if_guard_pattern_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_switch() {
     assert_evals_to!(
         indoc!(
@@ -651,7 +651,7 @@ fn if_guard_pattern_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_exhaustiveness() {
     assert_evals_to!(
         indoc!(
@@ -670,7 +670,7 @@ fn if_guard_exhaustiveness() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_enum() {
     assert_evals_to!(
         indoc!(
@@ -692,7 +692,7 @@ fn when_on_enum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pattern_matching_unit() {
     assert_evals_to!(
         indoc!(
@@ -751,7 +751,7 @@ fn pattern_matching_unit() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn one_element_tag() {
     assert_evals_to!(
         indoc!(
@@ -768,7 +768,7 @@ fn one_element_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_tag_union() {
     assert_evals_to!(
         indoc!(
@@ -789,7 +789,7 @@ fn nested_tag_union() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn unit_type() {
     assert_evals_to!(
         indoc!(
@@ -808,7 +808,7 @@ fn unit_type() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn join_point_if() {
     assert_evals_to!(
         indoc!(
