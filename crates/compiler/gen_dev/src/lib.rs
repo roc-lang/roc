@@ -213,6 +213,7 @@ trait Backend<'a> {
                 self.free_symbols(stmt);
             }
             Stmt::Jump(id, args) => {
+                self.load_literal_symbols(args);
                 let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
                     bumpalo::vec![in self.env().arena];
                 arg_layouts.reserve(args.len());

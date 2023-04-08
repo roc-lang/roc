@@ -825,7 +825,7 @@ fn join_point_if() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn join_point_when() {
     assert_evals_to!(
         indoc!(

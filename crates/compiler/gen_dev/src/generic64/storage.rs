@@ -1166,9 +1166,9 @@ impl<
             Some(storages) => storages,
             None => internal_error!("Jump: unknown point specified to jump to: {:?}", id),
         };
-        for ((sym, layout), wanted_storage) in
-            args.iter().zip(arg_layouts).zip(param_storage.iter())
-        {
+
+        let it = args.iter().zip(arg_layouts).zip(param_storage.iter());
+        for ((sym, layout), wanted_storage) in it {
             // Note: it is possible that the storage we want to move to is in use by one of the args we want to pass.
             if self.get_storage_for_sym(sym) == wanted_storage {
                 continue;
