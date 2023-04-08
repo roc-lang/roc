@@ -1794,36 +1794,40 @@ fn solve(
                 ) {
                     // List U8 always valid.
                     subs.rollback_to(snapshot);
-                    return state;
-                }
-                subs.rollback_to(snapshot);
+                    state
+                } else {
+                    subs.rollback_to(snapshot);
 
-                let snapshot = subs.snapshot();
-                // We explicitly match on the last unify to get the type in the case it errors.
-                match unify(
-                    &mut UEnv::new(subs),
-                    actual,
-                    Variable::STR,
-                    Mode::EQ,
-                    Polarity::OF_VALUE,
-                ) {
-                    Success { .. } => {
-                        // Str only valid if valid utf8.
-                        if let Err(err) = std::str::from_utf8(bytes) {
-                            let problem = TypeError::IngestedFileBadUtf8(file_path.clone(), err);
-                            problems.push(problem);
+                    let snapshot = subs.snapshot();
+                    // We explicitly match on the last unify to get the type in the case it errors.
+                    match unify(
+                        &mut UEnv::new(subs),
+                        actual,
+                        Variable::STR,
+                        Mode::EQ,
+                        Polarity::OF_VALUE,
+                    ) {
+                        Success { .. } => {
+                            // Str only valid if valid utf8.
+                            if let Err(err) = std::str::from_utf8(bytes) {
+                                let problem =
+                                    TypeError::IngestedFileBadUtf8(file_path.clone(), err);
+                                problems.push(problem);
+                            }
+
+                            subs.rollback_to(snapshot);
+                            state
                         }
+                        Failure(_, actual_type, _, _) => {
+                            subs.rollback_to(snapshot);
 
-                        subs.rollback_to(snapshot);
-                        state
-                    }
-                    Failure(_, actual_type, _, _) => {
-                        subs.rollback_to(snapshot);
-
-                        let problem =
-                            TypeError::IngestedFileUnsupportedType(file_path.clone(), actual_type);
-                        problems.push(problem);
-                        state
+                            let problem = TypeError::IngestedFileUnsupportedType(
+                                file_path.clone(),
+                                actual_type,
+                            );
+                            problems.push(problem);
+                            state
+                        }
                     }
                 }
             }
