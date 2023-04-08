@@ -3505,7 +3505,7 @@ fn occurs(
     } else {
         ctx.seen.push(root_var);
         ctx.all_visited.push(root_var);
-        let result = (|| match subs.get_content_without_compacting(root_var) {
+        let result = (|| match subs.get_content_unchecked(root_var) {
             FlexVar(_)
             | RigidVar(_)
             | FlexAbleVar(_, _)
