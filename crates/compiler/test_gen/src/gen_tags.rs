@@ -1056,7 +1056,7 @@ fn phantom_polymorphic_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn result_never() {
     assert_evals_to!(
         indoc!(
@@ -1232,7 +1232,7 @@ fn recursive_tag_union_into_flat_tag_union() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
@@ -1249,7 +1249,7 @@ fn monomorphized_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn monomorphized_applied_tag() {
     assert_evals_to!(
         indoc!(
@@ -1337,7 +1337,7 @@ fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
     assert_evals_to!(
         indoc!(
