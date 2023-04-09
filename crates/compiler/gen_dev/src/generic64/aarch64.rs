@@ -2075,17 +2075,8 @@ fn madd_reg64_reg64_reg64_reg64(
 /// `MOV Xd, Xm` -> Move Xm to Xd.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
-    // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    let inst = LogicalShiftedRegister::new(LogicalShiftedRegisterParams {
-        op: LogicalOp::ORR,
-        shift: ShiftType::LSL,
-        imm6: 0,
-        rm: src,
-        rn: AArch64GeneralReg::ZRSP,
-        rd: dst,
-    });
-
-    buf.extend(inst.bytes());
+    // MOV is equivalent to `ORR Xd, XZR, Xm` in AARCH64.
+    orr_reg64_reg64_reg64(buf, dst, AArch64GeneralReg::ZRSP, src);
 }
 
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
