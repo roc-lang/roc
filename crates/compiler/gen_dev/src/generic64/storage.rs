@@ -554,7 +554,10 @@ impl<
                     let field_size = layout_interner.stack_size(*layout);
                     data_offset += field_size as i32;
                 }
-                debug_assert!(data_offset < base_offset + size as i32);
+
+                // check that the record completely contains the field
+                debug_assert!(data_offset <= base_offset + size as i32,);
+
                 let layout = field_layouts[index as usize];
                 let size = layout_interner.stack_size(layout);
                 self.allocation_map.insert(*sym, owned_data);
