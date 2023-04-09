@@ -2007,17 +2007,21 @@ impl<'a> Expr<'a> {
             Reset {
                 symbol,
                 update_mode,
-            } => alloc.text(format!(
-                "Reset {{ symbol: {:?}, id: {} }}",
-                symbol, update_mode.id
-            )),
+            } => alloc
+                .text("Reset { symbol: ")
+                .append(symbol_to_doc(alloc, *symbol, pretty))
+                .append(", id: ")
+                .append(format!("{:?}", update_mode))
+                .append(" }"),
             ResetRef {
                 symbol,
                 update_mode,
-            } => alloc.text(format!(
-                "ResetRef {{ symbol: {:?}, id: {} }}",
-                symbol, update_mode.id
-            )),
+            } => alloc
+                .text("ResetRef { symbol: ")
+                .append(symbol_to_doc(alloc, *symbol, pretty))
+                .append(", id: ")
+                .append(format!("{:?}", update_mode))
+                .append(" }"),
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
