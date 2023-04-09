@@ -1,6 +1,6 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.File.{ File }, pf.TypeId.{ TypeId }]
+    imports [pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId }]
     provides [makeGlue] to pf
 
 makeGlue : List Types -> Result (List File) Str
@@ -8,7 +8,7 @@ makeGlue = \typesByArch ->
     modFileContent =
         List.walk typesByArch "" \content, types ->
             arch = (Types.target types).architecture
-            archStr = archName arch 
+            archStr = archName arch
 
             Str.concat
                 content
@@ -17,7 +17,7 @@ makeGlue = \typesByArch ->
                 mod \(archStr);
                 #[cfg(target_arch = "\(archStr)")]
                 pub use \(archStr)::*;
-                
+
                 """
 
     typesByArch
@@ -41,7 +41,7 @@ convertTypesToFile = \types ->
 
                 TagUnion (NonRecursive { name, tags, discriminantSize, discriminantOffset }) ->
                     if !(List.isEmpty tags) then
-                        generateNonRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset None
+                        generateNonRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset
                     else
                         buf
 
@@ -61,11 +61,13 @@ convertTypesToFile = \types ->
                     generateSingleTagStruct buf types name tagName payload
 
                 TagUnion (NonNullableUnwrapped { name, tagName, payload }) ->
-                    generateRecursiveTagUnion buf types id name [{ name: tagName, payload: Some payload }] 0 0 None
+                    generateNonNullableUnwrapped buf types name tagName payload 0 0 None
 
-                Function _ ->
-                    # TODO: actually generate glue functions.
-                    buf
+                Function rocFn ->
+                    if rocFn.isToplevel then
+                        buf
+                    else
+                        generateFunction buf types rocFn
 
                 RecursivePointer _ ->
                     # This is recursively pointing to a type that should already have been added,
@@ -88,12 +90,144 @@ convertTypesToFile = \types ->
                     buf
 
     arch = (Types.target types).architecture
-    archStr = archName arch 
+    archStr = archName arch
 
     {
         name: "\(archStr).rs",
-        content,
+        content: content |> generateEntryPoints types,
     }
+
+generateEntryPoints : Str, Types -> Str
+generateEntryPoints = \buf, types ->
+    List.walk (Types.entryPoints types) buf \accum, T name id -> generateEntryPoint accum types name id
+
+generateEntryPoint : Str, Types, Str, TypeId -> Str
+generateEntryPoint = \buf, types, name, id ->
+    publicSignature =
+        when Types.shape types id is
+            Function rocFn ->
+                arguments =
+                    rocFn.args
+                    |> List.mapWithIndex \argId, i ->
+                        type = typeName types argId
+                        c = Num.toStr i
+                        "arg\(c): \(type)"
+                    |> Str.joinWith ", "
+
+                ret = typeName types rocFn.ret
+
+                "(\(arguments)) -> \(ret)"
+
+            _ ->
+                ret = typeName types id
+                "() -> \(ret)"
+
+    externSignature =
+        when Types.shape types id is
+            Function rocFn ->
+                arguments =
+                    rocFn.args
+                    |> List.map \argId ->
+                        type = typeName types argId
+                        "_: \(type)"
+                    |> Str.joinWith ", "
+
+                ret = typeName types rocFn.ret
+                "(_: *mut \(ret), \(arguments))"
+
+            _ ->
+                ret = typeName types id
+                "(_: *mut \(ret))"
+
+    externArguments =
+        when Types.shape types id is
+            Function rocFn ->
+                rocFn.args
+                |> List.mapWithIndex \_, i ->
+                    c = Num.toStr i
+                    "arg\(c)"
+                |> Str.joinWith ", "
+
+            _ ->
+                ""
+
+    """
+    \(buf)
+
+    pub fn \(name)\(publicSignature) {
+        extern "C" {
+            fn roc__\(name)_1_exposed_generic\(externSignature);
+        }
+
+        let mut ret = std::mem::MaybeUninit::uninit();
+
+        unsafe { roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments)) };
+
+        unsafe { ret.assume_init() }
+    }
+    """
+
+generateFunction : Str, Types, RocFn -> Str
+generateFunction = \buf, types, rocFn ->
+    name = rocFn.functionName
+    externName = rocFn.externName
+
+    lambdaSet = typeName types rocFn.lambdaSet
+
+    publicArguments =
+        rocFn.args
+        |> List.mapWithIndex \argId, i ->
+            type = typeName types argId
+            c = Num.toStr i
+            "arg\(c): \(type)"
+        |> Str.joinWith ", "
+
+    externDefArguments =
+        rocFn.args
+        |> List.mapWithIndex \argId, i ->
+            type = typeName types argId
+            c = Num.toStr i
+            "arg\(c): *const \(type)"
+        |> Str.joinWith ", "
+
+    externCallArguments =
+        rocFn.args
+        |> List.mapWithIndex \_, i ->
+            c = Num.toStr i
+            "&arg\(c)"
+        |> Str.joinWith ", "
+
+    externComma = if Str.isEmpty publicArguments then "" else ", "
+
+    ret = typeName types rocFn.ret
+
+    """
+    \(buf)
+
+    #[repr(C)]
+    #[derive(Debug, Clone)]
+    pub struct \(name) {
+        closure_data: \(lambdaSet),
+    }
+
+    impl \(name) {
+        pub fn force_thunk(mut self, \(publicArguments)) -> \(ret) {
+            extern "C" {
+                fn \(externName)(\(externDefArguments)\(externComma) closure_data: *mut u8, output: *mut \(ret));
+            }
+
+            let mut output = std::mem::MaybeUninit::uninit();
+            let ptr = &mut self.closure_data as *mut _ as *mut u8;
+
+            unsafe { \(externName)(\(externCallArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
+
+            // ownership of the closure is transferred back to roc
+            core::mem::forget(self.closure_data);
+
+            unsafe { output.assume_init() }
+        }
+    }
+    """
 
 generateStruct : Str, Types, TypeId, _, _, _ -> Str
 generateStruct = \buf, types, id, name, structFields, visibility ->
@@ -125,8 +259,9 @@ generateStructFields = \buf, types, visibility, structFields ->
     when structFields is
         HasNoClosure fields ->
             List.walk fields buf (generateStructFieldWithoutClosure types visibility)
-        HasClosure _ ->
-            Str.concat buf "// TODO: Struct fields with closures"
+
+        HasClosure fields ->
+            List.walk fields buf (generateStructFieldWithoutClosure types visibility)
 
 generateStructFieldWithoutClosure = \types, visibility ->
     \accum, { name: fieldName, id } ->
@@ -147,6 +282,7 @@ nameTagUnionPayloadFields = \payloadFields ->
         HasNoClosure fields ->
             renamedFields = List.map fields \{ name, id } -> { name: "f\(name)", id }
             HasNoClosure renamedFields
+
         HasClosure fields ->
             renamedFields = List.map fields \{ name, id, accessors } -> { name: "f\(name)", id, accessors }
             HasClosure renamedFields
@@ -169,7 +305,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
         impl core::fmt::Debug for \(escapedName) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
-        
+
         """
     |> \b -> List.walk tags b (generateEnumTagsDebug name)
     |> Str.concat "\(indent)\(indent)}\n\(indent)}\n}\n\n"
@@ -183,24 +319,311 @@ generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
-generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, discriminantOffset, _nullTagIndex ->
+deriveCloneTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveCloneTagUnion = \buf, tagUnionType, tags ->
+    clones =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => union_\(tagUnionType) {
+                                \(tagName): self.payload.\(tagName).clone(),
+                            },
+            """
+
+    """
+    \(buf)
+
+    impl Clone for \(tagUnionType) {
+        fn clone(&self) -> Self {
+            use discriminant_\(tagUnionType)::*;
+
+            let payload = unsafe {
+                match self.discriminant {\(clones)
+                }
+            };
+
+            Self {
+                discriminant: self.discriminant,
+                payload,
+            }
+        }
+    }
+    """
+
+deriveDebugTagUnion : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName, payload } ->
+            type =
+                when payload is
+                    Some id -> typeName types id
+                    None -> "()"
+
+            """
+            \(accum)
+                            \(tagName) => {
+                                let field: &\(type) = &self.payload.\(tagName);
+                                f.debug_tuple("\(tagUnionType)::\(tagName)").field(field).finish()
+                            },
+            """
+
+    """
+    \(buf)
+
+    impl core::fmt::Debug for \(tagUnionType) {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            use discriminant_\(tagUnionType)::*;
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
+deriveEqTagUnion : Str, Str -> Str
+deriveEqTagUnion = \buf, tagUnionType ->
+    """
+    \(buf)
+
+    impl Eq for \(tagUnionType) {}
+    """
+
+derivePartialEqTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+derivePartialEqTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => self.payload.\(tagName) == other.payload.\(tagName),
+            """
+
+    """
+    \(buf)
+
+    impl PartialEq for \(tagUnionType) {
+        fn eq(&self, other: &Self) -> bool {
+            use discriminant_\(tagUnionType)::*;
+
+            if self.discriminant != other.discriminant {
+                return false;
+            }
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
+deriveOrdTagUnion : Str, Str -> Str
+deriveOrdTagUnion = \buf, tagUnionType ->
+    """
+    \(buf)
+
+    impl Ord for \(tagUnionType) {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.partial_cmp(other).unwrap()
+        }
+    }
+    """
+
+derivePartialOrdTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+derivePartialOrdTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                                \(tagName) => self.payload.\(tagName).partial_cmp(&other.payload.\(tagName)),
+            """
+
+    """
+    \(buf)
+
+    impl PartialOrd for \(tagUnionType) {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            use discriminant_\(tagUnionType)::*;
+
+            use std::cmp::Ordering::*;
+
+            match self.discriminant.cmp(&other.discriminant) {
+                Less => Option::Some(Less),
+                Greater => Option::Some(Greater),
+                Equal => unsafe {
+                    match self.discriminant {\(checks)
+                    }
+                },
+            }
+        }
+    }
+    """
+
+deriveHashTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveHashTagUnion = \buf, tagUnionType, tags ->
+    checks =
+        List.walk tags "" \accum, { name: tagName } ->
+            """
+            \(accum)
+                            \(tagName) => self.payload.\(tagName).hash(state),
+            """
+
+    """
+    \(buf)
+
+    impl core::hash::Hash for \(tagUnionType) {
+        fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+            use discriminant_\(tagUnionType)::*;
+
+            unsafe {
+                match self.discriminant {\(checks)
+                }
+            }
+        }
+    }
+    """
+
+generateConstructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+generateConstructorFunctions = \buf, types, tagUnionType, tags ->
+    buf
+    |> Str.concat "\n\nimpl \(tagUnionType) {"
+    |> \b -> List.walk tags b \accum, r -> generateConstructorFunction accum types tagUnionType r.name r.payload
+    |> Str.concat "\n}\n\n"
+
+generateConstructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
+generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
+    when optPayload is
+        None ->
+            """
+            \(buf)
+
+                pub fn \(name)() -> Self {
+                    Self {
+                        discriminant: discriminant_\(tagUnionType)::\(name),
+                        payload: union_\(tagUnionType) {
+                            \(name): (),
+                        }
+                    }
+                }
+            """
+
+        Some payloadId ->
+            payloadType = typeName types payloadId
+            shape = Types.shape types payloadId
+
+            new =
+                if canDeriveCopy types shape then
+                    "payload"
+                else
+                    "core::mem::ManuallyDrop::new(payload)"
+
+            """
+            \(buf)
+
+                pub fn \(name)(payload: \(payloadType)) -> Self {
+                    Self {
+                        discriminant: discriminant_\(tagUnionType)::\(name),
+                        payload: union_\(tagUnionType) {
+                            \(name): \(new),
+                        }
+                    }
+                }
+            """
+
+generateDestructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+generateDestructorFunctions = \buf, types, tagUnionType, tags ->
+    buf
+    |> Str.concat "\n\nimpl \(tagUnionType) {"
+    |> \b -> List.walk tags b \accum, r -> generateDestructorFunction accum types tagUnionType r.name r.payload
+    |> Str.concat "\n}\n\n"
+
+generateDestructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
+generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
+    when optPayload is
+        None ->
+            """
+            \(buf)
+
+                pub fn is_\(name)(&self) -> bool {
+                    matches!(self.discriminant, discriminant_\(tagUnionType)::\(name))
+                }
+            """
+
+        Some payloadId ->
+            payloadType = typeName types payloadId
+            shape = Types.shape types payloadId
+
+            take =
+                if canDeriveCopy types shape then
+                    "unsafe { self.payload.\(name) }"
+                else
+                    "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }"
+
+            """
+            \(buf)
+
+                pub fn unwrap_\(name)(mut self) -> \(payloadType) {
+                    debug_assert_eq!(self.discriminant, discriminant_\(tagUnionType)::\(name));
+                    \(take)
+                }
+
+                pub fn is_\(name)(&self) -> bool {
+                    matches!(self.discriminant, discriminant_\(tagUnionType)::\(name))
+                }
+            """
+
+generateNonRecursiveTagUnion : Str, Types, TypeId, Str, List { name : Str, payload : [Some TypeId, None] }, U32, U32 -> Str
+generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, discriminantOffset ->
     escapedName = escapeKW name
     discriminantName = "discriminant_\(escapedName)"
+    unionName = "union_\(escapedName)"
     discriminantOffsetStr = Num.toStr discriminantOffset
     tagNames = List.map tags \{ name: n } -> n
-    # self = "self"
     selfMut = "self"
-    # other = "other"
-    unionName = escapedName
+
+    max = \a, b -> if a >= b then a else b
+
+    alignOfUnion =
+        List.walk tags 1 \accum, { payload } ->
+            when payload is
+                Some payloadId -> max accum (Types.alignment types payloadId)
+                None -> accum
+
+    alignOfUnionStr = Num.toStr alignOfUnion
+
+    sizeOfUnionStr =
+        List.walk tags 1 \accum, { payload } ->
+            when payload is
+                Some payloadId -> max accum (Types.size types payloadId)
+                None -> accum
+        |> nextMultipleOf alignOfUnion
+        |> Num.toStr
+
+    sizeOfSelf = Num.toStr (Types.size types id)
+    alignOfSelf = Num.toStr (Types.alignment types id)
+
+    # TODO: this value can be different than the alignment of `id`
+    align =
+        List.walk tags 1 \accum, { payload } ->
+            when payload is
+                Some payloadId -> max accum (Types.alignment types payloadId)
+                None -> accum
+        |> Num.toStr
 
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
-    |> Str.concat "#[repr(C)]\npub union \(unionName) {\n"
+    |> Str.concat "#[repr(C, align(\(align)))]\npub union \(unionName) {\n"
     |> \b -> List.walk tags b (generateUnionField types)
-    |> generateTagUnionSizer types id tags
     |> Str.concat
         """
         }
+
+        const _SIZE_CHECK_\(unionName): () = assert!(core::mem::size_of::<\(unionName)>() == \(sizeOfUnionStr));
+        const _ALIGN_CHECK_\(unionName): () = assert!(core::mem::align_of::<\(unionName)>() == \(alignOfUnionStr));
+
+        const _SIZE_CHECK_\(escapedName): () = assert!(core::mem::size_of::<\(escapedName)>() == \(sizeOfSelf));
+        const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(alignOfSelf));
 
         impl \(escapedName) {
             \(discriminantDocComment)
@@ -222,9 +645,25 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
             }
         }
 
-        
+
         """
-    |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
+    |> Str.concat
+        """
+        #[repr(C)]
+        pub struct \(escapedName) {
+            payload: union_\(escapedName),
+            discriminant: discriminant_\(escapedName),
+        }
+        """
+    |> deriveCloneTagUnion escapedName tags
+    |> deriveDebugTagUnion types escapedName tags
+    |> deriveEqTagUnion escapedName
+    |> derivePartialEqTagUnion escapedName tags
+    |> deriveOrdTagUnion escapedName
+    |> derivePartialOrdTagUnion escapedName tags
+    |> deriveHashTagUnion escapedName tags
+    |> generateDestructorFunctions types escapedName tags
+    |> generateConstructorFunctions types escapedName tags
     |> \b ->
         type = Types.shape types id
         if cannotDeriveCopy types type then
@@ -235,7 +674,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                 impl Drop for \(escapedName) {
                     fn drop(&mut self) {
                         // Drop the payloads
-                
+
                 """
             |> generateTagUnionDropPayload types selfMut tags discriminantName discriminantSize 2
             |> Str.concat
@@ -243,13 +682,70 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                     }
                 }
 
-                
+
                 """
         else
             b
 
-generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, _nullTagIndex ->
+generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminantSize, _discriminantOffset, _nullTagIndex ->
     escapedName = escapeKW name
+    discriminantName = "discriminant_\(escapedName)"
+
+    payloadFields =
+        when Types.shape types payload is
+            TagUnionPayload { fields } ->
+                when fields is
+                    HasNoClosure xs -> List.map xs .id
+                    HasClosure xs -> List.map xs .id
+
+            _ ->
+                []
+
+    payloadFieldNames =
+        commaSeparated "" payloadFields \_, i ->
+            n = Num.toStr i
+            "f\(n)"
+
+    constructorArguments =
+        commaSeparated "" payloadFields \id, i ->
+            n = Num.toStr i
+            type = typeName types id
+            "f\(n): \(type)"
+
+    debugFields =
+        payloadFields
+        |> List.mapWithIndex \_, i ->
+            n = Num.toStr i
+            ".field(&node.f\(n))"
+        |> Str.joinWith ""
+
+    buf1 = buf |> generateDiscriminant types discriminantName [tagName] discriminantSize
+
+    """
+    \(buf1)
+
+    #[repr(transparent)]
+    #[derive(Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+    pub struct \(escapedName)(roc_std::RocBox<\(name)_\(tagName)>);
+
+    impl \(escapedName) {
+        pub fn \(tagName)(\(constructorArguments)) -> Self {
+            let payload = \(name)_\(tagName) { \(payloadFieldNames) };
+
+            Self(roc_std::RocBox::new(payload))
+        }
+    }
+
+    impl core::fmt::Debug for \(escapedName) {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let node = &self.0;
+            f.debug_tuple("\(escapedName)::\(tagName)")\(debugFields).finish()
+        }
+    }
+    """
+
+generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSize, _discriminantOffset, nullTagIndex ->
+    escapedName = escapeKW tagUnionName
     discriminantName = "discriminant_\(escapedName)"
     tagNames = List.map tags \{ name: n } -> n
     # self = "(&*self.union_pointer())"
@@ -257,13 +753,348 @@ generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _disc
     # other = "(&*other.union_pointer())"
     unionName = "union_\(escapedName)"
 
+    discriminants =
+        tagNames
+        |> Str.joinWith ", "
+        |> \b -> "[ \(b) ]"
+
+    nullTagId =
+        when nullTagIndex is
+            Some index ->
+                n = Num.toStr index
+                "discriminants[\(n)]"
+
+            None ->
+                """
+                unreachable!("this pointer cannot be NULL")
+                """
+
+    isFunction = \{ name: tagName, payload: optPayload }, index ->
+        payloadFields =
+            when optPayload is
+                Some payload ->
+                    when Types.shape types payload is
+                        TagUnionPayload { fields } ->
+                            when fields is
+                                HasNoClosure xs -> List.map xs .id
+                                HasClosure xs -> List.map xs .id
+
+                        _ ->
+                            []
+
+                None ->
+                    []
+
+        payloadFieldNames =
+            commaSeparated "" payloadFields \_, i ->
+                n = Num.toStr i
+                "f\(n)"
+
+        constructorArguments =
+            commaSeparated "" payloadFields \payloadId, i ->
+                n = Num.toStr i
+                type = typeName types payloadId
+                "f\(n): \(type)"
+
+        fixManuallyDrop =
+            when optPayload is
+                Some payload ->
+                    shape = Types.shape types payload
+
+                    if canDeriveCopy types shape then
+                        "payload"
+                    else
+                        "core::mem::ManuallyDrop::new(payload)"
+
+                None ->
+                    "payload"
+
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                pub fn is_\(tagName)(&self) -> bool {
+                    matches!(self.discriminant(), discriminant_\(escapedName)::\(tagName))
+                }
+
+                pub fn \(tagName)(\(constructorArguments)) -> Self {
+                    Self(std::ptr::null_mut())
+                }
+            """
+        else
+            """
+                pub fn is_\(tagName)(&self) -> bool {
+                    matches!(self.discriminant(), discriminant_\(escapedName)::\(tagName))
+                }
+
+                pub fn \(tagName)(\(constructorArguments)) -> Self {
+                    let tag_id = discriminant_\(escapedName)::\(tagName);
+
+                    let payload = \(escapedName)_\(tagName) { \(payloadFieldNames) } ;
+
+                    let union_payload = union_\(escapedName) { \(tagName): \(fixManuallyDrop) };
+
+                    let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(union_payload)) };
+
+                    Self((ptr as usize | tag_id as usize) as *mut _)
+                }
+            """
+
+    constructors =
+        tags
+        |> List.mapWithIndex isFunction
+        |> Str.joinWith "\n\n"
+
+    cloneCase = \{ name: tagName }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => Self::\(tagName)(),
+            """
+        else
+            """
+                        \(tagName) => {
+                            let tag_id = discriminant_\(escapedName)::\(tagName);
+
+                            let payload_union = unsafe { self.ptr_read_union() };
+                            let payload = union_\(escapedName) { 
+                                \(tagName): unsafe { payload_union.\(tagName).clone() },
+                            };
+
+                            let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+
+                            Self((ptr as usize | tag_id as usize) as *mut _)
+                        },
+            """
+
+    cloneCases =
+        tags
+        |> List.mapWithIndex cloneCase
+        |> Str.joinWith "\n"
+
+    partialEqCase = \{ name: tagName }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => true,
+            """
+        else
+            """
+                        \(tagName) => {
+                            let payload_union1 = unsafe { self.ptr_read_union() };
+                            let payload_union2 = unsafe { other.ptr_read_union() };
+
+                            unsafe { 
+                                payload_union1.\(tagName) == payload_union2.\(tagName)
+                            }
+                        },
+            """
+
+    partialEqCases =
+        tags
+        |> List.mapWithIndex partialEqCase
+        |> Str.joinWith "\n"
+
+    debugCase = \{ name: tagName, payload: optPayload }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => f.debug_tuple("\(escapedName)::\(tagName)").finish(),
+            """
+        else
+            payloadFields =
+                when optPayload is
+                    Some payload ->
+                        when Types.shape types payload is
+                            TagUnionPayload { fields } ->
+                                when fields is
+                                    HasNoClosure xs -> List.map xs .id
+                                    HasClosure xs -> List.map xs .id
+
+                            _ ->
+                                []
+
+                    None ->
+                        []
+
+            debugFields =
+                payloadFields
+                |> List.mapWithIndex \_, i ->
+                    n = Num.toStr i
+                    ".field(&payload_union.\(tagName).f\(n))"
+                |> Str.joinWith ""
+
+            """
+                        \(tagName) => {
+                            let payload_union = unsafe { self.ptr_read_union() };
+
+                            unsafe { 
+                                f.debug_tuple("\(escapedName)::\(tagName)")\(debugFields).finish()
+                            }
+                        },
+            """
+
+    debugCases =
+        tags
+        |> List.mapWithIndex debugCase
+        |> Str.joinWith "\n"
+
+    hashCase = \{ name: tagName }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => {} 
+            """
+        else
+            """
+                        \(tagName) => {
+                            let payload_union = unsafe { self.ptr_read_union() };
+                            unsafe { payload_union.\(tagName).hash(state) };
+                        },
+            """
+
+    hashCases =
+        tags
+        |> List.mapWithIndex hashCase
+        |> Str.joinWith "\n"
+
+    partialOrdCase = \{ name: tagName }, index ->
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                        \(tagName) => std::cmp::Ordering::Equal,
+            """
+        else
+            """
+                        \(tagName) => {
+                            let payload_union1 = unsafe { self.ptr_read_union() };
+                            let payload_union2 = unsafe { other.ptr_read_union() };
+
+                            unsafe { 
+                                payload_union1.\(tagName).cmp(&payload_union2.\(tagName))
+                            }
+                        },
+            """
+
+    partialOrdCases =
+        tags
+        |> List.mapWithIndex partialOrdCase
+        |> Str.joinWith "\n"
+
+    sizeOfSelf = Num.toStr (Types.size types id)
+    alignOfSelf = Num.toStr (Types.alignment types id)
+
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
     |> Str.concat
         """
         #[repr(transparent)]
-        pub struct \(escapedName) {
-            pointer: *mut \(unionName),
+        pub struct \(escapedName)(*mut \(unionName));
+
+        const _SIZE_CHECK_\(escapedName): () = assert!(core::mem::size_of::<\(escapedName)>() == \(sizeOfSelf));
+        const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(alignOfSelf));
+
+        impl \(escapedName) {
+            fn discriminant(&self) -> discriminant_\(escapedName) { 
+                let discriminants = {
+                    use \(discriminantName)::*;
+
+                    \(discriminants)
+                };
+
+                if self.0.is_null() {
+                    \(nullTagId)
+                } else  {
+                    match std::mem::size_of::<usize>() {
+                        4 => discriminants[self.0 as usize & 0b011],
+                        8 => discriminants[self.0 as usize & 0b111],
+                        _ => unreachable!(),
+                    }
+                }
+            }
+
+            unsafe fn ptr_read_union(&self) -> core::mem::ManuallyDrop<union_\(escapedName)> {
+                debug_assert!(!self.0.is_null());
+
+                let mask = match std::mem::size_of::<usize>() {
+                    4 => !0b011usize,
+                    8 => !0b111usize,
+                    _ => unreachable!(),
+                };
+
+                let ptr = ((self.0 as usize) & mask) as *mut union_\(escapedName);
+
+                core::mem::ManuallyDrop::new(unsafe { std::ptr::read(ptr) })
+            }
+
+            \(constructors)
+        }
+
+        impl Clone for \(escapedName) {
+            fn clone(&self) -> Self {
+                use discriminant_\(escapedName)::*;
+
+                let discriminant = self.discriminant();
+
+                match discriminant {
+                \(cloneCases)
+                }
+            }
+        }
+
+        impl PartialEq for \(escapedName) {
+            fn eq(&self, other: &Self) -> bool {
+                use discriminant_\(escapedName)::*;
+
+                if self.discriminant() != other.discriminant() {
+                    return false;
+                }
+
+                match self.discriminant() {
+                    \(partialEqCases)
+                }
+            }
+        }
+
+        impl Eq for \(escapedName) {}
+
+        impl core::fmt::Debug for \(escapedName) {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                use discriminant_\(escapedName)::*;
+
+                match self.discriminant() {
+                    \(debugCases)
+                }
+            }
+        }
+
+        impl core::hash::Hash for \(escapedName) {
+            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                use discriminant_\(escapedName)::*;
+
+                self.discriminant().hash(state);
+
+                match self.discriminant() {
+                    \(hashCases)
+                }
+            }
+        }
+
+        impl PartialOrd for \(escapedName) {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(<Self as Ord>::cmp(self, other))
+            }
+        }
+
+        impl Ord for \(escapedName) {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                use discriminant_\(escapedName)::*;
+
+                use std::cmp::Ordering::*;
+
+                match self.discriminant().cmp(&other.discriminant()) {
+                    Less => Less,
+                    Greater => Greater,
+                    Equal => unsafe {
+                        match self.discriminant() {
+                            \(partialOrdCases)
+                        }
+                    },
+                }
+            }
         }
 
         #[repr(C)]
@@ -272,7 +1103,6 @@ generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _disc
     |> \b -> List.walk tags b (generateUnionField types)
     |> generateTagUnionSizer types id tags
     |> Str.concat "}\n\n"
-    |> Str.concat "// TODO: Recursive TagUnion impls\n\n"
 
 generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, discriminantSize, indents ->
     if discriminantSize == 0 then
@@ -291,7 +1121,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
                 Some id if cannotDeriveCopy types (Types.shape types id) ->
-                    "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).\(name)) }},"
+                    "unsafe { core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) },"
 
                 _ ->
                     # If it had no payload, or if the payload had no pointers,
@@ -356,10 +1186,11 @@ generateDiscriminant = \buf, types, name, tags, size ->
 
 generateUnionField = \types ->
     \accum, { name: fieldName, payload } ->
+        escapedFieldName = escapeKW fieldName
+
         when payload is
             Some id ->
                 typeStr = typeName types id
-                escapedFieldName = escapeKW fieldName
 
                 type = Types.shape types id
                 fullTypeStr =
@@ -374,11 +1205,172 @@ generateUnionField = \types ->
                 Str.concat accum "\(indent)\(escapedFieldName): \(fullTypeStr),\n"
 
             None ->
-                # If there's no payload, we don't need a discriminant for it.
-                accum
+                # use unit as the payload
+                Str.concat accum "\(indent)\(escapedFieldName): (),\n"
 
-generateNullableUnwrapped = \buf, _types, _id, _name, _nullTag, _nonNullTag, _nonNullPayload, _whichTagIsNull ->
-    Str.concat buf "// TODO: TagUnion NullableUnwrapped\n\n"
+commaSeparated : Str, List a, (a, Nat -> Str) -> Str
+commaSeparated = \buf, items, step ->
+    length = List.len items
+    List.walk items { buf, count: 0 } \accum, item ->
+        if accum.count + 1 == length then
+            { buf: Str.concat accum.buf (step item accum.count), count: length }
+        else
+            { buf: Str.concat accum.buf (step item accum.count) |> Str.concat ", ", count: accum.count + 1 }
+    |> .buf
+
+generateNullableUnwrapped : Str, Types, TypeId, Str, Str, Str, TypeId, [FirstTagIsNull, SecondTagIsNull] -> Str
+generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull ->
+    payloadFields =
+        when Types.shape types nonNullPayload is
+            TagUnionPayload { fields } ->
+                when fields is
+                    HasNoClosure xs -> List.map xs .id
+                    HasClosure xs -> List.map xs .id
+
+            _ ->
+                []
+
+    payloadFieldNames =
+        commaSeparated "" payloadFields \_, i ->
+            n = Num.toStr i
+            "f\(n)"
+
+    constructorArguments =
+        commaSeparated "" payloadFields \id, i ->
+            n = Num.toStr i
+            type = typeName types id
+            "f\(n): \(type)"
+
+    debugFields =
+        payloadFields
+        |> List.mapWithIndex \_, i ->
+            n = Num.toStr i
+            ".field(&node.f\(n))"
+        |> Str.joinWith ""
+
+    discriminant =
+        when whichTagIsNull is
+            FirstTagIsNull ->
+                """
+                #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                enum discriminant_\(name) {
+                    \(nullTag) = 0,
+                    \(nonNullTag) = 1,
+                }
+                """
+
+            SecondTagIsNull ->
+                """
+                #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                enum discriminant_\(name) {
+                    \(nonNullTag) = 0,
+                    \(nullTag) = 1,
+                }
+                """
+
+    sizeOfSelf = Num.toStr (Types.size types tagUnionid)
+    alignOfSelf = Num.toStr (Types.alignment types tagUnionid)
+
+    """
+    \(buf)
+
+    #[derive(PartialOrd, Ord)]
+    #[repr(C)]
+    pub struct \(name)(*mut \(name)_\(nonNullTag));
+
+    \(discriminant)
+
+    const _SIZE_CHECK_\(name): () = assert!(core::mem::size_of::<\(name)>() == \(sizeOfSelf));
+    const _ALIGN_CHECK_\(name): () = assert!(core::mem::align_of::<\(name)>() == \(alignOfSelf));
+
+    impl \(name) {
+        pub fn \(nullTag)() -> Self {
+            Self(core::ptr::null_mut())
+        }
+
+        pub fn \(nonNullTag)(\(constructorArguments)) -> Self {
+            let payload = \(name)_\(nonNullTag) { \(payloadFieldNames) };
+
+            let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+
+            Self(ptr)
+        }
+
+        pub fn discriminant(&self) -> discriminant_\(name) {
+            if self.is_\(nullTag)() {
+                discriminant_\(name)::\(nullTag)
+            } else {
+                discriminant_\(name)::\(nonNullTag)
+            }
+        }
+
+        pub fn is_\(nullTag)(&self) -> bool {
+            self.0.is_null()
+        }
+
+        pub fn is_\(nonNullTag)(&self) -> bool {
+            !self.0.is_null()
+        }
+    }
+
+    impl core::fmt::Debug for \(name) {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            if self.is_\(nullTag)() {
+                f.debug_tuple("\(name)::\(nullTag)").finish()
+            } else {
+                let node = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
+                f.debug_tuple("\(name)::\(nonNullTag)")\(debugFields).finish()
+            }
+        }
+    }
+
+    impl Clone for \(name) {
+        fn clone(&self) -> Self {
+            if self.is_\(nullTag)() {
+                Self::\(nullTag)()
+            } else {
+                use std::ops::Deref;
+
+                let node_ref = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
+                let payload : \(name)_\(nonNullTag) = (node_ref.deref()).clone();
+
+                let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+
+                Self(ptr)
+            }
+        }
+    }
+
+    impl PartialEq for \(name) {
+        fn eq(&self, other: &Self) -> bool {
+            if self.discriminant() != other.discriminant() {
+                return false;
+            }
+
+            if self.is_\(nullTag)() {
+                return true;
+            }
+
+            let payload1 = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
+            let payload2 = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(other.0) });
+
+            payload1 == payload2
+        }
+    }
+
+    impl Eq for \(name) {}
+
+    impl core::hash::Hash for \(name) {
+        fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+            self.discriminant().hash(state);
+
+            if self.is_\(nonNullTag)() {
+                let payload = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
+                payload.hash(state);
+            }
+        }
+    }
+    """
 
 generateSingleTagStruct = \buf, types, name, tagName, payload ->
     # Store single-tag unions as structs rather than enums,
@@ -417,6 +1409,7 @@ generateSingleTagStruct = \buf, types, name, tagName, payload ->
                     generateZeroElementSingleTagStruct b escapedName tagName
                 else
                     generateMultiElementSingleTagStruct b types escapedName tagName fields asStructFields
+
         HasClosure _ ->
             Str.concat buf "\\TODO: SingleTagStruct with closures"
 
@@ -428,7 +1421,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
     |> Str.concat
         """
         impl \(name) {
-        
+
         """
     |> \b ->
         fieldTypes =
@@ -475,7 +1468,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
                 \(indent)    }
                 \(indent)}
 
-                
+
                 """,
             fieldTypes,
             fieldAccesses,
@@ -494,7 +1487,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
                 \(indent)    \(retExpr)
                 \(indent)}
 
-                
+
                 """,
             fieldTypes,
             fieldAccesses,
@@ -517,7 +1510,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             \(indent)pub fn as_\(tagName)(&self) -> \(retType) {
             \(indent)    \(retExpr)
             \(indent)}
-            
+
             """
     |> Str.concat
         """
@@ -527,7 +1520,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         impl core::fmt::Debug for \(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.debug_tuple("\(name)::\(tagName)")
-        
+
         """
     |> \b ->
         payloadFields
@@ -542,7 +1535,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             }
         }
 
-        
+
         """
 
 asRustTuple = \list ->
@@ -585,66 +1578,134 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
             }
         }
 
-        
+
         """
 
 generateDeriveStr = \buf, types, type, includeDebug ->
+    condWrite = \b, cond, str ->
+        if cond then
+            Str.concat b str
+        else
+            b
+
+    deriveDebug =
+        when includeDebug is
+            IncludeDebug -> Bool.true
+            ExcludeDebug -> Bool.false
+
     buf
     |> Str.concat "#[derive(Clone, "
-    |> \b ->
-        if !(cannotDeriveCopy types type) then
-            Str.concat b "Copy, "
-        else
-            b
-    |> \b ->
-        if !(cannotDeriveDefault types type) then
-            Str.concat b "Default, "
-        else
-            b
-    |> \b ->
-        when includeDebug is
-            IncludeDebug ->
-                Str.concat b "Debug, "
+    |> condWrite (!(cannotDeriveCopy types type)) "Copy, "
+    |> condWrite (!(cannotDeriveDefault types type)) "Default, "
+    |> condWrite deriveDebug "Debug, "
+    |> condWrite (canDerivePartialEq types type) "PartialEq, PartialOrd, "
+    |> condWrite (!(hasFloat types type) && (canDerivePartialEq types type)) "Eq, Ord, Hash, "
+    |> Str.concat ")]\n"
 
-            ExcludeDebug ->
-                b
-    |> \b ->
-        if !(hasFloat types type) then
-            Str.concat b "Eq, Ord, Hash, "
-        else
-            b
-    |> Str.concat "PartialEq, PartialOrd)]\n"
-
-cannotDeriveCopy = \types, type ->
+canDerivePartialEq : Types, Shape -> Bool
+canDerivePartialEq = \types, type ->
     when type is
-        Unit | Unsized | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
-        RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.true
+        Function rocFn ->
+            runtimeRepresentation = Types.shape types rocFn.lambdaSet
+            canDerivePartialEq types runtimeRepresentation
+
+        Unsized -> Bool.false
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) -> Bool.true
+        RocStr -> Bool.true
+        RocList inner | RocSet inner | RocBox inner ->
+            innerType = Types.shape types inner
+            canDerivePartialEq types innerType
+
+        RocDict k v ->
+            kType = Types.shape types k
+            vType = Types.shape types v
+
+            canDerivePartialEq types kType && canDerivePartialEq types vType
+
+        TagUnion (Recursive { tags }) ->
+            List.all tags \{ payload } ->
+                when payload is
+                    None -> Bool.true
+                    Some id -> canDerivePartialEq types (Types.shape types id)
+
+        TagUnion (NullableWrapped { tags }) ->
+            List.all tags \{ payload } ->
+                when payload is
+                    None -> Bool.true
+                    Some id -> canDerivePartialEq types (Types.shape types id)
+
+        TagUnion (NonNullableUnwrapped { payload }) ->
+            canDerivePartialEq types (Types.shape types payload)
+
+        TagUnion (NullableUnwrapped { nonNullPayload }) ->
+            canDerivePartialEq types (Types.shape types nonNullPayload)
+
+        RecursivePointer _ -> Bool.true
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
         TagUnion (NonRecursive { tags }) ->
-            List.any tags \{ payload } ->
+            List.all tags \{ payload } ->
                 when payload is
-                    Some id -> cannotDeriveCopy types (Types.shape types id)
-                    None -> Bool.false
+                    Some id -> canDerivePartialEq types (Types.shape types id)
+                    None -> Bool.true
 
         RocResult okId errId ->
-            cannotDeriveCopy types (Types.shape types okId)
-            || cannotDeriveCopy types (Types.shape types errId)
+            okShape = Types.shape types okId
+            errShape = Types.shape types errId
+
+            canDerivePartialEq types okShape && canDerivePartialEq types errShape
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
+
+cannotDeriveCopy : Types, Shape -> Bool
+cannotDeriveCopy = \types, type ->
+    !(canDeriveCopy types type)
+
+canDeriveCopy : Types, Shape -> Bool
+canDeriveCopy = \types, type ->
+    when type is
+        Function rocFn ->
+            runtimeRepresentation = Types.shape types rocFn.lambdaSet
+            canDeriveCopy types runtimeRepresentation
+
+        # unsized values are heap-allocated
+        Unsized -> Bool.false
+        Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) -> Bool.true
+        RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.false
+        TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+
+        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+
+        TagUnion (NonRecursive { tags }) ->
+            List.all tags \{ payload } ->
+                when payload is
+                    Some id -> canDeriveCopy types (Types.shape types id)
+                    None -> Bool.true
+
+        RocResult okId errId ->
+            canDeriveCopy types (Types.shape types okId)
+            && canDeriveCopy types (Types.shape types errId)
+
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+
+        Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
+            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
 
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
-        RocStr | Bool | Num _ | Struct { fields: HasClosure _ } | TagUnionPayload { fields: HasClosure _ } -> Bool.false
+        RocStr | Bool | Num _ | TagUnionPayload { fields: HasClosure _ } -> Bool.false
         RocList id | RocSet id | RocBox id ->
             cannotDeriveDefault types (Types.shape types id)
 
@@ -652,6 +1713,7 @@ cannotDeriveDefault = \types, type ->
             cannotDeriveCopy types (Types.shape types keyId)
             || cannotDeriveCopy types (Types.shape types valId)
 
+        Struct { fields: HasClosure _ } -> Bool.true
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (Types.shape types id)
 
@@ -854,7 +1916,7 @@ fileHeader =
     #![allow(clippy::clone_on_copy)]
 
 
-    
+
     """
 
 indent = "    "
@@ -922,3 +1984,8 @@ escapeKW = \input ->
         "r#\(input)"
     else
         input
+
+nextMultipleOf = \lhs, rhs ->
+    when lhs % rhs is
+        0 -> lhs
+        r -> lhs + (rhs - r)

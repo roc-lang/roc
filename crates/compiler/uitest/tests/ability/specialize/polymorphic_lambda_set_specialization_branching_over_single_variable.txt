@@ -1,0 +1,22 @@
+app "test" provides [f] to "./platform"
+
+J has j : j -> (k -> {}) | j has J, k has K
+K has k : k -> {} | k has K
+
+C := {} has [J {j: jC}]
+jC = \@C _ -> k
+
+D := {} has [J {j: jD}]
+jD = \@D _ -> k
+
+E := {} has [K {k}]
+k = \@E _ -> {}
+
+f = \flag, a, c ->
+    it =
+        when flag is
+            A -> j a
+            B -> j a
+    it c
+#      ^ k | k has K
+#   ^^ k -[[] + j:j(2):2]-> {} | j has J, k has K

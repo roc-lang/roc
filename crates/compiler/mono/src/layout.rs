@@ -4586,4 +4586,10 @@ mod test {
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(Layout::VOID_NAKED.stack_size(&interner, target_info), 0);
     }
+
+    #[test]
+    fn align_u128_in_tag_union() {
+        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        assert_eq!(interner.alignment_bytes(Layout::U128), 16);
+    }
 }

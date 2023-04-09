@@ -1,0 +1,11 @@
+app "test" provides [foo] to "./platform"
+
+foo : [True, False] -> Str
+foo = \ob ->
+#      ^^ [False, True]
+    when ob is
+#        ^^ [False, True]
+        True -> "A"
+#       ^^^^ [False, True]
+        False -> "B"
+#       ^^^^^ [False, True]
