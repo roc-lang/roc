@@ -52,7 +52,7 @@ fn applied_tag_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just() {
     assert_evals_to!(
         indoc!(
@@ -384,7 +384,7 @@ fn maybe_is_just_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_pattern_match() {
     assert_evals_to!(
         indoc!(
