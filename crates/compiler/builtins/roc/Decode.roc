@@ -52,15 +52,34 @@ interface Decode
         Bool.{ Bool },
     ]
 
+## Error types when decoding a `List U8` of utf-8 bytes using a [Decoder]   
 DecodeError : [TooShort]
 
+## Return type of a [Decoder]. 
+##
+## This is can be useful when creating a [custom](#custom) decoder or when 
+## using [fromBytesPartial](#fromBytesPartial). For example writing unit tests,
+## such as;
+## ```
+## expect
+##     input = "\"hello\", " |> Str.toUtf8
+##     actual = Decode.fromBytesPartial input Json.fromUtf8
+##     expected = Ok "hello"
+## 
+##     actual.result == expected
+## ```
 DecodeResult val : { result : Result val DecodeError, rest : List U8 }
 
+## Decodes a `List U8` of utf-8 bytes where `val` is the type of the decoded 
+## value, and `fmt` is a [Decoder] which implements the [DecoderFormatting] 
+## ability
 Decoder val fmt := List U8, fmt -> DecodeResult val | fmt has DecoderFormatting
 
+## Definition of the [Decoding] ability
 Decoding has
     decoder : Decoder val fmt | val has Decoding, fmt has DecoderFormatting
 
+## Definition of the [DecoderFormatting] ability
 DecoderFormatting has
     u8 : Decoder U8 fmt | fmt has DecoderFormatting
     u16 : Decoder U16 fmt | fmt has DecoderFormatting
@@ -96,15 +115,46 @@ DecoderFormatting has
     ## `finalizer` should produce the tuple value from the decoded `state`.
     tuple : state, (state, Nat -> [Next (Decoder state fmt), TooLong]), (state -> Result val DecodeError) -> Decoder val fmt | fmt has DecoderFormatting
 
+## Build a custom [Decoder] function. For example the implementation of 
+## `decodeBool` could be defined as follows;
+##
+## ```
+## decodeBool = Decode.custom \bytes, @Json {} ->
+##     when bytes is
+##         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.drop bytes 5 }
+##         ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.drop bytes 4 }
+##         _ -> { result: Err TooShort, rest: bytes }
+## ```
 custom : (List U8, fmt -> DecodeResult val) -> Decoder val fmt | fmt has DecoderFormatting
 custom = \decode -> @Decoder decode
 
+## Decode a `List U8` utf-8 bytes using a specific [Decoder] function
 decodeWith : List U8, Decoder val fmt, fmt -> DecodeResult val | fmt has DecoderFormatting
 decodeWith = \bytes, @Decoder decode, fmt -> decode bytes fmt
 
+## Decode a `List U8` utf-8 bytes and return a [DecodeResult](#DecodeResult)
+## ```
+## expect
+##     input = "\"hello\", " |> Str.toUtf8
+##     actual = Decode.fromBytesPartial input Json.fromUtf8
+##     expected = Ok "hello"
+## 
+##     actual.result == expected
+## ```
 fromBytesPartial : List U8, fmt -> DecodeResult val | val has Decoding, fmt has DecoderFormatting
 fromBytesPartial = \bytes, fmt -> decodeWith bytes decoder fmt
 
+## Decode a `List U8` utf-8 bytes and return a [Result] with no leftover bytes 
+## expected. If successful returns `Ok val`, however, if there are bytes 
+## remaining returns `Err Leftover (List U8)`.
+## ```
+## expect
+##     input = "\"hello\", " |> Str.toUtf8
+##     actual = Decode.fromBytes input Json.fromUtf8
+##     expected = Ok "hello"
+## 
+##     actual == expected
+## ```
 fromBytes : List U8, fmt -> Result val [Leftover (List U8)]DecodeError | val has Decoding, fmt has DecoderFormatting
 fromBytes = \bytes, fmt ->
     when fromBytesPartial bytes fmt is
@@ -116,5 +166,6 @@ fromBytes = \bytes, fmt ->
             else
                 Err (Leftover rest)
 
+## Transform the `val` of a [DecodeResult]
 mapResult : DecodeResult a, (a -> b) -> DecodeResult b
 mapResult = \{ result, rest }, mapper -> { result: Result.map result mapper, rest }
