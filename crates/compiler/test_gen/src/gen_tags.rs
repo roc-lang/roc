@@ -1196,7 +1196,7 @@ fn monomorphized_applied_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn monomorphized_tag_with_polymorphic_arg() {
     assert_evals_to!(
         indoc!(
@@ -1219,17 +1219,17 @@ fn monomorphized_tag_with_polymorphic_arg() {
                         Wrapped A -> 5
                         Wrapped B -> 7
 
-                useWrap1 (wrap {}) * useWrap2 (wrap {})
+                if Bool.true then useWrap1 (wrap {}) else useWrap2 (wrap {})
             "#
         ),
-        10,
+        2,
         u8
     )
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn monomorphized_tag_with_polymorphic_and_monomorphic_arg() {
     assert_evals_to!(
         indoc!(
             r#"

@@ -261,8 +261,13 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Names and linker data for helpers
     for ((sym, layout), proc) in helper_symbols_and_layouts.into_iter().zip(helper_procs) {
-        let layout_id = layout_ids.get_toplevel(sym, &layout);
-        let fn_name = backend.symbol_to_string(sym, layout_id);
+        let fn_name = backend.function_symbol_to_string(
+            sym,
+            layout.arguments.iter().copied(),
+            None,
+            layout.result,
+        );
+
         if let Some(proc_id) = output.symbol_id(fn_name.as_bytes()) {
             if let SymbolSection::Section(section_id) = output.symbol(proc_id).section {
                 helper_names_symbols_procs.push((fn_name, section_id, proc_id, proc));
@@ -327,8 +332,12 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
     layout: ProcLayout<'a>,
     proc: Proc<'a>,
 ) {
-    let layout_id = layout_ids.get_toplevel(sym, &layout);
-    let base_name = backend.symbol_to_string(sym, layout_id);
+    let base_name = backend.function_symbol_to_string(
+        sym,
+        layout.arguments.iter().copied(),
+        None,
+        layout.result,
+    );
 
     let fn_name = if backend.env().exposed_to_host.contains(&sym) {
         layout_ids
@@ -459,6 +468,7 @@ fn build_proc<'a, B: Backend<'a>>(
                         }
                     }
                 }
+
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
                     write::Relocation {
                         offset: offset + proc_offset,
