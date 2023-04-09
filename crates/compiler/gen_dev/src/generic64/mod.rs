@@ -822,7 +822,11 @@ impl<
             .storage_manager
             .load_to_general_reg(&mut self.buf, cond_symbol);
 
+        // this state is updated destructively in the branches. We don't want the branches to
+        // influence each other, so we must clone here.
         let mut base_storage = self.storage_manager.clone();
+        let base_literal_map = self.literal_map.clone();
+
         let mut max_branch_stack_size = 0;
         let mut ret_jumps = bumpalo::vec![in self.env.arena];
         let mut tmp = bumpalo::vec![in self.env.arena];
@@ -836,6 +840,7 @@ impl<
 
             // Build all statements in this branch. Using storage as from before any branch.
             self.storage_manager = base_storage.clone();
+            self.literal_map = base_literal_map.clone();
             self.build_stmt(stmt, ret_layout);
 
             // Build unconditional jump to the end of this switch.
@@ -858,6 +863,7 @@ impl<
             base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
         }
         self.storage_manager = base_storage;
+        self.literal_map = base_literal_map;
         self.storage_manager
             .update_stack_size(max_branch_stack_size);
         let (_branch_info, stmt) = default_branch;

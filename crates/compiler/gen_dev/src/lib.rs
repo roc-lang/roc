@@ -18,7 +18,7 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutId, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
     UnionLayout,
 };
 use roc_mono::list_element_layout;
@@ -79,8 +79,40 @@ trait Backend<'a> {
         &mut CodeGenHelp<'a>,
     );
 
-    fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
-        layout_id.to_symbol_string(symbol, self.interns())
+    fn function_symbol_to_string<'b, I>(
+        &self,
+        symbol: Symbol,
+        arguments: I,
+        _lambda_set: Option<InLayout>,
+        result: InLayout,
+    ) -> String
+    where
+        I: Iterator<Item = InLayout<'b>>,
+    {
+        use std::hash::{BuildHasher, Hash, Hasher};
+
+        // NOTE: due to randomness, this will not be consistent between runs
+        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
+        for a in arguments {
+            a.hash(&mut state);
+        }
+
+        // lambda set should not matter; it should already be added as an argument
+        // lambda_set.hash(&mut state);
+
+        result.hash(&mut state);
+
+        let interns = self.interns();
+        let ident_string = symbol.as_str(interns);
+        let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
+
+        // the functions from the generates #help module (refcounting, equality) is always suffixed
+        // with 1. That is fine, they are always unique anyway.
+        if ident_string.contains("#help") {
+            format!("{}_{}_1", module_string, ident_string)
+        } else {
+            format!("{}_{}_{}", module_string, ident_string, state.finish())
+        }
     }
 
     fn defined_in_app_module(&self, symbol: Symbol) -> bool {
@@ -119,8 +151,13 @@ trait Backend<'a> {
         proc: Proc<'a>,
         layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
-        let layout_id = layout_ids.get(proc.name.name(), &proc.ret_layout);
-        let proc_name = self.symbol_to_string(proc.name.name(), layout_id);
+        let proc_name = self.function_symbol_to_string(
+            proc.name.name(),
+            proc.args.iter().map(|t| t.0),
+            proc.closure_data_layout,
+            proc.ret_layout,
+        );
+
         self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
@@ -304,8 +341,12 @@ trait Backend<'a> {
                             );
                         }
 
-                        let layout_id = LayoutIds::default().get(func_sym.name(), layout);
-                        let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
+                        let fn_name = self.function_symbol_to_string(
+                            func_sym.name(),
+                            arg_layouts.iter().copied(),
+                            None,
+                            *ret_layout,
+                        );
 
                         // Now that the arguments are needed, load them if they are literals.
                         self.load_literal_symbols(arguments);
@@ -1081,8 +1122,12 @@ trait Backend<'a> {
             }
             Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
                 // TODO: This is probably simple enough to be worth inlining.
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                let fn_name = self.function_symbol_to_string(
+                    func_sym,
+                    arg_layouts.iter().copied(),
+                    None,
+                    *ret_layout,
+                );
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
@@ -1101,8 +1146,12 @@ trait Backend<'a> {
             }
             Symbol::STR_IS_VALID_SCALAR => {
                 // just call the function
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                let fn_name = self.function_symbol_to_string(
+                    func_sym,
+                    arg_layouts.iter().copied(),
+                    None,
+                    *ret_layout,
+                );
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
@@ -1111,8 +1160,12 @@ trait Backend<'a> {
                 eprintln!("maybe {other:?} should have a custom implementation?");
 
                 // just call the function
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                let fn_name = self.function_symbol_to_string(
+                    func_sym,
+                    arg_layouts.iter().copied(),
+                    None,
+                    *ret_layout,
+                );
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)

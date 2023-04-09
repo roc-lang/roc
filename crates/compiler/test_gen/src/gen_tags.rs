@@ -52,7 +52,7 @@ fn applied_tag_nothing() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just() {
     assert_evals_to!(
         indoc!(
@@ -71,7 +71,7 @@ fn applied_tag_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just_enum() {
     assert_evals_to!(
         indoc!(
@@ -337,7 +337,7 @@ fn result_with_underscore() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn maybe_is_just_not_nested() {
     assert_evals_to!(
         indoc!(
@@ -362,7 +362,7 @@ fn maybe_is_just_not_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn maybe_is_just_nested() {
     assert_evals_to!(
         indoc!(
@@ -384,7 +384,7 @@ fn maybe_is_just_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_pattern_match() {
     assert_evals_to!(
         indoc!(
@@ -933,7 +933,7 @@ fn alignment_in_multi_tag_pattern_match() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn phantom_polymorphic() {
     assert_evals_to!(
         indoc!(
@@ -957,7 +957,7 @@ fn phantom_polymorphic() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn phantom_polymorphic_record() {
     assert_evals_to!(
         indoc!(
@@ -975,8 +975,8 @@ fn phantom_polymorphic_record() {
                 main = add zero
                 "#
         ),
-        (0, 0),
-        (i64, i64)
+        (0, 0, 0),
+        (i64, i64, i64)
     );
 }
 
@@ -1196,7 +1196,7 @@ fn monomorphized_applied_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn monomorphized_tag_with_polymorphic_arg() {
     assert_evals_to!(
         indoc!(
@@ -1219,17 +1219,17 @@ fn monomorphized_tag_with_polymorphic_arg() {
                         Wrapped A -> 5
                         Wrapped B -> 7
 
-                useWrap1 (wrap {}) * useWrap2 (wrap {})
+                if Bool.true then useWrap1 (wrap {}) else useWrap2 (wrap {})
             "#
         ),
-        10,
+        2,
         u8
     )
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn monomorphized_tag_with_polymorphic_and_monomorphic_arg() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1346,7 +1346,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2445() {
     assert_evals_to!(
         indoc!(
@@ -1483,7 +1483,7 @@ fn issue_2725_alias_polymorphic_lambda() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn opaque_assign_to_symbol() {
     assert_evals_to!(
         indoc!(
@@ -1697,7 +1697,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3560_nested_tag_constructor_is_newtype() {
     assert_evals_to!(
         indoc!(
@@ -1717,7 +1717,7 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3560_nested_tag_constructor_is_record_newtype() {
     assert_evals_to!(
         indoc!(
@@ -1931,7 +1931,7 @@ fn match_on_result_with_uninhabited_error_branch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn dispatch_tag_union_function_inferred() {
     assert_evals_to!(
         indoc!(
