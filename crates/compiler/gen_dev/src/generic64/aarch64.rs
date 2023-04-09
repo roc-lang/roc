@@ -1859,13 +1859,18 @@ fn asr_reg64_reg64_reg64(
 /// `B.cond imm19` -> Jump to PC + imm19 if cond is met.
 #[inline(always)]
 fn b_cond_imm19(buf: &mut Vec<'_, u8>, cond: ConditionCode, imm19: i32) {
+    // Since instructions are 4 bytes, the branch instructions assume the last 2 bits are 0
     debug_assert!(imm19 & 0b11 == 0, "branch location must be 4-byte aligned");
     let shifted = imm19 >> 2;
     let unsigned = shifted as u32;
+    // Our offset is only 19 bits, so we need to remove the first 13 bits
     let left_removed = (unsigned << 13) >> 13;
+    // Check that imm19 wasn't too big
     if imm19 >= 0 {
+        // Removing the first 13 bits should not have changed the value
         debug_assert!(left_removed == unsigned);
     } else {
+        // If imm19 was negative, left_removed will be sign-extended by the instruction
         debug_assert!(left_removed | 0b1111_1111_1111_1100_0000_0000_0000_0000 == unsigned);
     }
 
@@ -1880,13 +1885,18 @@ fn b_cond_imm19(buf: &mut Vec<'_, u8>, cond: ConditionCode, imm19: i32) {
 /// `B imm26` -> Jump to PC + imm26.
 #[inline(always)]
 fn b_imm26(buf: &mut Vec<'_, u8>, imm26: i32) {
+    // Since instructions are 4 bytes, the branch instructions assume the last 2 bits are 0
     debug_assert!(imm26 & 0b11 == 0, "branch location must be 4-byte aligned");
     let shifted = imm26 >> 2;
     let unsigned = shifted as u32;
+    // Our offset is only 26 bits, so we need to remove the first 6 bits
     let left_removed = (unsigned << 6) >> 6;
+    // Check that imm26 wasn't too big
     if imm26 >= 0 {
+        // Removing the first 6 bits should not have changed the value
         debug_assert!(left_removed == unsigned);
     } else {
+        // If imm26 was negative, left_removed will be sign-extended by the instruction
         debug_assert!(left_removed | 0b1111_1110_0000_0000_0000_0000_0000_0000 == unsigned);
     }
 
