@@ -1147,11 +1147,11 @@ objectHelp = \state, byte ->
         (BeforeOpeningBrace n, b) if isWhitespace b -> Continue (BeforeOpeningBrace (n + 1))
         (BeforeOpeningBrace n, b) if b == '{' -> Continue (AfterOpeningBrace (n + 1))
         (AfterOpeningBrace n, b) if isWhitespace b -> Continue (AfterOpeningBrace (n + 1))
-        (AfterOpeningBrace n, b) if b == '"' -> Break (ObjectFieldNameStart n) # field names must be a json string
+        (AfterOpeningBrace n, b) if b == '"' -> Break (ObjectFieldNameStart n)
         (BeforeColon n, b) if isWhitespace b -> Continue (BeforeColon (n + 1))
         (BeforeColon n, b) if b == ':' -> Continue (AfterColon (n + 1))
         (AfterColon n, b) if isWhitespace b -> Continue (AfterColon (n + 1))
-        (AfterColon n, _) -> Break (AfterColon n) # object value could start with lots of things
+        (AfterColon n, _) -> Break (AfterColon n)
         (AfterObjectValue n, b) if isWhitespace b -> Continue (AfterObjectValue (n + 1))
         (AfterObjectValue n, b) if b == ',' -> Continue (AfterComma (n + 1))
         (AfterObjectValue n, b) if b == '}' -> Continue (AfterClosingBrace (n + 1))
@@ -1173,7 +1173,7 @@ ObjectState : [
 ]
 
 # Test decode of simple Json Object into Roc Record ignoring whitespace
-# TODO this test makes `decodeI64` test fail
+# TODO blocked on [#5252](https://github.com/roc-lang/roc/issues/5252)
 # expect
 #     input = Str.toUtf8 " {\n\"fruit\"\t:2\n } "
 
@@ -1183,7 +1183,7 @@ ObjectState : [
 #     actual.result == expected
 
 # Test decode of simple Json Object
-# TODO this test makes `decodeString` tests fail
+# TODO blocked on [#5252](https://github.com/roc-lang/roc/issues/5252)
 # expect
 #     input = Str.toUtf8 "{\"fruit\": \"apple\" }"
 
@@ -1193,7 +1193,7 @@ ObjectState : [
 #     actual.result == expected
 
 # Test decode of simple Json Object
-# TODO this test makes `decodeBool` tests fail
+# TODO blocked on [#5252](https://github.com/roc-lang/roc/issues/5252)
 # expect
 #     input = Str.toUtf8 "{\"fruit\": true }"
 
