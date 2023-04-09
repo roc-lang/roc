@@ -896,6 +896,23 @@ main =
     }
 
     #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file_bytes() {
+        test_roc_app(
+            "examples/cli",
+            "ingested-file-bytes.roc",
+            "ingested-file-bytes",
+            &[],
+            &[],
+            &[],
+            "22424\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
     #[serial(parser_package)]
     #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]
