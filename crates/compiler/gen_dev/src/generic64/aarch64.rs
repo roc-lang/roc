@@ -534,7 +534,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
-        if offset >= -(1 << 27) && offset < (1 << 27) {
+        if (-(1 << 27)..(1 << 27)).contains(&offset) {
             b_imm26(buf, offset);
         } else {
             todo!("jump offsets over 27 bits for AArch64: {:#x}", offset);
@@ -565,7 +565,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             );
         }
 
-        if offset >= -(1 << 20) && offset < (1 << 20) {
+        if (-(1 << 20)..(1 << 20)).contains(&offset) {
             b_cond_imm19(buf, ConditionCode::NE, offset);
         } else {
             todo!("jump offsets over 20 bits for AArch64: {:#x}", offset);
@@ -2111,7 +2111,7 @@ mod tests {
         AArch64GeneralReg::ZRSP,
     ];
 
-    const ALL_CONDITIONS: &'static [ConditionCode] = &[
+    const ALL_CONDITIONS: &[ConditionCode] = &[
         ConditionCode::EQ,
         ConditionCode::NE,
         ConditionCode::CSHS,
