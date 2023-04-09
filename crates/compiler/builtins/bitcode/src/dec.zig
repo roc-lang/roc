@@ -693,10 +693,10 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         var s_lo: u128 = undefined;
         if (s_u128 == 1) {
             s_hi = math.maxInt(u128);
-            s_lo = math.maxInt(u128) - 2;
+            s_lo = math.maxInt(u128);
         } else {
             s_hi = 0;
-            s_lo = s_u128;
+            s_lo = 0;
         }
         var s = .{
             .hi = s_hi,
