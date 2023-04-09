@@ -686,14 +686,11 @@ impl<
                 let (data_size, data_alignment) =
                     union_layout.data_size_and_alignment(layout_interner, self.target_info);
                 let id_offset = data_size - data_alignment;
-                if data_alignment < 8 || data_alignment % 8 != 0 {
-                    todo!("small/unaligned tagging");
-                }
                 let base_offset = self.claim_stack_area(sym, data_size);
                 let mut current_offset = base_offset;
-                for (field, field_layout) in
-                    fields.iter().zip(field_layouts[tag_id as usize].iter())
-                {
+
+                let it = fields.iter().zip(field_layouts[tag_id as usize].iter());
+                for (field, field_layout) in it {
                     self.copy_symbol_to_stack_offset(
                         layout_interner,
                         buf,
@@ -704,10 +701,20 @@ impl<
                     let field_size = layout_interner.stack_size(*field_layout);
                     current_offset += field_size as i32;
                 }
+
+                // put the tag id in the right place
                 self.with_tmp_general_reg(buf, |_symbol_storage, buf, reg| {
                     ASM::mov_reg64_imm64(buf, reg, tag_id as i64);
-                    debug_assert!((base_offset + id_offset as i32) % 8 == 0);
-                    ASM::mov_base32_reg64(buf, base_offset + id_offset as i32, reg);
+
+                    let total_id_offset = base_offset as u32 + id_offset;
+                    debug_assert!(total_id_offset % data_alignment == 0);
+
+                    // pick the right instruction based on the alignment of the tag id
+                    if field_layouts.len() <= u8::MAX as _ {
+                        ASM::mov_base32_reg8(buf, total_id_offset as i32, reg);
+                    } else {
+                        ASM::mov_base32_reg16(buf, total_id_offset as i32, reg);
+                    }
                 });
             }
             x => todo!("creating unions with layout: {:?}", x),

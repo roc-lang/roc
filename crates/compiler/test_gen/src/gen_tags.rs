@@ -71,7 +71,7 @@ fn applied_tag_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just_enum() {
     assert_evals_to!(
         indoc!(
