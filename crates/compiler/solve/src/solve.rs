@@ -1785,7 +1785,12 @@ fn solve(
                 );
 
                 let snapshot = subs.snapshot();
-                if let Success { .. } = unify(
+                if let Success {
+                    vars,
+                    must_implement_ability,
+                    lambda_sets_to_specialize,
+                    extra_metadata: _,
+                } = unify(
                     &mut UEnv::new(subs),
                     actual,
                     Variable::LIST_U8,
@@ -1793,12 +1798,17 @@ fn solve(
                     Polarity::OF_VALUE,
                 ) {
                     // List U8 always valid.
-                    subs.rollback_to(snapshot);
+                    introduce(subs, rank, pools, &vars);
+
+                    debug_assert!(
+                        must_implement_ability.is_empty() && lambda_sets_to_specialize.is_empty(),
+                        "List U8 will never need to implement abilities or specialize lambda sets"
+                    );
+
                     state
                 } else {
                     subs.rollback_to(snapshot);
 
-                    let snapshot = subs.snapshot();
                     // We explicitly match on the last unify to get the type in the case it errors.
                     match unify(
                         &mut UEnv::new(subs),
@@ -1807,7 +1817,19 @@ fn solve(
                         Mode::EQ,
                         Polarity::OF_VALUE,
                     ) {
-                        Success { .. } => {
+                        Success {
+                            vars,
+                            must_implement_ability,
+                            lambda_sets_to_specialize,
+                            extra_metadata: _,
+                        } => {
+                            introduce(subs, rank, pools, &vars);
+
+                            debug_assert!(
+                                must_implement_ability.is_empty() && lambda_sets_to_specialize.is_empty(),
+                                "Str will never need to implement abilities or specialize lambda sets"
+                            );
+
                             // Str only valid if valid utf8.
                             if let Err(err) = std::str::from_utf8(bytes) {
                                 let problem =
@@ -1815,11 +1837,10 @@ fn solve(
                                 problems.push(problem);
                             }
 
-                            subs.rollback_to(snapshot);
                             state
                         }
-                        Failure(_, actual_type, _, _) => {
-                            subs.rollback_to(snapshot);
+                        Failure(vars, actual_type, _, _) => {
+                            introduce(subs, rank, pools, &vars);
 
                             let problem = TypeError::IngestedFileUnsupportedType(
                                 file_path.clone(),
