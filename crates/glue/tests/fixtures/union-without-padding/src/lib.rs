@@ -10,14 +10,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<test_glue::NonRecursive> =
-            core::mem::MaybeUninit::uninit();
-
-        roc_main(ret.as_mut_ptr());
-
-        ret.assume_init()
-    };
+    let tag_union = test_glue::mainForHost(());
 
     // Verify that it has all the expected traits.
 
@@ -32,7 +25,7 @@ pub extern "C" fn rust_main() -> i32 {
         tag_union,
         test_glue::NonRecursive::Foo("small str".into()),
         test_glue::NonRecursive::Bar(123),
-        test_glue::NonRecursive::Baz,
+        test_glue::NonRecursive::Baz(),
         test_glue::NonRecursive::Blah(456),
     ); // Debug
 

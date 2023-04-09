@@ -1,6 +1,7 @@
 #![allow(clippy::manual_map)]
 
 use crate::borrow::Ownership;
+use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
     LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout,
@@ -8,9 +9,8 @@ use crate::layout::{
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
-use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::SpecializationId;
-use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup, IntValue};
+use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
@@ -22,7 +22,6 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId};
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -38,6 +37,14 @@ use roc_types::subs::{
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
+
+use pattern::{from_can_pattern, store_pattern, Pattern};
+
+pub use literal::{ListLiteralElement, Literal};
+
+mod decision_tree;
+mod literal;
+mod pattern;
 
 #[inline(always)]
 pub fn pretty_print_ir_symbols() -> bool {
@@ -944,6 +951,16 @@ pub struct ProcsBase<'a> {
     pub imported_module_thunks: &'a [Symbol],
 }
 
+impl<'a> ProcsBase<'a> {
+    pub fn get_host_exposed_symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.host_specializations
+            .symbol_or_lambdas
+            .iter()
+            .copied()
+            .map(|n| n.name())
+    }
+}
+
 /// The current set of functions under specialization. They form a stack where the latest
 /// specialization to be seen is at the head of the stack.
 #[derive(Clone, Debug)]
@@ -962,14 +979,16 @@ impl<'a> SpecializationStack<'a> {
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
-    pub imported_module_thunks: &'a [Symbol],
-    pub module_thunks: &'a [Symbol],
     pending_specializations: PendingSpecializations<'a>,
     specialized: Specialized<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
     symbol_specializations: SymbolSpecializations<'a>,
     specialization_stack: SpecializationStack<'a>,
+
+    pub imported_module_thunks: &'a [Symbol],
+    pub module_thunks: &'a [Symbol],
+    pub host_exposed_symbols: &'a [Symbol],
 }
 
 impl<'a> Procs<'a> {
@@ -977,14 +996,16 @@ impl<'a> Procs<'a> {
         Self {
             partial_procs: PartialProcs::new_in(arena),
             ability_member_aliases: AbilityAliases::new_in(arena),
-            imported_module_thunks: &[],
-            module_thunks: &[],
             pending_specializations: PendingSpecializations::Finding(Suspended::new_in(arena)),
             specialized: Specialized::default(),
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
             symbol_specializations: Default::default(),
             specialization_stack: SpecializationStack(Vec::with_capacity_in(16, arena)),
+
+            imported_module_thunks: &[],
+            module_thunks: &[],
+            host_exposed_symbols: &[],
         }
     }
 
@@ -1695,43 +1716,6 @@ impl ModifyRc {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Literal<'a> {
-    // Literals
-    /// stored as raw bytes rather than a number to avoid an alignment bump
-    Int([u8; 16]),
-    /// stored as raw bytes rather than a number to avoid an alignment bump
-    U128([u8; 16]),
-    Float(f64),
-    /// stored as raw bytes rather than a number to avoid an alignment bump
-    Decimal([u8; 16]),
-    Str(&'a str),
-    /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
-    /// so they can (at least potentially) be emitted as 1-bit machine bools.
-    ///
-    /// So [True, False] compiles to this, and so do [A, B] and [Foo, Bar].
-    /// However, a union like [True, False, Other Int] would not.
-    Bool(bool),
-    /// Closed tag unions containing between 3 and 256 tags (all of 0 arity)
-    /// compile to bytes, e.g. [Blue, Black, Red, Green, White]
-    Byte(u8),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ListLiteralElement<'a> {
-    Literal(Literal<'a>),
-    Symbol(Symbol),
-}
-
-impl<'a> ListLiteralElement<'a> {
-    pub fn to_symbol(&self) -> Option<Symbol> {
-        match self {
-            Self::Symbol(s) => Some(*s),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Call<'a> {
     pub call_type: CallType<'a>,
@@ -1894,6 +1878,7 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
+    NullPointer,
 
     StructAtIndex {
         index: u64,
@@ -2032,6 +2017,7 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            NullPointer => alloc.text("NullPointer"),
             Reuse {
                 symbol,
                 tag_id,
@@ -3002,15 +2988,8 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, variable, host_exposed_aliases) in it {
-        specialize_external_help(
-            env,
-            procs,
-            layout_cache,
-            symbol,
-            offset_variable(variable),
-            &host_exposed_aliases,
-        )
+    for (symbol, variable, _host_exposed_aliases) in it {
+        specialize_external_help(env, procs, layout_cache, symbol, offset_variable(variable))
     }
 }
 
@@ -3035,7 +3014,7 @@ fn specialize_external_specializations<'a>(
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            specialize_external_help(env, procs, layout_cache, symbol, imported_variable, &[])
+            specialize_external_help(env, procs, layout_cache, symbol, imported_variable)
         }
     }
 }
@@ -3046,7 +3025,6 @@ fn specialize_external_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     name: LambdaName<'a>,
     variable: Variable,
-    host_exposed_aliases: &[(Symbol, Variable)],
 ) {
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
@@ -3066,7 +3044,7 @@ fn specialize_external_help<'a>(
                 debug_assert!(top_level.arguments.is_empty());
             }
 
-            if !host_exposed_aliases.is_empty() {
+            if procs.host_exposed_symbols.contains(&proc.name.name()) {
                 // layouts that are (transitively) used in the type of `mainForHost`.
                 let mut host_exposed_layouts: Vec<_> = top_level
                     .arguments
@@ -3079,7 +3057,6 @@ fn specialize_external_help<'a>(
                 host_exposed_layouts.sort();
                 host_exposed_layouts.dedup();
 
-                // TODO: In the future, we will generate glue procs here
                 for in_layout in host_exposed_layouts {
                     let layout = layout_cache.interner.get(in_layout);
 
@@ -3093,9 +3070,19 @@ fn specialize_external_help<'a>(
 
                     // for now, getters are not processed here
                     let GlueProcs {
-                        getters: _,
+                        getters,
                         extern_names,
                     } = all_glue_procs;
+
+                    for (_layout, glue_procs) in getters {
+                        for glue_proc in glue_procs {
+                            procs.specialized.insert_specialized(
+                                glue_proc.proc.name.name(),
+                                glue_proc.proc_layout,
+                                glue_proc.proc,
+                            );
+                        }
+                    }
 
                     let mut aliases = BumpMap::default();
 
@@ -3103,6 +3090,7 @@ fn specialize_external_help<'a>(
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
 
+                        // fix the recursion in the rocLovesRust example
                         if false {
                             raw_function_layout = match raw_function_layout {
                                 RawFunctionLayout::Function(a, mut lambda_set, _) => {
@@ -3135,37 +3123,6 @@ fn specialize_external_help<'a>(
                         };
 
                         aliases.insert(key, hels);
-                    }
-
-                    // pre-glue: generate named callers for as-exposed aliases
-                    for (alias_name, variable) in host_exposed_aliases {
-                        let raw_function_layout = layout_cache
-                            .raw_from_var(env.arena, *variable, env.subs)
-                            .unwrap();
-
-                        let symbol = env.unique_symbol();
-                        let lambda_name = LambdaName::no_niche(symbol);
-
-                        let (proc_name, (proc_layout, proc)) = generate_host_exposed_function(
-                            env,
-                            procs,
-                            layout_cache,
-                            lambda_name,
-                            raw_function_layout,
-                        );
-
-                        procs
-                            .specialized
-                            .insert_specialized(proc_name, proc_layout, proc);
-
-                        let hels = HostExposedLambdaSet {
-                            id: LambdaSetId::default(),
-                            symbol: proc_name,
-                            proc_layout,
-                            raw_function_layout,
-                        };
-
-                        aliases.insert(*alias_name, hels);
                     }
 
                     match &mut proc.host_exposed_layouts {
@@ -3551,6 +3508,7 @@ fn specialize_proc_help<'a>(
                                 UnionLayout::NonRecursive(_)
                                     | UnionLayout::Recursive(_)
                                     | UnionLayout::NullableUnwrapped { .. }
+                                    | UnionLayout::NullableWrapped { .. }
                             ));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 
@@ -5007,9 +4965,6 @@ pub fn with_hole<'a>(
                 _ => arena.alloc([record_layout]),
             };
 
-            debug_assert_eq!(field_layouts.len(), symbols.len());
-            debug_assert_eq!(fields.len(), symbols.len());
-
             if symbols.len() == 1 {
                 // TODO we can probably special-case this more, skippiing the generation of
                 // UpdateExisting
@@ -5346,7 +5301,7 @@ pub fn with_hole<'a>(
 
                                     let resolved_proc = match resolved_proc {
                                         Resolved::Specialization(symbol) => symbol,
-                                        Resolved::NeedsGenerated(_) => {
+                                        Resolved::Derive(_) => {
                                             todo_abilities!("Generate impls for structural types")
                                         }
                                     };
@@ -5807,12 +5762,17 @@ fn late_resolve_ability_specialization<'a>(
             solved,
             unspecialized,
             recursion_var: _,
-            ambient_function: _,
+            ambient_function,
         } = env.subs.get_lambda_set(*lambda_set);
 
         debug_assert!(unspecialized.is_empty());
         let mut iter_lambda_set = solved.iter_all();
-        debug_assert_eq!(iter_lambda_set.len(), 1);
+        debug_assert_eq!(
+            iter_lambda_set.len(),
+            1,
+            "{:?}",
+            (env.subs.dbg(*lambda_set), env.subs.dbg(ambient_function))
+        );
         let spec_symbol_index = iter_lambda_set.next().unwrap().0;
         env.subs[spec_symbol_index]
     } else {
@@ -5828,14 +5788,7 @@ fn late_resolve_ability_specialization<'a>(
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
-            Resolved::NeedsGenerated(var) => {
-                let derive_key = roc_derive_key::Derived::builtin(
-                    member.try_into().expect("derived symbols must be builtins"),
-                    env.subs,
-                    var,
-                )
-                .expect("specialization var not derivable!");
-
+            Resolved::Derive(derive_key) => {
                 match derive_key {
                     roc_derive_key::Derived::Immediate(imm)
                     | roc_derive_key::Derived::SingleLambdaSetImmediate(imm) => {
@@ -7050,28 +7003,18 @@ fn from_can_when<'a>(
                 }
             };
 
-            use crate::decision_tree::Guard;
+            use decision_tree::Guard;
             let result = if let Some(loc_expr) = opt_guard {
-                let id = JoinPointId(env.unique_symbol());
-                let symbol = env.unique_symbol();
-                let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
-
-                let guard_stmt = with_hole(
-                    env,
-                    loc_expr.value,
-                    Variable::BOOL,
-                    procs,
-                    layout_cache,
-                    symbol,
-                    jump,
-                );
+                let guard_spec = GuardStmtSpec {
+                    guard_expr: loc_expr.value,
+                    identity: env.next_call_specialization_id(),
+                };
 
                 (
                     pattern.clone(),
                     Guard::Guard {
-                        id,
                         pattern,
-                        stmt: guard_stmt,
+                        stmt_spec: guard_spec,
                     },
                     branch_stmt,
                 )
@@ -7088,7 +7031,7 @@ fn from_can_when<'a>(
         });
     let mono_branches = Vec::from_iter_in(it, arena);
 
-    crate::decision_tree::optimize_when(
+    decision_tree::optimize_when(
         env,
         procs,
         layout_cache,
@@ -7097,6 +7040,85 @@ fn from_can_when<'a>(
         ret_layout,
         mono_branches,
     )
+}
+
+/// A functor to generate IR for a guard under a `when` branch.
+/// Used in the decision tree compiler, after building a decision tree and converting into IR.
+///
+/// A guard might appear more than once in various places in the compiled decision tree, so the
+/// functor here may be called more than once. As such, it implements clone, which duplicates the
+/// guard AST for subsequent IR-regeneration. This is a bit wasteful, but in practice, guard ASTs
+/// are quite small. Moreoever, they must be generated on a per-case basis, since the guard may
+/// have calls or joins, whose specialization IDs and joinpoint IDs, respectively, must be unique.
+#[derive(Debug, Clone)]
+pub(crate) struct GuardStmtSpec {
+    guard_expr: roc_can::expr::Expr,
+
+    /// Unique id to indentity identical guard statements, even across clones.
+    /// Needed so that we can implement [PartialEq] on this type. Re-uses call specialization IDs,
+    /// since the identity is kind of irrelevant.
+    identity: CallSpecId,
+}
+
+impl PartialEq for GuardStmtSpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+}
+
+impl std::hash::Hash for GuardStmtSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity.id.hash(state);
+    }
+}
+
+impl GuardStmtSpec {
+    /// Generates IR for the guard, and the joinpoint that the guard will jump to with the
+    /// calculated guard boolean value.
+    ///
+    /// The caller should create a joinpoint with the given joinpoint ID and decide how to branch
+    /// after the guard has been evaluated.
+    ///
+    /// The compiled guard statement expects the pattern before the guard to be destructed before the
+    /// returned statement. The caller should layer on the pattern destructuring, as bound from the
+    /// `when` condition value.
+    pub(crate) fn generate_guard_and_join<'a>(
+        self,
+        env: &mut Env<'a, '_>,
+        procs: &mut Procs<'a>,
+        layout_cache: &mut LayoutCache<'a>,
+    ) -> CompiledGuardStmt<'a> {
+        let Self {
+            guard_expr,
+            identity: _,
+        } = self;
+
+        let join_point_id = JoinPointId(env.unique_symbol());
+        let symbol = env.unique_symbol();
+        let jump = env
+            .arena
+            .alloc(Stmt::Jump(join_point_id, env.arena.alloc([symbol])));
+
+        let stmt = with_hole(
+            env,
+            guard_expr,
+            Variable::BOOL,
+            procs,
+            layout_cache,
+            symbol,
+            jump,
+        );
+
+        CompiledGuardStmt {
+            join_point_id,
+            stmt,
+        }
+    }
+}
+
+pub(crate) struct CompiledGuardStmt<'a> {
+    pub join_point_id: JoinPointId,
+    pub stmt: Stmt<'a>,
 }
 
 fn substitute(substitutions: &BumpMap<Symbol, Symbol>, s: Symbol) -> Option<Symbol> {
@@ -7113,6 +7135,18 @@ fn substitute_in_exprs<'a>(arena: &'a Bump, stmt: &mut Stmt<'a>, from: Symbol, t
     let mut subs = BumpMap::with_capacity_in(1, arena);
     subs.insert(from, to);
 
+    // TODO clean this up
+    let ref_stmt = arena.alloc(stmt.clone());
+    if let Some(new) = substitute_in_stmt_help(arena, ref_stmt, &subs) {
+        *stmt = new.clone();
+    }
+}
+
+pub(crate) fn substitute_in_exprs_many<'a>(
+    arena: &'a Bump,
+    stmt: &mut Stmt<'a>,
+    subs: BumpMap<Symbol, Symbol>,
+) {
     // TODO clean this up
     let ref_stmt = arena.alloc(stmt.clone());
     if let Some(new) = substitute_in_stmt_help(arena, ref_stmt, &subs) {
@@ -7430,6 +7464,8 @@ fn substitute_in_expr<'a>(
             }
         }
 
+        NullPointer => None,
+
         Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
 
         Struct(args) => {
@@ -7537,689 +7573,9 @@ fn substitute_in_expr<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn store_pattern<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    can_pat: &Pattern<'a>,
-    outer_symbol: Symbol,
-    stmt: Stmt<'a>,
-) -> Stmt<'a> {
-    match store_pattern_help(env, procs, layout_cache, can_pat, outer_symbol, stmt) {
-        StorePattern::Productive(new) => new,
-        StorePattern::NotProductive(new) => new,
-    }
-}
-
-enum StorePattern<'a> {
-    /// we bound new symbols
-    Productive(Stmt<'a>),
-    /// no new symbols were bound in this pattern
-    NotProductive(Stmt<'a>),
-}
-
-/// It is crucial for correct RC insertion that we don't create dead variables!
-#[allow(clippy::too_many_arguments)]
-fn store_pattern_help<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    can_pat: &Pattern<'a>,
-    outer_symbol: Symbol,
-    mut stmt: Stmt<'a>,
-) -> StorePattern<'a> {
-    use Pattern::*;
-
-    match can_pat {
-        Identifier(symbol) => {
-            substitute_in_exprs(env.arena, &mut stmt, *symbol, outer_symbol);
-        }
-        Underscore => {
-            // do nothing
-            return StorePattern::NotProductive(stmt);
-        }
-        As(subpattern, symbol) => {
-            let stored_subpattern =
-                store_pattern_help(env, procs, layout_cache, subpattern, outer_symbol, stmt);
-
-            let mut stmt = match stored_subpattern {
-                StorePattern::Productive(stmt) => stmt,
-                StorePattern::NotProductive(stmt) => stmt,
-            };
-
-            substitute_in_exprs(env.arena, &mut stmt, *symbol, outer_symbol);
-
-            return StorePattern::Productive(stmt);
-        }
-        IntLiteral(_, _)
-        | FloatLiteral(_, _)
-        | DecimalLiteral(_)
-        | EnumLiteral { .. }
-        | BitLiteral { .. }
-        | StrLiteral(_) => {
-            return StorePattern::NotProductive(stmt);
-        }
-        NewtypeDestructure { arguments, .. } => match arguments.as_slice() {
-            [(pattern, _layout)] => {
-                return store_pattern_help(env, procs, layout_cache, pattern, outer_symbol, stmt);
-            }
-            _ => {
-                let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
-                fields.extend(arguments.iter().map(|x| x.1));
-
-                let layout =
-                    layout_cache.put_in(Layout::struct_no_name_order(fields.into_bump_slice()));
-
-                return store_newtype_pattern(
-                    env,
-                    procs,
-                    layout_cache,
-                    outer_symbol,
-                    layout,
-                    arguments,
-                    stmt,
-                );
-            }
-        },
-        AppliedTag {
-            arguments,
-            layout,
-            tag_id,
-            ..
-        } => {
-            return store_tag_pattern(
-                env,
-                procs,
-                layout_cache,
-                outer_symbol,
-                *layout,
-                arguments,
-                *tag_id,
-                stmt,
-            );
-        }
-
-        List {
-            arity,
-            element_layout,
-            elements,
-        } => {
-            return store_list_pattern(
-                env,
-                procs,
-                layout_cache,
-                outer_symbol,
-                *arity,
-                *element_layout,
-                elements,
-                stmt,
-            )
-        }
-
-        Voided { .. } => {
-            return StorePattern::NotProductive(stmt);
-        }
-
-        OpaqueUnwrap { argument, .. } => {
-            let (pattern, _layout) = &**argument;
-            return store_pattern_help(env, procs, layout_cache, pattern, outer_symbol, stmt);
-        }
-
-        RecordDestructure(destructs, [_single_field]) => {
-            for destruct in destructs {
-                match &destruct.typ {
-                    DestructType::Required(symbol) => {
-                        substitute_in_exprs(env.arena, &mut stmt, *symbol, outer_symbol);
-                    }
-                    DestructType::Guard(guard_pattern) => {
-                        return store_pattern_help(
-                            env,
-                            procs,
-                            layout_cache,
-                            guard_pattern,
-                            outer_symbol,
-                            stmt,
-                        );
-                    }
-                }
-            }
-        }
-        RecordDestructure(destructs, sorted_fields) => {
-            let mut is_productive = false;
-            for (index, destruct) in destructs.iter().enumerate().rev() {
-                match store_record_destruct(
-                    env,
-                    procs,
-                    layout_cache,
-                    destruct,
-                    index as u64,
-                    outer_symbol,
-                    sorted_fields,
-                    stmt,
-                ) {
-                    StorePattern::Productive(new) => {
-                        is_productive = true;
-                        stmt = new;
-                    }
-                    StorePattern::NotProductive(new) => {
-                        stmt = new;
-                    }
-                }
-            }
-
-            if !is_productive {
-                return StorePattern::NotProductive(stmt);
-            }
-        }
-
-        TupleDestructure(destructs, [_single_field]) => {
-            if let Some(destruct) = destructs.first() {
-                return store_pattern_help(
-                    env,
-                    procs,
-                    layout_cache,
-                    &destruct.pat,
-                    outer_symbol,
-                    stmt,
-                );
-            }
-        }
-        TupleDestructure(destructs, sorted_fields) => {
-            let mut is_productive = false;
-            for (index, destruct) in destructs.iter().enumerate().rev() {
-                match store_tuple_destruct(
-                    env,
-                    procs,
-                    layout_cache,
-                    destruct,
-                    index as u64,
-                    outer_symbol,
-                    sorted_fields,
-                    stmt,
-                ) {
-                    StorePattern::Productive(new) => {
-                        is_productive = true;
-                        stmt = new;
-                    }
-                    StorePattern::NotProductive(new) => {
-                        stmt = new;
-                    }
-                }
-            }
-
-            if !is_productive {
-                return StorePattern::NotProductive(stmt);
-            }
-        }
-    }
-
-    StorePattern::Productive(stmt)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ListIndex(
-    /// Positive if we should index from the head, negative if we should index from the tail
-    /// 0 is lst[0]
-    /// -1 is lst[List.len lst - 1]
-    i64,
-);
-
-impl ListIndex {
-    pub fn from_pattern_index(index: usize, arity: ListArity) -> Self {
-        match arity {
-            ListArity::Exact(_) => Self(index as _),
-            ListArity::Slice(head, tail) => {
-                if index < head {
-                    Self(index as _)
-                } else {
-                    // Slice(head=2, tail=5)
-                    //
-                    // s t ... w y z x q
-                    // 0 1     2 3 4 5 6 index
-                    //         0 1 2 3 4 (index - head)
-                    //         5 4 3 2 1 (tail - (index - head))
-                    Self(-((tail - (index - head)) as i64))
-                }
-            }
-        }
-    }
-}
-
-pub(crate) type Store<'a> = (Symbol, InLayout<'a>, Expr<'a>);
-
-/// Builds the list index we should index into
-#[must_use]
-pub(crate) fn build_list_index_probe<'a>(
-    env: &mut Env<'a, '_>,
-    list_sym: Symbol,
-    list_index: &ListIndex,
-) -> (Symbol, impl DoubleEndedIterator<Item = Store<'a>>) {
-    let usize_layout = Layout::usize(env.target_info);
-
-    let list_index = list_index.0;
-    let index_sym = env.unique_symbol();
-
-    let (opt_len_store, opt_offset_store, index_store) = if list_index >= 0 {
-        let index_expr = Expr::Literal(Literal::Int((list_index as i128).to_ne_bytes()));
-
-        let index_store = (index_sym, usize_layout, index_expr);
-
-        (None, None, index_store)
-    } else {
-        let len_sym = env.unique_symbol();
-        let len_expr = Expr::Call(Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::ListLen,
-                update_mode: env.next_update_mode_id(),
-            },
-            arguments: env.arena.alloc([list_sym]),
-        });
-
-        let offset = list_index.abs();
-        let offset_sym = env.unique_symbol();
-        let offset_expr = Expr::Literal(Literal::Int((offset as i128).to_ne_bytes()));
-
-        let index_expr = Expr::Call(Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::NumSub,
-                update_mode: env.next_update_mode_id(),
-            },
-            arguments: env.arena.alloc([len_sym, offset_sym]),
-        });
-
-        let len_store = (len_sym, usize_layout, len_expr);
-        let offset_store = (offset_sym, usize_layout, offset_expr);
-        let index_store = (index_sym, usize_layout, index_expr);
-
-        (Some(len_store), Some(offset_store), index_store)
-    };
-
-    let stores = (opt_len_store.into_iter())
-        .chain(opt_offset_store)
-        .chain([index_store]);
-
-    (index_sym, stores)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn store_list_pattern<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    list_sym: Symbol,
-    list_arity: ListArity,
-    element_layout: InLayout<'a>,
-    elements: &[Pattern<'a>],
-    mut stmt: Stmt<'a>,
-) -> StorePattern<'a> {
-    use Pattern::*;
-
-    let mut is_productive = false;
-
-    for (index, element) in elements.iter().enumerate().rev() {
-        let compute_element_load = |env: &mut Env<'a, '_>| {
-            let list_index = ListIndex::from_pattern_index(index, list_arity);
-
-            let (index_sym, needed_stores) = build_list_index_probe(env, list_sym, &list_index);
-
-            let load = Expr::Call(Call {
-                call_type: CallType::LowLevel {
-                    op: LowLevel::ListGetUnsafe,
-                    update_mode: env.next_update_mode_id(),
-                },
-                arguments: env.arena.alloc([list_sym, index_sym]),
-            });
-
-            (load, needed_stores)
-        };
-
-        let (store_loaded, needed_stores) = match element {
-            Identifier(symbol) => {
-                let (load, needed_stores) = compute_element_load(env);
-
-                // store immediately in the given symbol
-                (
-                    Stmt::Let(*symbol, load, element_layout, env.arena.alloc(stmt)),
-                    needed_stores,
-                )
-            }
-            Underscore
-            | IntLiteral(_, _)
-            | FloatLiteral(_, _)
-            | DecimalLiteral(_)
-            | EnumLiteral { .. }
-            | BitLiteral { .. }
-            | StrLiteral(_) => {
-                // ignore
-                continue;
-            }
-            _ => {
-                // store the field in a symbol, and continue matching on it
-                let symbol = env.unique_symbol();
-
-                // first recurse, continuing to unpack symbol
-                match store_pattern_help(env, procs, layout_cache, element, symbol, stmt) {
-                    StorePattern::Productive(new) => {
-                        stmt = new;
-                        let (load, needed_stores) = compute_element_load(env);
-
-                        // only if we bind one of its (sub)fields to a used name should we
-                        // extract the field
-                        (
-                            Stmt::Let(symbol, load, element_layout, env.arena.alloc(stmt)),
-                            needed_stores,
-                        )
-                    }
-                    StorePattern::NotProductive(new) => {
-                        // do nothing
-                        stmt = new;
-                        continue;
-                    }
-                }
-            }
-        };
-
-        is_productive = true;
-
-        stmt = store_loaded;
-        for (sym, lay, expr) in needed_stores.rev() {
-            stmt = Stmt::Let(sym, expr, lay, env.arena.alloc(stmt));
-        }
-    }
-
-    if is_productive {
-        StorePattern::Productive(stmt)
-    } else {
-        StorePattern::NotProductive(stmt)
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn store_tag_pattern<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    structure: Symbol,
-    union_layout: UnionLayout<'a>,
-    arguments: &[(Pattern<'a>, InLayout<'a>)],
-    tag_id: TagIdIntType,
-    mut stmt: Stmt<'a>,
-) -> StorePattern<'a> {
-    use Pattern::*;
-
-    let mut is_productive = false;
-
-    for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
-        let mut arg_layout = *arg_layout;
-
-        if let Layout::RecursivePointer(_) = layout_cache.get_in(arg_layout) {
-            // TODO(recursive-layouts): fix after disjoint rec ptrs
-            arg_layout = layout_cache.put_in(Layout::Union(union_layout));
-        }
-
-        let load = Expr::UnionAtIndex {
-            index: index as u64,
-            structure,
-            tag_id,
-            union_layout,
-        };
-
-        match argument {
-            Identifier(symbol) => {
-                // store immediately in the given symbol
-                stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
-                is_productive = true;
-            }
-            Underscore => {
-                // ignore
-            }
-            IntLiteral(_, _)
-            | FloatLiteral(_, _)
-            | DecimalLiteral(_)
-            | EnumLiteral { .. }
-            | BitLiteral { .. }
-            | StrLiteral(_) => {}
-            _ => {
-                // store the field in a symbol, and continue matching on it
-                let symbol = env.unique_symbol();
-
-                // first recurse, continuing to unpack symbol
-                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
-                    StorePattern::Productive(new) => {
-                        is_productive = true;
-                        stmt = new;
-                        // only if we bind one of its (sub)fields to a used name should we
-                        // extract the field
-                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
-                    }
-                    StorePattern::NotProductive(new) => {
-                        // do nothing
-                        stmt = new;
-                    }
-                }
-            }
-        }
-    }
-
-    if is_productive {
-        StorePattern::Productive(stmt)
-    } else {
-        StorePattern::NotProductive(stmt)
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn store_newtype_pattern<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    structure: Symbol,
-    layout: InLayout<'a>,
-    arguments: &[(Pattern<'a>, InLayout<'a>)],
-    mut stmt: Stmt<'a>,
-) -> StorePattern<'a> {
-    use Pattern::*;
-
-    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
-    let mut is_productive = false;
-
-    for (_, layout) in arguments {
-        arg_layouts.push(*layout);
-    }
-
-    for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
-        let mut arg_layout = *arg_layout;
-
-        if let Layout::RecursivePointer(_) = layout_cache.get_in(arg_layout) {
-            arg_layout = layout;
-        }
-
-        let load = Expr::StructAtIndex {
-            index: index as u64,
-            field_layouts: arg_layouts.clone().into_bump_slice(),
-            structure,
-        };
-
-        match argument {
-            Identifier(symbol) => {
-                stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
-                is_productive = true;
-            }
-            Underscore => {
-                // ignore
-            }
-            IntLiteral(_, _)
-            | FloatLiteral(_, _)
-            | DecimalLiteral(_)
-            | EnumLiteral { .. }
-            | BitLiteral { .. }
-            | StrLiteral(_) => {}
-            _ => {
-                // store the field in a symbol, and continue matching on it
-                let symbol = env.unique_symbol();
-
-                // first recurse, continuing to unpack symbol
-                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
-                    StorePattern::Productive(new) => {
-                        is_productive = true;
-                        stmt = new;
-                        // only if we bind one of its (sub)fields to a used name should we
-                        // extract the field
-                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
-                    }
-                    StorePattern::NotProductive(new) => {
-                        // do nothing
-                        stmt = new;
-                    }
-                }
-            }
-        }
-    }
-
-    if is_productive {
-        StorePattern::Productive(stmt)
-    } else {
-        StorePattern::NotProductive(stmt)
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn store_tuple_destruct<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    destruct: &TupleDestruct<'a>,
-    index: u64,
-    outer_symbol: Symbol,
-    sorted_fields: &'a [InLayout<'a>],
-    mut stmt: Stmt<'a>,
-) -> StorePattern<'a> {
-    use Pattern::*;
-
-    let load = Expr::StructAtIndex {
-        index,
-        field_layouts: sorted_fields,
-        structure: outer_symbol,
-    };
-
-    match &destruct.pat {
-        Identifier(symbol) => {
-            stmt = Stmt::Let(*symbol, load, destruct.layout, env.arena.alloc(stmt));
-        }
-        Underscore => {
-            // important that this is special-cased to do nothing: mono record patterns will extract all the
-            // fields, but those not bound in the source code are guarded with the underscore
-            // pattern. So given some record `{ x : a, y : b }`, a match
-            //
-            // { x } -> ...
-            //
-            // is actually
-            //
-            // { x, y: _ } -> ...
-            //
-            // internally. But `y` is never used, so we must make sure it't not stored/loaded.
-            //
-            // This also happens with tuples, so when matching a tuple `(a, b, c)`,
-            // a pattern like `(x, y)` will be internally rewritten to `(x, y, _)`.
-            return StorePattern::NotProductive(stmt);
-        }
-        IntLiteral(_, _)
-        | FloatLiteral(_, _)
-        | DecimalLiteral(_)
-        | EnumLiteral { .. }
-        | BitLiteral { .. }
-        | StrLiteral(_) => {
-            return StorePattern::NotProductive(stmt);
-        }
-
-        _ => {
-            let symbol = env.unique_symbol();
-
-            match store_pattern_help(env, procs, layout_cache, &destruct.pat, symbol, stmt) {
-                StorePattern::Productive(new) => {
-                    stmt = new;
-                    stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
-                }
-                StorePattern::NotProductive(stmt) => return StorePattern::NotProductive(stmt),
-            }
-        }
-    }
-
-    StorePattern::Productive(stmt)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn store_record_destruct<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    destruct: &RecordDestruct<'a>,
-    index: u64,
-    outer_symbol: Symbol,
-    sorted_fields: &'a [InLayout<'a>],
-    mut stmt: Stmt<'a>,
-) -> StorePattern<'a> {
-    use Pattern::*;
-
-    let load = Expr::StructAtIndex {
-        index,
-        field_layouts: sorted_fields,
-        structure: outer_symbol,
-    };
-
-    match &destruct.typ {
-        DestructType::Required(symbol) => {
-            stmt = Stmt::Let(*symbol, load, destruct.layout, env.arena.alloc(stmt));
-        }
-        DestructType::Guard(guard_pattern) => match &guard_pattern {
-            Identifier(symbol) => {
-                stmt = Stmt::Let(*symbol, load, destruct.layout, env.arena.alloc(stmt));
-            }
-            Underscore => {
-                // important that this is special-cased to do nothing: mono record patterns will extract all the
-                // fields, but those not bound in the source code are guarded with the underscore
-                // pattern. So given some record `{ x : a, y : b }`, a match
-                //
-                // { x } -> ...
-                //
-                // is actually
-                //
-                // { x, y: _ } -> ...
-                //
-                // internally. But `y` is never used, so we must make sure it't not stored/loaded.
-                return StorePattern::NotProductive(stmt);
-            }
-            IntLiteral(_, _)
-            | FloatLiteral(_, _)
-            | DecimalLiteral(_)
-            | EnumLiteral { .. }
-            | BitLiteral { .. }
-            | StrLiteral(_) => {
-                return StorePattern::NotProductive(stmt);
-            }
-
-            _ => {
-                let symbol = env.unique_symbol();
-
-                match store_pattern_help(env, procs, layout_cache, guard_pattern, symbol, stmt) {
-                    StorePattern::Productive(new) => {
-                        stmt = new;
-                        stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
-                    }
-                    StorePattern::NotProductive(stmt) => return StorePattern::NotProductive(stmt),
-                }
-            }
-        },
-    }
-
-    StorePattern::Productive(stmt)
-}
-
 /// We want to re-use symbols that are not function symbols
 /// for any other expression, we create a new symbol, and will
 /// later make sure it gets assigned the correct value.
-
 #[derive(Debug)]
 enum ReuseSymbol {
     Imported(Symbol),
@@ -9406,1034 +8762,6 @@ fn call_specialized_proc<'a>(
     }
 }
 
-/// A pattern, including possible problems (e.g. shadowing) so that
-/// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Pattern<'a> {
-    Identifier(Symbol),
-    Underscore,
-    As(Box<Pattern<'a>>, Symbol),
-    IntLiteral([u8; 16], IntWidth),
-    FloatLiteral(u64, FloatWidth),
-    DecimalLiteral([u8; 16]),
-    BitLiteral {
-        value: bool,
-        tag_name: TagName,
-        union: roc_exhaustive::Union,
-    },
-    EnumLiteral {
-        tag_id: u8,
-        tag_name: TagName,
-        union: roc_exhaustive::Union,
-    },
-    StrLiteral(Box<str>),
-
-    RecordDestructure(Vec<'a, RecordDestruct<'a>>, &'a [InLayout<'a>]),
-    TupleDestructure(Vec<'a, TupleDestruct<'a>>, &'a [InLayout<'a>]),
-    NewtypeDestructure {
-        tag_name: TagName,
-        arguments: Vec<'a, (Pattern<'a>, InLayout<'a>)>,
-    },
-    AppliedTag {
-        tag_name: TagName,
-        tag_id: TagIdIntType,
-        arguments: Vec<'a, (Pattern<'a>, InLayout<'a>)>,
-        layout: UnionLayout<'a>,
-        union: roc_exhaustive::Union,
-    },
-    Voided {
-        tag_name: TagName,
-    },
-    OpaqueUnwrap {
-        opaque: Symbol,
-        argument: Box<(Pattern<'a>, InLayout<'a>)>,
-    },
-    List {
-        arity: ListArity,
-        element_layout: InLayout<'a>,
-        elements: Vec<'a, Pattern<'a>>,
-    },
-}
-
-impl<'a> Pattern<'a> {
-    /// This pattern contains a pattern match on Void (i.e. [], the empty tag union)
-    /// such branches are not reachable at runtime
-    pub fn is_voided(&self) -> bool {
-        let mut stack: std::vec::Vec<&Pattern> = vec![self];
-
-        while let Some(pattern) = stack.pop() {
-            match pattern {
-                Pattern::Identifier(_)
-                | Pattern::Underscore
-                | Pattern::IntLiteral(_, _)
-                | Pattern::FloatLiteral(_, _)
-                | Pattern::DecimalLiteral(_)
-                | Pattern::BitLiteral { .. }
-                | Pattern::EnumLiteral { .. }
-                | Pattern::StrLiteral(_) => { /* terminal */ }
-                Pattern::As(subpattern, _) => stack.push(subpattern),
-                Pattern::RecordDestructure(destructs, _) => {
-                    for destruct in destructs {
-                        match &destruct.typ {
-                            DestructType::Required(_) => { /* do nothing */ }
-                            DestructType::Guard(pattern) => {
-                                stack.push(pattern);
-                            }
-                        }
-                    }
-                }
-                Pattern::TupleDestructure(destructs, _) => {
-                    for destruct in destructs {
-                        stack.push(&destruct.pat);
-                    }
-                }
-                Pattern::NewtypeDestructure { arguments, .. } => {
-                    stack.extend(arguments.iter().map(|(t, _)| t))
-                }
-                Pattern::Voided { .. } => return true,
-                Pattern::AppliedTag { arguments, .. } => {
-                    stack.extend(arguments.iter().map(|(t, _)| t))
-                }
-                Pattern::OpaqueUnwrap { argument, .. } => stack.push(&argument.0),
-                Pattern::List { elements, .. } => stack.extend(elements),
-            }
-        }
-
-        false
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecordDestruct<'a> {
-    pub label: Lowercase,
-    pub variable: Variable,
-    pub layout: InLayout<'a>,
-    pub typ: DestructType<'a>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct TupleDestruct<'a> {
-    pub index: usize,
-    pub variable: Variable,
-    pub layout: InLayout<'a>,
-    pub pat: Pattern<'a>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum DestructType<'a> {
-    Required(Symbol),
-    Guard(Pattern<'a>),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct WhenBranch<'a> {
-    pub patterns: Vec<'a, Pattern<'a>>,
-    pub value: Expr<'a>,
-    pub guard: Option<Stmt<'a>>,
-}
-
-#[allow(clippy::type_complexity)]
-fn from_can_pattern<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    can_pattern: &roc_can::pattern::Pattern,
-) -> Result<
-    (
-        Pattern<'a>,
-        Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
-    ),
-    RuntimeError,
-> {
-    let mut assignments = Vec::new_in(env.arena);
-    let pattern = from_can_pattern_help(env, procs, layout_cache, can_pattern, &mut assignments)?;
-
-    Ok((pattern, assignments))
-}
-
-fn from_can_pattern_help<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    can_pattern: &roc_can::pattern::Pattern,
-    assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
-) -> Result<Pattern<'a>, RuntimeError> {
-    use roc_can::pattern::Pattern::*;
-
-    match can_pattern {
-        Underscore => Ok(Pattern::Underscore),
-        Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        As(subpattern, symbol) => {
-            let mono_subpattern =
-                from_can_pattern_help(env, procs, layout_cache, &subpattern.value, assignments)?;
-
-            Ok(Pattern::As(Box::new(mono_subpattern), *symbol))
-        }
-        AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
-        IntLiteral(var, _, int_str, int, _bound) => Ok(make_num_literal_pattern(
-            env,
-            layout_cache,
-            *var,
-            int_str,
-            IntOrFloatValue::Int(*int),
-        )),
-        FloatLiteral(var, _, float_str, float, _bound) => Ok(make_num_literal_pattern(
-            env,
-            layout_cache,
-            *var,
-            float_str,
-            IntOrFloatValue::Float(*float),
-        )),
-        StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
-        SingleQuote(var, _, c, _) => {
-            let layout = layout_cache.from_var(env.arena, *var, env.subs);
-            match layout.map(|l| layout_cache.get_in(l)) {
-                Ok(Layout::Builtin(Builtin::Int(width))) => {
-                    Ok(Pattern::IntLiteral((*c as i128).to_ne_bytes(), width))
-                }
-                o => internal_error!("an integer width was expected, but we found {:?}", o),
-            }
-        }
-        Shadowed(region, ident, _new_symbol) => Err(RuntimeError::Shadowing {
-            original_region: *region,
-            shadow: ident.clone(),
-            kind: ShadowKind::Variable,
-        }),
-        UnsupportedPattern(region) => Err(RuntimeError::UnsupportedPattern(*region)),
-        MalformedPattern(_problem, region) => {
-            // TODO preserve malformed problem information here?
-            Err(RuntimeError::UnsupportedPattern(*region))
-        }
-        OpaqueNotInScope(loc_ident) => {
-            // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
-            Err(RuntimeError::UnsupportedPattern(loc_ident.region))
-        }
-        NumLiteral(var, num_str, num, _bound) => Ok(make_num_literal_pattern(
-            env,
-            layout_cache,
-            *var,
-            num_str,
-            IntOrFloatValue::Int(*num),
-        )),
-
-        AppliedTag {
-            whole_var,
-            tag_name,
-            arguments,
-            ..
-        } => {
-            use crate::layout::UnionVariant::*;
-            use roc_exhaustive::Union;
-
-            let res_variant = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
-                crate::layout::union_sorted_tags(&mut layout_env, *whole_var).map_err(Into::into)
-            };
-
-            let variant = match res_variant {
-                Ok(cached) => cached,
-                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                    return Err(RuntimeError::UnresolvedTypeVar)
-                }
-                Err(LayoutProblem::Erroneous) => return Err(RuntimeError::ErroneousType),
-            };
-
-            let result = match variant {
-                Never => unreachable!(
-                    "there is no pattern of type `[]`, union var {:?}",
-                    *whole_var
-                ),
-                Unit => Pattern::EnumLiteral {
-                    tag_id: 0,
-                    tag_name: tag_name.clone(),
-                    union: Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![Ctor {
-                            tag_id: TagId(0),
-                            name: CtorName::Tag(tag_name.clone()),
-                            arity: 0,
-                        }],
-                    },
-                },
-                BoolUnion { ttrue, ffalse } => {
-                    let (ttrue, ffalse) = (ttrue.expect_tag(), ffalse.expect_tag());
-                    Pattern::BitLiteral {
-                        value: tag_name == &ttrue,
-                        tag_name: tag_name.clone(),
-                        union: Union {
-                            render_as: RenderAs::Tag,
-                            alternatives: vec![
-                                Ctor {
-                                    tag_id: TagId(0),
-                                    name: CtorName::Tag(ffalse),
-                                    arity: 0,
-                                },
-                                Ctor {
-                                    tag_id: TagId(1),
-                                    name: CtorName::Tag(ttrue),
-                                    arity: 0,
-                                },
-                            ],
-                        },
-                    }
-                }
-                ByteUnion(tag_names) => {
-                    let tag_id = tag_names
-                        .iter()
-                        .position(|key| tag_name == key.expect_tag_ref())
-                        .expect("tag must be in its own type");
-
-                    let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
-                    for (i, tag_name) in tag_names.into_iter().enumerate() {
-                        ctors.push(Ctor {
-                            tag_id: TagId(i as _),
-                            name: CtorName::Tag(tag_name.expect_tag()),
-                            arity: 0,
-                        })
-                    }
-
-                    let union = roc_exhaustive::Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: ctors,
-                    };
-
-                    Pattern::EnumLiteral {
-                        tag_id: tag_id as u8,
-                        tag_name: tag_name.clone(),
-                        union,
-                    }
-                }
-                Newtype {
-                    arguments: field_layouts,
-                    ..
-                } => {
-                    let mut arguments = arguments.clone();
-
-                    arguments.sort_by(|arg1, arg2| {
-                        let size1 = layout_cache
-                            .from_var(env.arena, arg1.0, env.subs)
-                            .map(|x| layout_cache.interner.alignment_bytes(x))
-                            .unwrap_or(0);
-
-                        let size2 = layout_cache
-                            .from_var(env.arena, arg2.0, env.subs)
-                            .map(|x| layout_cache.interner.alignment_bytes(x))
-                            .unwrap_or(0);
-
-                        size2.cmp(&size1)
-                    });
-
-                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                    for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
-                        mono_args.push((
-                            from_can_pattern_help(
-                                env,
-                                procs,
-                                layout_cache,
-                                &loc_pat.value,
-                                assignments,
-                            )?,
-                            *layout,
-                        ));
-                    }
-
-                    Pattern::NewtypeDestructure {
-                        tag_name: tag_name.clone(),
-                        arguments: mono_args,
-                    }
-                }
-                NewtypeByVoid {
-                    data_tag_arguments,
-                    data_tag_name,
-                    ..
-                } => {
-                    let data_tag_name = data_tag_name.expect_tag();
-
-                    if tag_name != &data_tag_name {
-                        // this tag is not represented at runtime
-                        Pattern::Voided {
-                            tag_name: tag_name.clone(),
-                        }
-                    } else {
-                        let mut arguments = arguments.clone();
-
-                        arguments.sort_by(|arg1, arg2| {
-                            let size1 = layout_cache
-                                .from_var(env.arena, arg1.0, env.subs)
-                                .map(|x| layout_cache.interner.alignment_bytes(x))
-                                .unwrap_or(0);
-
-                            let size2 = layout_cache
-                                .from_var(env.arena, arg2.0, env.subs)
-                                .map(|x| layout_cache.interner.alignment_bytes(x))
-                                .unwrap_or(0);
-
-                            size2.cmp(&size1)
-                        });
-
-                        let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                        let it = arguments.iter().zip(data_tag_arguments.iter());
-                        for ((_, loc_pat), layout) in it {
-                            mono_args.push((
-                                from_can_pattern_help(
-                                    env,
-                                    procs,
-                                    layout_cache,
-                                    &loc_pat.value,
-                                    assignments,
-                                )?,
-                                *layout,
-                            ));
-                        }
-
-                        Pattern::NewtypeDestructure {
-                            tag_name: tag_name.clone(),
-                            arguments: mono_args,
-                        }
-                    }
-                }
-
-                Wrapped(variant) => {
-                    let (tag_id, argument_layouts) = variant.tag_name_to_id(tag_name);
-                    let number_of_tags = variant.number_of_tags();
-                    let mut ctors = std::vec::Vec::with_capacity(number_of_tags);
-
-                    let arguments = {
-                        let mut temp = arguments.clone();
-
-                        temp.sort_by(|arg1, arg2| {
-                            let layout1 =
-                                layout_cache.from_var(env.arena, arg1.0, env.subs).unwrap();
-                            let layout2 =
-                                layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
-
-                            let size1 = layout_cache.interner.alignment_bytes(layout1);
-                            let size2 = layout_cache.interner.alignment_bytes(layout2);
-
-                            size2.cmp(&size1)
-                        });
-
-                        temp
-                    };
-
-                    // we must derive the union layout from the whole_var, building it up
-                    // from `layouts` would unroll recursive tag unions, and that leads to
-                    // problems down the line because we hash layouts and an unrolled
-                    // version is not the same as the minimal version.
-                    let whole_var_layout = layout_cache.from_var(env.arena, *whole_var, env.subs);
-                    let layout =
-                        match whole_var_layout.map(|l| layout_cache.interner.chase_recursive(l)) {
-                            Ok(Layout::Union(ul)) => ul,
-                            _ => internal_error!(),
-                        };
-
-                    use WrappedVariant::*;
-                    match variant {
-                        NonRecursive {
-                            sorted_tag_layouts: ref tags,
-                        } => {
-                            debug_assert!(tags.len() > 1);
-
-                            for (i, (tag_name, args)) in tags.iter().enumerate() {
-                                ctors.push(Ctor {
-                                    tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
-                                    arity: args.len(),
-                                })
-                            }
-
-                            let union = roc_exhaustive::Union {
-                                render_as: RenderAs::Tag,
-                                alternatives: ctors,
-                            };
-
-                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-
-                            debug_assert_eq!(
-                                arguments.len(),
-                                argument_layouts.len(),
-                                "The {:?} tag got {} arguments, but its layout expects {}!",
-                                tag_name,
-                                arguments.len(),
-                                argument_layouts.len(),
-                            );
-                            let it = argument_layouts.iter();
-
-                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
-                                mono_args.push((
-                                    from_can_pattern_help(
-                                        env,
-                                        procs,
-                                        layout_cache,
-                                        &loc_pat.value,
-                                        assignments,
-                                    )?,
-                                    *layout,
-                                ));
-                            }
-
-                            Pattern::AppliedTag {
-                                tag_name: tag_name.clone(),
-                                tag_id: tag_id as _,
-                                arguments: mono_args,
-                                union,
-                                layout,
-                            }
-                        }
-
-                        Recursive {
-                            sorted_tag_layouts: ref tags,
-                        } => {
-                            debug_assert!(tags.len() > 1);
-
-                            for (i, (tag_name, args)) in tags.iter().enumerate() {
-                                ctors.push(Ctor {
-                                    tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
-                                    arity: args.len(),
-                                })
-                            }
-
-                            let union = roc_exhaustive::Union {
-                                render_as: RenderAs::Tag,
-                                alternatives: ctors,
-                            };
-
-                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-
-                            debug_assert_eq!(arguments.len(), argument_layouts.len());
-                            let it = argument_layouts.iter();
-
-                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
-                                mono_args.push((
-                                    from_can_pattern_help(
-                                        env,
-                                        procs,
-                                        layout_cache,
-                                        &loc_pat.value,
-                                        assignments,
-                                    )?,
-                                    *layout,
-                                ));
-                            }
-
-                            Pattern::AppliedTag {
-                                tag_name: tag_name.clone(),
-                                tag_id: tag_id as _,
-                                arguments: mono_args,
-                                union,
-                                layout,
-                            }
-                        }
-
-                        NonNullableUnwrapped {
-                            tag_name: w_tag_name,
-                            fields,
-                        } => {
-                            debug_assert_eq!(w_tag_name.expect_tag_ref(), tag_name);
-
-                            ctors.push(Ctor {
-                                tag_id: TagId(0),
-                                name: CtorName::Tag(tag_name.clone()),
-                                arity: fields.len(),
-                            });
-
-                            let union = roc_exhaustive::Union {
-                                render_as: RenderAs::Tag,
-                                alternatives: ctors,
-                            };
-
-                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-
-                            debug_assert_eq!(arguments.len(), argument_layouts.len());
-                            let it = argument_layouts.iter();
-
-                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
-                                mono_args.push((
-                                    from_can_pattern_help(
-                                        env,
-                                        procs,
-                                        layout_cache,
-                                        &loc_pat.value,
-                                        assignments,
-                                    )?,
-                                    *layout,
-                                ));
-                            }
-
-                            Pattern::AppliedTag {
-                                tag_name: tag_name.clone(),
-                                tag_id: tag_id as _,
-                                arguments: mono_args,
-                                union,
-                                layout,
-                            }
-                        }
-
-                        NullableWrapped {
-                            sorted_tag_layouts: ref non_nulled_tags,
-                            nullable_id,
-                            nullable_name,
-                        } => {
-                            for id in 0..(non_nulled_tags.len() + 1) {
-                                if id == nullable_id as usize {
-                                    ctors.push(Ctor {
-                                        tag_id: TagId(id as _),
-                                        name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                        arity: 0,
-                                    });
-                                } else {
-                                    let i = if id < nullable_id.into() { id } else { id - 1 };
-                                    let (tag_name, args) = &non_nulled_tags[i];
-                                    ctors.push(Ctor {
-                                        tag_id: TagId(i as _),
-                                        name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
-                                        arity: args.len(),
-                                    });
-                                }
-                            }
-
-                            let union = roc_exhaustive::Union {
-                                render_as: RenderAs::Tag,
-                                alternatives: ctors,
-                            };
-
-                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-
-                            let it = if tag_name == nullable_name.expect_tag_ref() {
-                                [].iter()
-                            } else {
-                                argument_layouts.iter()
-                            };
-
-                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
-                                mono_args.push((
-                                    from_can_pattern_help(
-                                        env,
-                                        procs,
-                                        layout_cache,
-                                        &loc_pat.value,
-                                        assignments,
-                                    )?,
-                                    *layout,
-                                ));
-                            }
-
-                            Pattern::AppliedTag {
-                                tag_name: tag_name.clone(),
-                                tag_id: tag_id as _,
-                                arguments: mono_args,
-                                union,
-                                layout,
-                            }
-                        }
-
-                        NullableUnwrapped {
-                            other_fields,
-                            nullable_id,
-                            nullable_name,
-                            other_name: _,
-                        } => {
-                            debug_assert!(!other_fields.is_empty());
-
-                            ctors.push(Ctor {
-                                tag_id: TagId(nullable_id as _),
-                                name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                arity: 0,
-                            });
-
-                            ctors.push(Ctor {
-                                tag_id: TagId(!nullable_id as _),
-                                name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                arity: other_fields.len(),
-                            });
-
-                            let union = roc_exhaustive::Union {
-                                render_as: RenderAs::Tag,
-                                alternatives: ctors,
-                            };
-
-                            let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-
-                            let it = if tag_name == nullable_name.expect_tag_ref() {
-                                [].iter()
-                            } else {
-                                argument_layouts.iter()
-                            };
-
-                            for ((_, loc_pat), layout) in arguments.iter().zip(it) {
-                                mono_args.push((
-                                    from_can_pattern_help(
-                                        env,
-                                        procs,
-                                        layout_cache,
-                                        &loc_pat.value,
-                                        assignments,
-                                    )?,
-                                    *layout,
-                                ));
-                            }
-
-                            Pattern::AppliedTag {
-                                tag_name: tag_name.clone(),
-                                tag_id: tag_id as _,
-                                arguments: mono_args,
-                                union,
-                                layout,
-                            }
-                        }
-                    }
-                }
-            };
-
-            Ok(result)
-        }
-
-        UnwrappedOpaque {
-            opaque, argument, ..
-        } => {
-            let (arg_var, loc_arg_pattern) = &(**argument);
-            let arg_layout = layout_cache
-                .from_var(env.arena, *arg_var, env.subs)
-                .unwrap();
-            let mono_arg_pattern = from_can_pattern_help(
-                env,
-                procs,
-                layout_cache,
-                &loc_arg_pattern.value,
-                assignments,
-            )?;
-            Ok(Pattern::OpaqueUnwrap {
-                opaque: *opaque,
-                argument: Box::new((mono_arg_pattern, arg_layout)),
-            })
-        }
-
-        TupleDestructure {
-            whole_var,
-            destructs,
-            ..
-        } => {
-            // sorted fields based on the type
-            let sorted_elems = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
-                crate::layout::sort_tuple_elems(&mut layout_env, *whole_var)
-                    .map_err(RuntimeError::from)?
-            };
-
-            // sorted fields based on the destruct
-            let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
-            let mut destructs_by_index = Vec::with_capacity_in(destructs.len(), env.arena);
-            destructs_by_index.extend(destructs.iter().map(Some));
-
-            let mut elem_layouts = Vec::with_capacity_in(sorted_elems.len(), env.arena);
-
-            for (index, variable, res_layout) in sorted_elems.into_iter() {
-                if index < destructs.len() {
-                    // this elem is destructured by the pattern
-                    mono_destructs.push(from_can_tuple_destruct(
-                        env,
-                        procs,
-                        layout_cache,
-                        &destructs[index].value,
-                        res_layout,
-                        assignments,
-                    )?);
-                } else {
-                    // this elem is not destructured by the pattern
-                    // put in an underscore
-                    mono_destructs.push(TupleDestruct {
-                        index,
-                        variable,
-                        layout: res_layout,
-                        pat: Pattern::Underscore,
-                    });
-                }
-
-                // the layout of this field is part of the layout of the record
-                elem_layouts.push(res_layout);
-            }
-
-            Ok(Pattern::TupleDestructure(
-                mono_destructs,
-                elem_layouts.into_bump_slice(),
-            ))
-        }
-
-        RecordDestructure {
-            whole_var,
-            destructs,
-            ..
-        } => {
-            // sorted fields based on the type
-            let sorted_fields = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
-                crate::layout::sort_record_fields(&mut layout_env, *whole_var)
-                    .map_err(RuntimeError::from)?
-            };
-
-            // sorted fields based on the destruct
-            let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
-            let mut destructs_by_label = BumpMap::with_capacity_in(destructs.len(), env.arena);
-            destructs_by_label.extend(destructs.iter().map(|x| (&x.value.label, x)));
-
-            let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
-
-            // next we step through both sequences of fields. The outer loop is the sequence based
-            // on the type, since not all fields need to actually be destructured in the source
-            // language.
-            //
-            // However in mono patterns, we do destruct all patterns (but use Underscore) when
-            // in the source the field is not matche in the source language.
-            //
-            // Optional fields somewhat complicate the matter here
-
-            for (label, variable, res_layout) in sorted_fields.into_iter() {
-                match res_layout {
-                    Ok(field_layout) => {
-                        // the field is non-optional according to the type
-
-                        match destructs_by_label.remove(&label) {
-                            Some(destruct) => {
-                                // this field is destructured by the pattern
-                                mono_destructs.push(from_can_record_destruct(
-                                    env,
-                                    procs,
-                                    layout_cache,
-                                    &destruct.value,
-                                    field_layout,
-                                    assignments,
-                                )?);
-                            }
-                            None => {
-                                // this field is not destructured by the pattern
-                                // put in an underscore
-                                mono_destructs.push(RecordDestruct {
-                                    label: label.clone(),
-                                    variable,
-                                    layout: field_layout,
-                                    typ: DestructType::Guard(Pattern::Underscore),
-                                });
-                            }
-                        }
-
-                        // the layout of this field is part of the layout of the record
-                        field_layouts.push(field_layout);
-                    }
-                    Err(field_layout) => {
-                        // the field is optional according to the type
-                        match destructs_by_label.remove(&label) {
-                            Some(destruct) => {
-                                // this field is destructured by the pattern
-                                match &destruct.value.typ {
-                                    roc_can::pattern::DestructType::Optional(_, loc_expr) => {
-                                        // if we reach this stage, the optional field is not present
-                                        // so we push the default assignment into the branch
-                                        assignments.push((
-                                            destruct.value.symbol,
-                                            variable,
-                                            loc_expr.value.clone(),
-                                        ));
-                                    }
-                                    _ => unreachable!(
-                                        "only optional destructs can be optional fields"
-                                    ),
-                                };
-                            }
-                            None => {
-                                // this field is not destructured by the pattern
-                                // put in an underscore
-                                mono_destructs.push(RecordDestruct {
-                                    label: label.clone(),
-                                    variable,
-                                    layout: field_layout,
-                                    typ: DestructType::Guard(Pattern::Underscore),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            for (_, destruct) in destructs_by_label.drain() {
-                // this destruct is not in the type, but is in the pattern
-                // it must be an optional field, and we will use the default
-                match &destruct.value.typ {
-                    roc_can::pattern::DestructType::Optional(field_var, loc_expr) => {
-                        assignments.push((
-                            destruct.value.symbol,
-                            // destruct.value.var,
-                            *field_var,
-                            loc_expr.value.clone(),
-                        ));
-                    }
-                    _ => unreachable!("only optional destructs can be optional fields"),
-                }
-            }
-
-            Ok(Pattern::RecordDestructure(
-                mono_destructs,
-                field_layouts.into_bump_slice(),
-            ))
-        }
-
-        List {
-            list_var: _,
-            elem_var,
-            patterns,
-        } => {
-            let element_layout = match layout_cache.from_var(env.arena, *elem_var, env.subs) {
-                Ok(lay) => lay,
-                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                    return Err(RuntimeError::UnresolvedTypeVar)
-                }
-                Err(LayoutProblem::Erroneous) => return Err(RuntimeError::ErroneousType),
-            };
-
-            let arity = patterns.arity();
-
-            let mut mono_patterns = Vec::with_capacity_in(patterns.patterns.len(), env.arena);
-            for loc_pat in patterns.patterns.iter() {
-                let mono_pat =
-                    from_can_pattern_help(env, procs, layout_cache, &loc_pat.value, assignments)?;
-                mono_patterns.push(mono_pat);
-            }
-
-            Ok(Pattern::List {
-                arity,
-                element_layout,
-                elements: mono_patterns,
-            })
-        }
-    }
-}
-
-fn from_can_record_destruct<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    can_rd: &roc_can::pattern::RecordDestruct,
-    field_layout: InLayout<'a>,
-    assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
-) -> Result<RecordDestruct<'a>, RuntimeError> {
-    Ok(RecordDestruct {
-        label: can_rd.label.clone(),
-        variable: can_rd.var,
-        layout: field_layout,
-        typ: match &can_rd.typ {
-            roc_can::pattern::DestructType::Required => DestructType::Required(can_rd.symbol),
-            roc_can::pattern::DestructType::Optional(_, _) => {
-                // if we reach this stage, the optional field is present
-                DestructType::Required(can_rd.symbol)
-            }
-            roc_can::pattern::DestructType::Guard(_, loc_pattern) => DestructType::Guard(
-                from_can_pattern_help(env, procs, layout_cache, &loc_pattern.value, assignments)?,
-            ),
-        },
-    })
-}
-
-fn from_can_tuple_destruct<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    layout_cache: &mut LayoutCache<'a>,
-    can_rd: &roc_can::pattern::TupleDestruct,
-    field_layout: InLayout<'a>,
-    assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
-) -> Result<TupleDestruct<'a>, RuntimeError> {
-    Ok(TupleDestruct {
-        index: can_rd.destruct_index,
-        variable: can_rd.var,
-        layout: field_layout,
-        pat: from_can_pattern_help(env, procs, layout_cache, &can_rd.typ.1.value, assignments)?,
-    })
-}
-
-#[derive(Debug, Clone, Copy)]
-enum IntOrFloatValue {
-    Int(IntValue),
-    Float(f64),
-}
-
-enum NumLiteral {
-    Int([u8; 16], IntWidth),
-    U128([u8; 16]),
-    Float(f64, FloatWidth),
-    Decimal([u8; 16]),
-}
-
-impl NumLiteral {
-    fn to_expr_literal(&self) -> Literal<'static> {
-        match *self {
-            NumLiteral::Int(n, _) => Literal::Int(n),
-            NumLiteral::U128(n) => Literal::U128(n),
-            NumLiteral::Float(n, _) => Literal::Float(n),
-            NumLiteral::Decimal(n) => Literal::Decimal(n),
-        }
-    }
-    fn to_pattern(&self) -> Pattern<'static> {
-        match *self {
-            NumLiteral::Int(n, w) => Pattern::IntLiteral(n, w),
-            NumLiteral::U128(n) => Pattern::IntLiteral(n, IntWidth::U128),
-            NumLiteral::Float(n, w) => Pattern::FloatLiteral(f64::to_bits(n), w),
-            NumLiteral::Decimal(n) => Pattern::DecimalLiteral(n),
-        }
-    }
-}
-
-fn make_num_literal<'a>(
-    interner: &TLLayoutInterner<'a>,
-    layout: InLayout<'a>,
-    num_str: &str,
-    num_value: IntOrFloatValue,
-) -> NumLiteral {
-    match interner.get(layout) {
-        Layout::Builtin(Builtin::Int(width)) => match num_value {
-            IntOrFloatValue::Int(IntValue::I128(n)) => NumLiteral::Int(n, width),
-            IntOrFloatValue::Int(IntValue::U128(n)) => NumLiteral::U128(n),
-            IntOrFloatValue::Float(..) => {
-                internal_error!("Float value where int was expected, should have been a type error")
-            }
-        },
-        Layout::Builtin(Builtin::Float(width)) => match num_value {
-            IntOrFloatValue::Float(n) => NumLiteral::Float(n, width),
-            IntOrFloatValue::Int(int_value) => match int_value {
-                IntValue::I128(n) => NumLiteral::Float(i128::from_ne_bytes(n) as f64, width),
-                IntValue::U128(n) => NumLiteral::Float(u128::from_ne_bytes(n) as f64, width),
-            },
-        },
-        Layout::Builtin(Builtin::Decimal) => {
-            let dec = match RocDec::from_str(num_str) {
-                Some(d) => d,
-                None => internal_error!(
-                    "Invalid decimal for float literal = {}. This should be a type error!",
-                    num_str
-                ),
-            };
-            NumLiteral::Decimal(dec.to_ne_bytes())
-        }
-        layout => internal_error!(
-            "Found a non-num layout where a number was expected: {:?}",
-            layout
-        ),
-    }
-}
-
 fn assign_num_literal_expr<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
@@ -10450,20 +8778,6 @@ fn assign_num_literal_expr<'a>(
         make_num_literal(&layout_cache.interner, layout, num_str, num_value).to_expr_literal();
 
     Stmt::Let(assigned, Expr::Literal(literal), layout, hole)
-}
-
-fn make_num_literal_pattern<'a>(
-    env: &mut Env<'a, '_>,
-    layout_cache: &mut LayoutCache<'a>,
-    variable: Variable,
-    num_str: &str,
-    num_value: IntOrFloatValue,
-) -> Pattern<'a> {
-    let layout = layout_cache
-        .from_var(env.arena, variable, env.subs)
-        .unwrap();
-    let literal = make_num_literal(&layout_cache.interner, layout, num_str, num_value);
-    literal.to_pattern()
 }
 
 type ToLowLevelCallArguments<'a> = (
@@ -11178,12 +9492,14 @@ where
     }
 }
 
+#[derive(Debug, Default)]
 pub struct GlueLayouts<'a> {
     pub getters: std::vec::Vec<(Symbol, ProcLayout<'a>)>,
 }
 
 type GlueProcId = u16;
 
+#[derive(Debug)]
 pub struct GlueProc<'a> {
     pub name: Symbol,
     pub proc_layout: ProcLayout<'a>,
@@ -11203,10 +9519,6 @@ impl LambdaSetId {
     pub fn next(self) -> Self {
         debug_assert!(self.0 < u32::MAX);
         Self(self.0 + 1)
-    }
-
-    pub const fn invalid() -> Self {
-        Self(u32::MAX)
     }
 }
 
@@ -11230,34 +9542,8 @@ where
     let mut stack: Vec<'a, Layout<'a>> = Vec::from_iter_in([*layout], arena);
     let mut next_unique_id = 0;
 
-    macro_rules! handle_struct_field_layouts {
-        ($field_layouts: expr) => {{
-            if $field_layouts.iter().any(|l| {
-                layout_interner
-                    .get(*l)
-                    .has_varying_stack_size(layout_interner, arena)
-            }) {
-                let procs = generate_glue_procs_for_struct_fields(
-                    layout_interner,
-                    home,
-                    &mut next_unique_id,
-                    ident_ids,
-                    arena,
-                    layout,
-                    $field_layouts,
-                );
-
-                answer.getters.push((*layout, procs));
-            }
-
-            for in_layout in $field_layouts.iter().rev() {
-                stack.push(layout_interner.get(*in_layout));
-            }
-        }};
-    }
-
     macro_rules! handle_tag_field_layouts {
-        ($tag_id:expr, $union_layout:expr, $field_layouts: expr) => {{
+        ($tag_id:expr, $layout:expr, $union_layout:expr, $field_layouts: expr) => {{
             if $field_layouts.iter().any(|l| {
                 layout_interner
                     .get(*l)
@@ -11270,12 +9556,12 @@ where
                     ident_ids,
                     arena,
                     $tag_id,
-                    layout,
+                    &$layout,
                     $union_layout,
                     $field_layouts,
                 );
 
-                answer.getters.push((*layout, procs));
+                answer.getters.push(($layout, procs));
             }
 
             for in_layout in $field_layouts.iter().rev() {
@@ -11295,7 +9581,27 @@ where
                 Builtin::List(element) => stack.push(layout_interner.get(element)),
             },
             Layout::Struct { field_layouts, .. } => {
-                handle_struct_field_layouts!(field_layouts);
+                if field_layouts.iter().any(|l| {
+                    layout_interner
+                        .get(*l)
+                        .has_varying_stack_size(layout_interner, arena)
+                }) {
+                    let procs = generate_glue_procs_for_struct_fields(
+                        layout_interner,
+                        home,
+                        &mut next_unique_id,
+                        ident_ids,
+                        arena,
+                        &layout,
+                        field_layouts,
+                    );
+
+                    answer.getters.push((layout, procs));
+                }
+
+                for in_layout in field_layouts.iter().rev() {
+                    stack.push(layout_interner.get(*in_layout));
+                }
             }
             Layout::Boxed(boxed) => {
                 stack.push(layout_interner.get(boxed));
@@ -11312,7 +9618,7 @@ where
                     }
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    handle_tag_field_layouts!(0, union_layout, field_layouts);
+                    handle_tag_field_layouts!(0, layout, union_layout, field_layouts);
                 }
                 UnionLayout::NullableWrapped {
                     other_tags,
@@ -11321,7 +9627,7 @@ where
                     let tag_ids =
                         (0..nullable_id).chain(nullable_id + 1..other_tags.len() as u16 + 1);
                     for (i, field_layouts) in tag_ids.zip(other_tags) {
-                        handle_tag_field_layouts!(i, union_layout, *field_layouts);
+                        handle_tag_field_layouts!(i, layout, union_layout, *field_layouts);
                     }
                 }
                 UnionLayout::NullableUnwrapped { other_fields, .. } => {
@@ -11341,6 +9647,9 @@ where
                 lambda_set_id = lambda_set_id.next();
 
                 stack.push(layout_interner.get(lambda_set.runtime_representation()));
+
+                // TODO: figure out if we need to look at the other layouts
+                // stack.push(layout_interner.get(lambda_set.ret));
             }
             Layout::RecursivePointer(_) => {
                 /* do nothing, we've already generated for this type through the Union(_) */
@@ -11357,8 +9666,8 @@ fn generate_glue_procs_for_struct_fields<'a, 'i, I>(
     next_unique_id: &mut GlueProcId,
     ident_ids: &mut IdentIds,
     arena: &'a Bump,
-    unboxed_struct_layout: &'a Layout<'a>,
-    field_layouts: &'a [InLayout<'a>],
+    unboxed_struct_layout: &Layout<'a>,
+    field_layouts: &[InLayout<'a>],
 ) -> Vec<'a, GlueProc<'a>>
 where
     I: LayoutInterner<'a>,
@@ -11367,6 +9676,17 @@ where
     let boxed_struct_layout = Layout::Boxed(interned_unboxed_struct_layout);
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
+
+    let field_layouts = match layout_interner.get(interned_unboxed_struct_layout) {
+        Layout::Struct { field_layouts, .. } => field_layouts,
+        other => {
+            unreachable!(
+                "{:?} {:?}",
+                layout_interner.dbg(interned_unboxed_struct_layout),
+                other
+            )
+        }
+    };
 
     for (index, field) in field_layouts.iter().enumerate() {
         let proc_layout = ProcLayout {
@@ -11443,7 +9763,8 @@ fn unique_glue_symbol(
     let _result = write!(&mut string, "roc__getter_{}_{}", module_name, unique_id);
     debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
 
-    let ident_id = ident_ids.get_or_insert(string.into_bump_str());
+    let bump_string = string.into_bump_str();
+    let ident_id = ident_ids.get_or_insert(bump_string);
 
     Symbol::new(home, ident_id)
 }
@@ -11456,7 +9777,7 @@ fn generate_glue_procs_for_tag_fields<'a, 'i, I>(
     ident_ids: &mut IdentIds,
     arena: &'a Bump,
     tag_id: TagIdIntType,
-    unboxed_struct_layout: &'a Layout<'a>,
+    unboxed_struct_layout: &Layout<'a>,
     union_layout: UnionLayout<'a>,
     field_layouts: &'a [InLayout<'a>],
 ) -> Vec<'a, GlueProc<'a>>

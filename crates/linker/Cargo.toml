@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
 roc_error_macros = { path = "../error_macros" }
+roc_module = { path = "../compiler/module" }
 roc_load = { path = "../compiler/load" }
 roc_mono = { path = "../compiler/mono" }
 roc_packaging = { path = "../packaging" }
@@ -35,3 +36,4 @@ tempfile.workspace = true
 [dev-dependencies]
 indoc.workspace = true
 libc.workspace = true
+serial_test.workspace = true

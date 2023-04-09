@@ -3,7 +3,6 @@ use crate::link::{
 };
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
-use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
@@ -18,6 +17,7 @@ use roc_reporting::{
     report::{RenderTarget, DEFAULT_PALETTE},
 };
 use roc_target::TargetInfo;
+use std::ffi::OsStr;
 use std::ops::Deref;
 use std::{
     path::{Path, PathBuf},
@@ -28,6 +28,8 @@ use target_lexicon::Triple;
 
 #[cfg(feature = "target-wasm32")]
 use roc_collections::all::MutSet;
+
+pub const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
@@ -73,7 +75,7 @@ impl Deref for CodeObject {
 #[derive(Debug, Clone, Copy)]
 pub enum CodeGenBackend {
     Assembly,
-    Llvm,
+    Llvm(LlvmBackendMode),
     Wasm,
 }
 
@@ -96,6 +98,10 @@ pub fn gen_from_mono_module<'a>(
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
+    let path = roc_file_path;
+    let debug = code_gen_options.emit_debug_info;
+    let opt = code_gen_options.opt_level;
+
     match code_gen_options.backend {
         CodeGenBackend::Assembly => gen_from_mono_module_dev(
             arena,
@@ -104,12 +110,18 @@ pub fn gen_from_mono_module<'a>(
             preprocessed_host_path,
             wasm_dev_stack_bytes,
         ),
-        CodeGenBackend::Llvm => {
-            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+        CodeGenBackend::Llvm(backend_mode) => {
+            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
         }
         CodeGenBackend::Wasm => {
             // emit wasm via the llvm backend
-            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+
+            let backend_mode = match code_gen_options.opt_level {
+                OptLevel::Development => LlvmBackendMode::BinaryDev,
+                OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+            };
+
+            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
         }
     }
 }
@@ -122,7 +134,9 @@ fn gen_from_mono_module_llvm<'a>(
     mut loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
-    code_gen_options: CodeGenOptions,
+    opt_level: OptLevel,
+    backend_mode: LlvmBackendMode,
+    emit_debug_info: bool,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -172,12 +186,6 @@ fn gen_from_mono_module_llvm<'a>(
         }
     }
 
-    let CodeGenOptions {
-        backend: _,
-        opt_level,
-        emit_debug_info,
-    } = code_gen_options;
-
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
     let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
@@ -192,12 +200,14 @@ fn gen_from_mono_module_llvm<'a>(
         interns: loaded.interns,
         module,
         target_info,
-        mode: match opt_level {
-            OptLevel::Development => LlvmBackendMode::BinaryDev,
-            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
-        },
+        mode: backend_mode,
 
-        exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: loaded
+            .exposed_to_host
+            .top_level_values
+            .keys()
+            .copied()
+            .collect(),
     };
 
     // does not add any externs for this mode (we have a host) but cleans up some functions around
@@ -225,6 +235,7 @@ fn gen_from_mono_module_llvm<'a>(
         loaded.procedures,
         entry_point,
         Some(&app_ll_file),
+        &loaded.glue_layouts,
     );
 
     env.dibuilder.finalize();
@@ -501,7 +512,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let exposed_to_host = loaded
         .exposed_to_host
-        .values
+        .top_level_values
         .keys()
         .copied()
         .collect::<MutSet<_>>();
@@ -572,7 +583,7 @@ fn gen_from_mono_module_dev_assembly<'a>(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
@@ -643,6 +654,48 @@ impl<'a> BuildFileError<'a> {
                 module,
                 total_time: compilation_start.elapsed(),
             },
+        }
+    }
+}
+
+pub fn handle_error_module(
+    mut module: roc_load::LoadedModule,
+    total_time: std::time::Duration,
+    filename: &OsStr,
+    print_run_anyway_hint: bool,
+) -> std::io::Result<i32> {
+    debug_assert!(module.total_problems() > 0);
+
+    let problems = report_problems_typechecked(&mut module);
+
+    problems.print_to_stdout(total_time);
+
+    if print_run_anyway_hint {
+        // If you're running "main.roc" then you can just do `roc run`
+        // to re-run the program.
+        print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
+
+        if filename != DEFAULT_ROC_FILENAME {
+            print!(" {}", &filename.to_string_lossy());
+        }
+
+        println!("\x1B[39m");
+    }
+
+    Ok(problems.exit_code())
+}
+
+pub fn handle_loading_problem(problem: LoadingProblem) -> std::io::Result<i32> {
+    match problem {
+        LoadingProblem::FormattedReport(report) => {
+            print!("{}", report);
+            Ok(1)
+        }
+        _ => {
+            // TODO: tighten up the types here, we should always end up with a
+            // formatted report from load.
+            print!("Failed with error: {:?}", problem);
+            Ok(1)
         }
     }
 }
@@ -772,25 +825,10 @@ fn build_loaded_file<'a>(
         // Also, we should no longer need to do this once we have platforms on
         // a package repository, as we can then get prebuilt platforms from there.
 
-        let exposed_values = loaded
-            .exposed_to_host
-            .values
-            .keys()
-            .map(|x| x.as_str(&loaded.interns).to_string())
-            .collect();
-
-        let exposed_closure_types = loaded
-            .exposed_to_host
-            .closure_types
-            .iter()
-            .map(|x| {
-                format!(
-                    "{}_{}",
-                    x.module_string(&loaded.interns),
-                    x.as_str(&loaded.interns)
-                )
-            })
-            .collect();
+        let dll_stub_symbols = roc_linker::ExposedSymbols::from_exposed_to_host(
+            &loaded.interns,
+            &loaded.exposed_to_host,
+        );
 
         let join_handle = spawn_rebuild_thread(
             code_gen_options.opt_level,
@@ -799,8 +837,7 @@ fn build_loaded_file<'a>(
             preprocessed_host_path.clone(),
             output_exe_path.clone(),
             target,
-            exposed_values,
-            exposed_closure_types,
+            dll_stub_symbols,
         );
 
         Some(join_handle)
@@ -938,8 +975,8 @@ fn build_loaded_file<'a>(
 
             std::fs::write(app_o_file, &*roc_app_bytes).unwrap();
 
-            let builtins_host_tempfile =
-                bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+            let builtins_host_tempfile = roc_bitcode::host_tempfile()
+                .expect("failed to write host builtins object to tempfile");
 
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
@@ -994,6 +1031,13 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
         false => "",
     };
 
+    let preprocessed_host_path_str = preprocessed_host_path.to_string_lossy();
+    let extra_err_msg = if preprocessed_host_path_str.ends_with(".rh") {
+        "\n\n\tNote: If the platform does have an .rh1 file but no .rh file, it's because it's been built with an older version of roc. Contact the author to release a new build of the platform using a roc release newer than March 21 2023.\n"
+    } else {
+        ""
+    };
+
     eprintln!(
         indoc::indoc!(
             r#"
@@ -1001,13 +1045,14 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
 
                 {}
 
-            However, it was not there!
+            However, it was not there!{}
 
             If you have the platform's source code locally, you may be able to generate it by re-running this command with --prebuilt-platform=false
             "#
         ),
         prefix,
         preprocessed_host_path.to_string_lossy(),
+        extra_err_msg
     );
 }
 
@@ -1019,8 +1064,7 @@ fn spawn_rebuild_thread(
     preprocessed_host_path: PathBuf,
     output_exe_path: PathBuf,
     target: &Triple,
-    exported_symbols: Vec<String>,
-    exported_closure_types: Vec<String>,
+    dll_stub_symbols: Vec<String>,
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
@@ -1043,13 +1087,12 @@ fn spawn_rebuild_thread(
                 preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
             }
             LinkingStrategy::Surgical => {
-                build_and_preprocess_host(
+                build_and_preprocess_host_lowlevel(
                     opt_level,
                     &thread_local_target,
                     platform_main_roc.as_path(),
                     preprocessed_host_path.as_path(),
-                    exported_symbols,
-                    exported_closure_types,
+                    &dll_stub_symbols,
                 );
 
                 // Copy preprocessed host to executable location.
@@ -1075,15 +1118,31 @@ pub fn build_and_preprocess_host(
     target: &Triple,
     platform_main_roc: &Path,
     preprocessed_host_path: &Path,
-    exposed_to_host: Vec<String>,
-    exported_closure_types: Vec<String>,
+    exposed_symbols: roc_linker::ExposedSymbols,
 ) {
-    let (stub_lib, stub_dll_symbols) = roc_linker::generate_stub_lib_from_loaded(
+    let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
+
+    build_and_preprocess_host_lowlevel(
+        opt_level,
         target,
         platform_main_roc,
-        exposed_to_host,
-        exported_closure_types,
-    );
+        preprocessed_host_path,
+        &stub_dll_symbols,
+    )
+}
+
+fn build_and_preprocess_host_lowlevel(
+    opt_level: OptLevel,
+    target: &Triple,
+    platform_main_roc: &Path,
+    preprocessed_host_path: &Path,
+    stub_dll_symbols: &[String],
+) {
+    let stub_lib =
+        roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc, stub_dll_symbols);
+
+    debug_assert!(stub_lib.exists());
+
     rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 
     roc_linker::preprocess_host(
@@ -1091,7 +1150,7 @@ pub fn build_and_preprocess_host(
         platform_main_roc,
         preprocessed_host_path,
         &stub_lib,
-        &stub_dll_symbols,
+        stub_dll_symbols,
     )
 }
 
@@ -1177,7 +1236,7 @@ pub fn build_str_test<'a>(
     let triple = target_lexicon::Triple::host();
 
     let code_gen_options = CodeGenOptions {
-        backend: CodeGenBackend::Llvm,
+        backend: CodeGenBackend::Llvm(LlvmBackendMode::Binary),
         opt_level: OptLevel::Normal,
         emit_debug_info: false,
     };

@@ -3,13 +3,8 @@
 extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::Bump;
-use docs_error::{DocsError, DocsResult};
-use html::mark_node_to_html;
 use roc_can::scope::Scope;
-use roc_code_markup::markup::nodes::MarkupNode;
-use roc_code_markup::slow_pool::SlowPool;
 use roc_collections::VecSet;
-use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -21,10 +16,9 @@ use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-mod docs_error;
-mod html;
-
 const BUILD_DIR: &str = "./generated-docs";
+
+const LINK_SVG: &str = include_str!("./static/link.svg");
 
 pub fn generate_docs_html(root_file: PathBuf) {
     let build_dir = Path::new(BUILD_DIR);
@@ -131,49 +125,6 @@ fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
 
-// converts plain-text code to highlighted html
-pub fn syntax_highlight_expr(code_str: &str) -> DocsResult<String> {
-    let trimmed_code_str = code_str.trim_end().trim();
-    let mut mark_node_pool = SlowPool::default();
-
-    let mut highlighted_html_str = String::new();
-
-    match highlight_expr(trimmed_code_str, &mut mark_node_pool) {
-        Ok(root_mark_node_id) => {
-            let root_mark_node = mark_node_pool.get(root_mark_node_id);
-            mark_node_to_html(root_mark_node, &mark_node_pool, &mut highlighted_html_str);
-
-            Ok(highlighted_html_str)
-        }
-        Err(err) => Err(DocsError::from(err)),
-    }
-}
-
-// converts plain-text code to highlighted html
-pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
-    let trimmed_code_str = code_str.trim_end().trim();
-
-    let mut mark_node_pool = SlowPool::default();
-
-    let mut highlighted_html_str = String::new();
-
-    match highlight_defs(trimmed_code_str, &mut mark_node_pool) {
-        Ok(mark_node_id_vec) => {
-            let def_mark_nodes: Vec<&MarkupNode> = mark_node_id_vec
-                .iter()
-                .map(|mn_id| mark_node_pool.get(*mn_id))
-                .collect();
-
-            for mn in def_mark_nodes {
-                mark_node_to_html(mn, &mark_node_pool, &mut highlighted_html_str)
-            }
-
-            Ok(highlighted_html_str)
-        }
-        Err(err) => Err(DocsError::from(err)),
-    }
-}
-
 fn render_module_documentation(
     module: &ModuleDocumentation,
     root_module: &LoadedModule,
@@ -197,7 +148,7 @@ fn render_module_documentation(
     for entry in &module.entries {
         match entry {
             DocEntry::DocDef(doc_def) => {
-                // Only redner entries that are exposed
+                // Only render entries that are exposed
                 if all_exposed_symbols.contains(&doc_def.symbol) {
                     buf.push_str("<section>");
 
@@ -205,7 +156,8 @@ fn render_module_documentation(
                     let href = format!("#{name}");
                     let mut content = String::new();
 
-                    push_html(&mut content, "a", vec![("href", href.as_str())], name);
+                    push_html(&mut content, "a", vec![("href", href.as_str())], LINK_SVG);
+                    push_html(&mut content, "strong", vec![], name);
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
@@ -588,6 +540,7 @@ fn type_annotation_to_html(
             type_annotation_to_html(indent_level, buf, extension, true);
         }
         TypeAnnotation::Function { args, output } => {
+            let mut paren_is_open = false;
             let mut peekable_args = args.iter().peekable();
             while let Some(arg) = peekable_args.next() {
                 if is_multiline {
@@ -596,8 +549,14 @@ fn type_annotation_to_html(
                     }
                     indent(buf, indent_level + 1);
                 }
+                if needs_parens && !paren_is_open {
+                    buf.push('(');
+                    paren_is_open = true;
+                }
 
-                type_annotation_to_html(indent_level, buf, arg, false);
+                let child_needs_parens =
+                    matches!(arg, TypeAnnotation::Function { args: _, output: _ });
+                type_annotation_to_html(indent_level, buf, arg, child_needs_parens);
 
                 if peekable_args.peek().is_some() {
                     buf.push_str(", ");
@@ -618,6 +577,9 @@ fn type_annotation_to_html(
             }
 
             type_annotation_to_html(next_indent_level, buf, output, false);
+            if needs_parens && paren_is_open {
+                buf.push(')');
+            }
         }
         TypeAnnotation::Ability { members: _ } => {
             // TODO(abilities): fill me in
@@ -728,7 +690,6 @@ fn doc_url<'a>(
                 module_name = symbol.module_string(interns);
             }
             Err(_) => {
-                dbg!(scope);
                 // TODO return Err here
                 panic!(
                     "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
@@ -857,65 +818,24 @@ fn markdown_to_html(
 
     let markdown_options = pulldown_cmark::Options::ENABLE_TABLES;
 
-    let mut expecting_code_block = false;
+    let mut in_code_block: Option<CowStr> = None;
+    let mut to_highlight = String::new();
 
     let mut docs_parser = vec![];
-    let (_, _) = pulldown_cmark::Parser::new_with_broken_link_callback(
+    let parser = pulldown_cmark::Parser::new_with_broken_link_callback(
         markdown,
         markdown_options,
         Some(&mut broken_link_callback),
-    )
-    .fold((0, 0), |(start_quote_count, end_quote_count), event| {
+    );
 
-        match &event {
-            // Replace this sequence (`>>>` syntax):
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(Paragraph)
-            // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::Start(BlockQuote) => {
-                docs_parser.push(event);
-                (start_quote_count + 1, 0)
+    for event in parser {
+        match event {
+            Event::Code(cow_str) => {
+                let highlighted_html =
+                    roc_highlight::highlight_roc_code_inline(cow_str.to_string().as_str());
+                docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
             }
-            Event::Start(Paragraph) => {
-                if start_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                } else {
-                    docs_parser.push(event);
-                }
-                (0, 0)
-            }
-            // Replace this sequence (`>>>` syntax):
-            //     End(Paragraph)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::End(Paragraph) => {
-                docs_parser.push(event);
-                (0, 1)
-            }
-            Event::End(BlockQuote) => {
-                if end_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                    (0, 0)
-                } else {
-                    docs_parser.push(event);
-                    (0, end_quote_count + 1)
-                }
-            }
-            Event::End(Link(LinkType::ShortcutUnknown, _url, _title)) => {
+            Event::End(Link(LinkType::ShortcutUnknown, ref _url, ref _title)) => {
                 // Replace the preceding Text node with a Code node, so it
                 // renders as the equivalent of [`List.len`] instead of [List.len]
                 match docs_parser.pop() {
@@ -929,41 +849,59 @@ fn markdown_to_html(
                 }
 
                 docs_parser.push(event);
-
-                (start_quote_count, end_quote_count)
             }
-            Event::Start(CodeBlock(CodeBlockKind::Fenced(_))) => {
-                expecting_code_block = true;
-                docs_parser.push(event);
-                (0, 0)
+            Event::Start(CodeBlock(CodeBlockKind::Fenced(cow_str))) => {
+                in_code_block = Some(cow_str);
             }
             Event::End(CodeBlock(_)) => {
-                expecting_code_block = false;
-                docs_parser.push(event);
-                (0, 0)
-            }
-            Event::Text(CowStr::Borrowed(code_str)) if expecting_code_block => {
+                match in_code_block {
+                    Some(cow_str) => {
+                        if cow_str.contains("unchecked") {
+                            // TODO HANDLE UNCHECKED
+                        }
 
-                match syntax_highlight_expr(
-                    code_str
-                )
-                {
-                    Ok(highlighted_code_str) => {
-                        docs_parser.push(Event::Html(CowStr::from(highlighted_code_str)));
-                    }
-                    Err(syntax_error) => {
-                        panic!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
-                    }
-                };
+                        if cow_str.contains("repl") {
+                            // TODO HANDLE REPL
+                        }
 
-                (0, 0)
-            }
-            _ => {
+                        // TODO HANDLE CHECKING BY DEFAULT
+                        let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                        docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+                    }
+                    None => {
+                        // Indented code block
+
+                        let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                        docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+                    }
+                }
+
+                // Reset codeblock buffer
+                to_highlight = String::new();
+                in_code_block = None;
+
+                // Push Event::End(CodeBlock)
                 docs_parser.push(event);
-                (0, 0)
+            }
+            Event::Text(t) => {
+                match in_code_block {
+                    Some(_) => {
+                        // If we're in a code block, build up the string of text
+                        to_highlight.push_str(&t);
+                    }
+                    None => {
+                        docs_parser.push(Event::Text(t));
+                    }
+                }
+            }
+            Event::Html(html) => {
+                docs_parser.push(Event::Text(html));
+            }
+            e => {
+                docs_parser.push(e);
             }
         }
-    });
+    }
 
     pulldown_cmark::html::push_html(buf, docs_parser.into_iter());
 }

@@ -1,0 +1,17 @@
+# +opt infer:print_only_under_alias
+app "test" provides [main] to "./platform"
+
+Thunk a : {} -> a
+
+Id has id : a -> Thunk a | a has Id
+
+A := {} has [Id {id}]
+id = \@A {} -> \{} -> @A {}
+#^^{-1} A#id(5): {} -[[id(5)]]-> ({} -[[8]]-> {})
+
+main =
+    a : A
+    a = (id (@A {})) {}
+    #    ^^ A#id(5): {} -[[id(5)]]-> ({} -[[8]]-> {})
+
+    a

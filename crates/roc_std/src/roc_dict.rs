@@ -129,6 +129,7 @@ impl<K: Debug, V: Debug> Debug for RocDict<K, V> {
 /// contiguously in memory. If we separate them at some point, we'll need to
 /// change this implementation drastically!
 #[derive(Eq)]
+#[repr(C)]
 union RocDictItem<K, V> {
     key_first: ManuallyDrop<KeyFirst<K, V>>,
     value_first: ManuallyDrop<ValueFirst<K, V>>,

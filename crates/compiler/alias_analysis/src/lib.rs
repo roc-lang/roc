@@ -305,8 +305,8 @@ where
                 debug_assert_eq!(variant_types.len(), 1);
                 variant_types[0]
             } else {
-                let data_type = builder.add_union_type(&variant_types)?;
                 let cell_type = builder.add_heap_cell_type();
+                let data_type = builder.add_union_type(&variant_types)?;
 
                 builder.add_tuple_type(&[cell_type, data_type])?
             };
@@ -1157,6 +1157,11 @@ fn lowlevel_spec<'a>(
 
             list_clone(builder, block, update_mode_var, list)
         }
+        ListReleaseExcessCapacity => {
+            let list = env.symbols[&arguments[0]];
+
+            list_clone(builder, block, update_mode_var, list)
+        }
         ListAppendUnsafe => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];
@@ -1284,6 +1289,11 @@ fn expr_spec<'a>(
 
     match expr {
         Literal(literal) => literal_spec(builder, block, literal),
+        NullPointer => {
+            let pointer_type = layout_spec(env, builder, interner, layout)?;
+
+            builder.add_unknown_with(block, &[], pointer_type)
+        }
         Call(call) => call_spec(builder, interner, env, block, layout, call),
         Reuse {
             tag_layout,
@@ -1462,7 +1472,8 @@ fn expr_spec<'a>(
 
             let _unit = builder.add_update(block, update_mode_var, heap_cell)?;
 
-            with_new_heap_cell(builder, block, union_data)
+            let value = with_new_heap_cell(builder, block, union_data)?;
+            builder.add_make_named(block, MOD_APP, type_name, value)
         }
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(env, builder, interner, layout)?;

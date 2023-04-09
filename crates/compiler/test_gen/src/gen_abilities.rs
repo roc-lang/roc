@@ -485,6 +485,44 @@ mod encode_immediate {
         )
     }
 
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn ranged_number() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Encode, Json] provides [main] to "./platform"
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] Json.toUtf8) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from(r"[1,2,3]"),
+            RocStr
+        )
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn bool() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Encode, Json] provides [main] to "./platform"
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes Bool.false Json.toUtf8) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from(r"false"),
+            RocStr
+        )
+    }
+
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
@@ -788,6 +826,52 @@ fn encode_derived_record_with_many_types() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derived_tuple_two_fields() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, Json]
+                provides [main] to "./platform"
+
+            main =
+                tup = ("foo", 10u8)
+                result = Str.fromUtf8 (Encode.toBytes tup Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"["foo",10]"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derived_tuple_of_tuples() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, Json]
+                provides [main] to "./platform"
+
+            main =
+                tup = ( ("foo", 10u8), (23u8, "bar", 15u8) )
+                result = Str.fromUtf8 (Encode.toBytes tup Json.toUtf8)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"[["foo",10],[23,"bar",15]]"#),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
 fn encode_derived_generic_record_with_different_field_types() {
     assert_evals_to!(
@@ -957,6 +1041,47 @@ mod decode_immediate {
             ),
             RocStr::from("foo"),
             RocStr
+        )
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn ranged_number() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Json] provides [main] to "./platform"
+
+                main =
+                    input = Str.toUtf8 "[1,2,3]"
+                    expected = [1,2,3]
+
+                    actual = Decode.fromBytes input Json.fromUtf8 |> Result.withDefault []
+
+                    actual == expected
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn bool() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Json] provides [main] to "./platform"
+
+                main =
+                    when Str.toUtf8 "false" |> Decode.fromBytes Json.fromUtf8 is
+                        Ok s -> s
+                        _ -> Bool.true
+                "#
+            ),
+            false,
+            bool
         )
     }
 
@@ -1233,6 +1358,50 @@ fn decode_record_of_record() {
     )
 }
 
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_tuple_two_elements() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[\"ab\",10]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok ("ab", 10u8) -> "abcd"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_tuple_of_tuples() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [Json] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[[\"ab\",10],[\"cd\",25]]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok ( ("ab", 10u8), ("cd", 25u8) ) -> "abcd"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 mod hash {
     #[cfg(feature = "gen-llvm")]
@@ -1317,6 +1486,24 @@ mod hash {
     mod immediate {
         use super::{assert_evals_to, build_test};
         use roc_std::RocList;
+
+        #[test]
+        fn bool_false() {
+            assert_evals_to!(
+                &build_test("Bool.false"),
+                RocList::from_slice(&[0]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn bool_true() {
+            assert_evals_to!(
+                &build_test("Bool.true"),
+                RocList::from_slice(&[1]),
+                RocList<u8>
+            )
+        }
 
         #[test]
         fn i8() {
@@ -1489,6 +1676,35 @@ mod hash {
                     r#"{ a: [ { b: 15u8 }, { b: 23u8 } ], b: [ { c: 45u8 }, { c: 73u8 } ] }"#
                 ),
                 RocList::from_slice(&[15, 23, 45, 73]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn tuple_of_u8_and_str() {
+            assert_evals_to!(
+                &build_test(r#"(15u8, "bc")"#),
+                RocList::from_slice(&[15, 98, 99]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn tuple_of_tuples() {
+            assert_evals_to!(
+                &build_test(r#"( (15u8, "bc"), (23u8, "ef") )"#),
+                RocList::from_slice(&[15, 98, 99, 23, 101, 102]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn tuple_of_list_of_tuples() {
+            assert_evals_to!(
+                &build_test(
+                    r#"( [ ( 15u8, 32u8 ), ( 23u8, 41u8 ) ], [ (45u8, 63u8), (58u8, 73u8) ] )"#
+                ),
+                RocList::from_slice(&[15, 32, 23, 41, 45, 63, 58, 73]),
                 RocList<u8>
             )
         }
@@ -1760,6 +1976,22 @@ mod eq {
 
     use indoc::indoc;
     use roc_std::RocStr;
+
+    #[test]
+    fn eq_tuple() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    ("a", "b") == ("a", "b")
+                "#
+            ),
+            true,
+            bool
+        )
+    }
 
     #[test]
     fn custom_eq_impl() {

@@ -1,0 +1,6 @@
+app "test" provides [main] to "./platform"
+
+Pair x _ = Pair 0 1
+
+main = x
+#      ^ Num w_a

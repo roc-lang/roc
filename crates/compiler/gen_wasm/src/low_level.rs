@@ -285,6 +285,9 @@ impl<'a> LowLevelCall<'a> {
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
             StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
+            StrReleaseExcessCapacity => {
+                self.load_args_and_call_zig(backend, bitcode::STR_RELEASE_EXCESS_CAPACITY)
+            }
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
             StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
@@ -318,25 +321,7 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
-            ListGetCapacity => match backend.storage.get(&self.arguments[0]) {
-                StoredValue::StackMemory { location, .. } => {
-                    let (local_id, offset) =
-                        location.local_and_offset(backend.storage.stack_frame_pointer);
-                    backend.code_builder.get_local(local_id);
-                    // List is stored as (pointer, length, capacity),
-                    // with each of those fields being 4 bytes on wasm.
-                    // So the capacity is 8 bytes after the start of the struct.
-                    //
-                    // WRAPPER_CAPACITY represents the index of the capacity field
-                    // (which is 2 as of the writing of this comment). If the field order
-                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
-                    // continue to work even though this comment may become inaccurate.
-                    backend
-                        .code_builder
-                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
-                }
-                _ => internal_error!("invalid storage for List"),
-            },
+            ListGetCapacity => self.load_args_and_call_zig(backend, bitcode::LIST_CAPACITY),
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
@@ -571,6 +556,46 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 7, false);
+            }
+
+            ListReleaseExcessCapacity => {
+                // List.releaseExcessCapacity : List elem -> List elem
+
+                let list: Symbol = self.arguments[0];
+
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get(elem_layout);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  list: RocList              i64, i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+                //  update_mode: UpdateMode    i32
+
+                // return pointer and list
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    &[list],
+                    self.ret_symbol,
+                    &WasmLayout::new(backend.layout_interner, self.ret_layout),
+                    CallConv::Zig,
+                );
+
+                backend.code_builder.i32_const(elem_align as i32);
+
+                backend.code_builder.i32_const(elem_width as i32);
+
+                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
+
+                backend.call_host_fn_after_loading_args(
+                    bitcode::LIST_RELEASE_EXCESS_CAPACITY,
+                    6,
+                    false,
+                );
             }
 
             ListAppendUnsafe => {
@@ -1489,6 +1514,40 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
+
+            NumCountLeadingZeroBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_COUNT_LEADING_ZERO_BITS[width],
+                    );
+                }
+                _ => panic_ret_type(),
+            },
+            NumCountTrailingZeroBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_COUNT_TRAILING_ZERO_BITS[width],
+                    );
+                }
+                _ => panic_ret_type(),
+            },
+            NumCountOneBits => match backend
+                .layout_interner
+                .get(backend.storage.symbol_layouts[&self.arguments[0]])
+            {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_COUNT_ONE_BITS[width]);
+                }
+                _ => panic_ret_type(),
+            },
             NumRound => {
                 self.load_args(backend);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
@@ -1577,6 +1636,8 @@ impl<'a> LowLevelCall<'a> {
             },
             NumBytesToU16 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U16),
             NumBytesToU32 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U32),
+            NumBytesToU64 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U64),
+            NumBytesToU128 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U128),
             NumBitwiseAnd => {
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {

@@ -8,6 +8,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_code_markup = { path = "../code_markup" }
+html-escape = "0.2"
+roc_parse = { path = "../compiler/parse" }
+roc_region = { path = "../compiler/region" }
 
-peg.workspace = true

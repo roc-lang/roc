@@ -1,73 +1,6 @@
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
 use std::ops::Index;
-use tempfile::NamedTempFile;
-
-pub const HOST_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bitcode/builtins-wasm32.o"));
-// TODO: in the future, we should use Zig's cross-compilation to generate and store these
-// for all targets, so that we can do cross-compilation!
-#[cfg(unix)]
-pub const HOST_UNIX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bitcode/builtins-host.o"));
-#[cfg(windows)]
-pub const HOST_WINDOWS: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/bitcode/builtins-windows-x86_64.obj"
-));
-
-pub fn host_wasm_tempfile() -> std::io::Result<NamedTempFile> {
-    let tempfile = tempfile::Builder::new()
-        .prefix("host_bitcode")
-        .suffix(".wasm")
-        .rand_bytes(8)
-        .tempfile()?;
-
-    std::fs::write(tempfile.path(), HOST_WASM)?;
-
-    Ok(tempfile)
-}
-
-#[cfg(unix)]
-fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
-    let tempfile = tempfile::Builder::new()
-        .prefix("host_bitcode")
-        .suffix(".o")
-        .rand_bytes(8)
-        .tempfile()?;
-
-    std::fs::write(tempfile.path(), HOST_UNIX)?;
-
-    Ok(tempfile)
-}
-
-#[cfg(windows)]
-fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
-    let tempfile = tempfile::Builder::new()
-        .prefix("host_bitcode")
-        .suffix(".obj")
-        .rand_bytes(8)
-        .tempfile()?;
-
-    std::fs::write(tempfile.path(), HOST_WINDOWS)?;
-
-    Ok(tempfile)
-}
-
-pub fn host_tempfile() -> std::io::Result<NamedTempFile> {
-    #[cfg(unix)]
-    {
-        host_unix_tempfile()
-    }
-
-    #[cfg(windows)]
-    {
-        host_windows_tempfile()
-    }
-
-    #[cfg(not(any(windows, unix)))]
-    {
-        unreachable!()
-    }
-}
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct IntrinsicName {
@@ -356,8 +289,16 @@ pub const NUM_MUL_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.
 pub const NUM_MUL_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.mul_with_overflow");
 
+pub const NUM_COUNT_LEADING_ZERO_BITS: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.count_leading_zero_bits");
+pub const NUM_COUNT_TRAILING_ZERO_BITS: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.count_trailing_zero_bits");
+pub const NUM_COUNT_ONE_BITS: IntrinsicName = int_intrinsic!("roc_builtins.num.count_one_bits");
+
 pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
 pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
+pub const NUM_BYTES_TO_U64: &str = "roc_builtins.num.bytes_to_u64";
+pub const NUM_BYTES_TO_U128: &str = "roc_builtins.num.bytes_to_u128";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
@@ -392,6 +333,8 @@ pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
 pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 pub const STR_WITH_CAPACITY: &str = "roc_builtins.str.with_capacity";
 pub const STR_GRAPHEMES: &str = "roc_builtins.str.graphemes";
+pub const STR_REFCOUNT_PTR: &str = "roc_builtins.str.refcount_ptr";
+pub const STR_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.str.release_excess_capacity";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
@@ -409,6 +352,9 @@ pub const LIST_IS_UNIQUE: &str = "roc_builtins.list.is_unique";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
 pub const LIST_APPEND_UNSAFE: &str = "roc_builtins.list.append_unsafe";
 pub const LIST_RESERVE: &str = "roc_builtins.list.reserve";
+pub const LIST_CAPACITY: &str = "roc_builtins.list.capacity";
+pub const LIST_REFCOUNT_PTR: &str = "roc_builtins.list.refcount_ptr";
+pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess_capacity";
 
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";

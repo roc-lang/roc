@@ -1268,3 +1268,27 @@ fn enum_tag_union_in_list() {
         r#"[E, F, G, H] : List [E, F, G, H]"#,
     );
 }
+
+#[test]
+fn str_to_dec() {
+    expect_success(
+        indoc!(
+            r#"
+            Str.toDec "1234.1234"
+            "#
+        ),
+        r#"Ok 1234.1234 : Result Dec [InvalidNumStr]"#,
+    );
+}
+
+#[test]
+fn tuple() {
+    expect_success(
+        indoc!(
+            r#"
+            ("a", 2u32)
+            "#
+        ),
+        r#"("a", 2) : ( Str, U32 )*"#,
+    );
+}

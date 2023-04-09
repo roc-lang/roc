@@ -58,46 +58,43 @@ find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div c
 # cleanup files that could have stayed behind if the script failed
 rm -rf roc_nightly roc_releases.json
 
-echo 'Fetching latest roc nightly...'
-
 # to prevent GitHub from rate limiting netlify servers
 if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
-  curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+  echo 'Building tutorial.html from tutorial.md...'
+  mkdir www/build/tutorial
+
+  cargo run --release --bin roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 else
+  echo 'Fetching latest roc nightly...'
+  
+  # we assume that we're on a netlify server if GITHUB_TOKEN_READ_ONLY is set
   curl --request GET \
           --url https://api.github.com/repos/roc-lang/roc/releases \
           -u $GITHUB_TOKEN_READ_ONLY \
           --output roc_releases.json
-fi
 
-# get the url of the latest release
-if [ "$(uname)" == "Linux" ]; then
   RELEASE_MACHINE="linux_x86_64"
-elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "arm64" ]; then
-  RELEASE_MACHINE="macos_apple_silicon"
-elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "x86_64" ]; then
-  RELEASE_MACHINE="macos_x86_64"
-else
-  RELEASE_MACHINE="UNSUPPORTED_MACHINE"
+
+  export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh $RELEASE_MACHINE)
+  # get roc release archive
+  curl -OL $ROC_RELEASE_URL
+  # extract archive
+  ls | grep "roc_nightly" | xargs tar -xzvf
+  # delete archive
+  ls | grep "roc_nightly.*tar.gz" | xargs rm
+  # simplify dir name
+  mv roc_nightly* roc_nightly
+
+  echo 'Building tutorial.html from tutorial.md...'
+  mkdir www/build/tutorial
+
+  ./roc_nightly/roc version
+  ./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
+
+  # cleanup
+  rm -rf roc_nightly roc_releases.json
 fi
 
-export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh $RELEASE_MACHINE)
-# get roc release archive
-curl -OL $ROC_RELEASE_URL
-# extract archive
-ls | grep "roc_nightly" | xargs tar -xzvf
-# delete archive
-ls | grep "roc_nightly.*tar.gz" | xargs rm
-# simplify dir name
-mv roc_nightly* roc_nightly
-
-echo 'Building tutorial.html from tutorial.md...'
-mkdir www/build/tutorial
-./roc_nightly/roc version
-./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
-
-# cleanup
-rm -rf roc_nightly roc_releases.json
 
 popd

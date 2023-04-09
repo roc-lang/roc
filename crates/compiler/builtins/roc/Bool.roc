@@ -32,6 +32,8 @@ Eq has
     ## cannot derive `isEq` for types that contain functions.
     isEq : a, a -> Bool | a has Eq
 
+## Represents the boolean true and false using an opaque type.
+## `Bool` implements the `Eq` ability.
 Bool := [True, False] has [Eq { isEq: boolIsEq }]
 
 boolIsEq = \@Bool b1, @Bool b2 -> structuralEq b1 b2
@@ -49,23 +51,27 @@ false = @Bool False
 ## gate. The infix operator `&&` can also be used as shorthand for
 ## `Bool.and`.
 ##
-##     expect (Bool.and Bool.true Bool.true) == Bool.true
-##     expect (Bool.true && Bool.true) == Bool.true
-##     expect (Bool.false && Bool.true) == Bool.false
-##     expect (Bool.true && Bool.false) == Bool.false
-##     expect (Bool.false && Bool.false) == Bool.false
+## ```
+## expect (Bool.and Bool.true Bool.true) == Bool.true
+## expect (Bool.true && Bool.true) == Bool.true
+## expect (Bool.false && Bool.true) == Bool.false
+## expect (Bool.true && Bool.false) == Bool.false
+## expect (Bool.false && Bool.false) == Bool.false
+## ```
 ##
-## **Performance Note** that in Roc the `&&` and `||` work the same way as any
+## ## Performance Details
+##
+## In Roc the `&&` and `||` work the same way as any
 ## other function. However, in some languages `&&` and `||` are special-cased.
 ## In these languages the compiler will skip evaluating the expression after the
 ## first operator under certain circumstances. For example an expression like
 ## `enablePets && likesDogs user` would compile to.
-##
-##     if enablePets then
-##         likesDogs user
-##     else
-##         Bool.false
-##
+## ```
+## if enablePets then
+##     likesDogs user
+## else
+##     Bool.false
+## ```
 ## Roc does not do this because conditionals like `if` and `when` have a
 ## performance cost. Calling a function can sometimes be faster across the board
 ## than doing an `if` to decide whether to skip calling it.
@@ -74,14 +80,17 @@ and : Bool, Bool -> Bool
 ## Returns `Bool.true` when either input is a `Bool.true`. This is equivalent to
 ## the logic [OR](https://en.wikipedia.org/wiki/Logical_disjunction) gate.
 ## The infix operator `||` can also be used as shorthand for `Bool.or`.
+## ```
+## expect (Bool.or Bool.false Bool.true) == Bool.true
+## expect (Bool.true || Bool.true) == Bool.true
+## expect (Bool.false || Bool.true) == Bool.true
+## expect (Bool.true || Bool.false) == Bool.true
+## expect (Bool.false || Bool.false) == Bool.false
+## ```
 ##
-##     expect (Bool.or Bool.false Bool.true) == Bool.true
-##     expect (Bool.true || Bool.true) == Bool.true
-##     expect (Bool.false || Bool.true) == Bool.true
-##     expect (Bool.true || Bool.false) == Bool.true
-##     expect (Bool.false || Bool.false) == Bool.false
+## ## Performance Details
 ##
-## **Performance Note** that in Roc the `&&` and `||` work the same way as any
+## In Roc the `&&` and `||` work the same way as any
 ## other functions. However, in some languages `&&` and `||` are special-cased.
 ## Refer to the note in `Bool.and` for more detail.
 or : Bool, Bool -> Bool
@@ -89,9 +98,10 @@ or : Bool, Bool -> Bool
 ## Returns `Bool.false` when given `Bool.true`, and vice versa. This is
 ## equivalent to the logic [NOT](https://en.wikipedia.org/wiki/Negation)
 ## gate. The operator `!` can also be used as shorthand for `Bool.not`.
-##
-##     expect (Bool.not Bool.false) == Bool.true
-##     expect (!Bool.false) == Bool.true
+## ```
+## expect (Bool.not Bool.false) == Bool.true
+## expect (!Bool.false) == Bool.true
+## ```
 not : Bool -> Bool
 
 ## This will call the function `Bool.isEq` on the inputs, and then `Bool.not`
@@ -101,10 +111,11 @@ not : Bool -> Bool
 ##
 ## **Note** that `isNotEq` does not accept arguments whose types contain
 ## functions.
-##
-##     expect (Bool.isNotEq Bool.false Bool.true) == Bool.true
-##     expect (Bool.false != Bool.false) == Bool.false
-##     expect "Apples" != "Oranges"
+## ```
+## expect (Bool.isNotEq Bool.false Bool.true) == Bool.true
+## expect (Bool.false != Bool.false) == Bool.false
+## expect "Apples" != "Oranges"
+## ```
 isNotEq : a, a -> Bool | a has Eq
 isNotEq = \a, b -> structuralNotEq a b
 

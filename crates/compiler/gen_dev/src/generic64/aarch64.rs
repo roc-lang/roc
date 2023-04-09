@@ -7,7 +7,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, STLayoutInterner};
 
-use super::CompareOperation;
+use super::{CompareOperation, RegisterWidth};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -876,6 +876,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn eq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
         dst: AArch64GeneralReg,
         src1: AArch64GeneralReg,
         src2: AArch64GeneralReg,
@@ -887,34 +888,13 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn neq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
         dst: AArch64GeneralReg,
         src1: AArch64GeneralReg,
         src2: AArch64GeneralReg,
     ) {
         cmp_reg64_reg64(buf, src1, src2);
         cset_reg64_cond(buf, dst, ConditionCode::NE);
-    }
-
-    #[inline(always)]
-    fn ilt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        cset_reg64_cond(buf, dst, ConditionCode::LT);
-    }
-
-    #[inline(always)]
-    fn ult_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        cset_reg64_cond(buf, dst, ConditionCode::CCLO);
     }
 
     #[inline(always)]
@@ -927,28 +907,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _operation: CompareOperation,
     ) {
         todo!("registers float comparison for AArch64");
-    }
-
-    #[inline(always)]
-    fn igt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        cset_reg64_cond(buf, dst, ConditionCode::GT);
-    }
-
-    #[inline(always)]
-    fn ugt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        cset_reg64_cond(buf, dst, ConditionCode::HI);
     }
 
     #[inline(always)]
@@ -1090,6 +1048,28 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     fn sqrt_freg32_freg32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
         todo!("sqrt")
+    }
+
+    fn signed_compare_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        _operation: CompareOperation,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("signed compare")
+    }
+
+    fn unsigned_compare_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        _operation: CompareOperation,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("unsigned compare")
     }
 }
 

@@ -19,9 +19,4 @@ pub mod low_level;
 pub mod reset_reuse;
 pub mod tail_recursion;
 
-// Temporary, while we can build up test cases and optimize the exhaustiveness checking.
-// For now, following this warning's advice will lead to nasty type inference errors.
-//#[allow(clippy::ptr_arg)]
-pub mod decision_tree;
-
 pub mod debug;

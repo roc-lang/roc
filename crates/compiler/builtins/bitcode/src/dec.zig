@@ -553,7 +553,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
 //
-// Adapted from https://github.com/nlordell/ethnum-rs
+// Adapted from https://github.com/nlordell/ethnum-rs/blob/c9ed57e131bffde7bcc8274f376e5becf62ef9ac/src/intrinsics/native/divmod.rs
 // Copyright (c) 2020 Nicholas Rodrigues Lordello
 // Licensed under the Apache License version 2.0
 //
@@ -682,16 +682,25 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         lo_overflowed = @subWithOverflow(u128, lo, 1, &lo);
         hi = hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
 
-        // TODO this U256 was originally created by:
+        // NOTE: this U256 was originally created by:
         //
         // ((hi as i128) >> 127).as_u256()
         //
-        // ...however, I can't figure out where that function is defined.
-        // Maybe it's defined using a macro or something. Anyway, hopefully
-        // this is what it would do in this scenario.
+        // As an implementation of `as_u256`, we wrap a negative value around to the maximum value of U256.
+
+        var s_u128 = math.shr(u128, hi, 127);
+        var s_hi: u128 = undefined;
+        var s_lo: u128 = undefined;
+        if (s_u128 == 1) {
+            s_hi = math.maxInt(u128);
+            s_lo = math.maxInt(u128);
+        } else {
+            s_hi = 0;
+            s_lo = 0;
+        }
         var s = .{
-            .hi = 0,
-            .lo = math.shr(u128, hi, 127),
+            .hi = s_hi,
+            .lo = s_lo,
         };
 
         carry = s.lo & 1;
@@ -921,8 +930,8 @@ test "toStr: 123.1111111" {
 test "toStr: 123.1111111111111 (big str)" {
     var dec: RocDec = .{ .num = 123111111111111000000 };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.deinit();
-    defer res_roc_str.deinit();
+    errdefer res_roc_str.decref();
+    defer res_roc_str.decref();
 
     const res_slice: []const u8 = "123.111111111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -931,8 +940,8 @@ test "toStr: 123.1111111111111 (big str)" {
 test "toStr: 123.111111111111444444 (max number of decimal places)" {
     var dec: RocDec = .{ .num = 123111111111111444444 };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.deinit();
-    defer res_roc_str.deinit();
+    errdefer res_roc_str.decref();
+    defer res_roc_str.decref();
 
     const res_slice: []const u8 = "123.111111111111444444"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -941,8 +950,8 @@ test "toStr: 123.111111111111444444 (max number of decimal places)" {
 test "toStr: 12345678912345678912.111111111111111111 (max number of digits)" {
     var dec: RocDec = .{ .num = 12345678912345678912111111111111111111 };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.deinit();
-    defer res_roc_str.deinit();
+    errdefer res_roc_str.decref();
+    defer res_roc_str.decref();
 
     const res_slice: []const u8 = "12345678912345678912.111111111111111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -951,8 +960,8 @@ test "toStr: 12345678912345678912.111111111111111111 (max number of digits)" {
 test "toStr: std.math.maxInt" {
     var dec: RocDec = .{ .num = std.math.maxInt(i128) };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.deinit();
-    defer res_roc_str.deinit();
+    errdefer res_roc_str.decref();
+    defer res_roc_str.decref();
 
     const res_slice: []const u8 = "170141183460469231731.687303715884105727"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -961,8 +970,8 @@ test "toStr: std.math.maxInt" {
 test "toStr: std.math.minInt" {
     var dec: RocDec = .{ .num = std.math.minInt(i128) };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.deinit();
-    defer res_roc_str.deinit();
+    errdefer res_roc_str.decref();
+    defer res_roc_str.decref();
 
     const res_slice: []const u8 = "-170141183460469231731.687303715884105728"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
@@ -1047,12 +1056,38 @@ test "div: 10 / 3" {
     var denom: RocDec = RocDec.fromU64(3);
 
     var roc_str = RocStr.init("3.333333333333333333", 20);
-    errdefer roc_str.deinit();
-    defer roc_str.deinit();
+    errdefer roc_str.decref();
+    defer roc_str.decref();
 
     var res: RocDec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(res, numer.div(denom));
+}
+
+test "div: 341 / 341" {
+    var number1: RocDec = RocDec.fromU64(341);
+    var number2: RocDec = RocDec.fromU64(341);
+    try expectEqual(RocDec.fromU64(1), number1.div(number2));
+}
+
+test "div: 342 / 343" {
+    var number1: RocDec = RocDec.fromU64(342);
+    var number2: RocDec = RocDec.fromU64(343);
+    var roc_str = RocStr.init("0.997084548104956268", 20);
+    try expectEqual(RocDec.fromStr(roc_str), number1.div(number2));
+}
+
+test "div: 680 / 340" {
+    var number1: RocDec = RocDec.fromU64(680);
+    var number2: RocDec = RocDec.fromU64(340);
+    try expectEqual(RocDec.fromU64(2), number1.div(number2));
+}
+
+test "div: 500 / 1000" {
+    var number1: RocDec = RocDec.fromU64(500);
+    var number2: RocDec = RocDec.fromU64(1000);
+    var roc_str = RocStr.init("0.5", 3);
+    try expectEqual(RocDec.fromStr(roc_str), number1.div(number2));
 }
 
 // exports

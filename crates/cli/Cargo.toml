@@ -16,7 +16,7 @@ path = "src/main.rs"
 test = false
 
 [features]
-default = ["target-aarch64", "target-x86_64", "target-wasm32", "editor"]
+default = ["target-aarch64", "target-x86_64", "target-wasm32"]
 
 i386-cli-run = ["target-x86"]
 wasm32-cli-run = ["target-wasm32", "run-wasm32"]
@@ -85,7 +85,7 @@ roc_repl_expect = { path = "../repl_expect" }
 [dev-dependencies]
 cli_utils = { path = "../cli_utils" }
 roc_test_utils = { path = "../test_utils" }
-roc_utils = { path = "../utils" }
+roc_command_utils = { path = "../utils/command" }
 
 criterion.workspace = true
 indoc.workspace = true

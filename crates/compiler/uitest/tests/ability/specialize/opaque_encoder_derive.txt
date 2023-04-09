@@ -1,0 +1,6 @@
+app "test" provides [main] to "./platform"
+
+N := U8 has [Encoding]
+
+main = Encode.toEncoder (@N 15)
+#      ^^^^^^^^^^^^^^^^ N#Encode.toEncoder(3): N -[[#N_toEncoder(3)]]-> Encoder fmt | fmt has EncoderFormatting

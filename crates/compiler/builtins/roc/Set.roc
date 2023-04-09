@@ -4,6 +4,7 @@ interface Set
         empty,
         single,
         walk,
+        walkUntil,
         insert,
         len,
         remove,
@@ -25,6 +26,8 @@ interface Set
 # We should have this line above the next has.
 # It causes the formatter to fail currently.
 # | k has Hash & Eq
+## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
+## type which stores a collection of unique values, without any ordering
 Set k := Dict.Dict k {}
      has [
          Eq {
@@ -43,14 +46,39 @@ isEq = \xs, ys ->
             else
                 Break Bool.false
 
-## Creates a new empty set.
+## Creates a new empty `Set`.
+## ```
+## emptySet = Set.empty {}
+## countValues = Set.len emptySet
+##
+## expect countValues == 0
+## ```
 empty : {} -> Set k | k has Hash & Eq
 empty = \{} -> @Set (Dict.empty {})
 
+## Creates a new `Set` with a single value.
+## ```
+## singleItemSet = Set.single "Apple"
+## countValues = Set.len singleItemSet
+##
+## expect countValues == 1
+## ```
 single : k -> Set k | k has Hash & Eq
 single = \key ->
     Dict.single key {} |> @Set
 
+## Insert a value into a `Set`.
+## ```
+## fewItemSet =
+##     Set.empty {}
+##     |> Set.insert "Apple"
+##     |> Set.insert "Pear"
+##     |> Set.insert "Banana"
+##
+## countValues = Set.len fewItemSet
+##
+## expect countValues == 3
+## ```
 insert : Set k, k -> Set k | k has Hash & Eq
 insert = \@Set dict, key ->
     Dict.insert dict key {} |> @Set
@@ -72,6 +100,18 @@ expect
 
     expected == actual
 
+## Counts the number of values in a given `Set`.
+## ```
+## fewItemSet =
+##     Set.empty {}
+##     |> Set.insert "Apple"
+##     |> Set.insert "Pear"
+##     |> Set.insert "Banana"
+##
+## countValues = Set.len fewItemSet
+##
+## expect countValues == 3
+## ```
 len : Set k -> Nat | k has Hash & Eq
 len = \@Set dict ->
     Dict.len dict
@@ -88,41 +128,151 @@ expect
 
     actual == 3
 
-## Drops the given element from the set.
+## Removes the value from the given `Set`.
+## ```
+## numbers =
+##     Set.empty {}
+##     |> Set.insert 10
+##     |> Set.insert 20
+##     |> Set.remove 10
+##
+## has10 = Set.contains numbers 10
+## has20 = Set.contains numbers 20
+##
+## expect has10 == Bool.false
+## expect has20 == Bool.true
+## ```
 remove : Set k, k -> Set k | k has Hash & Eq
 remove = \@Set dict, key ->
     Dict.remove dict key |> @Set
 
+## Test if a value is in the `Set`.
+## ```
+## Fruit : [Apple, Pear, Banana]
+##
+## fruit : Set Fruit
+## fruit =
+##     Set.single Apple
+##     |> Set.insert Pear
+##
+## hasApple = Set.contains fruit Apple
+## hasBanana = Set.contains fruit Banana
+##
+## expect hasApple == Bool.true
+## expect hasBanana == Bool.false
+## ```
 contains : Set k, k -> Bool | k has Hash & Eq
 contains = \@Set dict, key ->
     Dict.contains dict key
 
+## Retrieve the values in a `Set` as a `List`.
+## ```
+## numbers : Set U64
+## numbers = Set.fromList [1,2,3,4,5]
+##
+## values = [1,2,3,4,5]
+##
+## expect Set.toList numbers == values
+## ```
 toList : Set k -> List k | k has Hash & Eq
 toList = \@Set dict ->
     Dict.keys dict
 
+## Create a `Set` from a `List` of values.
+## ```
+## values =
+##     Set.empty {}
+##     |> Set.insert Banana
+##     |> Set.insert Apple
+##     |> Set.insert Pear
+##
+## expect Set.fromList [Pear, Apple, Banana] == values
+## ```
 fromList : List k -> Set k | k has Hash & Eq
 fromList = \list ->
     initial = @Set (Dict.withCapacity (List.len list))
 
     List.walk list initial insert
 
+## Combine two `Set` collection by keeping the
+## [union](https://en.wikipedia.org/wiki/Union_(set_theory))
+## of all the values pairs. This means that all of the values in both `Set`s
+## will be combined.
+## ```
+## set1 = Set.single Left
+## set2 = Set.single Right
+##
+## expect Set.union set1 set2 == Set.fromList [Left, Right]
+## ```
 union : Set k, Set k -> Set k | k has Hash & Eq
 union = \@Set dict1, @Set dict2 ->
     Dict.insertAll dict1 dict2 |> @Set
 
+## Combine two `Set`s by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
+## of all the values pairs. This means that we keep only those values that are
+## in both `Set`s.
+## ```
+## set1 = Set.fromList [Left, Other]
+## set2 = Set.fromList [Left, Right]
+##
+## expect Set.intersection set1 set2 == Set.single Left
+## ```
 intersection : Set k, Set k -> Set k | k has Hash & Eq
 intersection = \@Set dict1, @Set dict2 ->
     Dict.keepShared dict1 dict2 |> @Set
 
+## Remove the values in the first `Set` that are also in the second `Set`
+## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
+## of the values. This means that we will be left with only those values that
+## are in the first and not in the second.
+## ```
+## first = Set.fromList [Left, Right, Up, Down]
+## second = Set.fromList [Left, Right]
+##
+## expect Set.difference first second == Set.fromList [Up, Down]
+## ```
 difference : Set k, Set k -> Set k | k has Hash & Eq
 difference = \@Set dict1, @Set dict2 ->
     Dict.removeAll dict1 dict2 |> @Set
 
+## Iterate through the values of a given `Set` and build a value.
+## ```
+## values = Set.fromList ["March", "April", "May"]
+##
+## startsWithLetterM = \month ->
+##     when Str.toUtf8 month is
+##         ['M', ..] -> Bool.true
+##         _ -> Bool.false
+##
+## reduce = \state, k ->
+##     if startsWithLetterM k then
+##         state + 1
+##     else
+##         state
+##
+## result = Set.walk values 0 reduce
+##
+## expect result == 2
+## ```
 walk : Set k, state, (state, k -> state) -> state | k has Hash & Eq
 walk = \@Set dict, state, step ->
     Dict.walk dict state (\s, k, _ -> step s k)
 
+## Iterate through the values of a given `Set` and build a value, can stop
+## iterating part way through the collection.
+## ```
+## numbers = Set.fromList [1,2,3,4,5,6,42,7,8,9,10]
+##
+## find42 = \state, k ->
+##     if k == 42 then
+##         Break FoundTheAnswer
+##     else
+##         Continue state
+##
+## result = Set.walkUntil numbers NotFound find42
+##
+## expect result == FoundTheAnswer
+## ```
 walkUntil : Set k, state, (state, k -> [Continue state, Break state]) -> state | k has Hash & Eq
 walkUntil = \@Set dict, state, step ->
     Dict.walkUntil dict state (\s, k, _ -> step s k)

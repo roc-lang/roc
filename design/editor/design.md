@@ -20,5 +20,5 @@ Should the editor organize all UI into a tree for easy altering/communication wi
 - It requires a lot less work to communicate with the compiler because we have a valid AST at all time.
 - Similarly, we never have to deal with partial expressions that have not been fully typed out yet.
 - The user never has to fiddle with formatting.
-- It allows plugins to work with typed values instead of: a string that is connected with a typed value and where any changes to the typed value would have to produce a string that is sensibly formatted similar the formatting of the original string.
+- It allows plugins to work with typed values instead of a string that is connected with a typed value and where any changes to the typed value would have to produce a string that is sensibly formatted similar the formatting of the original string.
 

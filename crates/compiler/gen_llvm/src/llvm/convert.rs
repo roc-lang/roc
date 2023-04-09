@@ -18,7 +18,9 @@ fn basic_type_from_record<'a, 'ctx, 'env>(
     let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
 
     for field_layout in fields.iter() {
-        field_types.push(basic_type_from_layout(env, layout_interner, *field_layout));
+        let typ = basic_type_from_layout(env, layout_interner, *field_layout);
+
+        field_types.push(typ);
     }
 
     env.context
@@ -322,6 +324,10 @@ impl<'ctx> RocUnion<'ctx> {
             Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
 
         Self::new(context, target_info, data_align, data_width, None)
+    }
+
+    pub fn data_width(&self) -> u32 {
+        self.data_width
     }
 
     pub fn tag_alignment(&self) -> u32 {

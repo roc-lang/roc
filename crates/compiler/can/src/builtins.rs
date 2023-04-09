@@ -126,6 +126,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrGetCapacity; STR_CAPACITY; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
     StrGraphemes; STR_GRAPHEMES; 1,
+    StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
 
     ListLen; LIST_LEN; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
@@ -145,6 +146,7 @@ map_symbol_to_lowlevel_and_arity! {
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
     ListGetCapacity; LIST_CAPACITY; 1,
+    ListReleaseExcessCapacity; LIST_RELEASE_EXCESS_CAPACITY; 1,
 
     ListGetUnsafe; DICT_LIST_GET_UNSAFE; 2,
 
@@ -187,6 +189,8 @@ map_symbol_to_lowlevel_and_arity! {
     NumAsin; NUM_ASIN; 1,
     NumBytesToU16; NUM_BYTES_TO_U16_LOWLEVEL; 2,
     NumBytesToU32; NUM_BYTES_TO_U32_LOWLEVEL; 2,
+    NumBytesToU64; NUM_BYTES_TO_U64_LOWLEVEL; 2,
+    NumBytesToU128; NUM_BYTES_TO_U128_LOWLEVEL; 2,
     NumBitwiseAnd; NUM_BITWISE_AND; 2,
     NumBitwiseXor; NUM_BITWISE_XOR; 2,
     NumBitwiseOr; NUM_BITWISE_OR; 2,
@@ -194,6 +198,9 @@ map_symbol_to_lowlevel_and_arity! {
     NumShiftRightBy; NUM_SHIFT_RIGHT; 2,
     NumShiftRightZfBy; NUM_SHIFT_RIGHT_ZERO_FILL; 2,
     NumToStr; NUM_TO_STR; 1,
+    NumCountLeadingZeroBits; NUM_COUNT_LEADING_ZERO_BITS; 1,
+    NumCountTrailingZeroBits; NUM_COUNT_TRAILING_ZERO_BITS; 1,
+    NumCountOneBits; NUM_COUNT_ONE_BITS; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,

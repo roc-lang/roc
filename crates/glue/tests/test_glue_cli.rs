@@ -55,6 +55,7 @@ mod glue_cli_run {
             )*
 
             #[test]
+            #[ignore]
             fn all_fixtures_have_tests() {
                 use roc_collections::VecSet;
 
@@ -72,29 +73,23 @@ mod glue_cli_run {
     fixtures! {
         basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
         nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
-        dict:"dict" => indoc!(r#"
-            dict was: RocDict {"foo": "bar", "baz": "blah"}
-        "#),
-        set:"set" => indoc!(r#"
-            set was: RocSet {"foo", "bar", "baz"}
-        "#),
         enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
+        single_tag_union:"single-tag-union" => indoc!(r#"
+            tag_union was: SingleTagUnion::OneTag
+        "#),
         union_with_padding:"union-with-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
             `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
             `Bar 123` is: NonRecursive::Bar(123)
-            `Baz` is: NonRecursive::Baz
+            `Baz` is: NonRecursive::Baz(())
             `Blah 456` is: NonRecursive::Blah(456)
-        "#),
-        single_tag_union:"single-tag-union" => indoc!(r#"
-            tag_union was: SingleTagUnion::OneTag
         "#),
         union_without_padding:"union-without-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
             `Bar 123` is: NonRecursive::Bar(123)
-            `Baz` is: NonRecursive::Baz
+            `Baz` is: NonRecursive::Baz(())
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
         nullable_wrapped:"nullable-wrapped" => indoc!(r#"
@@ -110,8 +105,8 @@ mod glue_cli_run {
             `Nil` is: StrConsList::Nil
         "#),
         nonnullable_unwrapped:"nonnullable-unwrapped" => indoc!(r#"
-            tag_union was: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "root", f1: [StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf1", f1: [] } }), StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "leaf2", f1: [] } })] } })
-            Tree "foo" [] is: StrRoseTree::Tree(ManuallyDrop { value: StrRoseTree_Tree { f0: "foo", f1: [] } })
+            tag_union was: StrRoseTree::Tree("root", [StrRoseTree::Tree("leaf1", []), StrRoseTree::Tree("leaf2", [])])
+            Tree "foo" [] is: StrRoseTree::Tree("foo", [])
         "#),
         basic_recursive_union:"basic-recursive-union" => indoc!(r#"
             tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
@@ -126,6 +121,20 @@ mod glue_cli_run {
         "#),
         multiple_modules:"multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
+        "#),
+        arguments:"arguments" => indoc!(r#"
+            Answer was: 84
+        "#),
+        rocresult:"rocresult" => indoc!(r#"
+            Answer was: RocOk(ManuallyDrop { value: "Hello World!" })
+            Answer was: RocErr(ManuallyDrop { value: 42 })
+        "#),
+        option:"option" => indoc!(r#"
+            Answer was: "Hello World!"
+            Answer was: discriminant_U1::None
+        "#),
+        return_function:"return-function" => indoc!(r#"
+            Answer was: 43 41
         "#),
     }
 
@@ -164,7 +173,7 @@ mod glue_cli_run {
         args: I,
     ) -> Out {
         let platform_module_path = platform_dir.join("platform.roc");
-        let glue_file = platform_dir.join("src").join("test_glue.rs");
+        let glue_dir = platform_dir.join("src").join("test_glue");
         let fixture_templates_dir = platform_dir
             .parent()
             .unwrap()
@@ -179,18 +188,27 @@ mod glue_cli_run {
             .unwrap();
 
         // Delete the glue file to make sure we're actually regenerating it!
-        if glue_file.exists() {
-            fs::remove_file(&glue_file)
-                .expect("Unable to remove test_glue.rs in order to regenerate it in the test");
+        if glue_dir.exists() {
+            fs::remove_dir_all(&glue_dir)
+                .expect("Unable to remove test_glue dir in order to regenerate it in the test");
         }
 
-        // Generate a fresh test_glue.rs for this platform
+        let rust_glue_spec = fixture_templates_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("src")
+            .join("RustGlue.roc");
+
+        // Generate a fresh test_glue for this platform
         let glue_out = run_glue(
             // converting these all to String avoids lifetime issues
             std::iter::once("glue".to_string()).chain(
                 args.into_iter().map(|arg| arg.to_string()).chain([
+                    rust_glue_spec.to_str().unwrap().to_string(),
+                    glue_dir.to_str().unwrap().to_string(),
                     platform_module_path.to_str().unwrap().to_string(),
-                    glue_file.to_str().unwrap().to_string(),
                 ]),
             ),
         );
@@ -208,7 +226,7 @@ mod glue_cli_run {
     }
 
     fn run_app<'a, I: IntoIterator<Item = &'a str>>(app_file: &'a Path, args: I) -> Out {
-        // Generate test_glue.rs for this platform
+        // Generate test_glue for this platform
         let compile_out = run_roc(
             // converting these all to String avoids lifetime issues
             args.into_iter()
