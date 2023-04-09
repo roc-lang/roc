@@ -337,7 +337,7 @@ fn result_with_underscore() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn maybe_is_just_not_nested() {
     assert_evals_to!(
         indoc!(
@@ -362,7 +362,7 @@ fn maybe_is_just_not_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn maybe_is_just_nested() {
     assert_evals_to!(
         indoc!(
