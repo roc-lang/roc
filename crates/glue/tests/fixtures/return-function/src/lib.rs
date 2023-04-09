@@ -1,50 +1,12 @@
 mod test_glue;
 
-use indoc::indoc;
-use test_glue::Expr;
-
-extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut Expr);
-}
-
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    use std::cmp::Ordering;
-    use std::collections::hash_set::HashSet;
+    let record = test_glue::mainForHost();
+    let answer1 = record.f.force_thunk(42i64, 1);
+    let answer2 = record.g.force_thunk(42i64, 1);
 
-    let tag_union = test_glue::mainForHost(()); 
-
-    // Verify that it has all the expected traits.
-
-    assert!(tag_union == tag_union); // PartialEq
-    assert!(tag_union.clone() == tag_union.clone()); // Clone
-
-    assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
-    assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
-
-    print!(
-        indoc!(
-            r#"
-                tag_union was: {:?}
-                `Concat (String "Hello, ") (String "World!")` is: {:?}
-                `String "this is a test"` is: {:?}
-            "#
-        ),
-        tag_union,
-        Expr::Concat(
-            Expr::String("Hello, ".into()),
-            Expr::String("World!".into()),
-        ),
-        Expr::String("this is a test".into()),
-    ); // Debug
-
-    let mut set = HashSet::new();
-
-    set.insert(tag_union.clone()); // Eq, Hash
-    set.insert(tag_union);
-
-    assert_eq!(set.len(), 1);
+    println!("Answer was: {:?} {:?}", answer1, answer2);
 
     // Exit code
     0

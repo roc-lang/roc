@@ -213,6 +213,7 @@ trait Backend<'a> {
                 self.free_symbols(stmt);
             }
             Stmt::Jump(id, args) => {
+                self.load_literal_symbols(args);
                 let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
                     bumpalo::vec![in self.env().arena];
                 arg_layouts.reserve(args.len());
@@ -1129,6 +1130,9 @@ trait Backend<'a> {
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     );
+
+    /// Move a returned value into `dst`
+    fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
 
     /// build_num_abs stores the absolute value of src into dst.
     fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>);

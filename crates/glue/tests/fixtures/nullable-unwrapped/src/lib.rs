@@ -13,17 +13,12 @@ pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<StrConsList> = core::mem::MaybeUninit::uninit();
-
-        roc_main(ret.as_mut_ptr());
-
-        ret.assume_init()
-    };
+    let tag_union = test_glue::mainForHost(());
 
     // Verify that it has all the expected traits.
 
     assert!(tag_union == tag_union); // PartialEq
+
     assert!(tag_union.clone() == tag_union.clone()); // Clone
 
     assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
@@ -38,8 +33,8 @@ pub extern "C" fn rust_main() -> i32 {
             "#
         ),
         tag_union,
-        StrConsList::Cons("small str".into(), StrConsList::Nil),
-        StrConsList::Nil,
+        StrConsList::Cons("small str".into(), StrConsList::Nil()),
+        StrConsList::Nil(),
     ); // Debug
 
     let mut set = HashSet::new();

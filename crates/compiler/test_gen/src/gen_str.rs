@@ -16,6 +16,40 @@ use indoc::indoc;
 use roc_std::{RocList, RocResult, RocStr};
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn string_eq() {
+    // context: the dev backend did not correctly mask the boolean that zig returns here
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main : I64
+            main = if "*" == "*" then 123 else 456
+            "#
+        ),
+        123,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn string_neq() {
+    // context: the dev backend did not correctly mask the boolean that zig returns here
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main : I64
+            main = if "*" != "*" then 123 else 456
+            "#
+        ),
+        456,
+        u64
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_empty_delimiter() {
     assert_evals_to!(
