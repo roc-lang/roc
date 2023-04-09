@@ -1346,7 +1346,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2445() {
     assert_evals_to!(
         indoc!(
@@ -1483,7 +1483,7 @@ fn issue_2725_alias_polymorphic_lambda() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn opaque_assign_to_symbol() {
     assert_evals_to!(
         indoc!(
@@ -1697,7 +1697,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3560_nested_tag_constructor_is_newtype() {
     assert_evals_to!(
         indoc!(
@@ -1717,7 +1717,7 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3560_nested_tag_constructor_is_record_newtype() {
     assert_evals_to!(
         indoc!(
