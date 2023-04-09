@@ -1931,7 +1931,7 @@ fn match_on_result_with_uninhabited_error_branch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn dispatch_tag_union_function_inferred() {
     assert_evals_to!(
         indoc!(
