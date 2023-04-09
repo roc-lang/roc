@@ -1120,9 +1120,25 @@ pub struct MoveWideImmediate {
 
 impl Aarch64Bytes for MoveWideImmediate {}
 
+pub struct MoveWideImmediateParams {
+    opc: u8,
+    rd: AArch64GeneralReg,
+    imm16: u16,
+    hw: u8,
+    sf: bool,
+}
+
 impl MoveWideImmediate {
     #[inline(always)]
-    fn new(opc: u8, rd: AArch64GeneralReg, imm16: u16, hw: u8, sf: bool) -> Self {
+    fn new(
+        MoveWideImmediateParams {
+            opc,
+            rd,
+            imm16,
+            hw,
+            sf,
+        }: MoveWideImmediateParams,
+    ) -> Self {
         // TODO: revisit this is we change where we want to check the shift
         // currently this is done in the assembler above
         // assert!(shift % 16 == 0 && shift <= 48);
@@ -1155,15 +1171,26 @@ pub struct ArithmeticImmediate {
 
 impl Aarch64Bytes for ArithmeticImmediate {}
 
+pub struct ArithmeticImmediateParams {
+    op: bool,
+    s: bool,
+    rd: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    imm12: u16,
+    sh: bool,
+}
+
 impl ArithmeticImmediate {
     #[inline(always)]
     fn new(
-        op: bool,
-        s: bool,
-        rd: AArch64GeneralReg,
-        rn: AArch64GeneralReg,
-        imm12: u16,
-        sh: bool,
+        ArithmeticImmediateParams {
+            op,
+            s,
+            rd,
+            rn,
+            imm12,
+            sh,
+        }: ArithmeticImmediateParams,
     ) -> Self {
         debug_assert!(imm12 <= 0xFFF);
 
@@ -1215,16 +1242,28 @@ pub struct ArithmeticShifted {
 
 impl Aarch64Bytes for ArithmeticShifted {}
 
+pub struct ArithmeticShiftedParams {
+    op: bool,
+    s: bool,
+    shift: ShiftType,
+    imm6: u8,
+    rm: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
 impl ArithmeticShifted {
     #[inline(always)]
     fn new(
-        op: bool,
-        s: bool,
-        shift: ShiftType,
-        imm6: u8,
-        rm: AArch64GeneralReg,
-        rn: AArch64GeneralReg,
-        rd: AArch64GeneralReg,
+        ArithmeticShiftedParams {
+            op,
+            s,
+            shift,
+            imm6,
+            rm,
+            rn,
+            rd,
+        }: ArithmeticShiftedParams,
     ) -> Self {
         debug_assert!(imm6 <= 0b111111);
 
@@ -1347,9 +1386,16 @@ pub struct ConditionalBranchImmediate {
 
 impl Aarch64Bytes for ConditionalBranchImmediate {}
 
+pub struct ConditionalBranchImmediateParams {
+    cond: ConditionCode,
+    imm19: u32,
+}
+
 impl ConditionalBranchImmediate {
     #[inline(always)]
-    fn new(cond: ConditionCode, imm19: u32) -> Self {
+    fn new(
+        ConditionalBranchImmediateParams { cond, imm19 }: ConditionalBranchImmediateParams,
+    ) -> Self {
         debug_assert!(imm19 >> 19 == 0);
 
         Self {
@@ -1378,16 +1424,28 @@ pub struct ConditionalSelect {
 
 impl Aarch64Bytes for ConditionalSelect {}
 
+pub struct ConditionalSelectParams {
+    op: bool,
+    s: bool,
+    cond: ConditionCode,
+    op2: u8,
+    rm: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
 impl ConditionalSelect {
     #[inline(always)]
     fn new(
-        op: bool,
-        s: bool,
-        cond: ConditionCode,
-        op2: u8,
-        rm: AArch64GeneralReg,
-        rn: AArch64GeneralReg,
-        rd: AArch64GeneralReg,
+        ConditionalSelectParams {
+            op,
+            s,
+            cond,
+            op2,
+            rm,
+            rn,
+            rd,
+        }: ConditionalSelectParams,
     ) -> Self {
         debug_assert!(op2 <= 0b11);
 
@@ -1422,9 +1480,18 @@ pub struct DataProcessingTwoSource {
 
 impl Aarch64Bytes for DataProcessingTwoSource {}
 
+pub struct DataProcessingTwoSourceParams {
+    op: u8,
+    rm: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
 impl DataProcessingTwoSource {
     #[inline(always)]
-    fn new(op: u8, rm: AArch64GeneralReg, rn: AArch64GeneralReg, rd: AArch64GeneralReg) -> Self {
+    fn new(
+        DataProcessingTwoSourceParams { op, rm, rn, rd }: DataProcessingTwoSourceParams,
+    ) -> Self {
         debug_assert!(op <= 0b111111);
 
         Self {
@@ -1456,14 +1523,24 @@ pub struct DataProcessingThreeSource {
 
 impl Aarch64Bytes for DataProcessingThreeSource {}
 
+pub struct DataProcessingThreeSourceParams {
+    op31: u8,
+    rm: AArch64GeneralReg,
+    ra: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
 impl DataProcessingThreeSource {
     #[inline(always)]
     fn new(
-        op31: u8,
-        rm: AArch64GeneralReg,
-        ra: AArch64GeneralReg,
-        rn: AArch64GeneralReg,
-        rd: AArch64GeneralReg,
+        DataProcessingThreeSourceParams {
+            op31,
+            rm,
+            ra,
+            rn,
+            rd,
+        }: DataProcessingThreeSourceParams,
     ) -> Self {
         debug_assert!(op31 <= 0b111);
 
@@ -1510,15 +1587,26 @@ pub struct LogicalShiftedRegister {
 
 impl Aarch64Bytes for LogicalShiftedRegister {}
 
+pub struct LogicalShiftedRegisterParams {
+    op: LogicalOp,
+    shift: ShiftType,
+    imm6: u8,
+    rm: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
 impl LogicalShiftedRegister {
     #[inline(always)]
     fn new(
-        op: LogicalOp,
-        shift: ShiftType,
-        imm6: u8,
-        rm: AArch64GeneralReg,
-        rn: AArch64GeneralReg,
-        rd: AArch64GeneralReg,
+        LogicalShiftedRegisterParams {
+            op,
+            shift,
+            imm6,
+            rm,
+            rn,
+            rd,
+        }: LogicalShiftedRegisterParams,
     ) -> Self {
         debug_assert!(imm6 <= 0b111111);
 
@@ -1565,9 +1653,16 @@ pub struct UnconditionalBranchRegister {
 
 impl Aarch64Bytes for UnconditionalBranchRegister {}
 
+pub struct UnconditionalBranchRegisterParams {
+    op: u8,
+    rn: AArch64GeneralReg,
+}
+
 impl UnconditionalBranchRegister {
     #[inline(always)]
-    fn new(op: u8, rn: AArch64GeneralReg) -> Self {
+    fn new(
+        UnconditionalBranchRegisterParams { op, rn }: UnconditionalBranchRegisterParams,
+    ) -> Self {
         debug_assert!(op <= 0b11);
 
         Self {
@@ -1595,9 +1690,16 @@ pub struct UnconditionalBranchImmediate {
 
 impl Aarch64Bytes for UnconditionalBranchImmediate {}
 
+pub struct UnconditionalBranchImmediateParams {
+    op: bool,
+    imm26: u32,
+}
+
 impl UnconditionalBranchImmediate {
     #[inline(always)]
-    fn new(op: bool, imm26: u32) -> Self {
+    fn new(
+        UnconditionalBranchImmediateParams { op, imm26 }: UnconditionalBranchImmediateParams,
+    ) -> Self {
         debug_assert!(imm26 <= 0b11_1111_1111_1111_1111_1111_1111);
         Self {
             op,
@@ -1625,9 +1727,24 @@ pub struct LoadStoreRegisterImmediate {
 
 impl Aarch64Bytes for LoadStoreRegisterImmediate {}
 
+pub struct LoadStoreRegisterImmediateParams {
+    size: u8,
+    imm12: u16,
+    rn: AArch64GeneralReg,
+    rt: AArch64GeneralReg,
+}
+
 impl LoadStoreRegisterImmediate {
     #[inline(always)]
-    fn new(size: u8, opc: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
+    fn new(
+        opc: u8,
+        LoadStoreRegisterImmediateParams {
+            size,
+            imm12,
+            rn,
+            rt,
+        }: LoadStoreRegisterImmediateParams,
+    ) -> Self {
         debug_assert!(size <= 0b11);
         debug_assert!(imm12 <= 0xFFF);
 
@@ -1644,13 +1761,13 @@ impl LoadStoreRegisterImmediate {
     }
 
     #[inline(always)]
-    fn new_load(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
-        Self::new(size, 0b01, imm12, rn, rt)
+    fn new_load(params: LoadStoreRegisterImmediateParams) -> Self {
+        Self::new(0b01, params)
     }
 
     #[inline(always)]
-    fn new_store(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
-        Self::new(size, 0b00, imm12, rn, rt)
+    fn new_store(params: LoadStoreRegisterImmediateParams) -> Self {
+        Self::new(0b00, params)
     }
 }
 
@@ -1668,7 +1785,14 @@ fn add_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = ArithmeticImmediate::new(false, false, dst, src, imm12, false);
+    let inst = ArithmeticImmediate::new(ArithmeticImmediateParams {
+        op: false,
+        s: false,
+        rd: dst,
+        rn: src,
+        imm12,
+        sh: false,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1681,7 +1805,15 @@ fn add_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src2, src1, dst);
+    let inst = ArithmeticShifted::new(ArithmeticShiftedParams {
+        op: false,
+        s: false,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1694,7 +1826,14 @@ fn and_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = LogicalShiftedRegister::new(LogicalOp::AND, ShiftType::LSL, 0, src2, src1, dst);
+    let inst = LogicalShiftedRegister::new(LogicalShiftedRegisterParams {
+        op: LogicalOp::AND,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1707,7 +1846,12 @@ fn asr_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = DataProcessingTwoSource::new(0b001010, src2, src1, dst);
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b001010,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1725,7 +1869,10 @@ fn b_cond_imm19(buf: &mut Vec<'_, u8>, cond: ConditionCode, imm19: i32) {
         debug_assert!(left_removed | 0b1111_1111_1111_1100_0000_0000_0000_0000 == unsigned);
     }
 
-    let inst = ConditionalBranchImmediate::new(cond, left_removed);
+    let inst = ConditionalBranchImmediate::new(ConditionalBranchImmediateParams {
+        cond,
+        imm19: left_removed,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1743,7 +1890,10 @@ fn b_imm26(buf: &mut Vec<'_, u8>, imm26: i32) {
         debug_assert!(left_removed | 0b1111_1110_0000_0000_0000_0000_0000_0000 == unsigned);
     }
 
-    let inst = UnconditionalBranchImmediate::new(false, left_removed);
+    let inst = UnconditionalBranchImmediate::new(UnconditionalBranchImmediateParams {
+        op: false,
+        imm26: left_removed,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1792,7 +1942,15 @@ fn csinc_reg64_reg64_reg64_cond(
     src2: AArch64GeneralReg,
     cond: ConditionCode,
 ) {
-    let inst = ConditionalSelect::new(false, false, cond, 0b01, src2, src1, dst);
+    let inst = ConditionalSelect::new(ConditionalSelectParams {
+        op: false,
+        s: false,
+        cond,
+        op2: 0b01,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1806,7 +1964,15 @@ fn csneg_reg64_reg64_reg64_cond(
     src2: AArch64GeneralReg,
     cond: ConditionCode,
 ) {
-    let inst = ConditionalSelect::new(true, false, cond, 0b01, src2, src1, dst);
+    let inst = ConditionalSelect::new(ConditionalSelectParams {
+        op: true,
+        s: false,
+        cond,
+        op2: 0b01,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1819,7 +1985,14 @@ fn eor_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = LogicalShiftedRegister::new(LogicalOp::EOR, ShiftType::LSL, 0, src2, src1, dst);
+    let inst = LogicalShiftedRegister::new(LogicalShiftedRegisterParams {
+        op: LogicalOp::EOR,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1833,7 +2006,12 @@ fn ldr_reg64_reg64_imm12(
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = LoadStoreRegisterImmediate::new_load(0b11, imm12, base, dst);
+    let inst = LoadStoreRegisterImmediate::new_load(LoadStoreRegisterImmediateParams {
+        size: 0b11,
+        imm12,
+        rn: base,
+        rt: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1846,7 +2024,12 @@ fn lsl_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = DataProcessingTwoSource::new(0b001000, src2, src1, dst);
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b001000,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1859,7 +2042,12 @@ fn lsr_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = DataProcessingTwoSource::new(0b001001, src2, src1, dst);
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b001001,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1873,7 +2061,13 @@ fn madd_reg64_reg64_reg64_reg64(
     src2: AArch64GeneralReg,
     src3: AArch64GeneralReg,
 ) {
-    let inst = DataProcessingThreeSource::new(0b000000, src2, src3, src1, dst);
+    let inst = DataProcessingThreeSource::new(DataProcessingThreeSourceParams {
+        op31: 0b000000,
+        rm: src2,
+        ra: src3,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1882,14 +2076,14 @@ fn madd_reg64_reg64_reg64_reg64(
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
     // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    let inst = LogicalShiftedRegister::new(
-        LogicalOp::ORR,
-        ShiftType::LSL,
-        0,
-        src,
-        AArch64GeneralReg::ZRSP,
-        dst,
-    );
+    let inst = LogicalShiftedRegister::new(LogicalShiftedRegisterParams {
+        op: LogicalOp::ORR,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src,
+        rn: AArch64GeneralReg::ZRSP,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1897,7 +2091,13 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64Ge
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
-    let inst = MoveWideImmediate::new(0b11, dst, imm16, hw, true);
+    let inst = MoveWideImmediate::new(MoveWideImmediateParams {
+        opc: 0b11,
+        rd: dst,
+        imm16,
+        hw,
+        sf: true,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1905,7 +2105,13 @@ fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
 /// `MOVZ Xd, imm16` -> Zeros Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
-    let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
+    let inst = MoveWideImmediate::new(MoveWideImmediateParams {
+        opc: 0b10,
+        rd: dst,
+        imm16,
+        hw,
+        sf: true,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1935,7 +2141,14 @@ fn orr_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = LogicalShiftedRegister::new(LogicalOp::ORR, ShiftType::LSL, 0, src2, src1, dst);
+    let inst = LogicalShiftedRegister::new(LogicalShiftedRegisterParams {
+        op: LogicalOp::ORR,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1949,7 +2162,12 @@ fn sdiv_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = DataProcessingTwoSource::new(0b000011, src2, src1, dst);
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b000011,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1963,7 +2181,12 @@ fn str_reg64_reg64_imm12(
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = LoadStoreRegisterImmediate::new_store(0b11, imm12, base, src);
+    let inst = LoadStoreRegisterImmediate::new_store(LoadStoreRegisterImmediateParams {
+        size: 0b11,
+        imm12,
+        rn: base,
+        rt: src,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1976,7 +2199,14 @@ fn sub_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = ArithmeticImmediate::new(true, false, dst, src, imm12, false);
+    let inst = ArithmeticImmediate::new(ArithmeticImmediateParams {
+        op: true,
+        s: false,
+        rd: dst,
+        rn: src,
+        imm12,
+        sh: false,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1989,7 +2219,15 @@ fn sub_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = ArithmeticShifted::new(true, false, ShiftType::LSL, 0, src2, src1, dst);
+    let inst = ArithmeticShifted::new(ArithmeticShiftedParams {
+        op: true,
+        s: false,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -2002,7 +2240,14 @@ fn subs_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = ArithmeticImmediate::new(true, true, dst, src, imm12, false);
+    let inst = ArithmeticImmediate::new(ArithmeticImmediateParams {
+        op: true,
+        s: true,
+        rd: dst,
+        rn: src,
+        imm12,
+        sh: false,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -2015,7 +2260,15 @@ fn subs_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = ArithmeticShifted::new(true, true, ShiftType::LSL, 0, src2, src1, dst);
+    let inst = ArithmeticShifted::new(ArithmeticShiftedParams {
+        op: true,
+        s: true,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -2023,7 +2276,8 @@ fn subs_reg64_reg64_reg64(
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
-    let inst = UnconditionalBranchRegister::new(0b10, xn);
+    let inst =
+        UnconditionalBranchRegister::new(UnconditionalBranchRegisterParams { op: 0b10, rn: xn });
 
     buf.extend(inst.bytes());
 }
@@ -2037,7 +2291,12 @@ fn udiv_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = DataProcessingTwoSource::new(0b000010, src2, src1, dst);
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b000010,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
