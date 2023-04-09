@@ -1051,25 +1051,39 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     fn signed_compare_reg64(
-        _buf: &mut Vec<'_, u8>,
+        buf: &mut Vec<'_, u8>,
         _register_width: RegisterWidth,
-        _operation: CompareOperation,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        operation: CompareOperation,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("signed compare")
+        cmp_reg64_reg64(buf, src1, src2);
+        let cond = match operation {
+            CompareOperation::LessThan => ConditionCode::LT,
+            CompareOperation::LessThanOrEqual => ConditionCode::LE,
+            CompareOperation::GreaterThan => ConditionCode::GT,
+            CompareOperation::GreaterThanOrEqual => ConditionCode::GE,
+        };
+        cset_reg64_cond(buf, dst, cond);
     }
 
     fn unsigned_compare_reg64(
-        _buf: &mut Vec<'_, u8>,
+        buf: &mut Vec<'_, u8>,
         _register_width: RegisterWidth,
-        _operation: CompareOperation,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        operation: CompareOperation,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("unsigned compare")
+        cmp_reg64_reg64(buf, src1, src2);
+        let cond = match operation {
+            CompareOperation::LessThan => ConditionCode::CCLO,
+            CompareOperation::LessThanOrEqual => ConditionCode::LS,
+            CompareOperation::GreaterThan => ConditionCode::HI,
+            CompareOperation::GreaterThanOrEqual => ConditionCode::CSHS,
+        };
+        cset_reg64_cond(buf, dst, cond);
     }
 }
 
