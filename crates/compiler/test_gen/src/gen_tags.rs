@@ -957,7 +957,7 @@ fn phantom_polymorphic() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn phantom_polymorphic_record() {
     assert_evals_to!(
         indoc!(
@@ -975,8 +975,8 @@ fn phantom_polymorphic_record() {
                 main = add zero
                 "#
         ),
-        (0, 0),
-        (i64, i64)
+        (0, 0, 0),
+        (i64, i64, i64)
     );
 }
 
