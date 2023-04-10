@@ -1338,13 +1338,10 @@ impl Types {
 
     pub fn shallow_dealias(&self, value: Index<TypeTag>) -> Index<TypeTag> {
         let mut result = value;
-        loop {
-            match self[result] {
-                TypeTag::StructuralAlias { actual, .. } | TypeTag::OpaqueAlias { actual, .. } => {
-                    result = actual
-                }
-                _ => break,
-            }
+        while let TypeTag::StructuralAlias { actual, .. } | TypeTag::OpaqueAlias { actual, .. } =
+            self[result]
+        {
+            result = actual;
         }
         result
     }
