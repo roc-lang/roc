@@ -4158,6 +4158,41 @@ pub fn with_hole<'a>(
             hole,
         ),
 
+        IngestedFile(_, bytes, var) => {
+            let interned = layout_cache.from_var(env.arena, var, env.subs).unwrap();
+            let layout = layout_cache.get_in(interned);
+
+            match layout {
+                Layout::Builtin(Builtin::List(elem_layout)) if elem_layout == Layout::U8 => {
+                    let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
+                    for byte in bytes.iter() {
+                        elements.push(ListLiteralElement::Literal(Literal::Byte(*byte)));
+                    }
+                    let expr = Expr::Array {
+                        elem_layout,
+                        elems: elements.into_bump_slice(),
+                    };
+
+                    Stmt::Let(assigned, expr, interned, hole)
+                }
+                Layout::Builtin(Builtin::Str) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Str(
+                        // This is safe because we ensure the utf8 bytes are valid earlier in the compiler pipeline.
+                        arena.alloc(
+                            unsafe { std::str::from_utf8_unchecked(bytes.as_ref()) }.to_owned(),
+                        ),
+                    )),
+                    Layout::STR,
+                    hole,
+                ),
+                _ => {
+                    // This will not manifest as a real runtime error and is just returned to have a value here.
+                    // The actual type error during solve will be fatal.
+                    runtime_error(env, "Invalid type for ingested file")
+                }
+            }
+        }
         SingleQuote(_, _, character, _) => {
             let layout = layout_cache
                 .from_var(env.arena, variable, env.subs)

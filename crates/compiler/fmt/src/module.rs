@@ -507,5 +507,11 @@ fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, in
                 fmt_collection(buf, indent, Braces::Curly, *entries, Newlines::No)
             }
         }
+
+        IngestedFile(file_name, typed_ident) => {
+            fmt_str_literal(buf, *file_name, indent);
+            buf.push_str_allow_spaces(" as ");
+            typed_ident.format(buf, 0);
+        }
     }
 }

@@ -375,6 +375,20 @@ pub fn constrain_expr(
             let expected_index = expected;
             constraints.equal_types(str_index, expected_index, Category::Str, region)
         }
+        IngestedFile(file_path, bytes, var) => {
+            let index = constraints.push_variable(*var);
+            let eq_con = constraints.equal_types(
+                index,
+                expected,
+                Category::IngestedFile(file_path.clone()),
+                region,
+            );
+            let ingested_con = constraints.ingested_file(index, file_path.clone(), bytes.clone());
+
+            // First resolve the type variable with the eq_con then try to ingest a file into the correct type.
+            let and_constraint = constraints.and_constraint(vec![eq_con, ingested_con]);
+            constraints.exists([*var], and_constraint)
+        }
         SingleQuote(num_var, precision_var, _, bound) => single_quote_literal(
             types,
             constraints,
@@ -3943,6 +3957,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
             Str(_)
+            | IngestedFile(..)
             | List { .. }
             | SingleQuote(_, _, _, _)
             | When { .. }
