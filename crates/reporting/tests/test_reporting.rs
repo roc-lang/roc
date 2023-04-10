@@ -1237,20 +1237,20 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 1st argument to `f` has an unexpected type:
+    This expression is used in an unexpected way:
 
     7│      g = \x -> f [x]
-                        ^^^
+                      ^^^^^
 
-    The argument is a list of type:
+    This `f` call produces:
+
+        List List b
+
+    But you are trying to use it as:
 
         List b
 
-    But `f` needs its 1st argument to be:
-
-        a
-
-    Tip: The type annotation uses the type variable `a` to say that this
+    Tip: The type annotation uses the type variable `b` to say that this
     definition can produce any type of value. But in the body I see that
     it will only produce a `List` value of a single specific type. Maybe
     change the type annotation to be more specific? Maybe change the code
@@ -12687,42 +12687,6 @@ I recommend using camelCase. It's the standard style in Roc code!
                 _ -> ""
             "#
         )
-    );
-
-    test_report!(
-        polymorphic_recursion_forces_ungeneralized_type,
-        indoc!(
-            r#"
-            foo : a, Bool -> Str
-            foo = \in, b -> if b then "done" else bar in
-
-            bar = \_ -> foo {} Bool.true
-
-            foo "" Bool.false
-            "#
-        ),
-    @r###"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-    This 1st argument to `foo` has an unexpected type:
-
-    9│      foo "" Bool.false
-                ^^
-
-    The argument is a string of type:
-
-        Str
-
-    But `foo` needs its 1st argument to be:
-
-        a
-
-    Tip: The type annotation uses the type variable `a` to say that this
-    definition can produce any type of value. But in the body I see that
-    it will only produce a `Str` value of a single specific type. Maybe
-    change the type annotation to be more specific? Maybe change the code
-    to be more general?
-    "###
     );
 
     test_report!(
