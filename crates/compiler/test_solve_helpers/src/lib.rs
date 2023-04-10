@@ -20,7 +20,7 @@ use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 use roc_solve_problem::TypeError;
 use roc_types::{
     pretty_print::{name_and_print_var, DebugPrint},
-    subs::{Subs, Variable},
+    subs::{instantiate_rigids, Subs, Variable},
 };
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -533,6 +533,7 @@ impl<'a> QueryCtx<'a> {
         let def_region = Region::new(start_pos, end_pos);
         let def_source = &self.source[start_pos.offset as usize..end_pos.offset as usize];
 
+        instantiate_rigids(self.subs, def.var());
         roc_late_solve::unify(
             self.home,
             self.arena,
