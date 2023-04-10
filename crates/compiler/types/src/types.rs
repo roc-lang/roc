@@ -1335,6 +1335,19 @@ impl Types {
 
         cloned
     }
+
+    pub fn shallow_dealias(&self, value: Index<TypeTag>) -> Index<TypeTag> {
+        let mut result = value;
+        loop {
+            match self[result] {
+                TypeTag::StructuralAlias { actual, .. } | TypeTag::OpaqueAlias { actual, .. } => {
+                    result = actual
+                }
+                _ => break,
+            }
+        }
+        result
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -1699,6 +1712,8 @@ impl_types_index! {
 
 impl_types_index_slice! {
     tag_names, TagName
+    field_names, Lowercase
+    tags, TypeTag
 }
 
 impl std::ops::Index<Index<AsideTypeSlice>> for Types {
@@ -2806,7 +2821,7 @@ impl Type {
     }
 
     /// a shallow dealias, continue until the first constructor is not an alias.
-    pub fn shallow_dealias(&self) -> &Self {
+    fn shallow_dealias(&self) -> &Self {
         let mut result = self;
         while let Type::Alias { actual, .. } = result {
             result = actual;
