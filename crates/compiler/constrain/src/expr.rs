@@ -3379,9 +3379,8 @@ fn instantiate_rigids(
         if !rigid_substitution.is_empty() {
             annotation.substitute_variables(&rigid_substitution);
         }
-        let annotation_index = types.from_old_type(&annotation);
 
-        annotation_index
+        types.from_old_type(&annotation)
     };
 
     let signature = generate_fresh_ann(types);
