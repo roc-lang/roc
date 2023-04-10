@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::abilities::SpecializationId;
@@ -680,15 +680,15 @@ impl Constraints {
     pub fn ingested_file(
         &mut self,
         type_index: TypeOrVar,
-        file_path: Box<Path>,
+        file_path: Box<PathBuf>,
         bytes: Arc<Vec<u8>>,
     ) -> Constraint {
         Constraint::IngestedFile(type_index, file_path, bytes)
     }
 }
 
-roc_error_macros::assert_sizeof_default!(Constraint, 4 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Constraint, 4 * 8);
+roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
 
 impl std::ops::Index<ExpectedTypeIndex> for Constraints {
     type Output = Expected<TypeOrVar>;
@@ -786,7 +786,7 @@ pub enum Constraint {
     Resolve(OpportunisticResolve),
     CheckCycle(Index<Cycle>, IllegalCycleMark),
 
-    IngestedFile(TypeOrVar, Box<Path>, Arc<Vec<u8>>),
+    IngestedFile(TypeOrVar, Box<PathBuf>, Arc<Vec<u8>>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]

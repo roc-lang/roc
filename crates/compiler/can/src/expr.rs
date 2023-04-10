@@ -29,7 +29,7 @@ use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Typ
 use std::fmt::{Debug, Display};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::{char, u32};
 
@@ -105,7 +105,7 @@ pub enum Expr {
     },
 
     // An ingested files, it's bytes, and the type variable.
-    IngestedFile(Box<Path>, Arc<Vec<u8>>, Variable),
+    IngestedFile(Box<PathBuf>, Arc<Vec<u8>>, Variable),
 
     // Lookups
     Var(Symbol, Variable),
@@ -742,7 +742,11 @@ pub fn canonicalize_expr<'a>(
                 let mut bytes = vec![];
                 match file.read_to_end(&mut bytes) {
                     Ok(_) => (
-                        Expr::IngestedFile((*file_path).into(), Arc::new(bytes), var_store.fresh()),
+                        Expr::IngestedFile(
+                            file_path.to_path_buf().into(),
+                            Arc::new(bytes),
+                            var_store.fresh(),
+                        ),
                         Output::default(),
                     ),
                     Err(e) => {

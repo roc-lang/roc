@@ -1,5 +1,5 @@
 //! Provides types to describe problems that can occur during solving.
-use std::{path::Path, str::Utf8Error};
+use std::{path::PathBuf, str::Utf8Error};
 
 use roc_can::expected::{Expected, PExpected};
 use roc_module::{ident::Lowercase, symbol::Symbol};
@@ -31,8 +31,8 @@ pub enum TypeError {
         expected_opaque: Symbol,
         found_opaque: Symbol,
     },
-    IngestedFileBadUtf8(Box<Path>, Utf8Error),
-    IngestedFileUnsupportedType(Box<Path>, ErrorType),
+    IngestedFileBadUtf8(Box<PathBuf>, Utf8Error),
+    IngestedFileUnsupportedType(Box<PathBuf>, ErrorType),
 }
 
 impl TypeError {
