@@ -737,7 +737,7 @@ pub fn build(
                             "─".repeat(80)
                         );
 
-                        // Return a nonzero exit code due to falta problem
+                        // Return a nonzero exit code due to fatal problem
                         return Ok(problems.exit_code());
                     }
                     if problems.errors > 0 || problems.warnings > 0 {
@@ -764,7 +764,7 @@ pub fn build(
                             "─".repeat(80)
                         );
 
-                        // Return a nonzero exit code due to falta problem
+                        // Return a nonzero exit code due to fatal problem
                         return Ok(problems.exit_code());
                     }
                     debug_assert_eq!(
