@@ -875,21 +875,23 @@ mod cli_run {
             &[],
             &[],
             &[],
-            r#"
-This roc file can print it's own source code. The source is:
+            indoc!(
+                r#"
+                This roc file can print it's own source code. The source is:
 
-app "ingested-file"
-    packages { pf: "cli-platform/main.roc" }
-    imports [
-        pf.Stdout,
-        "ingested-file.roc" as ownCode : Str,
-    ]
-    provides [main] to pf
+                app "ingested-file"
+                    packages { pf: "cli-platform/main.roc" }
+                    imports [
+                        pf.Stdout,
+                        "ingested-file.roc" as ownCode : Str,
+                    ]
+                    provides [main] to pf
 
-main =
-    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
+                main =
+                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
 
-"#,
+                "#
+            ),
             UseValgrind::No,
             TestCliCommands::Run,
         )
