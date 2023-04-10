@@ -210,15 +210,26 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     // And track a little bit of state
     let mut in_code_block = false;
     let mut is_roc_code = false;
-
+    
     for event in parser {
         match event {
             pulldown_cmark::Event::Code(cow_str) => {
-                let highlighted_html =
-                    roc_highlight::highlight_roc_code_inline(cow_str.to_string().as_str());
-                parser_with_highlighting.push(pulldown_cmark::Event::Html(
-                    pulldown_cmark::CowStr::from(highlighted_html),
-                ));
+                if cow_str.starts_with("roc!") {
+                    let stripped = cow_str
+                        .strip_prefix("roc!")
+                        .expect("expected leading 'roc!'");
+
+                    let highlighted_html = roc_highlight::highlight_roc_code_inline(stripped.to_string().as_str());
+                    
+                    parser_with_highlighting.push(pulldown_cmark::Event::Html(
+                        pulldown_cmark::CowStr::from(highlighted_html),
+                    ));
+                } else {
+                    let inline_code = pulldown_cmark::CowStr::from(format!("<code>{}</code>", cow_str));
+                    parser_with_highlighting.push(
+                        pulldown_cmark::Event::Html(inline_code)
+                    );
+                }
             }
             pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(cbk)) => {
                 in_code_block = true;
