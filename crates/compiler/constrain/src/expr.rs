@@ -4072,7 +4072,7 @@ fn rec_defs_help(
 
                 let is_hybrid = !new_infer_variables.is_empty();
 
-                hybrid_and_flex_info.vars.extend(new_infer_variables);
+                hybrid_and_flex_info.vars.extend(&new_infer_variables);
 
                 let signature_index = constraints.push_type(types, signature);
 
@@ -4113,13 +4113,14 @@ fn rec_defs_help(
                         let region = def.loc_expr.region;
 
                         let loc_body_expr = &**loc_body;
-                        let mut state = PatternState {
+                        let mut argument_pattern_state = PatternState {
                             headers: VecMap::default(),
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
                             delayed_is_open_constraints: vec![],
                         };
-                        let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
+                        let mut vars =
+                            Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
                         let ret_type_index = constraints.push_type(types, ret_type);
@@ -4133,7 +4134,7 @@ fn rec_defs_help(
                             env,
                             def,
                             &mut def_pattern_state,
-                            &mut state,
+                            &mut argument_pattern_state,
                             arguments,
                             arg_types,
                         );
@@ -4157,27 +4158,31 @@ fn rec_defs_help(
                             let typ = types.function(pattern_types, lambda_set, ret_type);
                             constraints.push_type(types, typ)
                         };
-                        let body_type =
-                            constraints.push_expected_type(NoExpectation(ret_type_index));
-                        let expr_con = constrain_expr(
-                            types,
-                            constraints,
-                            env,
-                            loc_body_expr.region,
-                            &loc_body_expr.value,
-                            body_type,
-                        );
+                        let expr_con = {
+                            let body_type =
+                                constraints.push_expected_type(NoExpectation(ret_type_index));
+
+                            constrain_expr(
+                                types,
+                                constraints,
+                                env,
+                                loc_body_expr.region,
+                                &loc_body_expr.value,
+                                body_type,
+                            )
+                        };
                         let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
                         vars.push(*fn_var);
 
-                        let state_constraints = constraints.and_constraint(state.constraints);
+                        let state_constraints =
+                            constraints.and_constraint(argument_pattern_state.constraints);
                         let expected_index = constraints.push_expected_type(expected);
                         let cons = [
                             constraints.let_constraint(
                                 [],
-                                state.vars,
-                                state.headers,
+                                argument_pattern_state.vars,
+                                argument_pattern_state.headers,
                                 state_constraints,
                                 expr_con,
                                 generalizable,
@@ -4216,9 +4221,15 @@ fn rec_defs_help(
                         } else {
                             rigid_info.vars.extend(&new_rigid_variables);
 
+                            let rigids = new_rigid_variables;
+                            let flex = def_pattern_state
+                                .vars
+                                .into_iter()
+                                .chain(new_infer_variables);
+
                             rigid_info.constraints.push(constraints.let_constraint(
-                                new_rigid_variables,
-                                def_pattern_state.vars,
+                                rigids,
+                                flex,
                                 [], // no headers introduced (at this level)
                                 def_con,
                                 Constraint::True,
