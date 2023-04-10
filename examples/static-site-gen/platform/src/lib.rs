@@ -8,6 +8,12 @@ use std::fs;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
+use syntect::easy::HighlightLines;
+use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{ThemeSet, Style};
+use syntect::util::{LinesWithEndings};
+use syntect::html::{ClassedHTMLGenerator, ClassStyle};
+
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
     fn roc_transformFileContentForHost(relPath: &RocStr, content: &RocStr) -> RocStr;
@@ -210,6 +216,8 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     // And track a little bit of state
     let mut in_code_block = false;
     let mut is_roc_code = false;
+    let ps : syntect::parsing::SyntaxSet = SyntaxSet::load_defaults_newlines();
+    let ts : syntect::highlighting::ThemeSet = ThemeSet::load_defaults();
     
     for event in parser {
         match event {
@@ -235,7 +243,7 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                 in_code_block = true;
                 is_roc_code = is_roc_code_block(&cbk);
             }
-            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(_)) => {
+            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(cow_str))) => {
                 if in_code_block {
                     match replace_code_with_static_file(&code_to_highlight, input_file) {
                         None => {}
@@ -254,6 +262,14 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                     let highlighted_html: String;
                     if is_roc_code {
                         highlighted_html = roc_highlight::highlight_roc_code(&code_to_highlight)
+                    } else if let Some(syntax) = ps.find_syntax_by_token(&cow_str) {
+                        let mut h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
+
+                        let mut html_generator = ClassedHTMLGenerator::new_with_class_style(syntax, &ps, ClassStyle::Spaced);
+                        for line in LinesWithEndings::from(&code_to_highlight) {
+                            html_generator.parse_html_for_line_which_includes_newline(line);
+                        }
+                        highlighted_html = format!("<pre><samp>{}</pre></samp>", html_generator.finalize())
                     } else {
                         highlighted_html = format!("<pre><samp>{}</pre></samp>", &code_to_highlight)
                     }

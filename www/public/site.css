@@ -635,48 +635,78 @@ h4 {
 /* Comments `#` and Documentation comments `##` */
 samp .comment,
 code .comment {
-    color: var(--green);
+  color: var(--green);
 }
 
-/* Number, String, Tag, Type literals */
+/* Number, String, Tag literals */
+samp .storage.type,
+code .storage.type,
+samp .string,
+code .string,
+samp .string.begin,
+code .string.begin,
+samp .string.end,
+code .string.end,
+samp .constant,
+code .constant,
 samp .literal,
 code .literal {
-    color: var(--cyan);
+  color: var(--cyan);
 }
 
 /* Keywords and punctuation */
-samp .kw,
+samp .keyword, 
+code .keyword,
+samp .punctuation.section, 
+code .punctuation.section,
+samp .punctuation.separator, 
+code .punctuation.separator,
+samp .punctuation.terminator, 
+code .punctuation.terminator,
+samp .kw, 
 code .kw {
     color: var(--magenta);
 }
 
 /* Operators */
 samp .op,
-code .op {
-    color: var(--orange);
+code .op,
+samp .keyword.operator,
+code .keyword.operator {
+  color: var(--orange);
 }
 
 /* Delimieters */
 samp .delimeter,
 code .delimeter {
-    color: var(--gray);
+  color: var(--gray);
 }
 
 /* Variables modules and field names */
+samp .function,
+code .function,
+samp .meta.group,
+code .meta.group,
+samp .meta.block,
+code .meta.block,
 samp .lowerident,
 code .lowerident {
-    color: var(--blue);
+  color: var(--blue);
 }
 
 /* Types, Tags, and Modules */
+samp .type,
+code .type,
+samp .meta.path,
+code .meta.path,
 samp .upperident,
 code .upperident {
-    color: var(--green);
+  color: var(--green);
 }
 
 samp .dim,
 code .dim {
-    opacity: 0.55;
+  opacity: 0.55;
 }
 
 .button-container {
