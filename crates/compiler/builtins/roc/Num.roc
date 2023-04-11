@@ -34,6 +34,7 @@ interface Num
         Binary32,
         Binary64,
         abs,
+        absDiff,
         neg,
         add,
         sub,
@@ -642,6 +643,27 @@ toFrac : Num * -> Frac *
 ##
 ## Calling this on an unsigned integer (like [U32] or [U64]) never does anything.
 abs : Num a -> Num a
+
+## Return the absolute difference between two numbers.
+##
+## ```
+## Num.absDiff 5 3
+##
+## Num.absDiff -3 5
+##
+## Num.absDiff 3.0 5.0
+## ```
+##
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## ∞ or -∞. For all other number types, overflow results in a panic.
+absDiff: Num a, Num a -> Num a
+absDiff = \a, b ->
+    if a > b then
+        a - b
+    else
+        b - a
 
 ## Return a negative number when given a positive one, and vice versa.
 ## ```
