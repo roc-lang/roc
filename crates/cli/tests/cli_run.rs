@@ -474,7 +474,7 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(basic_cli_url)]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn hello_world() {
         test_roc_app_slim(
@@ -533,8 +533,9 @@ mod cli_run {
         )
     }
 
+    // zig_platform_parser_package_basic_cli_url use to be split up but then things could get stuck
     #[test]
-    #[serial(zig_platform)]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
@@ -915,8 +916,7 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(parser_package)]
-    #[serial(zig_platform)]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
@@ -929,8 +929,7 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(parser_package)]
-    #[serial(basic_cli_url)]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
