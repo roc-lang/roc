@@ -1172,33 +1172,20 @@ ObjectState : [
     InvalidObject,
 ]
 
-# Test decode of simple Json Object into Roc Record ignoring whitespace
-# TODO blocked on [#5252](https://github.com/roc-lang/roc/issues/5252)
-# expect
-#     input = Str.toUtf8 " {\n\"fruit\"\t:2\n } "
+# Test decode of simple Object into Roc Record ignoring whitespace
+expect
+    input = Str.toUtf8 " {\n\"fruit\"\t:2\n, \"owner\": \"Farmer Joe\" } "
 
-#     actual = Decode.fromBytesPartial input fromUtf8
-#     expected = Ok { fruit: 2 }
+    actual = Decode.fromBytesPartial input fromUtf8
+    expected = Ok { fruit: 2, owner: "Farmer Joe" }
 
-#     actual.result == expected
+    actual.result == expected
 
-# Test decode of simple Json Object
-# TODO blocked on [#5252](https://github.com/roc-lang/roc/issues/5252)
-# expect
-#     input = Str.toUtf8 "{\"fruit\": \"apple\" }"
+# Test decode of Object with array and boolean
+expect
+    input = Str.toUtf8 "{\"fruit\": [\"Apples\",\"Bananas\",\"Pears\"], \"isFresh\": true }"
 
-#     actual = Decode.fromBytesPartial input fromUtf8
-#     expected = Ok { fruit: "apple" }
+    actual = Decode.fromBytesPartial input fromUtf8
+    expected = Ok { fruit: ["Apples", "Bananas", "Pears"], isFresh: Bool.true }
 
-#     actual.result == expected
-
-# Test decode of simple Json Object
-# TODO blocked on [#5252](https://github.com/roc-lang/roc/issues/5252)
-# expect
-#     input = Str.toUtf8 "{\"fruit\": true }"
-
-#     actual : DecodeResult { fruit : Bool }
-#     actual = Decode.fromBytesPartial input fromUtf8
-#     expected = Ok { fruit: Bool.true }
-
-#     actual.result == expected
+    actual.result == expected
