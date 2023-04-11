@@ -865,6 +865,56 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file() {
+        test_roc_app(
+            "examples/cli",
+            "ingested-file.roc",
+            "ingested-file",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This roc file can print it's own source code. The source is:
+
+                app "ingested-file"
+                    packages { pf: "cli-platform/main.roc" }
+                    imports [
+                        pf.Stdout,
+                        "ingested-file.roc" as ownCode : Str,
+                    ]
+                    provides [main] to pf
+
+                main =
+                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
+
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file_bytes() {
+        test_roc_app(
+            "examples/cli",
+            "ingested-file-bytes.roc",
+            "ingested-file-bytes",
+            &[],
+            &[],
+            &[],
+            "22424\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
     #[serial(parser_package)]
     #[serial(zig_platform)]
     #[cfg_attr(windows, ignore)]

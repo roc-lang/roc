@@ -232,6 +232,9 @@ pub enum EImports {
     IndentSetStart(Position),
     SetStart(Position),
     SetEnd(Position),
+    TypedIdent(Position),
+    AsKeyword(Position),
+    StrLiteral(Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

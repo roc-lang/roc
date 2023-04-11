@@ -15,6 +15,7 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::{Loc, Region};
 use std::fmt;
 use std::fmt::Write;
+use std::path::PathBuf;
 
 pub const TYPE_NUM: &str = "Num";
 pub const TYPE_INTEGER: &str = "Integer";
@@ -3781,6 +3782,7 @@ pub enum Category {
     List,
     Str,
     Character,
+    IngestedFile(Box<PathBuf>),
 
     // records
     Record,

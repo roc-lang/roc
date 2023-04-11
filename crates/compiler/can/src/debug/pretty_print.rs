@@ -165,6 +165,9 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         Num(_, n, _, _) | Int(_, _, n, _, _) | Float(_, _, n, _, _) => f.text(&**n),
         Str(s) => f.text(format!(r#""{}""#, s)),
         SingleQuote(_, _, c, _) => f.text(format!("'{}'", c)),
+        IngestedFile(file_path, bytes, _) => {
+            f.text(format!("<ingested {:?}, {} bytes>", file_path, bytes.len()))
+        }
         List {
             elem_var: _,
             loc_elems,

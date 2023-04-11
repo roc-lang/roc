@@ -257,6 +257,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         Expr::Int(..) => { /* terminal */ }
         Expr::Float(..) => { /* terminal */ }
         Expr::Str(..) => { /* terminal */ }
+        Expr::IngestedFile(..) => { /* terminal */ }
         Expr::SingleQuote(..) => { /* terminal */ }
         Expr::List {
             elem_var,
