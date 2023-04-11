@@ -4031,27 +4031,21 @@ fn num_abs_diff_float() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
-#[should_panic(
-    expected = r#"Roc failed with message: "integer subtraction overflowed!"#
-)]
+#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn num_abs_max_overflow() {
     assert_evals_to!(r#"Num.absDiff Num.maxI64 -1"#, 0, i64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
-#[should_panic(
-    expected = r#"Roc failed with message: "integer subtraction overflowed!"#
-)]
+#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn num_abs_int_min_overflow() {
     assert_evals_to!(r#"Num.absDiff Num.minI64 0"#, 0, i64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
-#[should_panic(
-    expected = r#"Roc failed with message: "integer subtraction overflowed!"#
-)]
+#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn num_abs_large_bits_min_overflow() {
     assert_evals_to!(r#"Num.absDiff Num.minI128 0"#, 0, i128);
 }
@@ -4059,9 +4053,5 @@ fn num_abs_large_bits_min_overflow() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn num_abs_float_overflow() {
-    assert_evals_to!(
-        "Num.absDiff Num.maxF64 Num.minF64",
-        f64::INFINITY,
-        f64
-    );
+    assert_evals_to!("Num.absDiff Num.maxF64 Num.minF64", f64::INFINITY, f64);
 }
