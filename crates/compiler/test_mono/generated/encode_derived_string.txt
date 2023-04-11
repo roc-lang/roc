@@ -12,23 +12,23 @@ procedure Encode.26 (Encode.105, Encode.106):
     ret Encode.108;
 
 procedure Json.1 ():
-    let Json.878 : {} = Struct {};
-    ret Json.878;
+    let Json.888 : {} = Struct {};
+    ret Json.888;
 
-procedure Json.146 (Json.147, Json.881, Json.145):
-    let Json.890 : I64 = 34i64;
-    let Json.889 : U8 = CallByName Num.127 Json.890;
-    let Json.887 : List U8 = CallByName List.4 Json.147 Json.889;
-    let Json.888 : List U8 = CallByName Str.12 Json.145;
-    let Json.884 : List U8 = CallByName List.8 Json.887 Json.888;
-    let Json.886 : I64 = 34i64;
-    let Json.885 : U8 = CallByName Num.127 Json.886;
-    let Json.883 : List U8 = CallByName List.4 Json.884 Json.885;
-    ret Json.883;
+procedure Json.146 (Json.147, Json.891, Json.145):
+    let Json.900 : I64 = 34i64;
+    let Json.899 : U8 = CallByName Num.127 Json.900;
+    let Json.897 : List U8 = CallByName List.4 Json.147 Json.899;
+    let Json.898 : List U8 = CallByName Str.12 Json.145;
+    let Json.894 : List U8 = CallByName List.8 Json.897 Json.898;
+    let Json.896 : I64 = 34i64;
+    let Json.895 : U8 = CallByName Num.127 Json.896;
+    let Json.893 : List U8 = CallByName List.4 Json.894 Json.895;
+    ret Json.893;
 
 procedure Json.23 (Json.145):
-    let Json.879 : Str = CallByName Encode.23 Json.145;
-    ret Json.879;
+    let Json.889 : Str = CallByName Encode.23 Json.145;
+    ret Json.889;
 
 procedure List.4 (List.107, List.108):
     let List.503 : U64 = 1i64;
