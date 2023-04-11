@@ -3085,6 +3085,8 @@ fn update<'a>(
                         std::mem::swap(&mut state.layout_interner, &mut taken);
                         taken
                     };
+
+                    #[allow(unused_mut)]
                     let mut layout_interner = layout_interner
                         .unwrap()
                         .expect("outstanding references to global layout interener, but we just drained all layout caches");
