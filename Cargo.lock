@@ -5195,6 +5195,7 @@ dependencies = [
  "cli_utils",
  "indoc",
  "roc_build",
+ "roc_command_utils",
  "roc_linker",
  "roc_load",
  "roc_mono",
