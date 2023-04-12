@@ -31,7 +31,7 @@ mod solve_expr {
                 ..
             },
             src,
-        ) = run_load_and_infer(src, false)?;
+        ) = run_load_and_infer(src, [], false)?;
 
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
@@ -103,7 +103,7 @@ mod solve_expr {
             interns,
             abilities_store,
             ..
-        } = run_load_and_infer(src, false).unwrap().0;
+        } = run_load_and_infer(src, [], false).unwrap().0;
 
         let can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();

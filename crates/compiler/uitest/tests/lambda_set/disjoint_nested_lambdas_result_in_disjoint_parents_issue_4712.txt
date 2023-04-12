@@ -1,5 +1,5 @@
-# +opt print:can_decls
 # +opt infer:print_only_under_alias
+# +emit:can_decls
 app "test" provides [main] to "./platform"
 
 Parser a : {} -> a
