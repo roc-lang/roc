@@ -304,16 +304,16 @@ procedure List.72 (#Attr.2, #Attr.3, #Attr.4):
     ret List.499;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.276 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.276;
+    let Num.279 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.279;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.278 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.278;
+    let Num.281 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.281;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.280 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.280;
+    let Num.283 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Str.12 (#Attr.2):
     let Str.307 : List U8 = lowlevel StrToUtf8 #Attr.2;
