@@ -1956,7 +1956,7 @@ fn constrain_function_def(
             );
 
             let return_type_annotation_expected = constraints.push_expected_type(FromAnnotation(
-                loc_pattern.clone(),
+                loc_pattern,
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
