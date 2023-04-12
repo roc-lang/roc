@@ -2316,7 +2316,7 @@ impl Type {
                 RecursiveTagUnion(rec, tags, ext) => {
                     if let Some(replacement) = substitutions.get(rec) {
                         let new_rec_var = match replacement {
-                            Type::Variable(v) => v.clone(),
+                            Type::Variable(v) => *v,
                             _ => panic!("Recursion var substitution must be a variable"),
                         };
 

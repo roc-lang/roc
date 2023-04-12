@@ -1258,33 +1258,35 @@ fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Ty
     result
 }
 
-pub fn instantiate_and_freshen_alias_type(
+struct FreshenedAlias {
+    new_lambda_set_variables: Vec<LambdaSet>,
+    actual_type: Type,
+}
+
+fn instantiate_and_freshen_alias_type(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     type_variables: &[Loc<AliasVar>],
     type_arguments: Vec<Type>,
+    recursion_variables: impl IntoIterator<Item = Variable>,
     lambda_set_variables: &[LambdaSet],
     mut actual_type: Type,
-) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
+) -> FreshenedAlias {
     let mut substitutions = ImMap::default();
-    let mut type_var_to_arg = Vec::new();
 
     for (loc_var, arg_ann) in type_variables.iter().zip(type_arguments.into_iter()) {
-        let name = loc_var.value.name.clone();
         let var = loc_var.value.var;
 
         substitutions.insert(var, arg_ann.clone());
-        type_var_to_arg.push((name.clone(), arg_ann));
     }
 
-    // make sure the recursion variable is freshly instantiated
-    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual_type {
+    // make sure all nested recursion variables is freshly instantiated
+    for rec_var in recursion_variables {
         let new = var_store.fresh();
-        substitutions.insert(*rvar, Type::Variable(new));
-        *rvar = new;
+        substitutions.insert(rec_var, Type::Variable(new));
     }
 
-    // make sure hidden variables are freshly instantiated
+    // make sure all nested lambda set variables are freshly instantiated
     let mut new_lambda_set_variables = Vec::with_capacity(lambda_set_variables.len());
     for typ in lambda_set_variables.iter() {
         if let Type::Variable(var) = typ.0 {
@@ -1300,7 +1302,10 @@ pub fn instantiate_and_freshen_alias_type(
     // instantiate variables
     actual_type.substitute(&substitutions);
 
-    (type_var_to_arg, new_lambda_set_variables, actual_type)
+    FreshenedAlias {
+        new_lambda_set_variables,
+        actual_type,
+    }
 }
 
 pub fn freshen_opaque_def(
@@ -1327,16 +1332,20 @@ pub fn freshen_opaque_def(
     // NB: If there are bugs, check whether this is a problem!
     let mut introduced_variables = IntroducedVariables::default();
 
-    let (_fresh_type_arguments, fresh_lambda_set, fresh_type) = instantiate_and_freshen_alias_type(
+    let FreshenedAlias {
+        new_lambda_set_variables,
+        actual_type,
+    } = instantiate_and_freshen_alias_type(
         var_store,
         &mut introduced_variables,
         &opaque.type_variables,
         fresh_type_arguments,
+        opaque.recursion_variables.iter().copied(),
         &opaque.lambda_set_variables,
         opaque.typ.clone(),
     );
 
-    (fresh_variables, fresh_lambda_set, fresh_type)
+    (fresh_variables, new_lambda_set_variables, actual_type)
 }
 
 fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)
