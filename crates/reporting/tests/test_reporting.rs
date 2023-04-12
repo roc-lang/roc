@@ -13410,4 +13410,35 @@ I recommend using camelCase. It's the standard style in Roc code!
     meant to unwrap it first?
     "###
     );
+
+    test_report!(
+        function_arity_mismatch,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : U8, U8 -> U8
+            f = \x -> x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    3│  f : U8, U8 -> U8
+    4│  f = \x -> x
+            ^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too few arguments. I was expecting 1 more.
+    "###
+    );
 }
