@@ -658,7 +658,7 @@ abs : Num a -> Num a
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
 ## *overflow*. For [F64] and [F32], overflow results in an answer of either
 ## ∞ or -∞. For all other number types, overflow results in a panic.
-absDiff: Num a, Num a -> Num a
+absDiff : Num a, Num a -> Num a
 absDiff = \a, b ->
     if a > b then
         a - b
