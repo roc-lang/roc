@@ -360,27 +360,30 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             })
         }
         Layout::Builtin(Builtin::Int(int_width)) => {
-            use Content::*;
             use IntWidth::*;
 
-            match (env.subs.get_content_without_compacting(raw_var), int_width) {
-                (Alias(Symbol::NUM_UNSIGNED8 | Symbol::NUM_U8, ..), U8) => num_helper!(u8),
-                (_, U8) => {
-                    // This is not a number, it's a tag union or something else
-                    app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
-                        byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
-                    })
+            match int_width {
+                U8 => {
+                    let raw_content = env.subs.get_content_without_compacting(raw_var);
+                    if matches!(raw_content, Content::Alias(name, ..) if name.module_id() == ModuleId::NUM)
+                    {
+                        num_helper!(u8)
+                    } else {
+                        // This is not a number, it's a tag union or something else
+                        app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
+                            byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
+                        })
+                    }
                 }
-                // The rest are numbers... for now
-                (_, U16) => num_helper!(u16),
-                (_, U32) => num_helper!(u32),
-                (_, U64) => num_helper!(u64),
-                (_, U128) => num_helper!(u128),
-                (_, I8) => num_helper!(i8),
-                (_, I16) => num_helper!(i16),
-                (_, I32) => num_helper!(i32),
-                (_, I64) => num_helper!(i64),
-                (_, I128) => num_helper!(i128),
+                U16 => num_helper!(u16),
+                U32 => num_helper!(u32),
+                U64 => num_helper!(u64),
+                U128 => num_helper!(u128),
+                I8 => num_helper!(i8),
+                I16 => num_helper!(i16),
+                I32 => num_helper!(i32),
+                I64 => num_helper!(i64),
+                I128 => num_helper!(i128),
             }
         }
         Layout::Builtin(Builtin::Float(float_width)) => {
