@@ -36,6 +36,10 @@ lazy_static! {
         .join("uitest")
         .join("tests");
 
+    /// # +opt can:<opt>
+    static ref RE_OPT_CAN: Regex =
+        Regex::new(r#"# \+opt can:(?P<opt>.*)"#).unwrap();
+
     /// # +opt infer:<opt>
     static ref RE_OPT_INFER: Regex =
         Regex::new(r#"# \+opt infer:(?P<opt>.*)"#).unwrap();
@@ -90,6 +94,7 @@ fn into_test(path: PathBuf) -> io::Result<Trial> {
 fn run_test(path: PathBuf) -> Result<(), Failed> {
     let data = std::fs::read_to_string(&path)?;
     let TestCase {
+        can_options,
         infer_options,
         emit_options,
         mono_options,
@@ -103,6 +108,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
             .iter()
             .map(|(md, src)| (&**md, &**src)),
         infer_options,
+        can_options.allow_errors,
     )?;
 
     {
@@ -115,6 +121,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
             &mut fd,
             program,
             inferred_program,
+            can_options,
             mono_options,
             emit_options,
         )?;
@@ -134,10 +141,16 @@ struct Modules<'a> {
 }
 
 struct TestCase<'a> {
+    can_options: CanOptions,
     infer_options: InferOptions,
     mono_options: MonoOptions,
     emit_options: EmitOptions,
     program: Modules<'a>,
+}
+
+#[derive(Default)]
+struct CanOptions {
+    allow_errors: bool,
 }
 
 #[derive(Default)]
@@ -153,6 +166,7 @@ impl<'a> TestCase<'a> {
             data = data[..drop_at].trim_end();
         }
 
+        let can_options = Self::parse_can_options(data)?;
         let infer_options = Self::parse_infer_options(data)?;
         let mono_options = Self::parse_mono_options(data)?;
         let emit_options = Self::parse_emit_options(data)?;
@@ -160,6 +174,7 @@ impl<'a> TestCase<'a> {
         let program = Self::parse_modules(data);
 
         Ok(TestCase {
+            can_options,
             infer_options,
             mono_options,
             emit_options,
@@ -214,6 +229,21 @@ impl<'a> TestCase<'a> {
         }
     }
 
+    fn parse_can_options(data: &str) -> Result<CanOptions, Failed> {
+        let mut can_opts = CanOptions::default();
+
+        let found_can_opts = RE_OPT_CAN.captures_iter(data);
+        for can_opt in found_can_opts {
+            let opt = can_opt.name("opt").unwrap().as_str();
+            match opt.trim() {
+                "allow_errors" => can_opts.allow_errors = true,
+                other => return Err(format!("unknown can option: {other:?}").into()),
+            }
+        }
+
+        Ok(can_opts)
+    }
+
     fn parse_infer_options(data: &str) -> Result<InferOptions, Failed> {
         let mut infer_opts = InferOptions {
             no_promote: true,
@@ -224,7 +254,6 @@ impl<'a> TestCase<'a> {
         for infer_opt in found_infer_opts {
             let opt = infer_opt.name("opt").unwrap().as_str();
             match opt.trim() {
-                "allow_errors" => infer_opts.allow_errors = true,
                 "print_only_under_alias" => infer_opts.print_only_under_alias = true,
                 other => return Err(format!("unknown infer option: {other:?}").into()),
             }
@@ -289,6 +318,7 @@ fn assemble_query_output(
     writer: &mut impl io::Write,
     program: Modules<'_>,
     inferred_program: InferredProgram,
+    can_options: CanOptions,
     mono_options: MonoOptions,
     emit_options: EmitOptions,
 ) -> io::Result<()> {
@@ -331,7 +361,13 @@ fn assemble_query_output(
         // Unfortunately, with the current setup we must now recompile into the IR.
         // TODO: extend the data returned by a monomorphized module to include
         // that of a solved module.
-        mono::write_compiled_ir(writer, test_module, other_modules, mono_options)?;
+        mono::write_compiled_ir(
+            writer,
+            test_module,
+            other_modules,
+            mono_options,
+            can_options.allow_errors,
+        )?;
     }
 
     Ok(())
