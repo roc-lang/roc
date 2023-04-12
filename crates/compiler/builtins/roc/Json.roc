@@ -554,7 +554,7 @@ isDigit1to9 = \b -> b >= '1' && b <= '9'
 isValidEnd : U8 -> Bool
 isValidEnd = \b ->
     when b is
-        ']' | ',' | ' ' | '\n' | '\r' | '\t' -> Bool.true
+        ']' | ',' | ' ' | '\n' | '\r' | '\t' | '}' -> Bool.true
         _ -> Bool.false
 
 expect
@@ -1158,6 +1158,7 @@ objectHelp = \state, byte ->
         (AfterComma n, b) if isWhitespace b -> Continue (AfterComma (n + 1))
         (AfterComma n, b) if b == '"' -> Break (ObjectFieldNameStart n)
         (AfterClosingBrace n, b) if isWhitespace b -> Continue (AfterClosingBrace (n + 1))
+        (AfterClosingBrace n, _) -> Break (AfterClosingBrace n)
         _ -> Break InvalidObject
 
 ObjectState : [
@@ -1172,7 +1173,7 @@ ObjectState : [
     InvalidObject,
 ]
 
-# Test decode of simple Object into Roc Record ignoring whitespace
+# Test decode of record with two strings ignoring whitespace
 expect
     input = Str.toUtf8 " {\n\"fruit\"\t:2\n, \"owner\": \"Farmer Joe\" } "
 
@@ -1181,11 +1182,29 @@ expect
 
     actual.result == expected
 
-# Test decode of Object with array and boolean
+# Test decode of record with an array of strings and a boolean field
 expect
     input = Str.toUtf8 "{\"fruit\": [\"Apples\",\"Bananas\",\"Pears\"], \"isFresh\": true }"
 
     actual = Decode.fromBytesPartial input fromUtf8
     expected = Ok { fruit: ["Apples", "Bananas", "Pears"], isFresh: Bool.true }
+
+    actual.result == expected
+
+# Test decode of record with a string and number field
+expect
+    input = Str.toUtf8 "{\"first\":\"ab\",\"second\":10}"
+
+    actual = Decode.fromBytesPartial input fromUtf8
+    expected = Ok { first: "ab", second: 10u8 }
+
+    actual.result == expected
+
+# Test decode of record of a record
+expect
+    input = Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}"
+
+    actual = Decode.fromBytesPartial input fromUtf8
+    expected = Ok { outer: { inner: "a" }, other: { one: "b", two: 10u8 } }
 
     actual.result == expected
