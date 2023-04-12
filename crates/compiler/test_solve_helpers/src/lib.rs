@@ -44,8 +44,9 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-pub fn run_load_and_infer(
+pub fn run_load_and_infer<'a>(
     src: &str,
+    dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
     no_promote: bool,
 ) -> Result<(LoadedModule, String), std::io::Error> {
     use tempfile::tempdir;
@@ -65,6 +66,11 @@ pub fn run_load_and_infer(
 
     let loaded = {
         let dir = tempdir()?;
+
+        for (file, source) in dependencies {
+            std::fs::write(dir.path().join(format!("{file}.roc")), source)?;
+        }
+
         let filename = PathBuf::from("Test.roc");
         let file_path = dir.path().join(filename);
         let result = roc_load::load_and_typecheck_str(
@@ -338,7 +344,11 @@ impl InferredProgram {
     }
 }
 
-pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram, Box<dyn Error>> {
+pub fn infer_queries<'a>(
+    src: &str,
+    dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
+    options: InferOptions,
+) -> Result<InferredProgram, Box<dyn Error>> {
     let (
         LoadedModule {
             module_id: home,
@@ -351,7 +361,7 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
             ..
         },
         src,
-    ) = run_load_and_infer(src, options.no_promote)?;
+    ) = run_load_and_infer(src, dependencies, options.no_promote)?;
 
     let declarations = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();

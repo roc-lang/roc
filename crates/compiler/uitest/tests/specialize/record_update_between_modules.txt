@@ -1,9 +1,23 @@
 # +emit:mono
-app "test" provides [main] to "./platform"
+# +opt mono:no_check
 
-main = ""
+## module Dep
+interface Dep exposes [defaultRequest] imports []
+
+defaultRequest = {
+    url: "",
+    body: "",
+}
+
+## module Test
+app "test" imports [Dep.{ defaultRequest }] provides [main] to "./platform"
+
+main =
+    { defaultRequest & url: "http://www.example.com" }
 
 # -emit:mono
 procedure Test.0 ():
-    let Test.1 : Str = "";
+    let Test.3 : Str = "http://www.example.com";
+    let Test.2 : Str = StructAtIndex 0 Dep.0;
+    let Test.1 : {Str, Str} = Struct {Test.2, Test.3};
     ret Test.1;

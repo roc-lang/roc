@@ -8,8 +8,19 @@ use roc_mono::{
     ir::{Proc, ProcLayout},
     layout::STLayoutInterner,
 };
+use tempfile::tempdir;
 
-pub fn write_compiled_ir(writer: &mut impl io::Write, module_source: &str) -> io::Result<()> {
+#[derive(Default)]
+pub struct MonoOptions {
+    pub no_check: bool,
+}
+
+pub fn write_compiled_ir<'a>(
+    writer: &mut impl io::Write,
+    test_module: &str,
+    dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
+    options: MonoOptions,
+) -> io::Result<()> {
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
 
@@ -17,8 +28,14 @@ pub fn write_compiled_ir(writer: &mut impl io::Write, module_source: &str) -> io
 
     let arena = &Bump::new();
 
+    let dir = tempdir()?;
+
+    for (file, source) in dependencies {
+        std::fs::write(dir.path().join(format!("{file}.roc")), source)?;
+    }
+
     let filename = PathBuf::from("Test.roc");
-    let src_dir = PathBuf::from("fake/test/path");
+    let file_path = dir.path().join(filename);
 
     let load_config = LoadConfig {
         target_info: roc_target::TargetInfo::default_x86_64(),
@@ -29,9 +46,9 @@ pub fn write_compiled_ir(writer: &mut impl io::Write, module_source: &str) -> io
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
-        filename,
-        module_source,
-        src_dir,
+        file_path,
+        test_module,
+        dir.path().to_path_buf(),
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -58,7 +75,9 @@ pub fn write_compiled_ir(writer: &mut impl io::Write, module_source: &str) -> io
 
     let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
 
-    check_procedures(arena, &interns, &mut layout_interner, &procedures);
+    if !options.no_check {
+        check_procedures(arena, &interns, &mut layout_interner, &procedures);
+    }
 
     write_procedures(writer, layout_interner, procedures, main_fn_symbol)
 }
