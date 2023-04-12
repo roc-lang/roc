@@ -9,6 +9,7 @@ use roc_mono::{
     layout::STLayoutInterner,
 };
 use tempfile::tempdir;
+use test_solve_helpers::format_problems;
 
 #[derive(Default)]
 pub struct MonoOptions {
@@ -20,6 +21,7 @@ pub fn write_compiled_ir<'a>(
     test_module: &str,
     dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
     options: MonoOptions,
+    allow_can_errors: bool,
 ) -> io::Result<()> {
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
@@ -70,10 +72,29 @@ pub fn write_compiled_ir<'a>(
         exposed_to_host,
         mut layout_interner,
         interns,
+        can_problems,
+        mut type_problems,
+        sources,
         ..
     } = loaded;
 
     let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
+
+    for (module, can_problems) in can_problems.into_iter() {
+        let type_problems = type_problems.remove(&module).unwrap_or_default();
+
+        let source = sources.get(&module).unwrap();
+
+        let (can_problems, type_problems) =
+            format_problems(&source.1, module, &interns, can_problems, type_problems);
+
+        if !can_problems.is_empty() && !allow_can_errors {
+            panic!("Canonicalization problems: {can_problems}");
+        }
+        if !type_problems.is_empty() {
+            panic!("Type problems: {type_problems}");
+        }
+    }
 
     if !options.no_check {
         check_procedures(arena, &interns, &mut layout_interner, &procedures);

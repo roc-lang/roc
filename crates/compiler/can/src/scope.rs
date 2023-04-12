@@ -463,6 +463,7 @@ pub fn create_alias(
         let mut hidden = type_variables;
 
         for var in (vars.iter().map(|lv| lv.value.var))
+            .chain(recursion_variables.iter().copied())
             .chain(infer_ext_in_output_variables.iter().copied())
         {
             hidden.remove(&var);

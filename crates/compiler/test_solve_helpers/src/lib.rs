@@ -254,9 +254,9 @@ fn parse_queries(src: &str, line_info: &LineInfo) -> Vec<TypeQuery> {
 
 #[derive(Default, Clone, Copy)]
 pub struct InferOptions {
+    pub allow_errors: bool,
     pub print_can_decls: bool,
     pub print_only_under_alias: bool,
-    pub allow_errors: bool,
     pub no_promote: bool,
 }
 
@@ -348,6 +348,7 @@ pub fn infer_queries<'a>(
     src: &str,
     dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
     options: InferOptions,
+    allow_can_errors: bool,
 ) -> Result<InferredProgram, Box<dyn Error>> {
     let (
         LoadedModule {
@@ -369,14 +370,14 @@ pub fn infer_queries<'a>(
     let can_problems = can_problems.remove(&home).unwrap_or_default();
     let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-    if !options.allow_errors {
+    {
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);
 
-        if !can_problems.is_empty() {
+        if !can_problems.is_empty() && !allow_can_errors {
             return Err(format!("Canonicalization problems: {can_problems}",).into());
         }
-        if !type_problems.is_empty() {
+        if !type_problems.is_empty() && !options.allow_errors {
             return Err(format!("Type problems: {type_problems}",).into());
         }
     }
