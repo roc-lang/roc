@@ -216,14 +216,14 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     // And track a little bit of state
     let mut in_code_block = false;
     let mut is_roc_code = false;
-    let ps : syntect::parsing::SyntaxSet = SyntaxSet::load_defaults_newlines();
-    let ts : syntect::highlighting::ThemeSet = ThemeSet::load_defaults();
+    let syntax_set : syntect::parsing::SyntaxSet = SyntaxSet::load_defaults_newlines();
+    let theme_set : syntect::highlighting::ThemeSet = ThemeSet::load_defaults();
     
     for event in parser {
         match event {
-            pulldown_cmark::Event::Code(cow_str) => {
-                if cow_str.starts_with("roc!") {
-                    let stripped = cow_str
+            pulldown_cmark::Event::Code(code_str) => {
+                if code_str.starts_with("roc!") {
+                    let stripped = code_str
                         .strip_prefix("roc!")
                         .expect("expected leading 'roc!'");
 
@@ -233,7 +233,7 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                         pulldown_cmark::CowStr::from(highlighted_html),
                     ));
                 } else {
-                    let inline_code = pulldown_cmark::CowStr::from(format!("<code>{}</code>", cow_str));
+                    let inline_code = pulldown_cmark::CowStr::from(format!("<code>{}</code>", code_str));
                     parser_with_highlighting.push(
                         pulldown_cmark::Event::Html(inline_code)
                     );
@@ -243,7 +243,7 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                 in_code_block = true;
                 is_roc_code = is_roc_code_block(&cbk);
             }
-            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(cow_str))) => {
+            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(extention_str))) => {
                 if in_code_block {
                     match replace_code_with_static_file(&code_to_highlight, input_file) {
                         None => {}
@@ -262,10 +262,10 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                     let highlighted_html: String;
                     if is_roc_code {
                         highlighted_html = roc_highlight::highlight_roc_code(&code_to_highlight)
-                    } else if let Some(syntax) = ps.find_syntax_by_token(&cow_str) {
-                        let mut h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
+                    } else if let Some(syntax) = syntax_set.find_syntax_by_token(&extention_str) {
+                        let mut h = HighlightLines::new(syntax, &theme_set.themes["base16-ocean.dark"]);
 
-                        let mut html_generator = ClassedHTMLGenerator::new_with_class_style(syntax, &ps, ClassStyle::Spaced);
+                        let mut html_generator = ClassedHTMLGenerator::new_with_class_style(syntax, &syntax_set, ClassStyle::Spaced);
                         for line in LinesWithEndings::from(&code_to_highlight) {
                             html_generator.parse_html_for_line_which_includes_newline(line);
                         }
