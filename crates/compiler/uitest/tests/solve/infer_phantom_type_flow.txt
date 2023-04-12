@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    F a b := b
+
+    foo : _ -> F U8 Str
+    foo = \it -> it
+
+    foo
+
+main = entry
+#      ^^^^^ F U8 Str -[[foo(3)]]-> F U8 Str
