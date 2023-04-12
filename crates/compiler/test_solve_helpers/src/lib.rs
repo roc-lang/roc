@@ -373,9 +373,6 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
 
     let line_info = LineInfo::new(&src);
     let queries = parse_queries(&src, &line_info);
-    if queries.is_empty() {
-        return Err("No queries provided!".into());
-    }
 
     let mut inferred_queries = Vec::with_capacity(queries.len());
     let exposed_by_module = ExposedByModule::default();

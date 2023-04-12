@@ -1,0 +1,9 @@
+# +opt print:mono
+app "test" provides [main] to "./platform"
+
+main = ""
+
+# -emit:mono
+procedure Test.0 ():
+    let Test.1 : Str = "";
+    ret Test.1;

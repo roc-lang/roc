@@ -14,8 +14,12 @@ harness = false
 
 [dev-dependencies]
 roc_builtins = { path = "../builtins" }
+roc_collections = { path = "../collections" }
 roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
 roc_load = { path = "../load" }
+roc_packaging = { path = "../../packaging" }
+roc_module = { path = "../module", features = ["debug-symbols"] }
+roc_mono = { path = "../mono" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_reporting = { path = "../../reporting" }

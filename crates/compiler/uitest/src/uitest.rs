@@ -13,6 +13,8 @@ use test_solve_helpers::{
     infer_queries, Elaboration, InferOptions, InferredProgram, InferredQuery, MUTLILINE_MARKER,
 };
 
+mod mono;
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Arguments::from_args();
 
@@ -110,6 +112,7 @@ struct TestCase {
 #[derive(Default)]
 struct PrintOptions {
     can_decls: bool,
+    mono: bool,
 }
 
 impl TestCase {
@@ -154,6 +157,7 @@ impl TestCase {
             let opt = infer_opt.name("opt").unwrap().as_str();
             match opt.trim() {
                 "can_decls" => print_opts.can_decls = true,
+                "mono" => print_opts.mono = true,
                 other => return Err(format!("unknown print option: {other:?}").into()),
             }
         }
@@ -197,10 +201,18 @@ fn assemble_query_output(
     write_source_with_answers(&mut reflow, source, sorted_queries, 0)?;
 
     // Finish up with any remaining print options we were asked to provide.
-    let PrintOptions { can_decls } = print_options;
+    let PrintOptions { can_decls, mono } = print_options;
     if can_decls {
         writeln!(writer, "\n{EMIT_HEADER}can_decls")?;
         program.write_can_decls(writer)?;
+    }
+
+    if mono {
+        writeln!(writer, "\n{EMIT_HEADER}mono")?;
+        // Unfortunately, with the current setup we must now recompile into the IR.
+        // TODO: extend the data returned by a monomorphized module to include
+        // that of a solved module.
+        mono::write_compiled_ir(writer, source)?;
     }
 
     Ok(())
