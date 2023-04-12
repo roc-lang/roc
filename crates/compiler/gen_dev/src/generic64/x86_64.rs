@@ -7,9 +7,9 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::FloatWidth;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
+use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
 
-use super::CompareOperation;
+use super::{CompareOperation, RegisterWidth};
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.
@@ -511,6 +511,24 @@ impl X64_64SystemVStoreArgs {
                         }
                         self.tmp_stack_offset += size as i32;
                     }
+                    Layout::Union(UnionLayout::NonRecursive(_)) => {
+                        // for now, just also store this on the stack
+                        let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
+                        debug_assert_eq!(base_offset % 8, 0);
+                        for i in (0..size as i32).step_by(8) {
+                            X86_64Assembler::mov_reg64_base32(
+                                buf,
+                                Self::GENERAL_RETURN_REGS[0],
+                                base_offset + i,
+                            );
+                            X86_64Assembler::mov_stack32_reg64(
+                                buf,
+                                self.tmp_stack_offset + i,
+                                Self::GENERAL_RETURN_REGS[0],
+                            );
+                        }
+                        self.tmp_stack_offset += size as i32;
+                    }
                     _ => {
                         todo!("calling with arg type, {:?}", layout_interner.dbg(other));
                     }
@@ -611,6 +629,11 @@ impl X64_64SystemVLoadArgs {
                     lambda_set.runtime_representation(),
                 ),
                 Layout::Struct { .. } => {
+                    // for now, just also store this on the stack
+                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                    self.argument_offset += stack_size as i32;
+                }
+                Layout::Union(UnionLayout::NonRecursive(_)) => {
                     // for now, just also store this on the stack
                     storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                     self.argument_offset += stack_size as i32;
@@ -1554,45 +1577,71 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn eq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
+        cmp_reg64_reg64(buf, register_width, src1, src2);
         sete_reg64(buf, dst);
     }
 
     #[inline(always)]
     fn neq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
+        cmp_reg64_reg64(buf, register_width, src1, src2);
         setne_reg64(buf, dst);
     }
 
     #[inline(always)]
-    fn ilt_reg64_reg64_reg64(
+    fn signed_compare_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        operation: CompareOperation,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        setl_reg64(buf, dst);
+        match operation {
+            CompareOperation::LessThan => {
+                cmp_reg64_reg64(buf, register_width, src1, src2);
+                setl_reg64(buf, dst);
+            }
+            CompareOperation::LessThanOrEqual => todo!(),
+            CompareOperation::GreaterThan => {
+                cmp_reg64_reg64(buf, register_width, src1, src2);
+                setg_reg64(buf, dst);
+            }
+            CompareOperation::GreaterThanOrEqual => todo!(),
+        }
     }
 
-    #[inline(always)]
-    fn ult_reg64_reg64_reg64(
+    fn unsigned_compare_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        operation: CompareOperation,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        setb_reg64(buf, dst);
+        match operation {
+            CompareOperation::LessThan => {
+                cmp_reg64_reg64(buf, register_width, src1, src2);
+                setb_reg64(buf, dst);
+            }
+            CompareOperation::LessThanOrEqual => todo!(),
+            CompareOperation::GreaterThan => {
+                cmp_reg64_reg64(buf, register_width, src1, src2);
+                seta_reg64(buf, dst);
+            }
+
+            CompareOperation::GreaterThanOrEqual => todo!(),
+        }
     }
 
     #[inline(always)]
@@ -1623,28 +1672,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn igt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        setg_reg64(buf, dst);
-    }
-
-    #[inline(always)]
-    fn ugt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        seta_reg64(buf, dst);
-    }
-
-    #[inline(always)]
     fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
         cvtsi2ss_freg64_reg64(buf, dst, src);
     }
@@ -1671,7 +1698,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
+        cmp_reg64_reg64(buf, RegisterWidth::W64, src1, src2);
         setle_reg64(buf, dst);
     }
 
@@ -1682,7 +1709,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
+        cmp_reg64_reg64(buf, RegisterWidth::W64, src1, src2);
         setge_reg64(buf, dst);
     }
 
@@ -1844,6 +1871,50 @@ fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
         byte | REX_PREFIX_R
     } else {
         byte
+    }
+}
+
+#[inline(always)]
+fn binop_reg16_reg16(
+    op_code: u8,
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = (src as u8 % 8) << 3;
+
+    if dst_high || src_high {
+        let rex = add_rm_extension(dst, REX);
+        let rex = add_reg_extension(src, rex);
+
+        buf.extend([0x66, rex, op_code, 0xC0 | dst_mod | src_mod])
+    } else {
+        buf.extend([0x66, op_code, 0xC0 | dst_mod | src_mod]);
+    }
+}
+
+#[inline(always)]
+fn binop_reg32_reg32(
+    op_code: u8,
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = (src as u8 % 8) << 3;
+
+    if dst_high || src_high {
+        let rex = add_rm_extension(dst, REX);
+        let rex = add_reg_extension(src, rex);
+
+        buf.extend([rex, op_code, 0xC0 | dst_mod | src_mod])
+    } else {
+        buf.extend([op_code, 0xC0 | dst_mod | src_mod]);
     }
 }
 
@@ -2119,8 +2190,18 @@ fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
 
 /// `CMP r/m64,r64` -> Compare r64 to r/m64.
 #[inline(always)]
-fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x39, buf, dst, src);
+fn cmp_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    match register_width {
+        RegisterWidth::W8 => binop_reg64_reg64(0x38, buf, dst, src),
+        RegisterWidth::W16 => binop_reg16_reg16(0x39, buf, dst, src),
+        RegisterWidth::W32 => binop_reg32_reg32(0x39, buf, dst, src),
+        RegisterWidth::W64 => binop_reg64_reg64(0x39, buf, dst, src),
+    }
 }
 
 #[inline(always)]
@@ -2417,13 +2498,6 @@ fn mov_base8_offset32_reg8(
         buf.push(0x24);
     }
     buf.extend(offset.to_le_bytes());
-}
-
-enum RegisterWidth {
-    W8,
-    W16,
-    W32,
-    W64,
 }
 
 #[inline(always)]
@@ -3669,6 +3743,53 @@ mod tests {
             |dst, src| format!("sqrtss {dst}, {src}"),
             ALL_FLOAT_REGS,
             ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_int_cmp() {
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
+                "cmp {}, {}",
+                dst.low_8bits_string(),
+                src.low_8bits_string()
+            ),
+            [RegisterWidth::W8],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
+                "cmp {}, {}",
+                dbg!(dst.low_16bits_string()),
+                dbg!(src.low_16bits_string())
+            ),
+            [RegisterWidth::W16],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
+                "cmp {}, {}",
+                dbg!(dst.low_32bits_string()),
+                dbg!(src.low_32bits_string())
+            ),
+            [RegisterWidth::W32],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!("cmp {dst}, {src}",),
+            [RegisterWidth::W64],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 }

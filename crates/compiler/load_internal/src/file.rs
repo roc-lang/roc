@@ -42,7 +42,8 @@ use roc_mono::layout::{
 use roc_mono::reset_reuse;
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{
-    self, CommentOrNewline, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation,
+    self, CommentOrNewline, Defs, Expr, ExtractSpaces, Pattern, Spaced, StrLiteral, TypeAnnotation,
+    ValueDef,
 };
 use roc_parse::header::{
     ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
@@ -52,7 +53,7 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::{Annotation, Palette, RenderTarget};
+use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
@@ -693,6 +694,7 @@ struct ModuleHeader<'a> {
     header_comments: &'a [CommentOrNewline<'a>],
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
+    defined_values: Vec<ValueDef<'a>>,
 }
 
 #[derive(Debug)]
@@ -1791,7 +1793,7 @@ fn state_thread_step<'a>(
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
                 Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report(&filename, error);
+                    let buf = to_file_problem_report_string(&filename, error);
                     Err(LoadingProblem::FormattedReport(buf))
                 }
 
@@ -1939,7 +1941,9 @@ pub fn report_loading_problem(
             )
         }
         LoadingProblem::FormattedReport(report) => report,
-        LoadingProblem::FileProblem { filename, error } => to_file_problem_report(&filename, error),
+        LoadingProblem::FileProblem { filename, error } => {
+            to_file_problem_report_string(&filename, error)
+        }
         err => todo!("Loading error: {:?}", err),
     }
 }
@@ -3629,7 +3633,7 @@ fn load_package_from_disk<'a>(
                         &header,
                         comments,
                         pkg_module_timing,
-                    );
+                    )?;
 
                     Ok(Msg::Header(package_module_msg))
                 }
@@ -3660,7 +3664,7 @@ fn load_package_from_disk<'a>(
                         &header,
                         comments,
                         pkg_module_timing,
-                    );
+                    )?;
 
                     Ok(Msg::Header(platform_module_msg))
                 }
@@ -3756,19 +3760,20 @@ fn load_builtin_module<'a>(
     module_timing: ModuleTiming,
     module_id: ModuleId,
     module_name: &str,
-) -> (ModuleId, Msg<'a>) {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let src_bytes = module_source(module_id);
 
     let (info, parse_state) = load_builtin_module_help(arena, module_name, src_bytes);
 
     let (module_id, _, header) = build_header(
+        arena,
         info,
         parse_state,
         module_ids,
         ident_ids_by_module,
         module_timing,
-    );
-    (module_id, Msg::Header(header))
+    )?;
+    Ok((module_id, Msg::Header(header)))
 }
 
 /// Load a module by its module name, rather than by its filename
@@ -3804,7 +3809,7 @@ fn load_module<'a>(
                         module_timing,
                         $module_id,
                         concat!($name, ".roc")
-                    );
+                    )?;
 
                     return Ok(HeaderOutput { module_id, msg, opt_platform_shorthand: None });
                 }
@@ -4042,12 +4047,13 @@ fn parse_header<'a>(
             };
 
             let (module_id, module_name, header) = build_header(
+                arena,
                 info,
                 parse_state.clone(),
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
-            );
+            )?;
 
             if let Some(expected_module_name) = opt_expected_module_name {
                 if expected_module_name != module_name {
@@ -4096,12 +4102,13 @@ fn parse_header<'a>(
             };
 
             let (module_id, _, header) = build_header(
+                arena,
                 info,
                 parse_state,
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
-            );
+            )?;
 
             Ok(HeaderOutput {
                 module_id,
@@ -4157,12 +4164,13 @@ fn parse_header<'a>(
             };
 
             let (module_id, _, resolved_header) = build_header(
+                arena,
                 info,
                 parse_state,
                 module_ids.clone(),
                 ident_ids_by_module.clone(),
                 module_timing,
-            );
+            )?;
 
             let mut messages = Vec::with_capacity(packages.len() + 1);
 
@@ -4221,7 +4229,7 @@ fn parse_header<'a>(
                 &header,
                 comments,
                 module_timing,
-            );
+            )?;
 
             Ok(HeaderOutput {
                 module_id,
@@ -4256,7 +4264,7 @@ fn parse_header<'a>(
                 &header,
                 comments,
                 module_timing,
-            );
+            )?;
 
             Ok(HeaderOutput {
                 module_id,
@@ -4424,12 +4432,13 @@ struct HeaderInfo<'a> {
 }
 
 fn build_header<'a>(
+    arena: &'a Bump,
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
-) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
+) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
     let HeaderInfo {
         filename,
         is_root_module,
@@ -4484,12 +4493,16 @@ fn build_header<'a>(
         Vec::with_capacity(imports.len());
     let mut scope_size = 0;
 
+    let mut defined_values = vec![];
     for loc_entry in imports {
-        let (qualified_module_name, exposed) = exposed_from_import(&loc_entry.value);
+        if let Some((qualified_module_name, exposed)) = exposed_from_import(&loc_entry.value) {
+            scope_size += num_exposes;
 
-        scope_size += num_exposes;
-
-        imported.push((qualified_module_name, exposed, loc_entry.region));
+            imported.push((qualified_module_name, exposed, loc_entry.region));
+        }
+        if let Some(value) = value_def_from_imports(arena, &filename, loc_entry)? {
+            defined_values.push(value);
+        }
     }
 
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
@@ -4716,7 +4729,7 @@ fn build_header<'a>(
         }
     };
 
-    (
+    Ok((
         home,
         name,
         ModuleHeader {
@@ -4735,8 +4748,9 @@ fn build_header<'a>(
             header_type,
             header_comments,
             module_timing,
+            defined_values,
         },
-    )
+    ))
 }
 
 impl<'a> BuildTask<'a> {
@@ -5263,7 +5277,7 @@ fn build_package_header<'a>(
     header: &PackageHeader<'a>,
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
-) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
+) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
     let exposes = bumpalo::collections::Vec::from_iter_in(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
@@ -5293,6 +5307,7 @@ fn build_package_header<'a>(
     };
 
     build_header(
+        arena,
         info,
         parse_state,
         module_ids,
@@ -5313,7 +5328,7 @@ fn build_platform_header<'a>(
     header: &PlatformHeader<'a>,
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
-) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
+) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
     // If we have an app module, then it's the root module;
     // otherwise, we must be the root.
     let is_root_module = opt_app_module_id.is_none();
@@ -5358,6 +5373,7 @@ fn build_platform_header<'a>(
     };
 
     build_header(
+        arena,
         info,
         parse_state,
         module_ids,
@@ -5563,7 +5579,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
+    let mut parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
         Ok((_, success, _state)) => success,
         Err((_, fail)) => {
             return Err(LoadingProblem::ParsingFailed(
@@ -5571,6 +5587,10 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
             ));
         }
     };
+    for value in header.defined_values.into_iter() {
+        // TODO: should these have a region?
+        parsed_defs.push_value_def(value, Region::zero(), &[], &[]);
+    }
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
@@ -5615,7 +5635,9 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     Ok(Msg::Parsed(parsed))
 }
 
-fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Loc<Ident>>) {
+fn exposed_from_import<'a>(
+    entry: &ImportsEntry<'a>,
+) -> Option<(QualifiedModuleName<'a>, Vec<Loc<Ident>>)> {
     use roc_parse::header::ImportsEntry::*;
 
     match entry {
@@ -5631,7 +5653,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
                 module: module_name.as_str().into(),
             };
 
-            (qualified_module_name, exposed)
+            Some((qualified_module_name, exposed))
         }
 
         Package(package_name, module_name, exposes) => {
@@ -5646,9 +5668,68 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
                 module: module_name.as_str().into(),
             };
 
-            (qualified_module_name, exposed)
+            Some((qualified_module_name, exposed))
         }
+
+        IngestedFile(_, _) => None,
     }
+}
+
+fn value_def_from_imports<'a>(
+    arena: &'a Bump,
+    header_path: &Path,
+    entry: &Loc<ImportsEntry<'a>>,
+) -> Result<Option<ValueDef<'a>>, LoadingProblem<'a>> {
+    use roc_parse::header::ImportsEntry::*;
+
+    let value = match entry.value {
+        Module(_, _) => None,
+        Package(_, _, _) => None,
+        IngestedFile(ingested_path, typed_ident) => {
+            let file_path = if let StrLiteral::PlainLine(ingested_path) = ingested_path {
+                let mut file_path = header_path.to_path_buf();
+                // Remove the header file name and push the new path.
+                file_path.pop();
+                file_path.push(ingested_path);
+
+                match fs::metadata(&file_path) {
+                    Ok(md) => {
+                        if md.is_dir() {
+                            return Err(LoadingProblem::FileProblem {
+                                filename: file_path,
+                                // TODO: change to IsADirectory once that is stable.
+                                error: io::ErrorKind::InvalidInput,
+                            });
+                        }
+                        file_path
+                    }
+                    Err(e) => {
+                        return Err(LoadingProblem::FileProblem {
+                            filename: file_path,
+                            error: e.kind(),
+                        });
+                    }
+                }
+            } else {
+                todo!(
+                    "Only plain strings are supported. Other cases should be made impossible here"
+                );
+            };
+            let typed_ident = typed_ident.extract_spaces().item;
+            let ident = arena.alloc(typed_ident.ident.map_owned(Pattern::Identifier));
+            let ann_type = arena.alloc(typed_ident.ann);
+            Some(ValueDef::AnnotatedBody {
+                ann_pattern: ident,
+                ann_type,
+                comment: None,
+                body_pattern: ident,
+                body_expr: arena
+                    .alloc(entry.with_value(Expr::IngestedFile(arena.alloc(file_path), ann_type))),
+            })
+        }
+    };
+
+    Ok(value)
 }
 
 fn ident_from_exposed(entry: &Spaced<'_, ExposedName<'_>>) -> Ident {
@@ -6469,87 +6550,6 @@ fn run_task<'a>(
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
     Ok(())
-}
-
-fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
-    use ven_pretty::DocAllocator;
-
-    let src_lines: Vec<&str> = Vec::new();
-
-    let mut module_ids = ModuleIds::default();
-
-    let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
-
-    let interns = Interns::default();
-
-    // Report parsing and canonicalization problems
-    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
-
-    let report = match error {
-        io::ErrorKind::NotFound => {
-            let doc = alloc.stack([
-                alloc.reflow(r"I am looking for this file, but it's not there:"),
-                alloc
-                    .parser_suggestion(filename.to_str().unwrap())
-                    .indent(4),
-                alloc.concat([
-                    alloc.reflow(r"Is the file supposed to be there? "),
-                    alloc.reflow("Maybe there is a typo in the file name?"),
-                ]),
-            ]);
-
-            Report {
-                filename: "UNKNOWN.roc".into(),
-                doc,
-                title: "FILE NOT FOUND".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-        io::ErrorKind::PermissionDenied => {
-            let doc = alloc.stack([
-                alloc.reflow(r"I don't have the required permissions to read this file:"),
-                alloc
-                    .parser_suggestion(filename.to_str().unwrap())
-                    .indent(4),
-                alloc
-                    .concat([alloc.reflow(r"Is it the right file? Maybe change its permissions?")]),
-            ]);
-
-            Report {
-                filename: "UNKNOWN.roc".into(),
-                doc,
-                title: "FILE PERMISSION DENIED".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-        _ => {
-            let error = std::io::Error::from(error);
-            let formatted = format!("{}", error);
-            let doc = alloc.stack([
-                alloc.reflow(r"I tried to read this file:"),
-                alloc
-                    .text(filename.to_str().unwrap())
-                    .annotate(Annotation::Error)
-                    .indent(4),
-                alloc.reflow(r"But ran into:"),
-                alloc.text(formatted).annotate(Annotation::Error).indent(4),
-            ]);
-
-            Report {
-                filename: "UNKNOWN.roc".into(),
-                doc,
-                title: "FILE PROBLEM".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-    };
-
-    let mut buf = String::new();
-    let palette = DEFAULT_PALETTE;
-    report.render_color_terminal(&mut buf, &alloc, &palette);
-
-    buf
 }
 
 fn to_import_cycle_report(

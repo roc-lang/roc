@@ -7,7 +7,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, STLayoutInterner};
 
-use super::CompareOperation;
+use super::{CompareOperation, RegisterWidth};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -382,8 +382,9 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
-    fn abs_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
-        todo!("abs_reg64_reg64 for AArch64");
+    fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
+        cmp_reg64_imm12(buf, src, 0);
+        cneg_reg64_reg64_cond(buf, dst, src, ConditionCode::MI);
     }
 
     #[inline(always)]
@@ -446,51 +447,51 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn imul_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("register signed multiplication for AArch64");
+        mul_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn umul_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("register unsigned multiplication for AArch64");
+        mul_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("register signed division for AArch64");
+        sdiv_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn udiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("register unsigned division for AArch64");
+        udiv_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     #[inline(always)]
@@ -532,8 +533,14 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn jmp_imm32(_buf: &mut Vec<'_, u8>, _offset: i32) -> usize {
-        todo!("jump instructions for AArch64");
+    fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
+        if (-(1 << 27)..(1 << 27)).contains(&offset) {
+            b_imm26(buf, offset);
+        } else {
+            todo!("jump offsets over 27 bits for AArch64: {:#x}", offset);
+        }
+
+        buf.len()
     }
 
     #[inline(always)]
@@ -544,12 +551,27 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn jne_reg64_imm64_imm32(
-        _buf: &mut Vec<'_, u8>,
-        _reg: AArch64GeneralReg,
-        _imm: u64,
-        _offset: i32,
+        buf: &mut Vec<'_, u8>,
+        reg: AArch64GeneralReg,
+        imm: u64,
+        offset: i32,
     ) -> usize {
-        todo!("jump not equal instructions for AArch64");
+        if imm < (1 << 12) {
+            cmp_reg64_imm12(buf, reg, imm as u16);
+        } else {
+            todo!(
+                "cmp immediate with value over 12 bits for AArch64: {:#x}",
+                imm
+            );
+        }
+
+        if (-(1 << 20)..(1 << 20)).contains(&offset) {
+            b_cond_imm19(buf, ConditionCode::NE, offset);
+        } else {
+            todo!("jump offsets over 20 bits for AArch64: {:#x}", offset);
+        }
+
+        buf.len()
     }
 
     #[inline(always)]
@@ -822,8 +844,8 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         }
     }
     #[inline(always)]
-    fn neg_reg64_reg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64GeneralReg) {
-        todo!("neg for AArch64");
+    fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
+        neg_reg64_reg64(buf, dst, src);
     }
 
     #[inline(always)]
@@ -853,42 +875,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn eq_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers equality for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::EQ);
     }
 
     #[inline(always)]
     fn neq_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers non-equality for AArch64");
-    }
-
-    #[inline(always)]
-    fn ilt_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
-    ) {
-        todo!("registers signed less than for AArch64");
-    }
-
-    #[inline(always)]
-    fn ult_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
-    ) {
-        todo!("registers unsigned less than for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::NE);
     }
 
     #[inline(always)]
@@ -901,26 +907,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _operation: CompareOperation,
     ) {
         todo!("registers float comparison for AArch64");
-    }
-
-    #[inline(always)]
-    fn igt_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
-    ) {
-        todo!("registers signed greater than for AArch64");
-    }
-
-    #[inline(always)]
-    fn ugt_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
-    ) {
-        todo!("registers unsigned greater than for AArch64");
     }
 
     #[inline(always)]
@@ -961,22 +947,24 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn lte_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers less than or equal for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::LE);
     }
 
     #[inline(always)]
     fn gte_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("registers greater than or equal for AArch64");
+        cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::GE);
     }
 
     fn set_if_overflow(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg) {
@@ -989,69 +977,69 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     fn and_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("bitwise and for AArch64")
+        and_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn or_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("bitwise or for AArch64")
+        orr_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn xor_reg64_reg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) {
-        todo!("bitwise xor for AArch64")
+        eor_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("shl for AArch64")
+        lsl_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("shr for AArch64")
+        lsr_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64GeneralReg,
-        _src2: AArch64GeneralReg,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
     ) where
         ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
         CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
     {
-        todo!("sar for AArch64")
+        asr_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
     fn sqrt_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
@@ -1060,6 +1048,42 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     fn sqrt_freg32_freg32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
         todo!("sqrt")
+    }
+
+    fn signed_compare_reg64(
+        buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        operation: CompareOperation,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        let cond = match operation {
+            CompareOperation::LessThan => ConditionCode::LT,
+            CompareOperation::LessThanOrEqual => ConditionCode::LE,
+            CompareOperation::GreaterThan => ConditionCode::GT,
+            CompareOperation::GreaterThanOrEqual => ConditionCode::GE,
+        };
+        cset_reg64_cond(buf, dst, cond);
+    }
+
+    fn unsigned_compare_reg64(
+        buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        operation: CompareOperation,
+        dst: AArch64GeneralReg,
+        src1: AArch64GeneralReg,
+        src2: AArch64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        let cond = match operation {
+            CompareOperation::LessThan => ConditionCode::CCLO,
+            CompareOperation::LessThanOrEqual => ConditionCode::LS,
+            CompareOperation::GreaterThan => ConditionCode::HI,
+            CompareOperation::GreaterThanOrEqual => ConditionCode::CSHS,
+        };
+        cset_reg64_cond(buf, dst, cond);
     }
 }
 
@@ -1096,9 +1120,25 @@ pub struct MoveWideImmediate {
 
 impl Aarch64Bytes for MoveWideImmediate {}
 
+pub struct MoveWideImmediateParams {
+    opc: u8,
+    rd: AArch64GeneralReg,
+    imm16: u16,
+    hw: u8,
+    sf: bool,
+}
+
 impl MoveWideImmediate {
     #[inline(always)]
-    fn new(opc: u8, rd: AArch64GeneralReg, imm16: u16, hw: u8, sf: bool) -> Self {
+    fn new(
+        MoveWideImmediateParams {
+            opc,
+            rd,
+            imm16,
+            hw,
+            sf,
+        }: MoveWideImmediateParams,
+    ) -> Self {
         // TODO: revisit this is we change where we want to check the shift
         // currently this is done in the assembler above
         // assert!(shift % 16 == 0 && shift <= 48);
@@ -1131,15 +1171,26 @@ pub struct ArithmeticImmediate {
 
 impl Aarch64Bytes for ArithmeticImmediate {}
 
+pub struct ArithmeticImmediateParams {
+    op: bool,
+    s: bool,
+    rd: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    imm12: u16,
+    sh: bool,
+}
+
 impl ArithmeticImmediate {
     #[inline(always)]
     fn new(
-        op: bool,
-        s: bool,
-        rd: AArch64GeneralReg,
-        rn: AArch64GeneralReg,
-        imm12: u16,
-        sh: bool,
+        ArithmeticImmediateParams {
+            op,
+            s,
+            rd,
+            rn,
+            imm12,
+            sh,
+        }: ArithmeticImmediateParams,
     ) -> Self {
         debug_assert!(imm12 <= 0xFFF);
 
@@ -1191,16 +1242,28 @@ pub struct ArithmeticShifted {
 
 impl Aarch64Bytes for ArithmeticShifted {}
 
+pub struct ArithmeticShiftedParams {
+    op: bool,
+    s: bool,
+    shift: ShiftType,
+    imm6: u8,
+    rm: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
 impl ArithmeticShifted {
     #[inline(always)]
     fn new(
-        op: bool,
-        s: bool,
-        shift: ShiftType,
-        imm6: u8,
-        rm: AArch64GeneralReg,
-        rn: AArch64GeneralReg,
-        rd: AArch64GeneralReg,
+        ArithmeticShiftedParams {
+            op,
+            s,
+            shift,
+            imm6,
+            rm,
+            rn,
+            rd,
+        }: ArithmeticShiftedParams,
     ) -> Self {
         debug_assert!(imm6 <= 0b111111);
 
@@ -1217,6 +1280,280 @@ impl ArithmeticShifted {
             // true for 64 bit addition
             // false for 32 bit addition
             sf: true,
+        }
+    }
+}
+
+// ARM manual section C1.2.4
+#[derive(Copy, Clone, PartialEq)]
+#[allow(dead_code)]
+enum ConditionCode {
+    /// Equal
+    EQ = 0b0000,
+    /// Not equal
+    NE = 0b0001,
+    /// CS or HS: Carry set
+    CSHS = 0b0010,
+    /// CC or LO: Carry clear
+    CCLO = 0b0011,
+    /// Minus, negative
+    MI = 0b0100,
+    /// Plus, positive or zero
+    PL = 0b0101,
+    /// Overflow
+    VS = 0b0110,
+    /// No overflow
+    VC = 0b0111,
+    /// Unsigned higher
+    HI = 0b1000,
+    /// Unsigned lower or same
+    LS = 0b1001,
+    /// Signed greater than or equal
+    GE = 0b1010,
+    /// Signed less than
+    LT = 0b1011,
+    /// Signed greater than
+    GT = 0b1100,
+    /// Signed less than or equal
+    LE = 0b1101,
+    /// Always
+    AL = 0b1110,
+}
+
+impl ConditionCode {
+    #[inline(always)]
+    fn id(&self) -> u8 {
+        *self as u8
+    }
+
+    /// The inverse of the condition code. For example, EQ becomes NE.
+    fn invert(self) -> Self {
+        match self {
+            ConditionCode::EQ => ConditionCode::NE,
+            ConditionCode::NE => ConditionCode::EQ,
+            ConditionCode::CSHS => ConditionCode::CCLO,
+            ConditionCode::CCLO => ConditionCode::CSHS,
+            ConditionCode::MI => ConditionCode::PL,
+            ConditionCode::PL => ConditionCode::MI,
+            ConditionCode::VS => ConditionCode::VC,
+            ConditionCode::VC => ConditionCode::VS,
+            ConditionCode::HI => ConditionCode::LS,
+            ConditionCode::LS => ConditionCode::HI,
+            ConditionCode::GE => ConditionCode::LT,
+            ConditionCode::LT => ConditionCode::GE,
+            ConditionCode::GT => ConditionCode::LE,
+            ConditionCode::LE => ConditionCode::GT,
+            ConditionCode::AL => ConditionCode::AL,
+        }
+    }
+}
+
+impl std::fmt::Display for ConditionCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ConditionCode::EQ => "eq",
+                ConditionCode::NE => "ne",
+                ConditionCode::CSHS => "hs",
+                ConditionCode::CCLO => "lo",
+                ConditionCode::MI => "mi",
+                ConditionCode::PL => "pl",
+                ConditionCode::VS => "vs",
+                ConditionCode::VC => "vc",
+                ConditionCode::HI => "hi",
+                ConditionCode::LS => "ls",
+                ConditionCode::GE => "ge",
+                ConditionCode::LT => "lt",
+                ConditionCode::GT => "gt",
+                ConditionCode::LE => "le",
+                ConditionCode::AL => "al",
+            }
+        )
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct ConditionalBranchImmediate {
+    fixed: Integer<u8, packed_bits::Bits<7>>,
+    o1: bool,
+    imm19: Integer<u32, packed_bits::Bits<19>>,
+    o0: bool,
+    cond: Integer<u8, packed_bits::Bits<4>>,
+}
+
+impl Aarch64Bytes for ConditionalBranchImmediate {}
+
+pub struct ConditionalBranchImmediateParams {
+    cond: ConditionCode,
+    imm19: u32,
+}
+
+impl ConditionalBranchImmediate {
+    #[inline(always)]
+    fn new(
+        ConditionalBranchImmediateParams { cond, imm19 }: ConditionalBranchImmediateParams,
+    ) -> Self {
+        debug_assert!(imm19 >> 19 == 0);
+
+        Self {
+            cond: cond.id().into(),
+            o0: false,
+            imm19: imm19.into(),
+            o1: false,
+            fixed: 0b0101010.into(),
+        }
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct ConditionalSelect {
+    sf: bool,
+    op: bool,
+    s: bool,
+    fixed: Integer<u8, packed_bits::Bits<8>>,
+    reg_m: Integer<u8, packed_bits::Bits<5>>,
+    cond: Integer<u8, packed_bits::Bits<4>>,
+    op2: Integer<u8, packed_bits::Bits<2>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for ConditionalSelect {}
+
+pub struct ConditionalSelectParams {
+    op: bool,
+    s: bool,
+    cond: ConditionCode,
+    op2: u8,
+    rm: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
+impl ConditionalSelect {
+    #[inline(always)]
+    fn new(
+        ConditionalSelectParams {
+            op,
+            s,
+            cond,
+            op2,
+            rm,
+            rn,
+            rd,
+        }: ConditionalSelectParams,
+    ) -> Self {
+        debug_assert!(op2 <= 0b11);
+
+        Self {
+            reg_d: rd.id().into(),
+            reg_n: rn.id().into(),
+            op2: op2.into(),
+            cond: cond.id().into(),
+            reg_m: rm.id().into(),
+            fixed: 0b11010100.into(),
+            s,
+            op,
+            // true for 64 bit addition
+            // false for 32 bit addition
+            sf: true,
+        }
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct DataProcessingTwoSource {
+    sf: bool,
+    fixed: bool,
+    s: bool,
+    fixed2: Integer<u8, packed_bits::Bits<8>>,
+    reg_m: Integer<u8, packed_bits::Bits<5>>,
+    op: Integer<u8, packed_bits::Bits<6>>,
+    reg_n: Integer<u8, packed_bits::Bits<5>>,
+    reg_d: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for DataProcessingTwoSource {}
+
+pub struct DataProcessingTwoSourceParams {
+    op: u8,
+    rm: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
+impl DataProcessingTwoSource {
+    #[inline(always)]
+    fn new(
+        DataProcessingTwoSourceParams { op, rm, rn, rd }: DataProcessingTwoSourceParams,
+    ) -> Self {
+        debug_assert!(op <= 0b111111);
+
+        Self {
+            sf: true,
+            fixed: false,
+            s: false,
+            fixed2: 0b11010110.into(),
+            reg_m: rm.id().into(),
+            op: op.into(),
+            reg_n: rn.id().into(),
+            reg_d: rd.id().into(),
+        }
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct DataProcessingThreeSource {
+    sf: bool,
+    op54: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<5>>,
+    op31: Integer<u8, packed_bits::Bits<3>>,
+    rm: Integer<u8, packed_bits::Bits<5>>,
+    o0: bool,
+    ra: Integer<u8, packed_bits::Bits<5>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for DataProcessingThreeSource {}
+
+pub struct DataProcessingThreeSourceParams {
+    op31: u8,
+    rm: AArch64GeneralReg,
+    ra: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
+impl DataProcessingThreeSource {
+    #[inline(always)]
+    fn new(
+        DataProcessingThreeSourceParams {
+            op31,
+            rm,
+            ra,
+            rn,
+            rd,
+        }: DataProcessingThreeSourceParams,
+    ) -> Self {
+        debug_assert!(op31 <= 0b111);
+
+        Self {
+            sf: true,
+            op54: 0b00.into(),
+            fixed: 0b011011.into(),
+            op31: op31.into(),
+            rm: rm.id().into(),
+            o0: false,
+            ra: ra.id().into(),
+            rn: rn.id().into(),
+            rd: rd.id().into(),
         }
     }
 }
@@ -1250,15 +1587,26 @@ pub struct LogicalShiftedRegister {
 
 impl Aarch64Bytes for LogicalShiftedRegister {}
 
+pub struct LogicalShiftedRegisterParams {
+    op: LogicalOp,
+    shift: ShiftType,
+    imm6: u8,
+    rm: AArch64GeneralReg,
+    rn: AArch64GeneralReg,
+    rd: AArch64GeneralReg,
+}
+
 impl LogicalShiftedRegister {
     #[inline(always)]
     fn new(
-        op: LogicalOp,
-        shift: ShiftType,
-        imm6: u8,
-        rm: AArch64GeneralReg,
-        rn: AArch64GeneralReg,
-        rd: AArch64GeneralReg,
+        LogicalShiftedRegisterParams {
+            op,
+            shift,
+            imm6,
+            rm,
+            rn,
+            rd,
+        }: LogicalShiftedRegisterParams,
     ) -> Self {
         debug_assert!(imm6 <= 0b111111);
 
@@ -1305,9 +1653,16 @@ pub struct UnconditionalBranchRegister {
 
 impl Aarch64Bytes for UnconditionalBranchRegister {}
 
+pub struct UnconditionalBranchRegisterParams {
+    op: u8,
+    rn: AArch64GeneralReg,
+}
+
 impl UnconditionalBranchRegister {
     #[inline(always)]
-    fn new(op: u8, rn: AArch64GeneralReg) -> Self {
+    fn new(
+        UnconditionalBranchRegisterParams { op, rn }: UnconditionalBranchRegisterParams,
+    ) -> Self {
         debug_assert!(op <= 0b11);
 
         Self {
@@ -1321,6 +1676,35 @@ impl UnconditionalBranchRegister {
             fixed2: false,
             z: false,
             fixed: 0b1101011.into(),
+        }
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct UnconditionalBranchImmediate {
+    op: bool, // false=B, true=BL
+    fixed: Integer<u8, packed_bits::Bits<5>>,
+    imm26: Integer<u32, packed_bits::Bits<26>>,
+}
+
+impl Aarch64Bytes for UnconditionalBranchImmediate {}
+
+pub struct UnconditionalBranchImmediateParams {
+    op: bool,
+    imm26: u32,
+}
+
+impl UnconditionalBranchImmediate {
+    #[inline(always)]
+    fn new(
+        UnconditionalBranchImmediateParams { op, imm26 }: UnconditionalBranchImmediateParams,
+    ) -> Self {
+        debug_assert!(imm26 <= 0b11_1111_1111_1111_1111_1111_1111);
+        Self {
+            op,
+            fixed: 0b00101.into(),
+            imm26: imm26.into(),
         }
     }
 }
@@ -1343,9 +1727,24 @@ pub struct LoadStoreRegisterImmediate {
 
 impl Aarch64Bytes for LoadStoreRegisterImmediate {}
 
+pub struct LoadStoreRegisterImmediateParams {
+    size: u8,
+    imm12: u16,
+    rn: AArch64GeneralReg,
+    rt: AArch64GeneralReg,
+}
+
 impl LoadStoreRegisterImmediate {
     #[inline(always)]
-    fn new(size: u8, opc: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
+    fn new(
+        opc: u8,
+        LoadStoreRegisterImmediateParams {
+            size,
+            imm12,
+            rn,
+            rt,
+        }: LoadStoreRegisterImmediateParams,
+    ) -> Self {
         debug_assert!(size <= 0b11);
         debug_assert!(imm12 <= 0xFFF);
 
@@ -1362,13 +1761,13 @@ impl LoadStoreRegisterImmediate {
     }
 
     #[inline(always)]
-    fn new_load(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
-        Self::new(size, 0b01, imm12, rn, rt)
+    fn new_load(params: LoadStoreRegisterImmediateParams) -> Self {
+        Self::new(0b01, params)
     }
 
     #[inline(always)]
-    fn new_store(size: u8, imm12: u16, rn: AArch64GeneralReg, rt: AArch64GeneralReg) -> Self {
-        Self::new(size, 0b00, imm12, rn, rt)
+    fn new_store(params: LoadStoreRegisterImmediateParams) -> Self {
+        Self::new(0b00, params)
     }
 }
 
@@ -1386,7 +1785,14 @@ fn add_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = ArithmeticImmediate::new(false, false, dst, src, imm12, false);
+    let inst = ArithmeticImmediate::new(ArithmeticImmediateParams {
+        op: false,
+        s: false,
+        rd: dst,
+        rn: src,
+        imm12,
+        sh: false,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1399,7 +1805,204 @@ fn add_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src2, src1, dst);
+    let inst = ArithmeticShifted::new(ArithmeticShiftedParams {
+        op: false,
+        s: false,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `AND Xd, Xn, Xm` -> Bitwise AND Xn and Xm and place the result into Xd.
+#[inline(always)]
+fn and_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = LogicalShiftedRegister::new(LogicalShiftedRegisterParams {
+        op: LogicalOp::AND,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `ASR Xd, Xn, Xn` -> Arithmetic shift right Xn by Xm and place the result into Xd.
+#[inline(always)]
+fn asr_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b001010,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `B.cond imm19` -> Jump to PC + imm19 if cond is met.
+#[inline(always)]
+fn b_cond_imm19(buf: &mut Vec<'_, u8>, cond: ConditionCode, imm19: i32) {
+    // Since instructions are 4 bytes, the branch instructions assume the last 2 bits are 0
+    debug_assert!(imm19 & 0b11 == 0, "branch location must be 4-byte aligned");
+    let shifted = imm19 >> 2;
+    let unsigned = shifted as u32;
+    // Our offset is only 19 bits, so we need to remove the first 13 bits
+    let left_removed = (unsigned << 13) >> 13;
+    // Check that imm19 wasn't too big
+    if imm19 >= 0 {
+        // Removing the first 13 bits should not have changed the value
+        debug_assert!(left_removed == unsigned);
+    } else {
+        // If imm19 was negative, left_removed will be sign-extended by the instruction
+        debug_assert!(left_removed | 0b1111_1111_1111_1100_0000_0000_0000_0000 == unsigned);
+    }
+
+    let inst = ConditionalBranchImmediate::new(ConditionalBranchImmediateParams {
+        cond,
+        imm19: left_removed,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `B imm26` -> Jump to PC + imm26.
+#[inline(always)]
+fn b_imm26(buf: &mut Vec<'_, u8>, imm26: i32) {
+    // Since instructions are 4 bytes, the branch instructions assume the last 2 bits are 0
+    debug_assert!(imm26 & 0b11 == 0, "branch location must be 4-byte aligned");
+    let shifted = imm26 >> 2;
+    let unsigned = shifted as u32;
+    // Our offset is only 26 bits, so we need to remove the first 6 bits
+    let left_removed = (unsigned << 6) >> 6;
+    // Check that imm26 wasn't too big
+    if imm26 >= 0 {
+        // Removing the first 6 bits should not have changed the value
+        debug_assert!(left_removed == unsigned);
+    } else {
+        // If imm26 was negative, left_removed will be sign-extended by the instruction
+        debug_assert!(left_removed | 0b1111_1110_0000_0000_0000_0000_0000_0000 == unsigned);
+    }
+
+    let inst = UnconditionalBranchImmediate::new(UnconditionalBranchImmediateParams {
+        op: false,
+        imm26: left_removed,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `CMP Xn, imm12` -> Compare Xn and imm12, setting condition flags.
+#[inline(always)]
+fn cmp_reg64_imm12(buf: &mut Vec<'_, u8>, src: AArch64GeneralReg, imm12: u16) {
+    subs_reg64_reg64_imm12(buf, AArch64GeneralReg::ZRSP, src, imm12);
+}
+
+/// `CMP Xn, Xm` -> Compare Xn and Xm, setting condition flags.
+#[inline(always)]
+fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, src1: AArch64GeneralReg, src2: AArch64GeneralReg) {
+    subs_reg64_reg64_reg64(buf, AArch64GeneralReg::ZRSP, src1, src2);
+}
+
+/// `CNEG Xd, Xn, cond` -> If cond is true, then Xd = -Xn, else Xd = Xn.
+#[inline(always)]
+fn cneg_reg64_reg64_cond(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+    cond: ConditionCode,
+) {
+    csneg_reg64_reg64_reg64_cond(buf, dst, src, src, cond.invert());
+}
+
+/// `CSET Xd, cond` -> If cond is true, then Xd = 1, else Xd = 0.
+#[inline(always)]
+fn cset_reg64_cond(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, cond: ConditionCode) {
+    csinc_reg64_reg64_reg64_cond(
+        buf,
+        dst,
+        AArch64GeneralReg::ZRSP,
+        AArch64GeneralReg::ZRSP,
+        cond.invert(),
+    );
+}
+
+/// `CSINC Xd, Xn, Xm, cond` -> If cond is true, then Xd = Xn, else Xd = Xm + 1.
+#[inline(always)]
+fn csinc_reg64_reg64_reg64_cond(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+    cond: ConditionCode,
+) {
+    let inst = ConditionalSelect::new(ConditionalSelectParams {
+        op: false,
+        s: false,
+        cond,
+        op2: 0b01,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `CSNEG Xd, Xn, Xm, cond` -> If cond is true, then Xd = Xn, else Xd = -Xm.
+#[inline(always)]
+fn csneg_reg64_reg64_reg64_cond(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+    cond: ConditionCode,
+) {
+    let inst = ConditionalSelect::new(ConditionalSelectParams {
+        op: true,
+        s: false,
+        cond,
+        op2: 0b01,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `EOR Xd, Xn, Xm` -> Bitwise XOR Xn and Xm and place the result into Xd.
+#[inline(always)]
+fn eor_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = LogicalShiftedRegister::new(LogicalShiftedRegisterParams {
+        op: LogicalOp::EOR,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1413,7 +2016,68 @@ fn ldr_reg64_reg64_imm12(
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = LoadStoreRegisterImmediate::new_load(0b11, imm12, base, dst);
+    let inst = LoadStoreRegisterImmediate::new_load(LoadStoreRegisterImmediateParams {
+        size: 0b11,
+        imm12,
+        rn: base,
+        rt: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `LSL Xd, Xn, Xm` -> Logical shift Xn left by Xm and place the result into Xd.
+#[inline(always)]
+fn lsl_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b001000,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `LSR Xd, Xn, Xm` -> Logical shift Xn right by Xm and place the result into Xd.
+#[inline(always)]
+fn lsr_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b001001,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `MADD Xd, Xn, Xm, Xa` -> Multiply Xn and Xm, add Xa, and place the result into Xd.
+#[inline(always)]
+fn madd_reg64_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+    src3: AArch64GeneralReg,
+) {
+    let inst = DataProcessingThreeSource::new(DataProcessingThreeSourceParams {
+        op31: 0b000000,
+        rm: src2,
+        ra: src3,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1421,23 +2085,20 @@ fn ldr_reg64_reg64_imm12(
 /// `MOV Xd, Xm` -> Move Xm to Xd.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
-    // MOV is equvalent to `ORR Xd, XZR, XM` in AARCH64.
-    let inst = LogicalShiftedRegister::new(
-        LogicalOp::ORR,
-        ShiftType::LSL,
-        0,
-        src,
-        AArch64GeneralReg::ZRSP,
-        dst,
-    );
-
-    buf.extend(inst.bytes());
+    // MOV is equivalent to `ORR Xd, XZR, Xm` in AARCH64.
+    orr_reg64_reg64_reg64(buf, dst, AArch64GeneralReg::ZRSP, src);
 }
 
 /// `MOVK Xd, imm16` -> Keeps Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
-    let inst = MoveWideImmediate::new(0b11, dst, imm16, hw, true);
+    let inst = MoveWideImmediate::new(MoveWideImmediateParams {
+        opc: 0b11,
+        rd: dst,
+        imm16,
+        hw,
+        sf: true,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1445,7 +2106,69 @@ fn movk_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
 /// `MOVZ Xd, imm16` -> Zeros Xd and moves an optionally shifted imm16 to Xd.
 #[inline(always)]
 fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, hw: u8) {
-    let inst = MoveWideImmediate::new(0b10, dst, imm16, hw, true);
+    let inst = MoveWideImmediate::new(MoveWideImmediateParams {
+        opc: 0b10,
+        rd: dst,
+        imm16,
+        hw,
+        sf: true,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `MUL Xd, Xn, Xm` -> Multiply Xn and Xm and place the result into Xd.
+#[inline(always)]
+fn mul_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    madd_reg64_reg64_reg64_reg64(buf, dst, src1, src2, AArch64GeneralReg::ZRSP);
+}
+
+/// `NEG Xd, Xm` -> Negate Xm and place the result into Xd.
+#[inline(always)]
+fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
+    sub_reg64_reg64_reg64(buf, dst, AArch64GeneralReg::ZRSP, src);
+}
+
+/// `ORR Xd, Xn, Xm` -> Bitwise OR Xn and Xm and place the result into Xd.
+#[inline(always)]
+fn orr_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = LogicalShiftedRegister::new(LogicalShiftedRegisterParams {
+        op: LogicalOp::ORR,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `SDIV Xd, Xn, Xm` -> Divide Xn by Xm and place the result into Xd.
+/// Xn, Xm, and Xd are signed integers.
+#[inline(always)]
+fn sdiv_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b000011,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1459,7 +2182,12 @@ fn str_reg64_reg64_imm12(
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = LoadStoreRegisterImmediate::new_store(0b11, imm12, base, src);
+    let inst = LoadStoreRegisterImmediate::new_store(LoadStoreRegisterImmediateParams {
+        size: 0b11,
+        imm12,
+        rn: base,
+        rt: src,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1472,7 +2200,14 @@ fn sub_reg64_reg64_imm12(
     src: AArch64GeneralReg,
     imm12: u16,
 ) {
-    let inst = ArithmeticImmediate::new(true, false, dst, src, imm12, false);
+    let inst = ArithmeticImmediate::new(ArithmeticImmediateParams {
+        op: true,
+        s: false,
+        rd: dst,
+        rn: src,
+        imm12,
+        sh: false,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1485,7 +2220,56 @@ fn sub_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = ArithmeticShifted::new(true, false, ShiftType::LSL, 0, src2, src1, dst);
+    let inst = ArithmeticShifted::new(ArithmeticShiftedParams {
+        op: true,
+        s: false,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `SUBS Xd, Xn, imm12` -> Subtract Xn and imm12 and place the result into Xd. Set condition flags.
+#[inline(always)]
+fn subs_reg64_reg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+    imm12: u16,
+) {
+    let inst = ArithmeticImmediate::new(ArithmeticImmediateParams {
+        op: true,
+        s: true,
+        rd: dst,
+        rn: src,
+        imm12,
+        sh: false,
+    });
+
+    buf.extend(inst.bytes());
+}
+
+/// `SUBS Xd, Xn, Xm` -> Subtract Xn and Xm and place the result into Xd. Set condition flags.
+#[inline(always)]
+fn subs_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = ArithmeticShifted::new(ArithmeticShiftedParams {
+        op: true,
+        s: true,
+        shift: ShiftType::LSL,
+        imm6: 0,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1493,7 +2277,27 @@ fn sub_reg64_reg64_reg64(
 /// `RET Xn` -> Return to the address stored in Xn.
 #[inline(always)]
 fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
-    let inst = UnconditionalBranchRegister::new(0b10, xn);
+    let inst =
+        UnconditionalBranchRegister::new(UnconditionalBranchRegisterParams { op: 0b10, rn: xn });
+
+    buf.extend(inst.bytes());
+}
+
+/// `UDIV Xd, Xn, Xm` -> Divide Xn by Xm and place the result into Xd.
+/// Xn, Xm, and Xd are unsigned integers.
+#[inline(always)]
+fn udiv_reg64_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    src1: AArch64GeneralReg,
+    src2: AArch64GeneralReg,
+) {
+    let inst = DataProcessingTwoSource::new(DataProcessingTwoSourceParams {
+        op: 0b000010,
+        rm: src2,
+        rn: src1,
+        rd: dst,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -1567,6 +2371,24 @@ mod tests {
         AArch64GeneralReg::ZRSP,
     ];
 
+    const ALL_CONDITIONS: &[ConditionCode] = &[
+        ConditionCode::EQ,
+        ConditionCode::NE,
+        ConditionCode::CSHS,
+        ConditionCode::CCLO,
+        ConditionCode::MI,
+        ConditionCode::PL,
+        ConditionCode::VS,
+        ConditionCode::VC,
+        ConditionCode::HI,
+        ConditionCode::LS,
+        ConditionCode::GE,
+        ConditionCode::LT,
+        ConditionCode::GT,
+        ConditionCode::LE,
+        ConditionCode::AL,
+    ];
+
     fn setup_capstone_and_arena<T>(
         arena: &bumpalo::Bump,
     ) -> (bumpalo::collections::Vec<T>, Capstone) {
@@ -1579,6 +2401,11 @@ mod tests {
             .expect("Failed to create Capstone object");
         (buf, cs)
     }
+
+    // Many of these instructions are aliases for each other,
+    // and depending on their arguments, they might get disassembled to a different instruction.
+    // That's why we need `if` expressions in some of these tests.
+    // The "alias conditions" for each instruction are listed in the ARM manual.
 
     #[test]
     fn test_add_reg64_reg64_reg64() {
@@ -1613,6 +2440,222 @@ mod tests {
     }
 
     #[test]
+    fn test_and_reg64_reg64_reg64() {
+        disassembler_test!(
+            and_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "and {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_asr_reg64_reg64_reg64() {
+        disassembler_test!(
+            asr_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "asr {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_b_cond_imm19() {
+        disassembler_test!(
+            b_cond_imm19,
+            |cond: ConditionCode, imm: i32| format!("b.{} #0x{:x}", cond, imm as i64),
+            ALL_CONDITIONS,
+            [0x120, -0x120, (1 << 20) - 4, -(1 << 20)]
+        );
+    }
+
+    #[test]
+    fn test_b_imm26() {
+        disassembler_test!(
+            b_imm26,
+            |imm| format!("b #0x{:x}", imm as i64),
+            [0x120, -0x120, (1 << 27) - 4, -(1 << 27)]
+        );
+    }
+
+    #[test]
+    fn test_cmp_reg64_imm12() {
+        disassembler_test!(
+            cmp_reg64_imm12,
+            |reg1: AArch64GeneralReg, imm| format!(
+                "cmp {}, #0x{:x}",
+                reg1.capstone_string(UsesSP),
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            [0x123]
+        );
+    }
+
+    #[test]
+    fn test_cmp_reg64_reg64() {
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "cmp {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_cneg_reg64_reg64_cond() {
+        disassembler_test!(
+            cneg_reg64_reg64_cond,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, cond: ConditionCode| {
+                if cond == ConditionCode::AL {
+                    format!(
+                        "csneg {}, {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        cond.invert()
+                    )
+                } else {
+                    format!(
+                        "cneg {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        cond
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_CONDITIONS
+        );
+    }
+
+    #[test]
+    fn test_cset() {
+        disassembler_test!(
+            cset_reg64_cond,
+            |reg1: AArch64GeneralReg, cond: ConditionCode| {
+                if cond == ConditionCode::AL {
+                    format!(
+                        "csinc {}, xzr, xzr, {}",
+                        reg1.capstone_string(UsesZR),
+                        cond.invert()
+                    )
+                } else {
+                    format!("cset {}, {}", reg1.capstone_string(UsesZR), cond)
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_CONDITIONS
+        );
+    }
+
+    #[test]
+    fn test_csinc() {
+        disassembler_test!(
+            csinc_reg64_reg64_reg64_cond,
+            |reg1: AArch64GeneralReg,
+             reg2: AArch64GeneralReg,
+             reg3: AArch64GeneralReg,
+             cond: ConditionCode| {
+                if reg3 != AArch64GeneralReg::ZRSP
+                    && cond != ConditionCode::AL
+                    && reg2 != AArch64GeneralReg::ZRSP
+                    && reg2 == reg3
+                {
+                    format!(
+                        "cinc {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        cond.invert()
+                    )
+                } else if reg3 == AArch64GeneralReg::ZRSP
+                    && cond != ConditionCode::AL
+                    && reg2 == AArch64GeneralReg::ZRSP
+                {
+                    format!("cset {}, {}", reg1.capstone_string(UsesZR), cond.invert())
+                } else {
+                    format!(
+                        "csinc {}, {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR),
+                        cond
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_CONDITIONS
+        )
+    }
+
+    #[test]
+    fn test_csneg() {
+        disassembler_test!(
+            csneg_reg64_reg64_reg64_cond,
+            |reg1: AArch64GeneralReg,
+             reg2: AArch64GeneralReg,
+             reg3: AArch64GeneralReg,
+             cond: ConditionCode| {
+                if cond != ConditionCode::AL && reg2 == reg3 {
+                    format!(
+                        "cneg {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        cond.invert()
+                    )
+                } else {
+                    format!(
+                        "csneg {}, {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR),
+                        cond
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_CONDITIONS
+        )
+    }
+
+    #[test]
+    fn test_eor_reg64_reg64_reg64() {
+        disassembler_test!(
+            eor_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "eor {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_ldr_reg64_reg64_imm12() {
         disassembler_test!(
             ldr_reg64_reg64_imm12,
@@ -1625,6 +2668,70 @@ mod tests {
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+
+    #[test]
+    fn test_lsl_reg64_reg64_reg64() {
+        disassembler_test!(
+            lsl_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "lsl {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_lsr_reg64_reg64_reg64() {
+        disassembler_test!(
+            lsr_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "lsr {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_madd_reg64_reg64_reg64_reg64() {
+        disassembler_test!(
+            madd_reg64_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg,
+             reg2: AArch64GeneralReg,
+             reg3: AArch64GeneralReg,
+             reg4: AArch64GeneralReg| {
+                if reg4 == AArch64GeneralReg::ZRSP {
+                    format!(
+                        "mul {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                } else {
+                    format!(
+                        "madd {}, {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR),
+                        reg4.capstone_string(UsesZR)
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 
@@ -1675,6 +2782,78 @@ mod tests {
             ALL_GENERAL_REGS,
             [TEST_U16],
             [0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn test_mul_reg64_reg64_reg64() {
+        disassembler_test!(
+            mul_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "mul {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_neg_reg64_reg64() {
+        disassembler_test!(
+            neg_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "neg {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_orr_reg64_reg64_reg64() {
+        disassembler_test!(
+            orr_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| {
+                if reg2 == AArch64GeneralReg::ZRSP {
+                    format!(
+                        "mov {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR),
+                    )
+                } else {
+                    format!(
+                        "orr {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR),
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_sdiv_reg64_reg64_reg64() {
+        disassembler_test!(
+            sdiv_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "sdiv {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 
@@ -1739,6 +2918,67 @@ mod tests {
     }
 
     #[test]
+
+    fn test_subs_reg64_reg64_imm12() {
+        disassembler_test!(
+            subs_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| {
+                if reg1 == AArch64GeneralReg::ZRSP {
+                    // When the first register is SP, it gets disassembled as cmp,
+                    // which is an alias for subs.
+                    format!("cmp {}, #0x{:x}", reg2.capstone_string(UsesSP), imm)
+                } else {
+                    format!(
+                        "subs {}, {}, #0x{:x}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesSP),
+                        imm
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
+        );
+    }
+
+    #[test]
+    fn test_subs_reg64_reg64_reg64() {
+        disassembler_test!(
+            subs_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| {
+                if reg1 == AArch64GeneralReg::ZRSP {
+                    // When the first register is SP, it gets disassembled as cmp,
+                    // which is an alias for subs.
+                    format!(
+                        "cmp {}, {}",
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                } else if reg2 == AArch64GeneralReg::ZRSP {
+                    // When the second register is ZR, it gets disassembled as negs,
+                    // which is an alias for subs.
+                    format!(
+                        "negs {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                } else {
+                    format!(
+                        "subs {}, {}, {}",
+                        reg1.capstone_string(UsesZR),
+                        reg2.capstone_string(UsesZR),
+                        reg3.capstone_string(UsesZR)
+                    )
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_ret_reg64() {
         disassembler_test!(
             ret_reg64,
@@ -1747,6 +2987,22 @@ mod tests {
             } else {
                 format!("ret {}", reg1.capstone_string(UsesZR))
             },
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_udiv_reg64_reg64_reg64() {
+        disassembler_test!(
+            udiv_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "udiv {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );
     }

@@ -1,3 +1,6 @@
+use std::io;
+use std::path::PathBuf;
+
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
@@ -204,11 +207,15 @@ pub enum Problem {
     OverAppliedCrash {
         region: Region,
     },
+    FileProblem {
+        filename: PathBuf,
+        error: io::ErrorKind,
+    },
 }
 
 impl Problem {
     pub fn severity(&self) -> Severity {
-        use Severity::{RuntimeError, Warning};
+        use Severity::{Fatal, RuntimeError, Warning};
 
         match self {
             Problem::UnusedDef(_, _) => Warning,
@@ -269,6 +276,7 @@ impl Problem {
             Problem::UnappliedCrash { .. } => RuntimeError,
             Problem::OverAppliedCrash { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
+            Problem::FileProblem { .. } => Fatal,
         }
     }
 
@@ -414,6 +422,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::VoidValue)
             | Problem::RuntimeError(RuntimeError::ExposedButNotDefined(_))
             | Problem::RuntimeError(RuntimeError::NoImplementationNamed { .. })
+            | Problem::FileProblem { .. }
             | Problem::ExposedButNotDefined(_) => None,
         }
     }

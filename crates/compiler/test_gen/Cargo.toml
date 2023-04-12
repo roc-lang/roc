@@ -69,5 +69,9 @@ gen-wasm = []
 name = "list_map"
 harness = false
 
+[[bench]]
+name = "quicksort"
+harness = false
+
 [package.metadata.cargo-udeps.ignore]
 development = ["roc_wasm_interp"]
