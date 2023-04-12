@@ -153,9 +153,9 @@ impl<'a> TestCase<'a> {
             data = data[..drop_at].trim_end();
         }
 
-        let infer_options = Self::parse_infer_options(&data)?;
-        let mono_options = Self::parse_mono_options(&data)?;
-        let emit_options = Self::parse_emit_options(&data)?;
+        let infer_options = Self::parse_infer_options(data)?;
+        let mono_options = Self::parse_mono_options(data)?;
+        let emit_options = Self::parse_emit_options(data)?;
 
         let program = Self::parse_modules(data);
 
@@ -168,7 +168,7 @@ impl<'a> TestCase<'a> {
     }
 
     fn parse_modules(data: &'a str) -> Modules<'a> {
-        let mut module_starts = RE_MODULE.captures_iter(&data).peekable();
+        let mut module_starts = RE_MODULE.captures_iter(data).peekable();
 
         let first_module_start = match module_starts.peek() {
             None => {
