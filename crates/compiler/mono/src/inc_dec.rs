@@ -964,11 +964,12 @@ fn insert_refcount_operations_binding<'a>(
                 match operator {
                     HigherOrder::ListMap { xs } => {
                         if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                            let new_stmt = decref_lists!(stmt, *xs);
+                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = decref_lists!(new_stmt, *xs);
 
                             let new_let = new_let!(new_stmt);
 
-                            inc_owned!([*xs, *closure_symbol].into_iter(), new_let)
+                            inc_owned!([*xs].into_iter(), new_let)
                         } else {
                             panic!("ListMap should have 3 arguments");
                         }
@@ -977,11 +978,12 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_stmt = decref_lists!(stmt, *xs, *ys);
+                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = decref_lists!(new_stmt, *xs, *ys);
 
                             let new_let = new_let!(new_stmt);
 
-                            inc_owned!([*xs, *ys, *closure_symbol].into_iter(), new_let)
+                            inc_owned!([*xs, *ys].into_iter(), new_let)
                         } else {
                             panic!("ListMap2 should have 4 arguments");
                         }
@@ -990,11 +992,12 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_stmt = decref_lists!(stmt, *xs, *ys, *zs);
+                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs);
 
                             let new_let = new_let!(new_stmt);
 
-                            inc_owned!([*xs, *ys, *zs, *closure_symbol].into_iter(), new_let)
+                            inc_owned!([*xs, *ys, *zs].into_iter(), new_let)
                         } else {
                             panic!("ListMap3 should have 5 arguments");
                         }
@@ -1003,11 +1006,12 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_stmt = decref_lists!(stmt, *xs, *ys, *zs, *ws);
+                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs, *ws);
 
                             let new_let = new_let!(new_stmt);
 
-                            inc_owned!([*xs, *ys, *zs, *ws, *closure_symbol].into_iter(), new_let)
+                            inc_owned!([*xs, *ys, *zs, *ws].into_iter(), new_let)
                         } else {
                             panic!("ListMap4 should have 6 arguments");
                         }
@@ -1015,9 +1019,10 @@ fn insert_refcount_operations_binding<'a>(
                     HigherOrder::ListSortWith { xs } => {
                         // TODO if non-unique, elements have been consumed, must still consume the list itself
                         if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                            let new_let = new_let!(stmt);
+                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_let = new_let!(new_stmt);
 
-                            inc_owned!([*xs, *closure_symbol].into_iter(), new_let)
+                            inc_owned!([*xs].into_iter(), new_let)
                         } else {
                             panic!("ListSortWith should have 3 arguments");
                         }
