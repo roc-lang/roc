@@ -2732,7 +2732,7 @@ fn constrain_typed_def(
                 name,
                 ..
             }),
-            TypeTag::Function(signature_closure_type, ret_type),
+            TypeTag::Function(_signature_closure_type, ret_type),
         ) => {
             let arg_types = types.get_type_arguments(signature);
 
@@ -2778,6 +2778,17 @@ fn constrain_typed_def(
                 &mut vars,
             );
 
+            let solved_fn_type = {
+                // TODO(types-soa) optimize for Variable
+                let arg_types =
+                    types.from_old_type_slice(arguments.iter().map(|a| Type::Variable(a.0)));
+                let lambda_set = types.from_old_type(&Type::Variable(closure_var));
+                let ret_var = types.from_old_type(&Type::Variable(ret_var));
+
+                let fn_type = types.function(arg_types, lambda_set, ret_var);
+                constraints.push_type(types, fn_type)
+            };
+
             let body_type = constraints.push_expected_type(FromAnnotation(
                 def.loc_pattern.clone(),
                 arguments.len(),
@@ -2800,18 +2811,6 @@ fn constrain_typed_def(
             vars.push(*fn_var);
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
-            let signature_closure_type = {
-                let signature_closure_type_index =
-                    constraints.push_type(types, signature_closure_type);
-                constraints.push_expected_type(Expected::FromAnnotation(
-                    def.loc_pattern.clone(),
-                    arity,
-                    AnnotationSource::TypedBody {
-                        region: annotation.region,
-                    },
-                    signature_closure_type_index,
-                ))
-            };
             let cons = [
                 constraints.let_constraint(
                     [],
@@ -2822,15 +2821,20 @@ fn constrain_typed_def(
                     // This is a syntactic function, it can be generalized
                     Generalizable(true),
                 ),
-                constraints.equal_types_var(
-                    closure_var,
-                    signature_closure_type,
-                    Category::ClosureSize,
+                // Store the inferred ret var into the function type now, so that
+                // when we check that the solved function type matches the annotation, we can
+                // display the fully inferred return variable.
+                constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
+                // Now, check the solved function type matches the annotation.
+                constraints.equal_types(
+                    solved_fn_type,
+                    annotation_expected,
+                    Category::Lambda,
                     region,
                 ),
+                // Finally put the solved closure type into the dedicated def expr variables.
                 constraints.store(signature_index, *fn_var, std::file!(), std::line!()),
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
-                constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
 
