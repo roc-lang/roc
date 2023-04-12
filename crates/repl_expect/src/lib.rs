@@ -1180,4 +1180,36 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn tuple_access() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                expect
+                    t = ("One", "Two")
+                    t.1 == "One"
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                3│>  expect
+                4│>      t = ("One", "Two")
+                5│>      t.1 == "One"
+
+                When it failed, these variables had these values:
+
+                t : (
+                    Str,
+                    Str,
+                )a
+                t = ("One", "Two")
+                "#
+            ),
+        );
+    }
 }
