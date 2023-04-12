@@ -254,6 +254,7 @@ fn parse_queries(src: &str, line_info: &LineInfo) -> Vec<TypeQuery> {
 
 #[derive(Default, Clone, Copy)]
 pub struct InferOptions {
+    pub allow_errors: bool,
     pub print_can_decls: bool,
     pub print_only_under_alias: bool,
     pub no_promote: bool,
@@ -376,7 +377,7 @@ pub fn infer_queries<'a>(
         if !can_problems.is_empty() && !allow_can_errors {
             return Err(format!("Canonicalization problems: {can_problems}",).into());
         }
-        if !type_problems.is_empty() {
+        if !type_problems.is_empty() && !options.allow_errors {
             return Err(format!("Type problems: {type_problems}",).into());
         }
     }
