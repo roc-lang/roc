@@ -129,23 +129,31 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         // But for completeness we add every kind of union to the layout_tags.
                         environment.add_layout_tag(layout, *tag_id);
 
-                        // See if we have a reuse token
-                        match environment.pop_reuse_token(layout) {
-                            // We have a reuse token for this layout, use it.
-                            Some(reuse_token) => {
-                                Expr::Reuse {
-                                    symbol: reuse_token.symbol,
-                                    update_mode: reuse_token.update_mode_id,
-                                    // for now, always overwrite the tag ID just to be sure
-                                    update_tag_id: true,
-                                    tag_layout: *tag_layout,
-                                    tag_id: *tag_id,
-                                    arguments,
+                        // Check if the tag id for this layout can be reused at all.
+                        match can_reuse_union_layout_tag(tag_layout, Option::Some(*tag_id)) {
+                            // The tag is reusable.
+                            Reuse::Reusable => {
+                                // See if we have a token.
+                                match environment.pop_reuse_token(layout) {
+                                    // We have a reuse token for this layout, use it.
+                                    Some(reuse_token) => {
+                                        Expr::Reuse {
+                                            symbol: reuse_token.symbol,
+                                            update_mode: reuse_token.update_mode_id,
+                                            // for now, always overwrite the tag ID just to be sure
+                                            update_tag_id: true,
+                                            tag_layout: *tag_layout,
+                                            tag_id: *tag_id,
+                                            arguments,
+                                        }
+                                    }
+
+                                    // We have no reuse token available, keep the old expression with a fresh allocation.
+                                    None => expr.clone(),
                                 }
                             }
-
-                            // We have no reuse token available, keep the old expression with a fresh allocation.
-                            None => expr.clone(),
+                            // We cannot reuse this tag id because it's a null pointer.
+                            Reuse::Nonreusable => expr.clone(),
                         }
                     }
                     _ => expr.clone(),
@@ -339,7 +347,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     match layout_option.clone() {
                         LayoutOption::Layout(layout)
                             if matches!(
-                                can_reuse_layout_tag(layout_interner, environment, layout),
+                                can_reuse_layout(layout_interner, environment, layout),
                                 Reuse::Reusable
                             ) =>
                         {
@@ -1110,43 +1118,54 @@ impl<'a> ReuseEnvironment<'a> {
     }
 }
 
-fn can_reuse_layout_tag<'a, 'i>(
+/**
+Check if a layout can be reused. by verifying if the layout is a union and if the tag is not nullable.
+*/
+fn can_reuse_layout<'a, 'i>(
     layout_interner: &'i STLayoutInterner<'a>,
     environment: &ReuseEnvironment<'a>,
     layout: &InLayout<'a>,
 ) -> Reuse {
     match layout_interner.get(*layout) {
-        Layout::Union(union_layout) => match union_layout {
-            UnionLayout::NonRecursive(_) => Reuse::Nonreusable,
-            // Non nullable union layouts
-            UnionLayout::Recursive(_) | UnionLayout::NonNullableUnwrapped(_) => {
-                // Non nullable union layouts can always be reused.
-                Reuse::Reusable
-            }
-            // Nullable union layouts
-            UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => {
-                // Nullable union layouts can only be reused if the tag is not null.
-                match environment.get_layout_tag(layout) {
-                    Some(tag_id) => {
-                        if union_layout.tag_is_null(tag_id) {
-                            // Variable of layout is always null, so it can't ever be reused.
-                            Reuse::Nonreusable
-                        } else {
-                            // Variable of layout is not null, so it can be reused.
-                            Reuse::Reusable
-                        }
-                    }
-                    None => {
-                        // Variable of layout might be null, so it might be reused.
-                        // If null will cause null pointer and fresh allocation.
-                        Reuse::Reusable
-                    }
-                }
-            }
-        },
+        Layout::Union(union_layout) => {
+            can_reuse_union_layout_tag(&union_layout, environment.get_layout_tag(layout))
+        }
         // Strings literals are constants.
         // Arrays are probably given to functions and reused there. Little use to reuse them here.
         _ => Reuse::Nonreusable,
+    }
+}
+
+/**
+   Check if a union layout can be reused. by verifying if the tag is not nullable.
+*/
+fn can_reuse_union_layout_tag(union_layout: &UnionLayout<'_>, tag_id_option: Option<Tag>) -> Reuse {
+    match union_layout {
+        UnionLayout::NonRecursive(_) => Reuse::Nonreusable,
+        // Non nullable union layouts
+        UnionLayout::Recursive(_) | UnionLayout::NonNullableUnwrapped(_) => {
+            // Non nullable union layouts can always be reused.
+            Reuse::Reusable
+        }
+        // Nullable union layouts
+        UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => {
+            match tag_id_option {
+                Some(tag_id) => {
+                    if union_layout.tag_is_null(tag_id) {
+                        // Variable of layout is always null, so it can't ever be reused.
+                        Reuse::Nonreusable
+                    } else {
+                        // Variable of layout is not null, so it can be reused.
+                        Reuse::Reusable
+                    }
+                }
+                None => {
+                    // Variable of layout might be null, so it might be reused.
+                    // If null will cause null pointer and fresh allocation.
+                    Reuse::Reusable
+                }
+            }
+        }
     }
 }
 
