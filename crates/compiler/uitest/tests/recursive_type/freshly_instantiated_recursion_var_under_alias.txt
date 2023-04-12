@@ -1,6 +1,5 @@
 # +opt can:allow_errors
 # +opt infer:print_only_under_alias
-# +emit:mono
 app "test" provides [single] to "./platform"
 
 LL a : [Nil, Cons a (LL a)]
@@ -9,7 +8,7 @@ LinkedList a : LL a
 
 single : a -> LinkedList a
 single = \item -> (Cons item Nil)
-#^^^^^^{-1} a -[[single(0)]]-> [Cons a ([Cons elem b, Nil] as b), Nil]* as [Cons elem b, Nil] as b
+#^^^^^^{-1} a -[[single(0)]]-> [Cons a b, Nil]* as b
 
 walk : LinkedList elem, state, (state, elem -> state) -> state
 walk = \list, state, fn ->
@@ -17,9 +16,3 @@ walk = \list, state, fn ->
     when list is
         Nil -> state
         Cons first rest -> walk (rest) (fn state first) fn
-
-# -emit:mono
-procedure Test.0 (Test.6):
-    let Test.15 : [<rnu><null>, C *self []] = TagId(1) ;
-    let Test.14 : [<rnu><null>, C *self []] = TagId(0) Test.15 Test.6;
-    ret Test.14;

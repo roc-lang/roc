@@ -2925,12 +2925,14 @@ fn correct_mutual_recursive_type_alias<'a>(
             };
 
             let mut new_lambda_sets = ImSet::default();
+            let mut new_recursion_variables = ImSet::default();
             let mut new_infer_ext_vars = ImSet::default();
             alias_type.instantiate_aliases(
                 alias_region,
                 &can_instantiate_symbol,
                 var_store,
                 &mut new_lambda_sets,
+                &mut new_recursion_variables,
                 &mut new_infer_ext_vars,
             );
 
@@ -2952,6 +2954,9 @@ fn correct_mutual_recursive_type_alias<'a>(
                     .iter()
                     .map(|var| LambdaSet(Type::Variable(*var))),
             );
+
+            // add any new recursion variables
+            alias.recursion_variables.extend(new_recursion_variables);
 
             // add any new infer-in-output extension variables that the instantiation created to the current alias
             alias
