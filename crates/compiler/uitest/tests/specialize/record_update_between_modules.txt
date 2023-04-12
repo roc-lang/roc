@@ -1,4 +1,4 @@
-# +opt print:mono
+# +emit:mono
 app "test" provides [main] to "./platform"
 
 main = ""

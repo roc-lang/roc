@@ -38,9 +38,9 @@ lazy_static! {
     static ref RE_OPT_INFER: Regex =
         Regex::new(r#"# \+opt infer:(?P<opt>.*)"#).unwrap();
 
-    /// # +opt print:<opt>
-    static ref RE_OPT_PRINT: Regex =
-        Regex::new(r#"# \+opt print:(?P<opt>.*)"#).unwrap();
+    /// # +emit:<opt>
+    static ref RE_EMIT: Regex =
+        Regex::new(r#"# \+emit:(?P<opt>.*)"#).unwrap();
 }
 
 fn collect_uitest_files() -> io::Result<Vec<PathBuf>> {
@@ -81,7 +81,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
     let data = std::fs::read_to_string(&path)?;
     let TestCase {
         infer_options,
-        print_options,
+        emit_options,
         source,
     } = TestCase::parse(data)?;
 
@@ -93,7 +93,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
             .truncate(true)
             .open(&path)?;
 
-        assemble_query_output(&mut fd, &source, inferred_program, print_options)?;
+        assemble_query_output(&mut fd, &source, inferred_program, emit_options)?;
     }
 
     check_for_changes(&path)?;
@@ -105,12 +105,12 @@ const EMIT_HEADER: &str = "# -emit:";
 
 struct TestCase {
     infer_options: InferOptions,
-    print_options: PrintOptions,
+    emit_options: EmitOptions,
     source: String,
 }
 
 #[derive(Default)]
-struct PrintOptions {
+struct EmitOptions {
     can_decls: bool,
     mono: bool,
 }
@@ -125,7 +125,7 @@ impl TestCase {
 
         Ok(TestCase {
             infer_options: Self::parse_infer_options(&data)?,
-            print_options: Self::parse_print_options(&data)?,
+            emit_options: Self::parse_emit_options(&data)?,
             source: data,
         })
     }
@@ -149,20 +149,20 @@ impl TestCase {
         Ok(infer_opts)
     }
 
-    fn parse_print_options(data: &str) -> Result<PrintOptions, Failed> {
-        let mut print_opts = PrintOptions::default();
+    fn parse_emit_options(data: &str) -> Result<EmitOptions, Failed> {
+        let mut emit_opts = EmitOptions::default();
 
-        let found_infer_opts = RE_OPT_PRINT.captures_iter(data);
+        let found_infer_opts = RE_EMIT.captures_iter(data);
         for infer_opt in found_infer_opts {
             let opt = infer_opt.name("opt").unwrap().as_str();
             match opt.trim() {
-                "can_decls" => print_opts.can_decls = true,
-                "mono" => print_opts.mono = true,
-                other => return Err(format!("unknown print option: {other:?}").into()),
+                "can_decls" => emit_opts.can_decls = true,
+                "mono" => emit_opts.mono = true,
+                other => return Err(format!("unknown emit option: {other:?}").into()),
             }
         }
 
-        Ok(print_opts)
+        Ok(emit_opts)
     }
 }
 
@@ -190,7 +190,7 @@ fn assemble_query_output(
     writer: &mut impl io::Write,
     source: &str,
     inferred_program: InferredProgram,
-    print_options: PrintOptions,
+    emit_options: EmitOptions,
 ) -> io::Result<()> {
     // Reverse the queries so that we can pop them off the end as we pass through the lines.
     let (queries, program) = inferred_program.decompose();
@@ -200,8 +200,8 @@ fn assemble_query_output(
     let mut reflow = Reflow::new_unindented(writer);
     write_source_with_answers(&mut reflow, source, sorted_queries, 0)?;
 
-    // Finish up with any remaining print options we were asked to provide.
-    let PrintOptions { can_decls, mono } = print_options;
+    // Finish up with any remaining emit options we were asked to provide.
+    let EmitOptions { can_decls, mono } = emit_options;
     if can_decls {
         writeln!(writer, "\n{EMIT_HEADER}can_decls")?;
         program.write_can_decls(writer)?;
