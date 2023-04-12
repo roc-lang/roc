@@ -3104,22 +3104,6 @@ fn instantiate_aliases<'a, F>(
 
                 actual.substitute(&substitution);
 
-                // instantiate recursion variable!
-                //if let Type::RecursiveTagUnion(rec_var, mut tags, mut ext) = actual {
-                //    let new_rec_var = ctx.var_store.fresh();
-                //    substitution.clear();
-                //    substitution.insert(rec_var, Type::Variable(new_rec_var));
-
-                //    for typ in tags.iter_mut().flat_map(|v| v.1.iter_mut()) {
-                //        typ.substitute(&substitution);
-                //    }
-
-                //    if let TypeExtension::Open(ext, _) = &mut ext {
-                //        ext.substitute(&substitution);
-                //    }
-
-                //    actual = Type::RecursiveTagUnion(new_rec_var, tags, ext);
-                //}
                 let alias = Type::Alias {
                     symbol: *symbol,
                     type_arguments: named_args,
