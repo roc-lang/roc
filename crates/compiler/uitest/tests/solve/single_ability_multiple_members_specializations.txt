@@ -1,0 +1,13 @@
+app "test" provides [hash, hash32] to "./platform"
+
+MHash has
+    hash : a -> U64 | a has MHash
+    hash32 : a -> U32 | a has MHash
+
+Id := U64 has [MHash {hash, hash32}]
+
+hash = \@Id n -> n
+#^^^^{-1} Id#hash(4): Id -[[hash(4)]]-> U64
+
+hash32 = \@Id n -> Num.toU32 n
+#^^^^^^{-1} Id#hash32(5): Id -[[hash32(5)]]-> U32

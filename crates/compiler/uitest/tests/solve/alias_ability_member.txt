@@ -1,0 +1,9 @@
+app "test" provides [thething] to "./platform"
+
+MHash has
+    hash : a -> U64 | a has MHash
+
+thething =
+#^^^^^^^^{-1} a -[[] + a:hash(2):1]-> U64 | a has MHash
+    itis = hash
+    itis
