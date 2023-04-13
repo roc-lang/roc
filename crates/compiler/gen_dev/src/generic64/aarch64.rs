@@ -104,7 +104,40 @@ impl AArch64GeneralReg {
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
-pub enum AArch64FloatReg {}
+pub enum AArch64FloatReg {
+    V0 = 0,
+    V1 = 1,
+    V2 = 2,
+    V3 = 3,
+    V4 = 4,
+    V5 = 5,
+    V6 = 6,
+    V7 = 7,
+    V8 = 8,
+    V9 = 9,
+    V10 = 10,
+    V11 = 11,
+    V12 = 12,
+    V13 = 13,
+    V14 = 14,
+    V15 = 15,
+    V16 = 16,
+    V17 = 17,
+    V18 = 18,
+    V19 = 19,
+    V20 = 20,
+    V21 = 21,
+    V22 = 22,
+    V23 = 23,
+    V24 = 24,
+    V25 = 25,
+    V26 = 26,
+    V27 = 27,
+    V28 = 28,
+    V29 = 29,
+    V30 = 30,
+    V31 = 31,
+}
 impl RegTrait for AArch64FloatReg {
     fn value(&self) -> u8 {
         *self as u8
@@ -112,7 +145,51 @@ impl RegTrait for AArch64FloatReg {
 }
 impl std::fmt::Display for AArch64FloatReg {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "TODO",)
+        write!(
+            f,
+            "{}",
+            match self {
+                AArch64FloatReg::V0 => "v0",
+                AArch64FloatReg::V1 => "v1",
+                AArch64FloatReg::V2 => "v2",
+                AArch64FloatReg::V3 => "v3",
+                AArch64FloatReg::V4 => "v4",
+                AArch64FloatReg::V5 => "v5",
+                AArch64FloatReg::V6 => "v6",
+                AArch64FloatReg::V7 => "v7",
+                AArch64FloatReg::V8 => "v8",
+                AArch64FloatReg::V9 => "v9",
+                AArch64FloatReg::V10 => "v10",
+                AArch64FloatReg::V11 => "v11",
+                AArch64FloatReg::V12 => "v12",
+                AArch64FloatReg::V13 => "v13",
+                AArch64FloatReg::V14 => "v14",
+                AArch64FloatReg::V15 => "v15",
+                AArch64FloatReg::V16 => "v16",
+                AArch64FloatReg::V17 => "v17",
+                AArch64FloatReg::V18 => "v18",
+                AArch64FloatReg::V19 => "v19",
+                AArch64FloatReg::V20 => "v20",
+                AArch64FloatReg::V21 => "v21",
+                AArch64FloatReg::V22 => "v22",
+                AArch64FloatReg::V23 => "v23",
+                AArch64FloatReg::V24 => "v24",
+                AArch64FloatReg::V25 => "v25",
+                AArch64FloatReg::V26 => "v26",
+                AArch64FloatReg::V27 => "v27",
+                AArch64FloatReg::V28 => "v28",
+                AArch64FloatReg::V29 => "v29",
+                AArch64FloatReg::V30 => "v30",
+                AArch64FloatReg::V31 => "v31",
+            }
+        )
+    }
+}
+
+impl AArch64FloatReg {
+    #[inline(always)]
+    fn id(&self) -> u8 {
+        *self as u8
     }
 }
 
@@ -389,12 +466,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn abs_freg64_freg64(
-        _buf: &mut Vec<'_, u8>,
+        buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,
-        _dst: AArch64FloatReg,
-        _src: AArch64FloatReg,
+        dst: AArch64FloatReg,
+        src: AArch64FloatReg,
     ) {
-        todo!("abs_reg64_reg64 for AArch64");
+        fabs_freg_freg(buf, FloatType::Double, dst, src);
     }
 
     #[inline(always)]
@@ -423,21 +500,21 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn add_freg32_freg32_freg32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src1: AArch64FloatReg,
-        _src2: AArch64FloatReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
     ) {
-        todo!("adding floats for AArch64");
+        fadd_freg_freg_freg(buf, FloatType::Single, dst, src1, src2);
     }
     #[inline(always)]
     fn add_freg64_freg64_freg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src1: AArch64FloatReg,
-        _src2: AArch64FloatReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
     ) {
-        todo!("adding floats for AArch64");
+        fadd_freg_freg_freg(buf, FloatType::Double, dst, src1, src2);
     }
 
     #[inline(always)]
@@ -496,40 +573,40 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn mul_freg32_freg32_freg32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src1: AArch64FloatReg,
-        _src2: AArch64FloatReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
     ) {
-        todo!("multiplication for floats for AArch64");
+        fmul_freg_freg_freg(buf, FloatType::Single, dst, src1, src2);
     }
     #[inline(always)]
     fn mul_freg64_freg64_freg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src1: AArch64FloatReg,
-        _src2: AArch64FloatReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
     ) {
-        todo!("multiplication for floats for AArch64");
+        fmul_freg_freg_freg(buf, FloatType::Double, dst, src1, src2);
     }
 
     #[inline(always)]
     fn div_freg32_freg32_freg32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src1: AArch64FloatReg,
-        _src2: AArch64FloatReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
     ) {
-        todo!("division for floats for AArch64");
+        fdiv_freg_freg_freg(buf, FloatType::Single, dst, src1, src2);
     }
     #[inline(always)]
     fn div_freg64_freg64_freg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src1: AArch64FloatReg,
-        _src2: AArch64FloatReg,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
     ) {
-        todo!("division for floats for AArch64");
+        fdiv_freg_freg_freg(buf, FloatType::Double, dst, src1, src2);
     }
 
     #[inline(always)]
@@ -899,14 +976,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn cmp_freg_freg_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src1: AArch64FloatReg,
-        _src2: AArch64FloatReg,
-        _width: FloatWidth,
-        _operation: CompareOperation,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
+        width: FloatWidth,
+        operation: CompareOperation,
     ) {
-        todo!("registers float comparison for AArch64");
+        let ftype = match width {
+            FloatWidth::F32 => FloatType::Single,
+            FloatWidth::F64 => FloatType::Double,
+        };
+        fcmp_freg_freg(buf, ftype, src1, src2);
+
+        let cond = match operation {
+            CompareOperation::LessThan => ConditionCode::MI,
+            CompareOperation::LessThanOrEqual => ConditionCode::LS,
+            CompareOperation::GreaterThan => ConditionCode::GT,
+            CompareOperation::GreaterThanOrEqual => ConditionCode::GE,
+        };
+        cset_reg64_cond(buf, dst, cond);
     }
 
     #[inline(always)]
@@ -1042,12 +1131,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         asr_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
-    fn sqrt_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
-        todo!("sqrt")
+    fn sqrt_freg64_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
+        fsqrt_freg_freg(buf, FloatType::Double, dst, src);
     }
 
-    fn sqrt_freg32_freg32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
-        todo!("sqrt")
+    fn sqrt_freg32_freg32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
+        fsqrt_freg_freg(buf, FloatType::Single, dst, src);
     }
 
     fn signed_compare_reg64(
@@ -1771,6 +1860,179 @@ impl LoadStoreRegisterImmediate {
     }
 }
 
+#[derive(Copy, Clone, PartialEq)]
+pub enum FloatType {
+    /// 32 bit
+    Single = 0b00,
+    /// 64 bit
+    Double = 0b01,
+}
+
+impl FloatType {
+    fn id(&self) -> u8 {
+        *self as u8
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct FloatingPointDataProcessingOneSource {
+    m: bool,
+    fixed: bool,
+    s: bool,
+    fixed2: Integer<u8, packed_bits::Bits<5>>,
+    ptype: Integer<u8, packed_bits::Bits<2>>,
+    fixed3: bool,
+    opcode: Integer<u8, packed_bits::Bits<6>>,
+    fixed4: Integer<u8, packed_bits::Bits<5>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for FloatingPointDataProcessingOneSource {}
+
+pub struct FloatingPointDataProcessingOneSourceParams {
+    ptype: FloatType,
+    opcode: u8,
+    rn: AArch64FloatReg,
+    rd: AArch64FloatReg,
+}
+
+impl FloatingPointDataProcessingOneSource {
+    #[inline(always)]
+    fn new(
+        FloatingPointDataProcessingOneSourceParams {
+            ptype,
+            opcode,
+            rn,
+            rd,
+        }: FloatingPointDataProcessingOneSourceParams,
+    ) -> Self {
+        debug_assert!(opcode <= 0b111111);
+
+        Self {
+            m: false,
+            fixed: false,
+            s: false,
+            fixed2: 0b11110.into(),
+            ptype: ptype.id().into(),
+            fixed3: true,
+            opcode: opcode.into(),
+            fixed4: 0b10000.into(),
+            rn: rn.id().into(),
+            rd: rd.id().into(),
+        }
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct FloatingPointCompare {
+    m: bool,
+    fixed: bool,
+    s: bool,
+    fixed2: Integer<u8, packed_bits::Bits<5>>,
+    ptype: Integer<u8, packed_bits::Bits<2>>,
+    fixed3: bool,
+    rm: Integer<u8, packed_bits::Bits<5>>,
+    op: Integer<u8, packed_bits::Bits<2>>,
+    fixed4: Integer<u8, packed_bits::Bits<4>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    opcode2: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for FloatingPointCompare {}
+
+pub struct FloatingPointCompareParams {
+    ptype: FloatType,
+    rm: AArch64FloatReg,
+    rn: AArch64FloatReg,
+    opcode2: u8,
+}
+
+impl FloatingPointCompare {
+    #[inline(always)]
+    fn new(
+        FloatingPointCompareParams {
+            ptype,
+            rm,
+            rn,
+            opcode2,
+        }: FloatingPointCompareParams,
+    ) -> Self {
+        debug_assert!(opcode2 <= 0b11111);
+
+        Self {
+            m: false,
+            fixed: false,
+            s: false,
+            fixed2: 0b11110.into(),
+            ptype: ptype.id().into(),
+            fixed3: true,
+            rm: rm.id().into(),
+            op: 0b00.into(),
+            fixed4: 0b1000.into(),
+            rn: rn.id().into(),
+            opcode2: opcode2.into(),
+        }
+    }
+}
+
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct FloatingPointDataProcessingTwoSource {
+    m: bool,
+    fixed: bool,
+    s: bool,
+    fixed2: Integer<u8, packed_bits::Bits<5>>,
+    ptype: Integer<u8, packed_bits::Bits<2>>,
+    fixed3: bool,
+    rm: Integer<u8, packed_bits::Bits<5>>,
+    opcode: Integer<u8, packed_bits::Bits<4>>,
+    fixed4: Integer<u8, packed_bits::Bits<2>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for FloatingPointDataProcessingTwoSource {}
+
+pub struct FloatingPointDataProcessingTwoSourceParams {
+    ptype: FloatType,
+    rm: AArch64FloatReg,
+    opcode: u8,
+    rn: AArch64FloatReg,
+    rd: AArch64FloatReg,
+}
+
+impl FloatingPointDataProcessingTwoSource {
+    #[inline(always)]
+    fn new(
+        FloatingPointDataProcessingTwoSourceParams {
+            ptype,
+            rm,
+            opcode,
+            rn,
+            rd,
+        }: FloatingPointDataProcessingTwoSourceParams,
+    ) -> Self {
+        debug_assert!(opcode <= 0b1111);
+
+        Self {
+            m: false,
+            fixed: false,
+            s: false,
+            fixed2: 0b11110.into(),
+            ptype: ptype.id().into(),
+            fixed3: true,
+            rm: rm.id().into(),
+            opcode: opcode.into(),
+            fixed4: 0b10.into(),
+            rn: rn.id().into(),
+            rd: rd.id().into(),
+        }
+    }
+}
+
 // Below here are the functions for all of the assembly instructions.
 // Their names are based on the instruction and operators combined.
 // You should call `buf.reserve()` if you push or extend more than once.
@@ -2302,6 +2564,115 @@ fn udiv_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
+#[inline(always)]
+fn fadd_freg_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    dst: AArch64FloatReg,
+    src1: AArch64FloatReg,
+    src2: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingTwoSource::new(FloatingPointDataProcessingTwoSourceParams {
+            opcode: 0b0010,
+            ptype: ftype,
+            rd: dst,
+            rn: src1,
+            rm: src2,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn fabs_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    dst: AArch64FloatReg,
+    src: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
+            opcode: 0b000001,
+            ptype: ftype,
+            rd: dst,
+            rn: src,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn fcmp_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    src1: AArch64FloatReg,
+    src2: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointCompare::new(FloatingPointCompareParams { ptype: ftype, rn: src1, rm: src2, opcode2: 0b00000 });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn fdiv_freg_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    dst: AArch64FloatReg,
+    src1: AArch64FloatReg,
+    src2: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingTwoSource::new(FloatingPointDataProcessingTwoSourceParams {
+            opcode: 0b0001,
+            ptype: ftype,
+            rd: dst,
+            rn: src1,
+            rm: src2,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn fmul_freg_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    dst: AArch64FloatReg,
+    src1: AArch64FloatReg,
+    src2: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingTwoSource::new(FloatingPointDataProcessingTwoSourceParams {
+            opcode: 0b0000,
+            ptype: ftype,
+            rd: dst,
+            rn: src1,
+            rm: src2,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn fsqrt_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    dst: AArch64FloatReg,
+    src: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
+            opcode: 0b000011,
+            ptype: ftype,
+            rd: dst,
+            rn: src,
+        });
+
+    buf.extend(inst.bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2328,6 +2699,15 @@ mod tests {
                     UsesSP => "sp".to_owned(),
                 },
                 _ => format!("{}", self),
+            }
+        }
+    }
+
+    impl AArch64FloatReg {
+        fn capstone_string(&self, float_type: FloatType) -> String {
+            match float_type {
+                FloatType::Single => format!("s{}", self.id()),
+                FloatType::Double => format!("d{}", self.id()),
             }
         }
     }
@@ -2370,6 +2750,43 @@ mod tests {
         AArch64GeneralReg::LR,
         AArch64GeneralReg::ZRSP,
     ];
+
+    const ALL_FLOAT_REGS: &[AArch64FloatReg] = &[
+        AArch64FloatReg::V0,
+        AArch64FloatReg::V1,
+        AArch64FloatReg::V2,
+        AArch64FloatReg::V3,
+        AArch64FloatReg::V4,
+        AArch64FloatReg::V5,
+        AArch64FloatReg::V6,
+        AArch64FloatReg::V7,
+        AArch64FloatReg::V8,
+        AArch64FloatReg::V9,
+        AArch64FloatReg::V10,
+        AArch64FloatReg::V11,
+        AArch64FloatReg::V12,
+        AArch64FloatReg::V13,
+        AArch64FloatReg::V14,
+        AArch64FloatReg::V15,
+        AArch64FloatReg::V16,
+        AArch64FloatReg::V17,
+        AArch64FloatReg::V18,
+        AArch64FloatReg::V19,
+        AArch64FloatReg::V20,
+        AArch64FloatReg::V21,
+        AArch64FloatReg::V22,
+        AArch64FloatReg::V23,
+        AArch64FloatReg::V24,
+        AArch64FloatReg::V25,
+        AArch64FloatReg::V26,
+        AArch64FloatReg::V27,
+        AArch64FloatReg::V28,
+        AArch64FloatReg::V29,
+        AArch64FloatReg::V30,
+        AArch64FloatReg::V31,
+    ];
+
+    const ALL_FLOAT_TYPES: &[FloatType] = &[FloatType::Single, FloatType::Double];
 
     const ALL_CONDITIONS: &[ConditionCode] = &[
         ConditionCode::EQ,
@@ -3004,6 +3421,111 @@ mod tests {
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_fabs_freg_freg() {
+        disassembler_test!(
+            fabs_freg_freg,
+            |ftype: FloatType, reg1: AArch64FloatReg, reg2: AArch64FloatReg| format!(
+                "fabs {}, {}",
+                reg1.capstone_string(ftype),
+                reg2.capstone_string(ftype)
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_fadd_freg_freg_freg() {
+        disassembler_test!(
+            fadd_freg_freg_freg,
+            |ftype: FloatType,
+             reg1: AArch64FloatReg,
+             reg2: AArch64FloatReg,
+             reg3: AArch64FloatReg| format!(
+                "fadd {}, {}, {}",
+                reg1.capstone_string(ftype),
+                reg2.capstone_string(ftype),
+                reg3.capstone_string(ftype)
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_fcmp_freg_freg() {
+        disassembler_test!(
+            fcmp_freg_freg,
+            |ftype: FloatType, reg1: AArch64FloatReg, reg2: AArch64FloatReg| format!(
+                "fcmp {}, {}",
+                reg1.capstone_string(ftype),
+                reg2.capstone_string(ftype)
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_fdiv_freg_freg_freg() {
+        disassembler_test!(
+            fdiv_freg_freg_freg,
+            |ftype: FloatType,
+             reg1: AArch64FloatReg,
+             reg2: AArch64FloatReg,
+             reg3: AArch64FloatReg| format!(
+                "fdiv {}, {}, {}",
+                reg1.capstone_string(ftype),
+                reg2.capstone_string(ftype),
+                reg3.capstone_string(ftype)
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_fmul_freg_freg_freg() {
+        disassembler_test!(
+            fmul_freg_freg_freg,
+            |ftype: FloatType,
+             reg1: AArch64FloatReg,
+             reg2: AArch64FloatReg,
+             reg3: AArch64FloatReg| format!(
+                "fmul {}, {}, {}",
+                reg1.capstone_string(ftype),
+                reg2.capstone_string(ftype),
+                reg3.capstone_string(ftype)
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_fsqrt_freg_freg() {
+        disassembler_test!(
+            fsqrt_freg_freg,
+            |ftype: FloatType, reg1: AArch64FloatReg, reg2: AArch64FloatReg| format!(
+                "fsqrt {}, {}",
+                reg1.capstone_string(ftype),
+                reg2.capstone_string(ftype)
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
         );
     }
 }
