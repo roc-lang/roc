@@ -507,7 +507,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
         } => {
             // First we evaluate the remainder, to see what reuse tokens are available at each jump. We generate code as if no reuse tokens are used.
             // Then we evaluate the body, to see what reuse tokens are consumed by the body.
-            // - If no reuse tokens are consumed (or when there were no available in the previous step), we stop here and return the first pass variables.
+            // - If no reuse tokens are consumed (or when there were no available in the previous step), we stop here and return the first pass symbols.
             // Then we evaluate the body and remainder again, given the consumed reuse tokens. And we update the joinpoint parameters.
 
             let (first_pass_remainder_environment, first_pass_remainder) = {
@@ -920,7 +920,7 @@ type ReuseTokens<'a> = MutMap<InLayout<'a>, Vec<'a, ReuseToken>>;
 
 /**
 A reuse token is a symbol that is used to reset a layout.
-Matches variables that are pointers.
+Matches symbols that are pointers.
 */
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct ReuseToken {
@@ -1152,15 +1152,15 @@ fn can_reuse_union_layout_tag(union_layout: &UnionLayout<'_>, tag_id_option: Opt
             match tag_id_option {
                 Some(tag_id) => {
                     if union_layout.tag_is_null(tag_id) {
-                        // Variable of layout is always null, so it can't ever be reused.
+                        // Symbol of layout is always null, so it can't ever be reused.
                         Reuse::Nonreusable
                     } else {
-                        // Variable of layout is not null, so it can be reused.
+                        // Symbol of layout is not null, so it can be reused.
                         Reuse::Reusable
                     }
                 }
                 None => {
-                    // Variable of layout might be null, so it might be reused.
+                    // Symbol of layout might be null, so it might be reused.
                     // If null will cause null pointer and fresh allocation.
                     Reuse::Reusable
                 }

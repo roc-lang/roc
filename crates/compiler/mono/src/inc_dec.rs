@@ -28,9 +28,9 @@ pub fn insert_inc_dec_operations<'a, 'i>(
     update_mode_ids: &'i mut UpdateModeIds,
     procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
-    // Create a VariableRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
-    let mut variable_rc_types_env = VariableRcTypesEnv::from_layout_interner(layout_interner);
-    variable_rc_types_env.insert_proc_symbols(procedures.keys().map(|(symbol, _layout)| *symbol));
+    // Create a SymbolRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
+    let mut symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
+    symbol_rc_types_env.insert_proc_symbols(procedures.keys().map(|(symbol, _layout)| *symbol));
 
     // Later in this file all wrapped calls to lowlevel functions will be inlined,
     // meaning they are no longer needed and the proc can be removed.
@@ -43,16 +43,15 @@ pub fn insert_inc_dec_operations<'a, 'i>(
     // });
 
     for (_, proc) in procedures.iter_mut() {
-        // Clone the variable_rc_types_env and insert the variables in the current procedure.
-        // As the variables should be limited in scope for the current proc.
-        let variable_rc_types_env = variable_rc_types_env.clone();
-
-        insert_inc_dec_operations_proc(arena, update_mode_ids, variable_rc_types_env, proc);
+        // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
+        // As the symbols should be limited in scope for the current proc.
+        let symbol_rc_types_env = symbol_rc_types_env.clone();
+        insert_inc_dec_operations_proc(arena, update_mode_ids, symbol_rc_types_env, proc);
     }
 }
 
 /**
-Enum indicating whether a variable (symbol) should be reference counted or not.
+Enum indicating whether a symbol should be reference counted or not.
 This includes layouts that themselves can be stack allocated but that contain a heap allocated item.
 */
 #[derive(Clone)]
@@ -61,27 +60,26 @@ enum VarRcType {
     NotReferenceCounted,
 }
 
-type VariableRcTypes = MutMap<Symbol, VarRcType>;
+type SymbolRcTypes = MutMap<Symbol, VarRcType>;
 
 /**
-Environment to keep track which of the variables should be reference counted and which ones should not.
+Environment to keep track which of the symbols should be reference counted and which ones should not.
  */
-struct VariableRcTypesEnv<'a, 'i> {
-    // A map keeping track of which variables are reference counted and which are not.
-    variables_rc_type: VariableRcTypes,
+#[derive(Clone)]
+struct SymbolRcTypesEnv<'a, 'i> {
+    // A map keeping track of which symbols are reference counted and which are not.
+    symbols_rc_type: SymbolRcTypes,
 
     layout_interner: &'i STLayoutInterner<'a>,
 }
 
-impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
+impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
     /**
-    Create a new VariableRcTypesEnv from a layout interner.
+    Create a new SymbolRcTypesEnv from a layout interner.
     */
-    fn from_layout_interner(
-        layout_interner: &'i STLayoutInterner<'a>,
-    ) -> VariableRcTypesEnv<'a, 'i> {
-        VariableRcTypesEnv {
-            variables_rc_type: VariableRcTypes::default(),
+    fn from_layout_interner(layout_interner: &'i STLayoutInterner<'a>) -> SymbolRcTypesEnv<'a, 'i> {
+        SymbolRcTypesEnv {
+            symbols_rc_type: SymbolRcTypes::default(),
             layout_interner,
         }
     }
@@ -89,43 +87,40 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
     Insert the reference count type of top level functions.
     As functions are not reference counted, they can be marked as such.
     */
-    fn insert_proc_symbols(
-        self: &mut VariableRcTypesEnv<'a, 'i>,
-        proc_symbols: impl Iterator<Item = Symbol>,
-    ) {
+    fn insert_proc_symbols(&mut self, proc_symbols: impl Iterator<Item = Symbol>) {
         for proc_symbol in proc_symbols {
-            self.variables_rc_type
+            self.symbols_rc_type
                 .insert(proc_symbol, VarRcType::NotReferenceCounted);
         }
     }
 
     /**
-    Insert the reference count types of all variables in a procedure.
+    Insert the reference count types of all symbols in a procedure.
     */
-    fn insert_variables_rc_type_proc(self: &mut VariableRcTypesEnv<'a, 'i>, proc: &Proc<'a>) {
+    fn insert_symbols_rc_type_proc(&mut self, proc: &Proc<'a>) {
         // First collect the argument types.
         for (layout, symbol) in proc.args.iter() {
             self.insert_symbol_layout_rc_type(symbol, layout);
         }
 
-        // Then collect the types of the variables in the body.
-        self.insert_variables_rc_type_stmt(&proc.body);
+        // Then collect the types of the symbols in the body.
+        self.insert_symbols_rc_type_stmt(&proc.body);
     }
 
     /**
-    Insert the reference count types of all variables in a statement.
+    Insert the reference count types of all symbols in a statement.
     */
-    fn insert_variables_rc_type_stmt(self: &mut VariableRcTypesEnv<'a, 'i>, stmt: &Stmt<'a>) {
+    fn insert_symbols_rc_type_stmt(&mut self, stmt: &Stmt<'a>) {
         match stmt {
             Stmt::Let(
                 binding,
-                // Expressions can be omitted, as they won't create new variables.
+                // Expressions can be omitted, as they won't create new symbols.
                 _expr,
                 layout,
                 continuation,
             ) => {
                 self.insert_symbol_layout_rc_type(binding, layout);
-                self.insert_variables_rc_type_stmt(continuation);
+                self.insert_symbols_rc_type_stmt(continuation);
             }
             Stmt::Switch {
                 // The switch condition is an integer and thus not reference counted.
@@ -135,7 +130,7 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
                 default_branch,
                 ret_layout: _,
             } => {
-                // Collect the types of the variables in all the branches, including the default one.
+                // Collect the types of the symbols in all the branches, including the default one.
                 for (info, stmt) in branches
                     .iter()
                     .map(|(_branch, info, stmt)| (info, stmt))
@@ -152,11 +147,11 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
                         }
                     }
 
-                    self.insert_variables_rc_type_stmt(stmt);
+                    self.insert_symbols_rc_type_stmt(stmt);
                 }
             }
             Stmt::Ret(_symbol) => {
-                // The return does not introduce new variables.
+                // The return does not introduce new symbols.
             }
             Stmt::Refcounting(_, _) => unreachable!(
                 "Refcounting operations should not be present in the AST at this point."
@@ -164,7 +159,7 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
             Stmt::Expect { remainder, .. }
             | Stmt::ExpectFx { remainder, .. }
             | Stmt::Dbg { remainder, .. } => {
-                self.insert_variables_rc_type_stmt(remainder);
+                self.insert_symbols_rc_type_stmt(remainder);
             }
             Stmt::Join {
                 id: _,
@@ -176,14 +171,14 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
                     self.insert_symbol_layout_rc_type(&parameter.symbol, &parameter.layout);
                 }
 
-                self.insert_variables_rc_type_stmt(body);
-                self.insert_variables_rc_type_stmt(continuation);
+                self.insert_symbols_rc_type_stmt(body);
+                self.insert_symbols_rc_type_stmt(continuation);
             }
             Stmt::Jump(_, _) => {
-                // A join point does not introduce new variables.
+                // A join point does not introduce new symbols.
             }
             Stmt::Crash(_, _) => {
-                // A crash does not introduce new variables.
+                // A crash does not introduce new symbols.
             }
         }
     }
@@ -191,156 +186,123 @@ impl<'a, 'i> VariableRcTypesEnv<'a, 'i> {
     /*
     Insert the reference count type of a symbol given its layout.
     */
-    fn insert_symbol_layout_rc_type(
-        self: &mut VariableRcTypesEnv<'a, 'i>,
-        symbol: &Symbol,
-        layout: &InLayout,
-    ) {
+    fn insert_symbol_layout_rc_type(&mut self, symbol: &Symbol, layout: &InLayout) {
         // This will reference count the entire struct, even if only one field is reference counted.
         // In another pass we can inline these operations, potentially improving reuse.
         let contains_refcounted = self.layout_interner.contains_refcounted(*layout);
-        if contains_refcounted {
-            self.variables_rc_type
-                .insert(*symbol, VarRcType::ReferenceCounted);
-        } else {
-            self.variables_rc_type
-                .insert(*symbol, VarRcType::NotReferenceCounted);
-        }
+        let rc_type = match contains_refcounted {
+            true => VarRcType::ReferenceCounted,
+            false => VarRcType::NotReferenceCounted,
+        };
+        self.symbols_rc_type.insert(*symbol, rc_type);
     }
 }
 
-impl Clone for VariableRcTypesEnv<'_, '_> {
-    fn clone(&self) -> Self {
-        VariableRcTypesEnv {
-            variables_rc_type: self.variables_rc_type.clone(),
-            layout_interner: self.layout_interner,
-        }
-    }
-}
-
-type VariablesOwnership = MutMap<Symbol, Ownership>;
+type SymbolsOwnership = MutMap<Symbol, Ownership>;
 
 /**
-Type containing data about the variable consumption of a join point.
+Type containing data about the symbols consumption of a join point.
 */
 type JoinPointConsumption = MutSet<Symbol>;
 
 /**
 The environment for the reference counting pass.
-Contains the variable rc types and the ownership.
+Contains the symbols rc types and the ownership.
 */
+#[derive(Clone)]
 struct RefcountEnvironment<'v> {
-    // Keep track which variables are reference counted and which are not.
-    variables_rc_types: &'v VariableRcTypes,
+    // Keep track which symbols are reference counted and which are not.
+    symbols_rc_types: &'v SymbolRcTypes,
     // The Koka implementation assumes everything that is not owned to be borrowed.
-    variables_ownership: VariablesOwnership,
+    symbols_ownership: SymbolsOwnership,
     jointpoint_closures: MutMap<JoinPointId, JoinPointConsumption>,
-}
-
-impl<'v> Clone for RefcountEnvironment<'v> {
-    fn clone(&self) -> Self {
-        RefcountEnvironment {
-            variables_rc_types: self.variables_rc_types,
-            variables_ownership: self.variables_ownership.clone(),
-            jointpoint_closures: self.jointpoint_closures.clone(),
-        }
-    }
 }
 
 impl<'v> RefcountEnvironment<'v> {
     /**
-    Retrieve the rc type of a variable.
+    Retrieve the rc type of a symbol.
     */
-    fn get_variable_rc_type(self: &mut RefcountEnvironment<'v>, variable: &Symbol) -> &VarRcType {
-        self.variables_rc_types
-            .get(variable)
-            .expect("variable should have rc type")
+    fn get_symbol_rc_type(&mut self, symbol: &Symbol) -> &VarRcType {
+        self.symbols_rc_types
+            .get(symbol)
+            .expect("symbol should have rc type")
     }
 
     /*
-    Retrieve whether the variable is owned or borrowed.
-    If it was owned, set it to borrowed (as it is consumed/the variable can be used as owned only once without incrementing).
-    If the variable is not reference counted, do nothing and return None.
+    Retrieve whether the symbol is owned or borrowed.
+    If it was owned, set it to borrowed (as it is consumed/the symbol can be used as owned only once without incrementing).
+    If the symbol is not reference counted, do nothing and return None.
     */
-    fn consume_variable(
-        self: &mut RefcountEnvironment<'v>,
-        variable: &Symbol,
-    ) -> Option<Ownership> {
-        if !self.variables_ownership.contains_key(variable) {
+    fn consume_symbol(&mut self, symbol: &Symbol) -> Option<Ownership> {
+        if !self.symbols_ownership.contains_key(symbol) {
             return None;
         }
 
-        // Consume the variable and return the previous ownership.
-        Some(self.consume_rc_variable(variable))
+        // Consume the symbol and return the previous ownership.
+        Some(self.consume_rc_symbol(symbol))
     }
 
     /*
-    Retrieve whether the variable is owned or borrowed.
-    If it was owned, set it to borrowed (as it is consumed/the variable can be used as owned only once without incrementing).
+    Retrieve whether the symbol is owned or borrowed.
+    If it was owned, set it to borrowed (as it is consumed/the symbol can be used as owned only once without incrementing).
     */
-    fn consume_rc_variable(self: &mut RefcountEnvironment<'v>, variable: &Symbol) -> Ownership {
-        // Consume the variable by setting it to borrowed (if it was owned before), and return the previous ownership.
-        self.variables_ownership
-            .insert(*variable, Ownership::Borrowed)
-            .expect("Expected variable to be in environment")
+    fn consume_rc_symbol(&mut self, symbol: &Symbol) -> Ownership {
+        // Consume the symbol by setting it to borrowed (if it was owned before), and return the previous ownership.
+        self.symbols_ownership
+            .insert(*symbol, Ownership::Borrowed)
+            .expect("Expected symbol to be in environment")
     }
 
     /**
-       Retrieve the ownership of a variable.
-       If the variable is not reference counted, it will None.
+       Retrieve the ownership of a symbol.
+       If the symbol is not reference counted, it will None.
     */
-    fn get_variable_ownership(
-        self: &RefcountEnvironment<'v>,
-        variable: &Symbol,
-    ) -> Option<&Ownership> {
-        self.variables_ownership.get(variable)
+    fn get_symbol_ownership(&self, symbol: &Symbol) -> Option<&Ownership> {
+        self.symbols_ownership.get(symbol)
     }
 
     /**
-    Remove non reference counted variables from an iterator.
+    Remove non reference counted symbols from an iterator.
     Useful when we want to insert reference count operations for symbols that might not be rc.
     */
-    fn filter_rc_variables<'a>(
-        self: &RefcountEnvironment<'v>,
-        variables: impl Iterator<Item = &'a Symbol>,
+    fn filter_rc_symbols<'a>(
+        &self,
+        symbols: impl Iterator<Item = &'a Symbol>,
     ) -> std::vec::Vec<&'a Symbol> {
-        variables
-            .filter(|variable| self.variables_ownership.contains_key(variable))
+        symbols
+            .filter(|symbol| self.symbols_ownership.contains_key(symbol))
             .collect::<std::vec::Vec<_>>()
     }
 
     /**
-    Add a variables to the environment if they are reference counted.
+    Add a symbols to the environment if they are reference counted.
     */
-    fn add_variables(
-        self: &mut RefcountEnvironment<'v>,
-        variables: impl IntoIterator<Item = Symbol>,
-    ) {
-        variables
+    fn add_symbols(&mut self, symbols: impl IntoIterator<Item = Symbol>) {
+        symbols
             .into_iter()
-            .for_each(|variable| self.add_variable(variable))
+            .for_each(|symbol| self.add_symbol(symbol))
     }
 
     /**
-    Add a variable to the environment if it is reference counted.
+    Add a symbol to the environment if it is reference counted.
     */
-    fn add_variable(self: &mut RefcountEnvironment<'v>, variable: Symbol) {
-        match self.get_variable_rc_type(&variable) {
+    fn add_symbol(&mut self, symbol: Symbol) {
+        match self.get_symbol_rc_type(&symbol) {
             VarRcType::ReferenceCounted => {
-                self.variables_ownership.insert(variable, Ownership::Owned);
+                self.symbols_ownership.insert(symbol, Ownership::Owned);
             }
             VarRcType::NotReferenceCounted => {
-                // If this variable is not reference counted, we don't need to do anything.
+                // If this symbol is not reference counted, we don't need to do anything.
             }
         }
     }
 
     /**
-    Remove a variable from the environment.
-    Is used when a variable is no longer in scope (before a let binding).
+    Remove a symbol from the environment.
+    Is used when a symbol is no longer in scope (before a let binding).
      */
-    fn remove_variable(self: &mut RefcountEnvironment<'v>, variable: Symbol) {
-        self.variables_ownership.remove(&variable);
+    fn remove_symbol(&mut self, symbol: Symbol) {
+        self.symbols_ownership.remove(&symbol);
     }
 
     /**
@@ -348,7 +310,7 @@ impl<'v> RefcountEnvironment<'v> {
     Used when analyzing a join point. So that a jump can update the environment on call.
     */
     fn add_joinpoint_consumption(
-        self: &mut RefcountEnvironment<'v>,
+        &mut self,
         joinpoint_id: JoinPointId,
         consumption: JoinPointConsumption,
     ) {
@@ -358,10 +320,7 @@ impl<'v> RefcountEnvironment<'v> {
     /**
     Get the consumed closure from a join point id.
     */
-    fn get_joinpoint_consumption(
-        self: &RefcountEnvironment<'v>,
-        joinpoint_id: JoinPointId,
-    ) -> JoinPointConsumption {
+    fn get_joinpoint_consumption(&self, joinpoint_id: JoinPointId) -> JoinPointConsumption {
         self.jointpoint_closures
             .get(&joinpoint_id)
             .expect("Expected closure to be in environment")
@@ -372,7 +331,7 @@ impl<'v> RefcountEnvironment<'v> {
     Remove a joinpoint id and the consumed closure from the environment.
     Used after analyzing the continuation of a join point.
     */
-    fn remove_joinpoint_consumption(self: &mut RefcountEnvironment<'v>, joinpoint_id: JoinPointId) {
+    fn remove_joinpoint_consumption(&mut self, joinpoint_id: JoinPointId) {
         let closure = self.jointpoint_closures.remove(&joinpoint_id);
         debug_assert!(
             matches!(closure, Some(_)),
@@ -384,48 +343,39 @@ impl<'v> RefcountEnvironment<'v> {
     Return owned usages.
     Collect the usage of all the reference counted symbols in the iterator and return as a map.
     */
-    fn owned_usages(
-        self: &RefcountEnvironment<'v>,
-        symbols: impl IntoIterator<Item = Symbol>,
-    ) -> MutMap<Symbol, u64> {
+    fn owned_usages(&self, symbols: impl IntoIterator<Item = Symbol>) -> MutMap<Symbol, u64> {
         // A groupby or something similar would be nice here.
-        let mut variable_usage = MutMap::default();
+        let mut symbol_usage = MutMap::default();
         for symbol in symbols {
             match {
-                self.variables_rc_types
+                self.symbols_rc_types
                     .get(&symbol)
-                    .expect("Expected variable to be in the map")
+                    .expect("Expected symbol to be in the map")
             } {
-                // If the variable is reference counted, we need to increment the usage count.
+                // If the symbol is reference counted, we need to increment the usage count.
                 VarRcType::ReferenceCounted => {
-                    match variable_usage.get(&symbol) {
-                        Some(count) => variable_usage.insert(symbol, count + 1),
-                        None => variable_usage.insert(symbol, 1),
-                    };
+                    *symbol_usage.entry(symbol).or_default() += 1;
                 }
-                // If the variable is not reference counted, we don't need to do anything.
+                // If the symbol is not reference counted, we don't need to do anything.
                 VarRcType::NotReferenceCounted => continue,
             }
         }
-        variable_usage
+        symbol_usage
     }
 
     /**
     Filter the given symbols to only contain reference counted symbols.
     */
-    fn borrowed_usages(
-        self: &RefcountEnvironment<'v>,
-        symbols: impl IntoIterator<Item = Symbol>,
-    ) -> MutSet<Symbol> {
+    fn borrowed_usages(&self, symbols: impl IntoIterator<Item = Symbol>) -> MutSet<Symbol> {
         symbols
             .into_iter()
             .filter(|symbol| {
-                // If the variable is reference counted, we need to increment the usage count.
-                // If the variable is not reference counted, we don't need to do anything.
+                // If the symbol is reference counted, we need to increment the usage count.
+                // If the symbol is not reference counted, we don't need to do anything.
                 matches!(
-                    self.variables_rc_types
+                    self.symbols_rc_types
                         .get(symbol)
-                        .expect("Expected variable to be in the map"),
+                        .expect("Expected symbol to be in the map"),
                     VarRcType::ReferenceCounted
                 )
             })
@@ -440,23 +390,23 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
     arena: &'a Bump,
     update_mode_ids: &'i mut UpdateModeIds,
 
-    mut variable_rc_types_env: VariableRcTypesEnv<'a, 'i>,
+    mut symbol_rc_types_env: SymbolRcTypesEnv<'a, 'i>,
     proc: &mut Proc<'a>,
 ) {
-    // Clone the variable_rc_types_env and insert the variables in the current procedure.
-    // As the variables should be limited in scope for the current proc.
-    variable_rc_types_env.insert_variables_rc_type_proc(proc);
+    // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
+    // As the symbols should be limited in scope for the current proc.
+    symbol_rc_types_env.insert_symbols_rc_type_proc(proc);
 
     let mut environment = RefcountEnvironment {
-        variables_rc_types: &variable_rc_types_env.variables_rc_type,
-        variables_ownership: MutMap::default(),
+        symbols_rc_types: &symbol_rc_types_env.symbols_rc_type,
+        symbols_ownership: MutMap::default(),
         jointpoint_closures: MutMap::default(),
     };
 
     // Add all arguments to the environment (if they are reference counted)
     let proc_symbols = proc.args.iter().map(|(_layout, symbol)| symbol);
     for symbol in proc_symbols.clone() {
-        environment.add_variable(*symbol);
+        environment.add_symbol(*symbol);
     }
 
     // Update the body with reference count statements.
@@ -464,7 +414,7 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
         insert_refcount_operations_stmt(arena, update_mode_ids, &mut environment, &proc.body);
 
     // Insert decrement statements for unused parameters (which are still marked as owned).
-    let rc_proc_symbols = environment.filter_rc_variables(proc_symbols);
+    let rc_proc_symbols = environment.filter_rc_symbols(proc_symbols);
     let newer_body = consume_and_insert_dec_stmts(
         arena,
         &mut environment,
@@ -474,11 +424,11 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
 
     // Assert that just the arguments are in the environment. And (after decrementing the unused ones) that they are all borrowed.
     debug_assert!(environment
-        .variables_ownership
+        .symbols_ownership
         .iter()
         .all(|(symbol, ownership)| {
-            // All variables should be borrowed.
-            *ownership == Ownership::Borrowed
+            // All symbols should be borrowed.
+            ownership.is_owned()
                 && proc
                     .args
                     .iter()
@@ -491,7 +441,7 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
 
 /**
 Given an environment, insert the reference counting operations for a statement.
-Assuming that a symbol can only be defined once (no binding to the same variable multiple times).
+Assuming that a symbol can only be defined once (no binding to the same symbol multiple times).
 */
 fn insert_refcount_operations_stmt<'v, 'a, 'i>(
     arena: &'a Bump,
@@ -521,13 +471,13 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
             );
 
             for (binding, _, _) in triples.iter() {
-                environment.add_variable(**binding); // Add the bound variable to the environment. As it can be used in the continuation.
+                environment.add_symbol(**binding); // Add the bound symbol to the environment. As it can be used in the continuation.
             }
 
             triples
                 .into_iter()
                 .rev()
-                // First evaluate the continuation and let it consume it's free variables.
+                // First evaluate the continuation and let it consume it's free symbols.
                 .fold(
                     insert_refcount_operations_stmt(
                         arena,
@@ -537,16 +487,15 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
                     ),
                     |new_stmt, (binding, expr, layout)| {
                         // If the binding is still owned in the environment, it is not used in the continuation and we can drop it right away.
-                        let new_stmt_without_unused = match matches!(
-                            environment.get_variable_ownership(binding),
-                            Some(Ownership::Owned)
-                        ) {
-                            true => insert_dec_stmt(arena, *binding, new_stmt),
-                            false => new_stmt,
+                        let new_stmt_without_unused = match environment
+                            .get_symbol_ownership(binding)
+                        {
+                            Some(Ownership::Owned) => insert_dec_stmt(arena, *binding, new_stmt),
+                            _ => new_stmt,
                         };
 
-                        // And as the variable should not be in scope before this let binding, remove it from the environment.
-                        environment.remove_variable(*binding);
+                        // And as the symbol should not be in scope before this let binding, remove it from the environment.
+                        environment.remove_symbol(*binding);
 
                         insert_refcount_operations_binding(
                             arena,
@@ -597,9 +546,9 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
                 (info.clone(), new_branch, branch_env)
             };
 
-            // Determine what variables are consumed in some of the branches.
+            // Determine what symbols are consumed in some of the branches.
             // So we can make sure they are consumed in the current environment and all branches.
-            let consume_variables = {
+            let consume_symbols = {
                 let branch_envs = {
                     let mut branch_environments =
                         Vec::with_capacity_in(new_branches.len() + 1, arena);
@@ -614,41 +563,46 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
                 };
 
                 {
-                    let mut consume_variables = MutSet::default();
+                    let mut consume_symbols = MutSet::default();
 
-                    for (symbol, ownership) in environment.variables_ownership.iter() {
-                        match ownership {
-                            Ownership::Owned => {
-                                if branch_envs
+                    // If the symbol is currently borrowed, it must be borrowed in all branches and we don't have to do anything.
+                    for (symbol, _) in environment
+                        .symbols_ownership
+                        .iter()
+                        .filter(|(_, o)| o.is_owned())
+                    {
+                        let error = "All symbols defined in the current environment should be in the environment of the branches.";
+                        let consumed =
+                            branch_envs
                                 .iter()
-                                .any(|branch_env| matches!(branch_env.get_variable_ownership(symbol).expect("All symbols defined in the current environment should be in the environment of the branches."), Ownership::Borrowed))
-                            {
-                                // If the variable is currently owned, and not in a some branches, it must be consumed in all branches
-                                consume_variables.insert(*symbol);
-                            }
-                                // Otherwise it can stay owned.
-                            }
-                            Ownership::Borrowed => {
-                                // If the variable is currently borrowed, it must be borrowed in all branches and we don't have to do anything.
-                            }
+                                .any(|branch_env: &&RefcountEnvironment<'v>| {
+                                    matches!(
+                                        branch_env.get_symbol_ownership(symbol).expect(error),
+                                        Ownership::Borrowed
+                                    )
+                                });
+                        if consumed {
+                            // If the symbol is currently owned, and not in a some branches, it must be consumed in all branches
+                            consume_symbols.insert(*symbol);
                         }
+                        // Otherwise it can stay owned.
                     }
 
-                    consume_variables
+                    consume_symbols
                 }
             };
 
-            // Given the consume_variables we can determine what additional variables should be dropped in each branch.
+            // Given the consume_symbols we can determine what additional symbols should be dropped in each branch.
             let newer_branches = Vec::from_iter_in(
                 new_branches
                     .into_iter()
                     .map(|(label, info, branch, branch_env)| {
-                        // If the variable is owned in the branch, it is not used in the branch and we can drop it.
-                        let consume_variables_branch = consume_variables.iter().copied().filter(|consume_variable| {
-                             matches!(branch_env.get_variable_ownership(consume_variable).expect("All symbols defined in the current environment should be in the environment of the branches."), Ownership::Owned) 
+                        // If the symbol is owned in the branch, it is not used in the branch and we can drop it.
+                        let consume_symbols_branch = consume_symbols.iter().copied().filter(|consume_symbol| {
+                             matches!(branch_env.get_symbol_ownership(consume_symbol).expect("All symbols defined in the current environment should be in the environment of the branches."), Ownership::Owned) 
                         });
 
-                        let newer_branch = insert_dec_stmts(arena,  consume_variables_branch, branch);
+                        let newer_branch = insert_dec_stmts(arena,  consume_symbols_branch, branch);
                         (label, info, newer_branch.clone())
                     }),
                 arena,
@@ -657,19 +611,19 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
 
             let newer_default_branch = {
                 let (info, branch, branch_env) = new_default_branch;
-                // If the variable is owned in the branch, it is not used in the branch and we can drop it.
-                let consume_variables_branch = consume_variables.iter().copied().filter(|consume_variable| {
-                    matches!(branch_env.get_variable_ownership(consume_variable).expect("All symbols defined in the current environment should be in the environment of the branches."), Ownership::Owned) 
+                // If the symbol is owned in the branch, it is not used in the branch and we can drop it.
+                let consume_symbols_branch = consume_symbols.iter().copied().filter(|consume_symbol| {
+                    matches!(branch_env.get_symbol_ownership(consume_symbol).expect("All symbols defined in the current environment should be in the environment of the branches."), Ownership::Owned) 
                  });
 
-                let newer_branch = insert_dec_stmts(arena, consume_variables_branch, branch);
+                let newer_branch = insert_dec_stmts(arena, consume_symbols_branch, branch);
 
                 (info, newer_branch)
             };
 
             // In addition to updating the branches, we need to update the current environment.
-            for consume_variable in consume_variables.iter() {
-                environment.consume_variable(consume_variable);
+            for consume_symbol in consume_symbols.iter() {
+                environment.consume_symbol(consume_symbol);
             }
 
             arena.alloc(Stmt::Switch {
@@ -681,7 +635,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
             })
         }
         Stmt::Ret(s) => {
-            let ownership = environment.consume_variable(s);
+            let ownership = environment.consume_symbol(s);
             debug_assert!(matches!(ownership, None | Some(Ownership::Owned))); // the return value should be owned or not reference counted at the return.
             return arena.alloc(Stmt::Ret(*s));
         }
@@ -767,22 +721,22 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
         } => {
             // Assuming that the values in the closure of the body of this jointpoint are already bound.
 
-            // Assuming that all variables are still owned. (So that we can determine what variables got consumed in the join point.)
+            // Assuming that all symbols are still owned. (So that we can determine what symbols got consumed in the join point.)
             debug_assert!(environment
-                .variables_ownership
+                .symbols_ownership
                 .iter()
-                .all(|(_, ownership)| matches!(ownership, Ownership::Owned)));
+                .all(|(_, ownership)| ownership.is_owned()));
 
             let mut body_env = environment.clone();
 
-            let parameter_variables = parameters.iter().map(|Param { symbol, .. }| *symbol);
-            let parameter_variables_set = parameter_variables.clone().collect::<MutSet<_>>();
-            body_env.add_variables(parameter_variables);
+            let parameter_symbols = parameters.iter().map(|Param { symbol, .. }| *symbol);
+            let parameter_symbols_set = parameter_symbols.clone().collect::<MutSet<_>>();
+            body_env.add_symbols(parameter_symbols);
 
             /*
-            We use a fixed point iteration to determine what variables are consumed in the join point.
+            We use a fixed point iteration to determine what symbols are consumed in the join point.
             We need to do this because the join point might be called recursively.
-            If we consume variables in the closure, like y in the example below:
+            If we consume symbols in the closure, like y in the example below:
 
             add = \x, y ->
                 jp 1 \acc, count ->
@@ -812,19 +766,16 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
                 current_body_env.remove_joinpoint_consumption(*joinpoint_id);
 
                 // We save the parameters consumed by this join point. So we can do the same when we jump to this joinpoint.
-                // This includes parameter variables, this might help with unused closure variables.
+                // This includes parameter symbols, this might help with unused closure symbols.
                 let current_joinpoint_consumption = {
-                    let consumed_variables = current_body_env
-                        .variables_ownership
+                    let consumed_symbols = current_body_env
+                        .symbols_ownership
                         .iter()
-                        .filter_map(|(symbol, ownership)| match ownership {
-                            Ownership::Borrowed => Some(*symbol),
-                            _ => None,
-                        })
+                        .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(*symbol))
                         .collect::<MutSet<_>>();
 
-                    consumed_variables
-                        .difference(&parameter_variables_set)
+                    consumed_symbols
+                        .difference(&parameter_symbols_set)
                         .copied()
                         .collect::<MutSet<Symbol>>()
                 };
@@ -855,9 +806,9 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
             })
         }
         Stmt::Jump(joinpoint_id, arguments) => {
-            let consumed_variables = environment.get_joinpoint_consumption(*joinpoint_id);
-            for consumed_variable in consumed_variables.iter() {
-                environment.consume_variable(consumed_variable);
+            let consumed_symbols = environment.get_joinpoint_consumption(*joinpoint_id);
+            for consumed_symbol in consumed_symbols.iter() {
+                environment.consume_symbol(consumed_symbol);
             }
 
             let new_jump = arena.alloc(Stmt::Jump(*joinpoint_id, arguments));
@@ -897,7 +848,7 @@ fn insert_refcount_operations_binding<'a, 'i>(
 ) -> &'a Stmt<'a> {
     macro_rules! dec_borrowed {
         ($symbols:expr,$stmt:expr) => {
-            // Insert decrement operations for borrowed variables if they are currently owned.
+            // Insert decrement operations for borrowed symbols if they are currently owned.
             consume_and_insert_dec_stmts(
                 arena,
                 environment,
@@ -915,7 +866,7 @@ fn insert_refcount_operations_binding<'a, 'i>(
 
     macro_rules! inc_owned {
         ($symbols:expr, $stmt:expr) => {
-            // Insert increment operations for the owned variables used in the expression.
+            // Insert increment operations for the owned symbols used in the expression.
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
@@ -987,22 +938,17 @@ fn insert_refcount_operations_binding<'a, 'i>(
                     .iter()
                     .copied()
                     .zip(borrow_signature.iter().copied());
-                let (owned_arguments, borrowed_arguments) = arguments_with_borrow_signature
-                    .partition::<std::vec::Vec<_>, _>(
-                    |(_, ownership)| matches!(ownership, Ownership::Owned),
-                );
+                let owned_arguments = arguments_with_borrow_signature
+                    .clone()
+                    .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
+                let borrowed_arguments = arguments_with_borrow_signature
+                    .filter_map(|(symbol, ownership)| ownership.is_borrowed().then_some(symbol));
 
-                let new_stmt = dec_borrowed!(
-                    borrowed_arguments.iter().map(|(symbol, _)| symbol).copied(),
-                    stmt
-                );
+                let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
 
                 let new_let = new_let!(new_stmt);
 
-                inc_owned!(
-                    owned_arguments.iter().map(|(symbol, _)| symbol).copied(),
-                    new_let
-                )
+                inc_owned!(owned_arguments, new_let)
             }
             CallType::HigherOrder(HigherOrderLowLevel {
                 op: operator,
@@ -1020,7 +966,7 @@ fn insert_refcount_operations_binding<'a, 'i>(
                 // This should always be true, not sure where this could be set to false.
                 debug_assert!(passed_function.owns_captured_environment);
 
-                // define macro that inserts a decref statement for a variable amount of symbols
+                // define macro that inserts a decref statement for a symbol amount of symbols
                 macro_rules! decref_lists {
                     ($stmt:expr, $symbol:expr) => {
                         arena.alloc(Stmt::Refcounting(ModifyRc::DecRef($symbol), $stmt))
@@ -1121,19 +1067,19 @@ fn insert_refcount_operations_binding<'a, 'i>(
 
             // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
             let newer_stmt = if matches!(
-                environment.get_variable_rc_type(binding),
+                environment.get_symbol_rc_type(binding),
                 VarRcType::ReferenceCounted
             ) {
                 match expr {
                     Expr::StructAtIndex { .. }
                     | Expr::UnionAtIndex { .. }
                     | Expr::ExprUnbox { .. } => insert_inc_stmt(arena, *binding, 1, new_stmt),
-                    // No usage of an element of a reference counted variable. No need to increment.
+                    // No usage of an element of a reference counted symbol. No need to increment.
                     Expr::GetTagId { .. } => new_stmt,
                     _ => unreachable!("Unexpected expression type"),
                 }
             } else {
-                // If the variable is not reference counted, we don't need to increment it.
+                // If the symbol is not reference counted, we don't need to increment it.
                 new_stmt
             };
 
@@ -1188,10 +1134,10 @@ fn consume_and_insert_inc_stmt<'a>(
     usage_count: u64,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    let new_count = match environment.consume_rc_variable(symbol) {
-        // If the variable is borrowed, we need to increment the reference count for each usage.
+    let new_count = match environment.consume_rc_symbol(symbol) {
+        // If the symbol is borrowed, we need to increment the reference count for each usage.
         Ownership::Borrowed => usage_count,
-        // If the variable is owned, we need to increment the reference count for each usage except one.
+        // If the symbol is owned, we need to increment the reference count for each usage except one.
         Ownership::Owned => usage_count - 1,
     };
 
@@ -1241,10 +1187,10 @@ fn consume_and_insert_dec_stmt<'a>(
     symbol: &Symbol,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    match environment.consume_rc_variable(symbol) {
-        // If the variable is borrowed, don't have to decrement the reference count.
+    match environment.consume_rc_symbol(symbol) {
+        // If the symbol is borrowed, don't have to decrement the reference count.
         Ownership::Borrowed => continuation,
-        // If the variable is owned, we do need to decrement the reference count.
+        // If the symbol is owned, we do need to decrement the reference count.
         Ownership::Owned => insert_dec_stmt(arena, *symbol, continuation),
     }
 }

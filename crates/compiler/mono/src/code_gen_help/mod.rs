@@ -160,30 +160,12 @@ impl<'a> CodeGenHelp<'a> {
         layout: InLayout<'a>,
         argument: Symbol,
     ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        let mut ctx = Context {
-            new_linker_data: Vec::new_in(self.arena),
-            recursive_union: None,
-            op: HelperOp::Reset,
-        };
-
-        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout_interner, layout);
-
-        let arguments = self.arena.alloc([argument]);
-        let ret_layout = layout;
-        let arg_layouts = self.arena.alloc([layout]);
-        let expr = Expr::Call(Call {
-            call_type: CallType::ByName {
-                name: LambdaName::no_niche(proc_name),
-                ret_layout,
-                arg_layouts,
-                specialization_id: CallSpecId::BACKEND_DUMMY,
-            },
-            arguments,
-        });
-
-        (expr, ctx.new_linker_data)
+        self.call_refcount(ident_ids, layout_interner, layout, argument, false)
     }
 
+    /**
+    Call a resetref operation. It is similar to reset except it does not recursively decrement it's children when unique.
+    */
     pub fn call_resetref_refcount(
         &mut self,
         ident_ids: &mut IdentIds,
@@ -191,10 +173,28 @@ impl<'a> CodeGenHelp<'a> {
         layout: InLayout<'a>,
         argument: Symbol,
     ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
+        self.call_refcount(ident_ids, layout_interner, layout, argument, true)
+    }
+
+    /**
+    Call either a reset or a resetref refcount operation.
+    */
+    fn call_refcount(
+        &mut self,
+        ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
+        layout: InLayout<'a>,
+        argument: Symbol,
+        resetref: bool,
+    ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
         let mut ctx = Context {
             new_linker_data: Vec::new_in(self.arena),
             recursive_union: None,
-            op: HelperOp::Reset,
+            op: if resetref {
+                HelperOp::ResetRef
+            } else {
+                HelperOp::Reset
+            },
         };
 
         let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout_interner, layout);

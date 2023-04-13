@@ -19,6 +19,14 @@ pub enum Ownership {
 }
 
 impl Ownership {
+    pub fn is_owned(&self) -> bool {
+        matches!(self, Ownership::Owned)
+    }
+
+    pub fn is_borrowed(&self) -> bool {
+        matches!(self, Ownership::Borrowed)
+    }
+
     /// For reference-counted types (lists, (big) strings, recursive tags), owning a value
     /// means incrementing its reference count. Hence, we prefer borrowing for these types
     fn from_layout(layout: &Layout) -> Self {
@@ -404,7 +412,7 @@ impl<'a> BorrowInfState<'a> {
     fn update_param_map_help(&mut self, ps: &[Param<'a>]) -> &'a [Param<'a>] {
         let mut new_ps = Vec::with_capacity_in(ps.len(), self.arena);
         new_ps.extend(ps.iter().map(|p| {
-            if p.ownership == Ownership::Owned {
+            if p.ownership.is_owned() {
                 *p
             } else if self.is_owned(p.symbol) {
                 self.modified = true;
@@ -430,7 +438,7 @@ impl<'a> BorrowInfState<'a> {
         let ps = &mut param_map.declarations[index..][..length];
 
         for p in ps.iter_mut() {
-            if p.ownership == Ownership::Owned {
+            if p.ownership.is_owned() {
                 // do nothing
             } else if self.is_owned(p.symbol) {
                 self.modified = true;
@@ -454,7 +462,7 @@ impl<'a> BorrowInfState<'a> {
         debug_assert_eq!(xs.len(), ps.len());
 
         for (x, p) in xs.iter().zip(ps.iter()) {
-            if p.ownership == Ownership::Owned {
+            if p.ownership.is_owned() {
                 self.own_var(*x);
             }
         }
@@ -465,11 +473,8 @@ impl<'a> BorrowInfState<'a> {
     /// then the argument must also be owned
     fn own_args_using_bools(&mut self, xs: &[Symbol], ps: &[Ownership]) {
         debug_assert_eq!(xs.len(), ps.len());
-
-        for (x, ownership) in xs.iter().zip(ps.iter()) {
-            if matches!(ownership, Ownership::Owned) {
-                self.own_var(*x);
-            }
+        for (x, _) in xs.iter().zip(ps.iter()).filter(|(_, o)| o.is_owned()) {
+            self.own_var(*x);
         }
     }
 
@@ -590,44 +595,44 @@ impl<'a> BorrowInfState<'a> {
                 match op {
                     ListMap { xs } => {
                         // own the list if the function wants to own the element
-                        if function_ps[0].ownership == Ownership::Owned {
+                        if function_ps[0].ownership.is_owned() {
                             self.own_var(*xs);
                         }
                     }
                     ListMap2 { xs, ys } => {
                         // own the lists if the function wants to own the element
-                        if function_ps[0].ownership == Ownership::Owned {
+                        if function_ps[0].ownership.is_owned() {
                             self.own_var(*xs);
                         }
 
-                        if function_ps[1].ownership == Ownership::Owned {
+                        if function_ps[1].ownership.is_owned() {
                             self.own_var(*ys);
                         }
                     }
                     ListMap3 { xs, ys, zs } => {
                         // own the lists if the function wants to own the element
-                        if function_ps[0].ownership == Ownership::Owned {
+                        if function_ps[0].ownership.is_owned() {
                             self.own_var(*xs);
                         }
-                        if function_ps[1].ownership == Ownership::Owned {
+                        if function_ps[1].ownership.is_owned() {
                             self.own_var(*ys);
                         }
-                        if function_ps[2].ownership == Ownership::Owned {
+                        if function_ps[2].ownership.is_owned() {
                             self.own_var(*zs);
                         }
                     }
                     ListMap4 { xs, ys, zs, ws } => {
                         // own the lists if the function wants to own the element
-                        if function_ps[0].ownership == Ownership::Owned {
+                        if function_ps[0].ownership.is_owned() {
                             self.own_var(*xs);
                         }
-                        if function_ps[1].ownership == Ownership::Owned {
+                        if function_ps[1].ownership.is_owned() {
                             self.own_var(*ys);
                         }
-                        if function_ps[2].ownership == Ownership::Owned {
+                        if function_ps[2].ownership.is_owned() {
                             self.own_var(*zs);
                         }
-                        if function_ps[3].ownership == Ownership::Owned {
+                        if function_ps[3].ownership.is_owned() {
                             self.own_var(*ws);
                         }
                     }
