@@ -687,8 +687,8 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         }
     }
     #[inline(always)]
-    fn mov_freg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _src: AArch64FloatReg) {
-        todo!("moving data between float registers for AArch64");
+    fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
+        fmov_freg_freg(buf, FloatType::Double, dst, src);
     }
     #[inline(always)]
     fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
@@ -2636,6 +2636,24 @@ fn fdiv_freg_freg_freg(
 }
 
 #[inline(always)]
+fn fmov_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    dst: AArch64FloatReg,
+    src: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
+            opcode: 0b000000,
+            ptype: ftype,
+            rd: dst,
+            rn: src,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
 fn fmul_freg_freg_freg(
     buf: &mut Vec<'_, u8>,
     ftype: FloatType,
@@ -3489,6 +3507,21 @@ mod tests {
             ),
             ALL_FLOAT_TYPES,
             ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_fmov_freg_freg() {
+        disassembler_test!(
+            fmov_freg_freg,
+            |ftype: FloatType, reg1: AArch64FloatReg, reg2: AArch64FloatReg| format!(
+                "fmov {}, {}",
+                reg1.capstone_string(ftype),
+                reg2.capstone_string(ftype)
+            ),
+            ALL_FLOAT_TYPES,
             ALL_FLOAT_REGS,
             ALL_FLOAT_REGS
         );
