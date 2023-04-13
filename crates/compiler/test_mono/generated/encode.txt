@@ -1,7 +1,7 @@
 procedure List.4 (List.107, List.108):
     let List.497 : U64 = 1i64;
-    let List.495 : List U8 = CallByName List.70 List.107 List.497;
-    let List.494 : List U8 = CallByName List.71 List.495 List.108;
+    let List.495 : List U8 = lowlevel ListReserve List.107 List.497;
+    let List.494 : List U8 = lowlevel ListAppendUnsafe List.495 List.108;
     ret List.494;
 
 procedure List.70 (#Attr.2, #Attr.3):

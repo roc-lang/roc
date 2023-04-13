@@ -23,13 +23,13 @@ procedure Test.3 ():
 procedure Test.5 (Test.6, Test.4):
     let Test.19 : {} = Struct {};
     let Test.18 : U8 = CallByName Test.7 Test.19;
-    let Test.17 : U8 = CallByName Num.19 Test.18 Test.4;
+    let Test.17 : U8 = lowlevel NumAdd Test.18 Test.4;
     ret Test.17;
 
 procedure Test.5 (Test.6, Test.4):
     let Test.30 : {} = Struct {};
     let Test.29 : U8 = CallByName Test.8 Test.30;
-    let Test.28 : U8 = CallByName Num.19 Test.29 Test.4;
+    let Test.28 : U8 = lowlevel NumAdd Test.29 Test.4;
     ret Test.28;
 
 procedure Test.7 (Test.20):

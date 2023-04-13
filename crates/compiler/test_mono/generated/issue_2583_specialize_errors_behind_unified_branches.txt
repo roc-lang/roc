@@ -7,11 +7,11 @@ procedure Bool.2 ():
     ret Bool.23;
 
 procedure List.2 (List.96, List.97):
-    inc List.96;
-    let List.508 : U64 = CallByName List.6 List.96;
-    let List.504 : Int1 = CallByName Num.22 List.97 List.508;
+    let List.508 : U64 = lowlevel ListLen List.96;
+    let List.504 : Int1 = lowlevel NumLt List.97 List.508;
     if List.504 then
-        let List.506 : I64 = CallByName List.66 List.96 List.97;
+        let List.506 : I64 = lowlevel ListGetUnsafe List.96 List.97;
+        dec List.96;
         let List.505 : [C {}, C I64] = TagId(1) List.506;
         ret List.505;
     else
@@ -59,10 +59,11 @@ procedure Str.47 (#Attr.2):
     ret Str.306;
 
 procedure Str.72 (Str.244):
-    let Str.245 : {I64, U8} = CallByName Str.47 Str.244;
+    let Str.245 : {I64, U8} = lowlevel StrToNum Str.244;
+    dec Str.244;
     let Str.304 : U8 = StructAtIndex 1 Str.245;
     let Str.305 : U8 = 0i64;
-    let Str.301 : Int1 = CallByName Bool.11 Str.304 Str.305;
+    let Str.301 : Int1 = lowlevel Eq Str.304 Str.305;
     if Str.301 then
         let Str.303 : I64 = StructAtIndex 0 Str.245;
         let Str.302 : [C Int1, C I64] = TagId(1) Str.303;

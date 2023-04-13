@@ -13,7 +13,7 @@ procedure Test.1 (Test.2):
     in
     joinpoint Test.11 Test.10:
         let Test.8 : U8 = 2i64;
-        let Test.7 : U8 = CallByName Num.19 Test.10 Test.8;
+        let Test.7 : U8 = lowlevel NumAdd Test.10 Test.8;
         ret Test.7;
     in
     let Test.22 : U8 = 15i64;

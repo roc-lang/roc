@@ -14,8 +14,8 @@ procedure Test.1 (Test.15, Test.16):
             ret Test.3;
         else
             let Test.12 : I64 = 1i64;
-            let Test.10 : I64 = CallByName Num.20 Test.2 Test.12;
-            let Test.11 : I64 = CallByName Num.19 Test.2 Test.3;
+            let Test.10 : I64 = lowlevel NumSub Test.2 Test.12;
+            let Test.11 : I64 = lowlevel NumAdd Test.2 Test.3;
             jump Test.7 Test.10 Test.11;
     in
     jump Test.7 Test.15 Test.16;

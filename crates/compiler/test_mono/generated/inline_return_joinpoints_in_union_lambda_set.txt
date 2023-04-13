@@ -14,13 +14,13 @@ procedure Test.2 (Test.3, Test.1):
 
 procedure Test.4 (Test.5, #Attr.12):
     let Test.1 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.16 : I64 = CallByName Num.19 Test.5 Test.1;
+    let Test.16 : I64 = lowlevel NumAdd Test.5 Test.1;
     ret Test.16;
 
 procedure Test.0 (Test.25):
     joinpoint Test.7 Test.1:
         let Test.20 : I64 = 1i64;
-        let Test.9 : I64 = CallByName Num.19 Test.1 Test.20;
+        let Test.9 : I64 = lowlevel NumAdd Test.1 Test.20;
         let Test.12 : Int1 = false;
         let Test.10 : [C , C I64] = CallByName Test.2 Test.12 Test.1;
         let Test.11 : U8 = GetTagId Test.10;

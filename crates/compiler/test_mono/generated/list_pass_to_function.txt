@@ -11,11 +11,10 @@ procedure List.6 (#Attr.2):
     ret List.501;
 
 procedure List.64 (List.101, List.102, List.103):
-    inc List.101;
-    let List.500 : U64 = CallByName List.6 List.101;
-    let List.497 : Int1 = CallByName Num.22 List.102 List.500;
+    let List.500 : U64 = lowlevel ListLen List.101;
+    let List.497 : Int1 = lowlevel NumLt List.102 List.500;
     if List.497 then
-        let List.498 : {List I64, I64} = CallByName List.67 List.101 List.102 List.103;
+        let List.498 : {List I64, I64} = lowlevel ListReplaceUnsafe List.101 List.102 List.103;
         ret List.498;
     else
         let List.496 : {List I64, I64} = Struct {List.101, List.103};

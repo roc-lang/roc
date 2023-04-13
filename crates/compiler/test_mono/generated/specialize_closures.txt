@@ -24,14 +24,14 @@ procedure Test.1 (Test.2, Test.3):
 
 procedure Test.7 (Test.9, #Attr.12):
     let Test.4 : I64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.21 : I64 = CallByName Num.19 Test.9 Test.4;
+    let Test.21 : I64 = lowlevel NumAdd Test.9 Test.4;
     ret Test.21;
 
 procedure Test.8 (Test.10, #Attr.12):
     let Test.6 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
     let Test.5 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
     if Test.6 then
-        let Test.19 : I64 = CallByName Num.21 Test.10 Test.5;
+        let Test.19 : I64 = lowlevel NumMul Test.10 Test.5;
         ret Test.19;
     else
         ret Test.10;

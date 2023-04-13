@@ -20,12 +20,12 @@ procedure Dict.4 (Dict.504):
     ret Dict.85;
 
 procedure List.11 (List.115, List.116):
-    let List.495 : List I8 = CallByName List.68 List.116;
+    let List.495 : List I8 = lowlevel ListWithCapacity List.116;
     let List.494 : List I8 = CallByName List.82 List.115 List.116 List.495;
     ret List.494;
 
 procedure List.11 (List.115, List.116):
-    let List.507 : List U64 = CallByName List.68 List.116;
+    let List.507 : List U64 = lowlevel ListWithCapacity List.116;
     let List.506 : List U64 = CallByName List.82 List.115 List.116 List.507;
     ret List.506;
 
@@ -48,11 +48,11 @@ procedure List.71 (#Attr.2, #Attr.3):
 procedure List.82 (List.518, List.519, List.520):
     joinpoint List.496 List.117 List.118 List.119:
         let List.504 : U64 = 0i64;
-        let List.498 : Int1 = CallByName Num.24 List.118 List.504;
+        let List.498 : Int1 = lowlevel NumGt List.118 List.504;
         if List.498 then
             let List.503 : U64 = 1i64;
-            let List.500 : U64 = CallByName Num.20 List.118 List.503;
-            let List.501 : List I8 = CallByName List.71 List.119 List.117;
+            let List.500 : U64 = lowlevel NumSub List.118 List.503;
+            let List.501 : List I8 = lowlevel ListAppendUnsafe List.119 List.117;
             jump List.496 List.117 List.500 List.501;
         else
             ret List.119;
@@ -62,11 +62,11 @@ procedure List.82 (List.518, List.519, List.520):
 procedure List.82 (List.526, List.527, List.528):
     joinpoint List.508 List.117 List.118 List.119:
         let List.516 : U64 = 0i64;
-        let List.510 : Int1 = CallByName Num.24 List.118 List.516;
+        let List.510 : Int1 = lowlevel NumGt List.118 List.516;
         if List.510 then
             let List.515 : U64 = 1i64;
-            let List.512 : U64 = CallByName Num.20 List.118 List.515;
-            let List.513 : List U64 = CallByName List.71 List.119 List.117;
+            let List.512 : U64 = lowlevel NumSub List.118 List.515;
+            let List.513 : List U64 = lowlevel ListAppendUnsafe List.119 List.117;
             jump List.508 List.117 List.512 List.513;
         else
             ret List.119;

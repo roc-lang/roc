@@ -1502,10 +1502,28 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
     rhs_layout: InLayout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
-    match (
-        layout_interner.get(lhs_layout),
-        layout_interner.get(rhs_layout),
-    ) {
+    // Recursively getting the lambdaset runtime representation
+    // as inlining lowlevels in RC might cause the layout to not to match the lowlevel args.
+    // Originally, the wrapper function received the mismatching layout but this was not validated.
+    let mut lhs_inlayout = lhs_layout;
+    let lhs_interned = loop {
+        let lhs_interned = layout_interner.get(lhs_inlayout);
+        match lhs_interned {
+            Layout::LambdaSet(lambda) => lhs_inlayout = lambda.runtime_representation(),
+            other => break other,
+        };
+    };
+
+    let mut rhs_inlayout = lhs_layout;
+    let rhs_interned = loop {
+        let rhs_interned = layout_interner.get(rhs_inlayout);
+        match rhs_interned {
+            Layout::LambdaSet(lambda) => rhs_inlayout = lambda.runtime_representation(),
+            other => break other,
+        };
+    };
+
+    match (lhs_interned, rhs_interned) {
         (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
             if lhs_builtin == rhs_builtin =>
         {

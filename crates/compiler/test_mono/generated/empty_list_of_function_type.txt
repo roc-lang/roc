@@ -3,11 +3,11 @@ procedure Bool.1 ():
     ret Bool.23;
 
 procedure List.2 (List.96, List.97):
-    inc List.96;
-    let List.500 : U64 = CallByName List.6 List.96;
-    let List.496 : Int1 = CallByName Num.22 List.97 List.500;
+    let List.500 : U64 = lowlevel ListLen List.96;
+    let List.496 : Int1 = lowlevel NumLt List.97 List.500;
     if List.496 then
-        let List.498 : {} = CallByName List.66 List.96 List.97;
+        let List.498 : {} = lowlevel ListGetUnsafe List.96 List.97;
+        dec List.96;
         let List.497 : [C {}, C {}] = TagId(1) List.498;
         ret List.497;
     else

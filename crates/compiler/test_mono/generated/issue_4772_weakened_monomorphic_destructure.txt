@@ -31,7 +31,7 @@ procedure Bool.2 ():
     ret Bool.35;
 
 procedure Bool.7 (Bool.19, Bool.20):
-    let Bool.37 : Int1 = CallByName Bool.12 Bool.19 Bool.20;
+    let Bool.37 : Int1 = lowlevel NotEq Bool.19 Bool.20;
     ret Bool.37;
 
 procedure Decode.24 (Decode.101):
@@ -182,7 +182,9 @@ procedure Json.42 (Json.298):
     dec Json.563;
     let Json.562 : U8 = 34i64;
     let Json.561 : List U8 = Array [Json.562];
-    let Json.491 : Int1 = CallByName Bool.11 Json.299 Json.561;
+    let Json.491 : Int1 = lowlevel Eq Json.299 Json.561;
+    dec Json.299;
+    dec Json.561;
     if Json.491 then
         dec Json.298;
         let Json.504 : {} = Struct {};
@@ -227,9 +229,8 @@ procedure Json.43 ():
     ret Json.484;
 
 procedure List.29 (List.298, List.299):
-    inc List.298;
-    let List.543 : U64 = CallByName List.6 List.298;
-    let List.300 : U64 = CallByName Num.77 List.543 List.299;
+    let List.543 : U64 = lowlevel ListLen List.298;
+    let List.300 : U64 = lowlevel NumSubSaturated List.543 List.299;
     let List.538 : List U8 = CallByName List.43 List.298 List.300;
     ret List.538;
 
@@ -239,19 +240,18 @@ procedure List.31 (#Attr.2, #Attr.3):
 
 procedure List.38 (List.292):
     let List.537 : U64 = 0i64;
-    let List.536 : List U8 = CallByName List.31 List.292 List.537;
+    let List.536 : List U8 = lowlevel ListDropAt List.292 List.537;
     ret List.536;
 
 procedure List.4 (List.107, List.108):
     let List.532 : U64 = 1i64;
-    let List.531 : List U8 = CallByName List.70 List.107 List.532;
-    let List.530 : List U8 = CallByName List.71 List.531 List.108;
+    let List.531 : List U8 = lowlevel ListReserve List.107 List.532;
+    let List.530 : List U8 = lowlevel ListAppendUnsafe List.531 List.108;
     ret List.530;
 
 procedure List.43 (List.296, List.297):
-    inc List.296;
-    let List.542 : U64 = CallByName List.6 List.296;
-    let List.541 : U64 = CallByName Num.77 List.542 List.297;
+    let List.542 : U64 = lowlevel ListLen List.296;
+    let List.541 : U64 = lowlevel NumSubSaturated List.542 List.297;
     let List.540 : {U64, U64} = Struct {List.297, List.541};
     let List.539 : List U8 = CallByName List.49 List.296 List.540;
     ret List.539;
@@ -259,7 +259,7 @@ procedure List.43 (List.296, List.297):
 procedure List.49 (List.370, List.371):
     let List.502 : U64 = StructAtIndex 0 List.371;
     let List.503 : U64 = 0i64;
-    let List.500 : Int1 = CallByName Bool.11 List.502 List.503;
+    let List.500 : Int1 = lowlevel Eq List.502 List.503;
     if List.500 then
         dec List.370;
         let List.501 : List U8 = Array [];
@@ -267,24 +267,23 @@ procedure List.49 (List.370, List.371):
     else
         let List.497 : U64 = StructAtIndex 1 List.371;
         let List.498 : U64 = StructAtIndex 0 List.371;
-        let List.496 : List U8 = CallByName List.72 List.370 List.497 List.498;
+        let List.496 : List U8 = lowlevel ListSublist List.370 List.497 List.498;
         ret List.496;
 
 procedure List.52 (List.385, List.386):
-    inc List.385;
-    let List.387 : U64 = CallByName List.6 List.385;
+    let List.387 : U64 = lowlevel ListLen List.385;
     joinpoint List.517 List.388:
         let List.515 : U64 = 0i64;
         let List.514 : {U64, U64} = Struct {List.388, List.515};
         inc List.385;
         let List.389 : List U8 = CallByName List.49 List.385 List.514;
-        let List.513 : U64 = CallByName Num.20 List.387 List.388;
+        let List.513 : U64 = lowlevel NumSub List.387 List.388;
         let List.512 : {U64, U64} = Struct {List.513, List.388};
         let List.390 : List U8 = CallByName List.49 List.385 List.512;
         let List.511 : {List U8, List U8} = Struct {List.389, List.390};
         ret List.511;
     in
-    let List.518 : Int1 = CallByName Num.24 List.387 List.386;
+    let List.518 : Int1 = lowlevel NumGt List.387 List.386;
     if List.518 then
         jump List.517 List.386;
     else
@@ -337,10 +336,11 @@ procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
     ret Str.321;
 
 procedure Str.72 (Str.244):
-    let Str.245 : {I64, U8} = CallByName Str.47 Str.244;
+    let Str.245 : {I64, U8} = lowlevel StrToNum Str.244;
+    dec Str.244;
     let Str.304 : U8 = StructAtIndex 1 Str.245;
     let Str.305 : U8 = 0i64;
-    let Str.301 : Int1 = CallByName Bool.11 Str.304 Str.305;
+    let Str.301 : Int1 = lowlevel Eq Str.304 Str.305;
     if Str.301 then
         let Str.303 : I64 = StructAtIndex 0 Str.245;
         let Str.302 : [C {}, C I64] = TagId(1) Str.303;
@@ -352,9 +352,8 @@ procedure Str.72 (Str.244):
 
 procedure Str.9 (Str.79):
     let Str.319 : U64 = 0i64;
-    inc Str.79;
-    let Str.320 : U64 = CallByName List.6 Str.79;
-    let Str.80 : {U64, Str, Int1, U8} = CallByName Str.48 Str.79 Str.319 Str.320;
+    let Str.320 : U64 = lowlevel ListLen Str.79;
+    let Str.80 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range Str.79 Str.319 Str.320;
     let Str.316 : Int1 = StructAtIndex 2 Str.80;
     if Str.316 then
         let Str.318 : Str = StructAtIndex 1 Str.80;
@@ -372,7 +371,7 @@ procedure Str.9 (Str.79):
 
 procedure Test.0 ():
     let Test.37 : Str = "-1234";
-    let Test.35 : List U8 = CallByName Str.12 Test.37;
+    let Test.35 : List U8 = lowlevel StrToUtf8 Test.37;
     let Test.36 : {} = CallByName Json.2;
     let Test.34 : {List U8, [C {}, C Str]} = CallByName Decode.26 Test.35 Test.36;
     let Test.2 : List U8 = StructAtIndex 0 Test.34;
@@ -414,8 +413,8 @@ procedure Test.12 ():
     let Test.18 : I64 = -1234i64;
     let Test.16 : {List U8, I64} = Struct {Test.17, Test.18};
     let Test.15 : [C Str, C {List U8, I64}] = TagId(1) Test.16;
-    inc Test.10;
-    let Test.14 : Int1 = CallByName Bool.11 Test.10 Test.15;
+    let Test.14 : Int1 = lowlevel Eq Test.10 Test.15;
+    dec Test.15;
     expect Test.14;
     let Test.13 : {} = Struct {};
     ret Test.13;

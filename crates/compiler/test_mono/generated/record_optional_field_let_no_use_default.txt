@@ -5,7 +5,7 @@ procedure Num.19 (#Attr.2, #Attr.3):
 procedure Test.1 (Test.2):
     let Test.3 : I64 = StructAtIndex 0 Test.2;
     let Test.4 : I64 = StructAtIndex 1 Test.2;
-    let Test.7 : I64 = CallByName Num.19 Test.3 Test.4;
+    let Test.7 : I64 = lowlevel NumAdd Test.3 Test.4;
     ret Test.7;
 
 procedure Test.0 ():

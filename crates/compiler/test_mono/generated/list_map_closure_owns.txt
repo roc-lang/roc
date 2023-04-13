@@ -1,9 +1,9 @@
 procedure List.2 (List.96, List.97):
-    inc List.96;
-    let List.500 : U64 = CallByName List.6 List.96;
-    let List.496 : Int1 = CallByName Num.22 List.97 List.500;
+    let List.500 : U64 = lowlevel ListLen List.96;
+    let List.496 : Int1 = lowlevel NumLt List.97 List.500;
     if List.496 then
-        let List.498 : Str = CallByName List.66 List.96 List.97;
+        let List.498 : Str = lowlevel ListGetUnsafe List.96 List.97;
+        dec List.96;
         let List.497 : [C {}, C Str] = TagId(1) List.498;
         ret List.497;
     else
@@ -39,7 +39,8 @@ procedure Str.3 (#Attr.2, #Attr.3):
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";
     let Test.22 : Str = "g";
-    let Test.20 : Str = CallByName Str.3 Test.21 Test.22;
+    let Test.20 : Str = lowlevel StrConcat Test.21 Test.22;
+    dec Test.22;
     let Test.19 : List Str = Array [Test.20];
     ret Test.19;
 
@@ -51,7 +52,8 @@ procedure Test.2 ():
 
 procedure Test.3 (Test.4):
     let Test.18 : Str = "!";
-    let Test.17 : Str = CallByName Str.3 Test.4 Test.18;
+    let Test.17 : Str = lowlevel StrConcat Test.4 Test.18;
+    dec Test.18;
     ret Test.17;
 
 procedure Test.0 ():

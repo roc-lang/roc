@@ -29,7 +29,9 @@ procedure Test.0 ():
         inc Test.13;
         dec Test.5;
         let Test.7 : {I64, Str} = CallByName Test.1;
-        let Test.6 : Int1 = CallByName Bool.11 Test.7 Test.13;
+        let Test.6 : Int1 = lowlevel Eq Test.7 Test.13;
+        dec Test.13;
+        dec Test.7;
         ret Test.6;
     else
         dec Test.5;

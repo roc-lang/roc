@@ -11,7 +11,7 @@ procedure Test.0 ():
     if Test.9 then
         let Test.3 : I64 = UnionAtIndex (Id 0) (Index 0) Test.1;
         let Test.5 : I64 = 1i64;
-        let Test.4 : I64 = CallByName Num.19 Test.3 Test.5;
+        let Test.4 : I64 = lowlevel NumAdd Test.3 Test.5;
         ret Test.4;
     else
         let Test.6 : I64 = 1i64;

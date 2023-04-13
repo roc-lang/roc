@@ -36,7 +36,7 @@ procedure Test.0 ():
     let Test.4 : I64 = CallByName Test.1 Test.24;
     let Test.23 : Int1 = true;
     let Test.5 : I64 = CallByName Test.1 Test.23;
-    let Test.17 : I64 = CallByName Num.21 Test.2 Test.3;
-    let Test.16 : I64 = CallByName Num.21 Test.17 Test.4;
-    let Test.15 : I64 = CallByName Num.21 Test.16 Test.5;
+    let Test.17 : I64 = lowlevel NumMul Test.2 Test.3;
+    let Test.16 : I64 = lowlevel NumMul Test.17 Test.4;
+    let Test.15 : I64 = lowlevel NumMul Test.16 Test.5;
     ret Test.15;

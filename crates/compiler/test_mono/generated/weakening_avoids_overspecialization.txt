@@ -15,16 +15,14 @@ procedure List.26 (List.153, List.154, List.155):
         ret List.157;
 
 procedure List.29 (List.298, List.299):
-    inc List.298;
-    let List.508 : U64 = CallByName List.6 List.298;
-    let List.300 : U64 = CallByName Num.77 List.508 List.299;
+    let List.508 : U64 = lowlevel ListLen List.298;
+    let List.300 : U64 = lowlevel NumSubSaturated List.508 List.299;
     let List.494 : List U8 = CallByName List.43 List.298 List.300;
     ret List.494;
 
 procedure List.43 (List.296, List.297):
-    inc List.296;
-    let List.506 : U64 = CallByName List.6 List.296;
-    let List.505 : U64 = CallByName Num.77 List.506 List.297;
+    let List.506 : U64 = lowlevel ListLen List.296;
+    let List.505 : U64 = lowlevel NumSubSaturated List.506 List.297;
     let List.496 : {U64, U64} = Struct {List.297, List.505};
     let List.495 : List U8 = CallByName List.49 List.296 List.496;
     ret List.495;
@@ -32,7 +30,7 @@ procedure List.43 (List.296, List.297):
 procedure List.49 (List.370, List.371):
     let List.503 : U64 = StructAtIndex 0 List.371;
     let List.504 : U64 = 0i64;
-    let List.501 : Int1 = CallByName Bool.11 List.503 List.504;
+    let List.501 : Int1 = lowlevel Eq List.503 List.504;
     if List.501 then
         dec List.370;
         let List.502 : List U8 = Array [];
@@ -40,7 +38,7 @@ procedure List.49 (List.370, List.371):
     else
         let List.498 : U64 = StructAtIndex 1 List.371;
         let List.499 : U64 = StructAtIndex 0 List.371;
-        let List.497 : List U8 = CallByName List.72 List.370 List.498 List.499;
+        let List.497 : List U8 = lowlevel ListSublist List.370 List.498 List.499;
         ret List.497;
 
 procedure List.6 (#Attr.2):
@@ -59,10 +57,9 @@ procedure List.72 (#Attr.2, #Attr.3, #Attr.4):
 
 procedure List.80 (List.544, List.545, List.546, List.547, List.548):
     joinpoint List.518 List.433 List.434 List.435 List.436 List.437:
-        let List.520 : Int1 = CallByName Num.22 List.436 List.437;
+        let List.520 : Int1 = lowlevel NumLt List.436 List.437;
         if List.520 then
-            inc List.433;
-            let List.529 : U8 = CallByName List.66 List.433 List.436;
+            let List.529 : U8 = lowlevel ListGetUnsafe List.433 List.436;
             let List.521 : [C U64, C U64] = CallByName Test.3 List.434 List.529;
             let List.526 : U8 = 1i64;
             let List.527 : U8 = GetTagId List.521;
@@ -70,7 +67,7 @@ procedure List.80 (List.544, List.545, List.546, List.547, List.548):
             if List.528 then
                 let List.438 : U64 = UnionAtIndex (Id 1) (Index 0) List.521;
                 let List.524 : U64 = 1i64;
-                let List.523 : U64 = CallByName Num.19 List.436 List.524;
+                let List.523 : U64 = lowlevel NumAdd List.436 List.524;
                 jump List.518 List.433 List.438 List.435 List.523 List.437;
             else
                 dec List.433;
@@ -86,8 +83,7 @@ procedure List.80 (List.544, List.545, List.546, List.547, List.548):
 
 procedure List.92 (List.430, List.431, List.432):
     let List.516 : U64 = 0i64;
-    inc List.430;
-    let List.517 : U64 = CallByName List.6 List.430;
+    let List.517 : U64 = lowlevel ListLen List.430;
     let List.515 : [C U64, C U64] = CallByName List.80 List.430 List.431 List.432 List.516 List.517;
     ret List.515;
 
@@ -113,7 +109,7 @@ procedure Test.0 (Test.1):
     inc Test.1;
     let Test.2 : U64 = CallByName List.26 Test.1 Test.10 Test.11;
     let Test.9 : U64 = 0i64;
-    let Test.7 : Int1 = CallByName Bool.11 Test.2 Test.9;
+    let Test.7 : Int1 = lowlevel Eq Test.2 Test.9;
     if Test.7 then
         ret Test.1;
     else

@@ -41,9 +41,12 @@ procedure Test.2 ():
     let Test.7 : Str = "World";
     let Test.21 : Str = ", ";
     let Test.23 : Str = "!";
-    let Test.22 : Str = CallByName Str.3 Test.7 Test.23;
-    let Test.20 : Str = CallByName Str.3 Test.21 Test.22;
-    let Test.19 : Str = CallByName Str.3 Test.6 Test.20;
+    let Test.22 : Str = lowlevel StrConcat Test.7 Test.23;
+    dec Test.23;
+    let Test.20 : Str = lowlevel StrConcat Test.21 Test.22;
+    dec Test.22;
+    let Test.19 : Str = lowlevel StrConcat Test.6 Test.20;
+    dec Test.20;
     ret Test.19;
 
 procedure Test.3 (Test.8):
@@ -72,7 +75,7 @@ procedure Test.5 (Test.16, Test.13):
 
 procedure Test.9 (Test.44, Test.8):
     let Test.48 : I64 = 1i64;
-    let Test.47 : I64 = CallByName Num.20 Test.8 Test.48;
+    let Test.47 : I64 = lowlevel NumSub Test.8 Test.48;
     let Test.46 : [<r>C {}, C I64 {}] = CallByName Test.3 Test.47;
     ret Test.46;
 

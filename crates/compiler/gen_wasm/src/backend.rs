@@ -1270,7 +1270,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     arguments,
                     ret_sym,
                     ret_layout,
-                    ret_storage,
                 )
             }
 
@@ -1310,15 +1309,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         arguments: &'a [Symbol],
         ret_sym: Symbol,
         ret_layout: InLayout<'a>,
-        ret_storage: &StoredValue,
     ) {
         let wasm_layout = WasmLayout::new(self.layout_interner, ret_layout);
 
         // If this function is just a lowlevel wrapper, then inline it
-        if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
-            LowLevelWrapperType::from_symbol(func_sym)
+        if let LowLevelWrapperType::CanBeReplacedBy(_) = LowLevelWrapperType::from_symbol(func_sym)
         {
-            return self.expr_call_low_level(lowlevel, arguments, ret_sym, ret_layout, ret_storage);
+            unreachable!("LowLevelWrapperType::CanBeReplacedBy should have been replaced by now, in the inc_dec reference counting file.");
         }
 
         let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
