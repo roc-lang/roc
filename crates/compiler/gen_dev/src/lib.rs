@@ -319,10 +319,16 @@ trait Backend<'a> {
                         ret_layout,
                         ..
                     } => {
-                        if let LowLevelWrapperType::CanBeReplacedBy(_) =
+                        if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
                             LowLevelWrapperType::from_symbol(func_sym.name())
                         {
-                            unreachable!("LowLevelWrapperType::CanBeReplacedBy should have been replaced by now, in the inc_dec reference counting file.");
+                            return self.build_run_low_level(
+                                sym,
+                                &lowlevel,
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            );
                         } else if sym.is_builtin() {
                             // These builtins can be built through `build_fn_call` as well, but the
                             // implementation in `build_builtin` inlines some of the symbols.

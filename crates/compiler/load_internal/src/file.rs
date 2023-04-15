@@ -3105,7 +3105,6 @@ fn update<'a>(
                     inc_dec::insert_inc_dec_operations(
                         arena,
                         &layout_interner,
-                        &mut update_mode_ids,
                         &mut state.procedures,
                     );
 

@@ -13,7 +13,7 @@ use crate::{
     borrow::{lowlevel_borrow_signature, Ownership},
     ir::{
         BranchInfo, Call, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
-        ModifyRc, Param, Proc, ProcLayout, Stmt, UpdateModeIds,
+        ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{InLayout, LayoutInterner, STLayoutInterner},
     low_level::HigherOrder,
@@ -25,28 +25,27 @@ Insert the reference count operations for procedures.
 pub fn insert_inc_dec_operations<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i STLayoutInterner<'a>,
-    update_mode_ids: &'i mut UpdateModeIds,
     procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
     // Create a SymbolRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
     let mut symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
     symbol_rc_types_env.insert_proc_symbols(procedures.keys().map(|(symbol, _layout)| *symbol));
 
-    // Later in this file all wrapped calls to lowlevel functions will be inlined,
-    // meaning they are no longer needed and the proc can be removed.
-    // TODO removing these currently causes errors as these functions as they are expected to be there later on.
-    // procedures.retain(|(symbol, _layout), _proc| {
-    //     matches!(
-    //         LowLevelWrapperType::from_symbol(*symbol),
-    //         LowLevelWrapperType::NotALowLevelWrapper
-    //     )
-    // });
-
-    for (_, proc) in procedures.iter_mut() {
-        // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
-        // As the symbols should be limited in scope for the current proc.
-        let symbol_rc_types_env = symbol_rc_types_env.clone();
-        insert_inc_dec_operations_proc(arena, update_mode_ids, symbol_rc_types_env, proc);
+    // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
+    // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
+    // Thus, these rc operations are performed on the caller of the wrapper instead, and we skip rc on the lowlevel.
+    // It might be possible to inline the lowlevels at this point already,
+    // but previous attempt conflicted as the parameters layouts and return layout do not match.
+    for ((symbol, _layout), proc) in procedures.iter_mut() {
+        if matches!(
+            LowLevelWrapperType::from_symbol(*symbol),
+            LowLevelWrapperType::NotALowLevelWrapper
+        ) {
+            // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
+            // As the symbols should be limited in scope for the current proc.
+            let symbol_rc_types_env = symbol_rc_types_env.clone();
+            insert_inc_dec_operations_proc(arena, symbol_rc_types_env, proc);
+        }
     }
 }
 
@@ -388,7 +387,6 @@ impl<'v> RefcountEnvironment<'v> {
 */
 fn insert_inc_dec_operations_proc<'a, 'i>(
     arena: &'a Bump,
-    update_mode_ids: &'i mut UpdateModeIds,
 
     mut symbol_rc_types_env: SymbolRcTypesEnv<'a, 'i>,
     proc: &mut Proc<'a>,
@@ -410,8 +408,7 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
     }
 
     // Update the body with reference count statements.
-    let new_body =
-        insert_refcount_operations_stmt(arena, update_mode_ids, &mut environment, &proc.body);
+    let new_body = insert_refcount_operations_stmt(arena, &mut environment, &proc.body);
 
     // Insert decrement statements for unused parameters (which are still marked as owned).
     let rc_proc_symbols = environment.filter_rc_symbols(proc_symbols);
@@ -445,7 +442,7 @@ Assuming that a symbol can only be defined once (no binding to the same symbol m
 */
 fn insert_refcount_operations_stmt<'v, 'a, 'i>(
     arena: &'a Bump,
-    update_mode_ids: &'i mut UpdateModeIds,
+
     environment: &mut RefcountEnvironment<'v>,
     stmt: &Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -479,12 +476,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
                 .rev()
                 // First evaluate the continuation and let it consume it's free symbols.
                 .fold(
-                    insert_refcount_operations_stmt(
-                        arena,
-                        update_mode_ids,
-                        environment,
-                        current_stmt,
-                    ),
+                    insert_refcount_operations_stmt(arena, environment, current_stmt),
                     |new_stmt, (binding, expr, layout)| {
                         // If the binding is still owned in the environment, it is not used in the continuation and we can drop it right away.
                         let new_stmt_without_unused = match environment
@@ -499,7 +491,6 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
 
                         insert_refcount_operations_binding(
                             arena,
-                            update_mode_ids,
                             environment,
                             binding,
                             expr,
@@ -521,12 +512,8 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
                 .map(|(label, info, branch)| {
                     let mut branch_env = environment.clone();
 
-                    let new_branch = insert_refcount_operations_stmt(
-                        arena,
-                        update_mode_ids,
-                        &mut branch_env,
-                        branch,
-                    );
+                    let new_branch =
+                        insert_refcount_operations_stmt(arena, &mut branch_env, branch);
 
                     (*label, info.clone(), new_branch, branch_env)
                 })
@@ -536,12 +523,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
                 let (info, branch) = default_branch;
 
                 let mut branch_env = environment.clone();
-                let new_branch = insert_refcount_operations_stmt(
-                    arena,
-                    update_mode_ids,
-                    &mut branch_env,
-                    branch,
-                );
+                let new_branch = insert_refcount_operations_stmt(arena, &mut branch_env, branch);
 
                 (info.clone(), new_branch, branch_env)
             };
@@ -647,8 +629,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
             variables,
             remainder,
         } => {
-            let new_remainder =
-                insert_refcount_operations_stmt(arena, update_mode_ids, environment, remainder);
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
             let new_expect = arena.alloc(Stmt::Expect {
                 condition: *condition,
@@ -672,8 +653,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
             variables,
             remainder,
         } => {
-            let new_remainder =
-                insert_refcount_operations_stmt(arena, update_mode_ids, environment, remainder);
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
             let new_expectfx = arena.alloc(Stmt::ExpectFx {
                 condition: *condition,
@@ -695,8 +675,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
             variable,
             remainder,
         } => {
-            let new_remainder =
-                insert_refcount_operations_stmt(arena, update_mode_ids, environment, remainder);
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
             let new_debug = arena.alloc(Stmt::Dbg {
                 symbol: *symbol,
@@ -757,12 +736,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
 
                 current_body_env
                     .add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption.clone());
-                let new_body = insert_refcount_operations_stmt(
-                    arena,
-                    update_mode_ids,
-                    &mut current_body_env,
-                    body,
-                );
+                let new_body = insert_refcount_operations_stmt(arena, &mut current_body_env, body);
                 current_body_env.remove_joinpoint_consumption(*joinpoint_id);
 
                 // We save the parameters consumed by this join point. So we can do the same when we jump to this joinpoint.
@@ -796,8 +770,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
             };
 
             environment.add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption);
-            let new_remainder =
-                insert_refcount_operations_stmt(arena, update_mode_ids, environment, remainder);
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
             environment.remove_joinpoint_consumption(*joinpoint_id);
 
             arena.alloc(Stmt::Join {
@@ -841,7 +814,6 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
 
 fn insert_refcount_operations_binding<'a, 'i>(
     arena: &'a Bump,
-    update_mode_ids: &'i mut UpdateModeIds,
     environment: &mut RefcountEnvironment,
     binding: &Symbol,
     expr: &Expr<'a>,
@@ -898,25 +870,24 @@ fn insert_refcount_operations_binding<'a, 'i>(
                 if let LowLevelWrapperType::CanBeReplacedBy(op) =
                     LowLevelWrapperType::from_symbol(name.name())
                 {
-                    // The function called is a wrapper function.
-                    // We can replace the wrapper function with the lowlevel function.
-                    let new_lowlevel = Expr::Call(Call {
-                        arguments,
-                        call_type: CallType::LowLevel {
-                            op,
-                            update_mode: update_mode_ids.next_id(),
-                        },
-                    });
+                    let borrow_signature = lowlevel_borrow_signature(arena, op);
+                    let arguments_with_borrow_signature = arguments
+                        .iter()
+                        .copied()
+                        .zip(borrow_signature.iter().copied());
+                    let owned_arguments = arguments_with_borrow_signature
+                        .clone()
+                        .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
+                    let borrowed_arguments =
+                        arguments_with_borrow_signature.filter_map(|(symbol, ownership)| {
+                            ownership.is_borrowed().then_some(symbol)
+                        });
 
-                    insert_refcount_operations_binding(
-                        arena,
-                        update_mode_ids,
-                        environment,
-                        binding,
-                        &new_lowlevel,
-                        layout,
-                        stmt,
-                    )
+                    let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
+
+                    let new_let = new_let!(new_stmt);
+
+                    inc_owned!(owned_arguments, new_let)
                 } else {
                     let new_let = new_let!(stmt);
 
