@@ -97,7 +97,37 @@ impl<'a> WasiDispatcher<'a> {
             "fd_allocate" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_close" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_datasync" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_fdstat_get" => todo!("WASI {}({:?})", function_name, arguments),
+            "fd_fdstat_get" => {
+                // (i32, i32) -> i32
+
+                // file descriptor
+                let fd = arguments[0].expect_i32().unwrap() as usize;
+                // ptr to a wasi_fdstat_t
+                let stat_mut_ptr = arguments[1].expect_i32().unwrap() as usize;
+
+                match fd {
+                    1 => {
+                        // Tell WASI that stdout is a tty (no seek or tell)
+                        // https://github.com/WebAssembly/wasi-libc/blob/659ff414560721b1660a19685110e484a081c3d4/libc-bottom-half/sources/isatty.c
+                        // *Not* a tty if:
+                        //     (statbuf.fs_filetype != __WASI_FILETYPE_CHARACTER_DEVICE ||
+                        //         (statbuf.fs_rights_base & (__WASI_RIGHTS_FD_SEEK | __WASI_RIGHTS_FD_TELL)) != 0)
+                        // So it's sufficient to set:
+                        //     .fs_filetype = __WASI_FILETYPE_CHARACTER_DEVICE
+                        //     .fs_rights_base = 0
+
+                        const WASI_FILETYPE_CHARACTER_DEVICE: u8 = 2;
+                        memory[stat_mut_ptr] = WASI_FILETYPE_CHARACTER_DEVICE;
+
+                        for b in memory[stat_mut_ptr + 1..stat_mut_ptr + 24].iter_mut() {
+                            *b = 0;
+                        }
+                    }
+                    _ => todo!("WASI {}({:?})", function_name, arguments),
+                }
+
+                success_code
+            }
             "fd_fdstat_set_flags" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_fdstat_set_rights" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_filestat_get" => todo!("WASI {}({:?})", function_name, arguments),
@@ -231,9 +261,13 @@ impl<'a> WasiDispatcher<'a> {
                     match &mut write_lock {
                         WriteLock::StdOut(stdout) => {
                             n_written += stdout.write(bytes).unwrap() as i32;
+                            // in practice, the newline is not included in iov_len
+                            stdout.write(b"\n").unwrap();
                         }
                         WriteLock::Stderr(stderr) => {
                             n_written += stderr.write(bytes).unwrap() as i32;
+                            // in practice, the newline is not included in iov_len
+                            stderr.write(b"\n").unwrap();
                         }
                         WriteLock::RegularFile(content) => {
                             content.extend_from_slice(bytes);
