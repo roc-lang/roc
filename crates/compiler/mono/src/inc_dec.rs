@@ -428,7 +428,7 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
         .iter()
         .all(|(symbol, ownership)| {
             // All symbols should be borrowed.
-            ownership.is_owned()
+            ownership.is_borrowed()
                 && proc
                     .args
                     .iter()
@@ -771,7 +771,9 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
                     let consumed_symbols = current_body_env
                         .symbols_ownership
                         .iter()
-                        .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(*symbol))
+                        .filter_map(|(symbol, ownership)| {
+                            ownership.is_borrowed().then_some(*symbol)
+                        })
                         .collect::<MutSet<_>>();
 
                     consumed_symbols
