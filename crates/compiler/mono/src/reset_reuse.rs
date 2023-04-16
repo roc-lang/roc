@@ -330,7 +330,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 new_branches
                     .into_iter()
                     .map(|(_, _, _, branch_env)| branch_env)
-                    .chain(std::iter::once(new_default_branch.2)),
+                    .chain([new_default_branch.2]),
             );
 
             arena.alloc(Stmt::Switch {
@@ -1038,7 +1038,7 @@ impl<'a> ReuseEnvironment<'a> {
             None => {
                 // If the layout is not in the map, create a new stack with the token.
                 self.reuse_tokens
-                    .insert(*layout, Vec::from_iter_in(std::iter::once(token), arena));
+                    .insert(*layout, Vec::from_iter_in([token], arena));
             }
         };
     }

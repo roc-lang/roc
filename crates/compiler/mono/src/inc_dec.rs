@@ -5,7 +5,7 @@
 // Implementation based of Perceus: Garbage Free Reference Counting with Reuse
 // https://www.microsoft.com/en-us/research/uploads/prod/2021/06/perceus-pldi21.pdf
 
-use std::{collections::HashMap, hash::BuildHasherDefault, iter};
+use std::{collections::HashMap, hash::BuildHasherDefault};
 
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -175,7 +175,7 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
                 for (info, stmt) in branches
                     .iter()
                     .map(|(_branch, info, stmt)| (info, stmt))
-                    .chain(iter::once((&default_branch.0, default_branch.1)))
+                    .chain([(&default_branch.0, default_branch.1)])
                 {
                     match info {
                         BranchInfo::None => (),
@@ -707,7 +707,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
-                environment.owned_usages(std::iter::once(*symbol)),
+                environment.owned_usages([*symbol]),
                 new_debug,
             )
         }
@@ -828,7 +828,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
-                environment.owned_usages(std::iter::once(symbol).copied()),
+                environment.owned_usages([*symbol]),
                 new_crash,
             )
         }
@@ -976,7 +976,7 @@ fn insert_refcount_operations_binding<'a>(
                 match operator {
                     HigherOrder::ListMap { xs } => {
                         if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
                             let new_stmt = decref_lists!(new_stmt, *xs);
 
                             let new_let = new_let!(new_stmt);
@@ -990,7 +990,7 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
                             let new_stmt = decref_lists!(new_stmt, *xs, *ys);
 
                             let new_let = new_let!(new_stmt);
@@ -1004,7 +1004,7 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
                             let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs);
 
                             let new_let = new_let!(new_stmt);
@@ -1018,7 +1018,7 @@ fn insert_refcount_operations_binding<'a>(
                         if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
                             &arguments
                         {
-                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
                             let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs, *ws);
 
                             let new_let = new_let!(new_stmt);
@@ -1031,7 +1031,7 @@ fn insert_refcount_operations_binding<'a>(
                     HigherOrder::ListSortWith { xs } => {
                         // TODO if non-unique, elements have been consumed, must still consume the list itself
                         if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                            let new_stmt = dec_borrowed!(iter::once(*closure_symbol), stmt);
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
                             let new_let = new_let!(new_stmt);
 
                             inc_owned!([*xs].into_iter(), new_let)
@@ -1050,7 +1050,7 @@ fn insert_refcount_operations_binding<'a>(
         Expr::ExprBox { symbol } => {
             let new_let = new_let!(stmt);
 
-            inc_owned!(iter::once(*symbol), new_let)
+            inc_owned!([*symbol], new_let)
         }
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
@@ -1059,7 +1059,7 @@ fn insert_refcount_operations_binding<'a>(
             // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
             // But we do want to make sure to decrement this item if it is the last reference.
 
-            let new_stmt = dec_borrowed!(iter::once(*structure), stmt);
+            let new_stmt = dec_borrowed!([*structure], stmt);
 
             // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
             let newer_stmt = if matches!(
