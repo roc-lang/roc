@@ -64,7 +64,45 @@ enum VarRcType {
     NotReferenceCounted,
 }
 
-type SymbolRcTypes = MutMap<Symbol, VarRcType>;
+/*
+A map keeping track of which symbols are reference counted and which are not.
+Implemented as two sets for efficiency.
+*/
+#[derive(Clone, Default)]
+struct SymbolRcTypes {
+    owned: MutSet<Symbol>,
+    borrowed: MutSet<Symbol>,
+}
+
+impl SymbolRcTypes {
+    /**
+    Insert a symbol with the given reference count type in the correct set.
+    */
+    fn insert(&mut self, symbol: Symbol, var_rc_type: VarRcType) {
+        match var_rc_type {
+            VarRcType::ReferenceCounted => {
+                self.owned.insert(symbol);
+            }
+            VarRcType::NotReferenceCounted => {
+                self.borrowed.insert(symbol);
+            }
+        }
+    }
+
+    /**
+    Get the reference count type of a symbol.
+     */
+    fn get(&self, symbol: &Symbol) -> Option<VarRcType> {
+        if self.owned.contains(symbol) {
+            debug_assert!(!self.borrowed.contains(symbol));
+            Some(VarRcType::ReferenceCounted)
+        } else if self.borrowed.contains(symbol) {
+            Some(VarRcType::NotReferenceCounted)
+        } else {
+            None
+        }
+    }
+}
 
 /**
 Environment to keep track which of the symbols should be reference counted and which ones should not.
@@ -226,8 +264,7 @@ impl<'v> RefcountEnvironment<'v> {
     Retrieve the rc type of a symbol.
     */
     fn get_symbol_rc_type(&mut self, symbol: &Symbol) -> VarRcType {
-        *self
-            .symbols_rc_types
+        self.symbols_rc_types
             .get(symbol)
             .expect("symbol should have rc type")
     }
