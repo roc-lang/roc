@@ -655,7 +655,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             if used_reuse_tokens.is_empty() {
                 // We evaluated the first pass using a cloned environment to be able to do a second pass with the same environment.
                 // But if we don't need a second environment, we override the passed env with the first pass env.
-                // TODO verify if this works as intended.
                 *environment = first_pass_remainder_environment.clone();
 
                 // Propagate jump reuse tokens upwards.
