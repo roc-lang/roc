@@ -2,8 +2,8 @@
 // thesis project of the Computing Science master program at Utrecht
 // University under supervision of Wouter Swierstra (w.s.swierstra@uu.nl).
 
-// Frame limited reuse
-// Based on Reference Counting with Frame Limited Reuse
+// Implementation based of Reference Counting with Frame Limited Reuse
+// https://www.microsoft.com/en-us/research/uploads/prod/2021/11/flreuse-tr.pdf
 
 use crate::borrow::Ownership;
 use crate::ir::{
@@ -15,6 +15,7 @@ use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLay
 use bumpalo::Bump;
 
 use bumpalo::collections::vec::Vec;
+use bumpalo::collections::CollectIn;
 use roc_collections::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
@@ -212,7 +213,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                     (*tag_id, info.clone(), new_branch, branch_env)
                 })
-                .collect::<std::vec::Vec<_>>();
+                .collect_in::<Vec<_>>(arena);
 
             let new_default_branch = {
                 let (info, branch) = default_branch;
@@ -274,22 +275,29 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             };
 
             // Then we drop any unused reuse tokens in branches where the minimum is not reached.
-            let newer_branches = Vec::from_iter_in(
-                new_branches
-                    .iter()
-                    .map(|(label, info, branch, branch_env)| {
-                        let unused_tokens=  branch_env.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
-                            let min_reuse_tokens = layout_min_reuse_tokens.get(layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
-                             &reuse_tokens[*min_reuse_tokens..]
-                        });
+            let msg =
+                "All layouts in the environment should be in the layout_min_reuse_tokens map.";
+            let newer_branches =
+                Vec::from_iter_in(
+                    new_branches
+                        .iter()
+                        .map(|(label, info, branch, branch_env)| {
+                            let unused_tokens = branch_env.reuse_tokens.iter().flat_map(
+                                |(layout, reuse_tokens)| {
+                                    let min_reuse_tokens =
+                                        layout_min_reuse_tokens.get(layout).expect(msg);
+                                    &reuse_tokens[*min_reuse_tokens..]
+                                },
+                            );
 
-                        let newer_branch = drop_unused_reuse_tokens(arena, unused_tokens.copied(), branch);
+                            let newer_branch =
+                                drop_unused_reuse_tokens(arena, unused_tokens.copied(), branch);
 
-                        (*label, info.clone(), newer_branch.clone())
-                    }),
-                arena,
-            )
-            .into_bump_slice();
+                            (*label, info.clone(), newer_branch.clone())
+                        }),
+                    arena,
+                )
+                .into_bump_slice();
 
             let newer_default_branch = {
                 // let (info, branch, branch_env) = new_default_branch;
@@ -559,7 +567,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     }
                     // Normally the remainder should always have jumps and this would not be None,
                     // But for testing this might not be the case, so default to no available reuse tokens.
-                    None => Vec::from_iter_in(std::iter::empty(), arena),
+                    None => Vec::new_in(arena),
                 };
 
             let (first_pass_body_environment, first_pass_body, used_reuse_tokens) = {
@@ -816,7 +824,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                     let token_layouts_clone = token_layouts.clone();
 
-                    let mut void_pointer_layout_symbols: std::vec::Vec<(InLayout, Symbol)> = vec![];
+                    let mut void_pointer_layout_symbols = Vec::new_in(arena);
 
                     // See what tokens we can get from the env, if none are available, use a void pointer.
                     let tokens = token_layouts_clone.iter().map(|token_layout| {
@@ -1013,7 +1021,7 @@ impl<'a> ReuseEnvironment<'a> {
     */
     fn peek_reuse_token(&mut self, layout: &InLayout<'a>) -> Option<ReuseToken> {
         let reuse_tokens = self.reuse_tokens.get(layout)?;
-        // If the layout is in the map, pop the token from the stack.
+        // If the layout is in the map, peek at the last element.
         let reuse_token = reuse_tokens.last();
         reuse_token.copied()
     }

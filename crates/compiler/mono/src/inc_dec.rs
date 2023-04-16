@@ -2,9 +2,12 @@
 // thesis project of the Computing Science master program at Utrecht
 // University under supervision of Wouter Swierstra (w.s.swierstra@uu.nl).
 
+// Implementation based of Perceus: Garbage Free Reference Counting with Reuse
+// https://www.microsoft.com/en-us/research/uploads/prod/2021/06/perceus-pldi21.pdf
+
 use std::{collections::HashMap, hash::BuildHasherDefault, iter};
 
-use bumpalo::collections::Vec;
+use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, MutMap, MutSet};
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
@@ -29,7 +32,9 @@ pub fn insert_inc_dec_operations<'a, 'i>(
 ) {
     // Create a SymbolRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
     let mut symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
-    symbol_rc_types_env.insert_proc_symbols(procedures.keys().map(|(symbol, _layout)| *symbol));
+    for proc_symbol in procedures.keys().map(|(symbol, _layout)| *symbol) {
+        symbol_rc_types_env.insert_proc_symbol(proc_symbol);
+    }
 
     // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
     // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
@@ -53,7 +58,7 @@ pub fn insert_inc_dec_operations<'a, 'i>(
 Enum indicating whether a symbol should be reference counted or not.
 This includes layouts that themselves can be stack allocated but that contain a heap allocated item.
 */
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 enum VarRcType {
     ReferenceCounted,
     NotReferenceCounted,
@@ -82,15 +87,14 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
             layout_interner,
         }
     }
+
     /**
     Insert the reference count type of top level functions.
     As functions are not reference counted, they can be marked as such.
     */
-    fn insert_proc_symbols(&mut self, proc_symbols: impl Iterator<Item = Symbol>) {
-        for proc_symbol in proc_symbols {
-            self.symbols_rc_type
-                .insert(proc_symbol, VarRcType::NotReferenceCounted);
-        }
+    fn insert_proc_symbol(&mut self, proc_symbol: Symbol) {
+        self.symbols_rc_type
+            .insert(proc_symbol, VarRcType::NotReferenceCounted);
     }
 
     /**
@@ -221,8 +225,9 @@ impl<'v> RefcountEnvironment<'v> {
     /**
     Retrieve the rc type of a symbol.
     */
-    fn get_symbol_rc_type(&mut self, symbol: &Symbol) -> &VarRcType {
-        self.symbols_rc_types
+    fn get_symbol_rc_type(&mut self, symbol: &Symbol) -> VarRcType {
+        *self
+            .symbols_rc_types
             .get(symbol)
             .expect("symbol should have rc type")
     }
@@ -238,17 +243,17 @@ impl<'v> RefcountEnvironment<'v> {
         }
 
         // Consume the symbol and return the previous ownership.
-        Some(self.consume_rc_symbol(symbol))
+        Some(self.consume_rc_symbol(*symbol))
     }
 
     /*
     Retrieve whether the symbol is owned or borrowed.
     If it was owned, set it to borrowed (as it is consumed/the symbol can be used as owned only once without incrementing).
     */
-    fn consume_rc_symbol(&mut self, symbol: &Symbol) -> Ownership {
+    fn consume_rc_symbol(&mut self, symbol: Symbol) -> Ownership {
         // Consume the symbol by setting it to borrowed (if it was owned before), and return the previous ownership.
         self.symbols_ownership
-            .insert(*symbol, Ownership::Borrowed)
+            .insert(symbol, Ownership::Borrowed)
             .expect("Expected symbol to be in environment")
     }
 
@@ -258,28 +263,6 @@ impl<'v> RefcountEnvironment<'v> {
     */
     fn get_symbol_ownership(&self, symbol: &Symbol) -> Option<&Ownership> {
         self.symbols_ownership.get(symbol)
-    }
-
-    /**
-    Remove non reference counted symbols from an iterator.
-    Useful when we want to insert reference count operations for symbols that might not be rc.
-    */
-    fn filter_rc_symbols<'a>(
-        &self,
-        symbols: impl Iterator<Item = &'a Symbol>,
-    ) -> std::vec::Vec<&'a Symbol> {
-        symbols
-            .filter(|symbol| self.symbols_ownership.contains_key(symbol))
-            .collect::<std::vec::Vec<_>>()
-    }
-
-    /**
-    Add a symbols to the environment if they are reference counted.
-    */
-    fn add_symbols(&mut self, symbols: impl IntoIterator<Item = Symbol>) {
-        symbols
-            .into_iter()
-            .for_each(|symbol| self.add_symbol(symbol))
     }
 
     /**
@@ -319,11 +302,10 @@ impl<'v> RefcountEnvironment<'v> {
     /**
     Get the consumed closure from a join point id.
     */
-    fn get_joinpoint_consumption(&self, joinpoint_id: JoinPointId) -> JoinPointConsumption {
+    fn get_joinpoint_consumption(&self, joinpoint_id: JoinPointId) -> &JoinPointConsumption {
         self.jointpoint_closures
             .get(&joinpoint_id)
             .expect("Expected closure to be in environment")
-            .clone()
     }
 
     /**
@@ -332,10 +314,7 @@ impl<'v> RefcountEnvironment<'v> {
     */
     fn remove_joinpoint_consumption(&mut self, joinpoint_id: JoinPointId) {
         let closure = self.jointpoint_closures.remove(&joinpoint_id);
-        debug_assert!(
-            matches!(closure, Some(_)),
-            "Expected closure to be in environment"
-        );
+        debug_assert!(closure.is_some(), "Expected closure to be in environment");
     }
 
     /**
@@ -387,7 +366,6 @@ impl<'v> RefcountEnvironment<'v> {
 */
 fn insert_inc_dec_operations_proc<'a, 'i>(
     arena: &'a Bump,
-
     mut symbol_rc_types_env: SymbolRcTypesEnv<'a, 'i>,
     proc: &mut Proc<'a>,
 ) {
@@ -411,13 +389,12 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
     let new_body = insert_refcount_operations_stmt(arena, &mut environment, &proc.body);
 
     // Insert decrement statements for unused parameters (which are still marked as owned).
-    let rc_proc_symbols = environment.filter_rc_symbols(proc_symbols);
-    let newer_body = consume_and_insert_dec_stmts(
-        arena,
-        &mut environment,
-        rc_proc_symbols.iter().copied().copied(),
-        new_body,
-    );
+    let rc_proc_symbols = proc_symbols
+        .filter(|symbol| environment.symbols_ownership.contains_key(symbol))
+        .copied()
+        .collect_in::<Vec<_>>(arena);
+    let newer_body =
+        consume_and_insert_dec_stmts(arena, &mut environment, rc_proc_symbols, new_body);
 
     // Assert that just the arguments are in the environment. And (after decrementing the unused ones) that they are all borrowed.
     debug_assert!(environment
@@ -425,12 +402,7 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
         .iter()
         .all(|(symbol, ownership)| {
             // All symbols should be borrowed.
-            ownership.is_borrowed()
-                && proc
-                    .args
-                    .iter()
-                    .map(|(_layout, symbol)| symbol)
-                    .any(|s| s == symbol)
+            ownership.is_borrowed() && proc.args.iter().any(|(_layout, s)| s == symbol)
         }));
 
     proc.body = newer_body.clone();
@@ -517,7 +489,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
 
                     (*label, info.clone(), new_branch, branch_env)
                 })
-                .collect::<std::vec::Vec<_>>();
+                .collect_in::<Vec<_>>(arena);
 
             let new_default_branch = {
                 let (info, branch) = default_branch;
@@ -575,16 +547,21 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             };
 
             // Given the consume_symbols we can determine what additional symbols should be dropped in each branch.
+            let msg = "All symbols defined in the current environment should be in the environment of the branches.";
             let newer_branches = Vec::from_iter_in(
                 new_branches
                     .into_iter()
                     .map(|(label, info, branch, branch_env)| {
                         // If the symbol is owned in the branch, it is not used in the branch and we can drop it.
-                        let consume_symbols_branch = consume_symbols.iter().copied().filter(|consume_symbol| {
-                             matches!(branch_env.get_symbol_ownership(consume_symbol).expect("All symbols defined in the current environment should be in the environment of the branches."), Ownership::Owned) 
-                        });
+                        let consume_symbols_branch =
+                            consume_symbols.iter().copied().filter(|consume_symbol| {
+                                branch_env
+                                    .get_symbol_ownership(consume_symbol)
+                                    .expect(msg)
+                                    .is_owned()
+                            });
 
-                        let newer_branch = insert_dec_stmts(arena,  consume_symbols_branch, branch);
+                        let newer_branch = insert_dec_stmts(arena, consume_symbols_branch, branch);
                         (label, info, newer_branch.clone())
                     }),
                 arena,
@@ -594,9 +571,14 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             let newer_default_branch = {
                 let (info, branch, branch_env) = new_default_branch;
                 // If the symbol is owned in the branch, it is not used in the branch and we can drop it.
-                let consume_symbols_branch = consume_symbols.iter().copied().filter(|consume_symbol| {
-                    matches!(branch_env.get_symbol_ownership(consume_symbol).expect("All symbols defined in the current environment should be in the environment of the branches."), Ownership::Owned) 
-                 });
+                let msg = "All symbols defined in the current environment should be in the environment of the branches.";
+                let consume_symbols_branch =
+                    consume_symbols.iter().copied().filter(|consume_symbol| {
+                        branch_env
+                            .get_symbol_ownership(consume_symbol)
+                            .expect(msg)
+                            .is_owned()
+                    });
 
                 let newer_branch = insert_dec_stmts(arena, consume_symbols_branch, branch);
 
@@ -688,7 +670,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             consume_and_insert_inc_stmts(
                 arena,
                 environment,
-                environment.owned_usages(std::iter::once(symbol).copied()),
+                environment.owned_usages(std::iter::once(*symbol)),
                 new_debug,
             )
         }
@@ -708,9 +690,13 @@ fn insert_refcount_operations_stmt<'v, 'a>(
 
             let mut body_env = environment.clone();
 
-            let parameter_symbols = parameters.iter().map(|Param { symbol, .. }| *symbol);
-            let parameter_symbols_set = parameter_symbols.clone().collect::<MutSet<_>>();
-            body_env.add_symbols(parameter_symbols);
+            let parameter_symbols_set = parameters
+                .iter()
+                .map(|Param { symbol, .. }| *symbol)
+                .collect::<MutSet<_>>();
+            for symbol in parameter_symbols_set.iter().copied() {
+                body_env.add_symbol(symbol)
+            }
 
             /*
             We use a fixed point iteration to determine what symbols are consumed in the join point.
@@ -782,7 +768,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         }
         Stmt::Jump(joinpoint_id, arguments) => {
             let consumed_symbols = environment.get_joinpoint_consumption(*joinpoint_id);
-            for consumed_symbol in consumed_symbols.iter() {
+            for consumed_symbol in consumed_symbols.clone().iter() {
                 environment.consume_symbol(consumed_symbol);
             }
 
@@ -1093,7 +1079,7 @@ fn consume_and_insert_inc_stmts<'a>(
     usage
         .into_iter()
         .fold(continuation, |continuation, (symbol, usage_count)| {
-            consume_and_insert_inc_stmt(arena, environment, &symbol, usage_count, continuation)
+            consume_and_insert_inc_stmt(arena, environment, symbol, usage_count, continuation)
         })
 }
 
@@ -1103,10 +1089,11 @@ Insert an increment statement for the given symbol compensating for the ownershi
 fn consume_and_insert_inc_stmt<'a>(
     arena: &'a Bump,
     environment: &mut RefcountEnvironment,
-    symbol: &Symbol,
+    symbol: Symbol,
     usage_count: u64,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
+    debug_assert!(usage_count > 0, "Usage count must be positive");
     let new_count = match environment.consume_rc_symbol(symbol) {
         // If the symbol is borrowed, we need to increment the reference count for each usage.
         Ownership::Borrowed => usage_count,
@@ -1114,7 +1101,7 @@ fn consume_and_insert_inc_stmt<'a>(
         Ownership::Owned => usage_count - 1,
     };
 
-    insert_inc_stmt(arena, *symbol, new_count, continuation)
+    insert_inc_stmt(arena, symbol, new_count, continuation)
 }
 
 /**
@@ -1147,7 +1134,7 @@ fn consume_and_insert_dec_stmts<'a>(
     symbols
         .into_iter()
         .fold(continuation, |continuation, symbol| {
-            consume_and_insert_dec_stmt(arena, environment, &symbol, continuation)
+            consume_and_insert_dec_stmt(arena, environment, symbol, continuation)
         })
 }
 
@@ -1157,14 +1144,14 @@ Insert a decrement statement for the given symbol if it is owned.
 fn consume_and_insert_dec_stmt<'a>(
     arena: &'a Bump,
     environment: &mut RefcountEnvironment,
-    symbol: &Symbol,
+    symbol: Symbol,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     match environment.consume_rc_symbol(symbol) {
         // If the symbol is borrowed, don't have to decrement the reference count.
         Ownership::Borrowed => continuation,
         // If the symbol is owned, we do need to decrement the reference count.
-        Ownership::Owned => insert_dec_stmt(arena, *symbol, continuation),
+        Ownership::Owned => insert_dec_stmt(arena, symbol, continuation),
     }
 }
 
