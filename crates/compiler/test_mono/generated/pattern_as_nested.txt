@@ -4,8 +4,6 @@ procedure Bool.1 ():
 
 procedure Bool.11 (#Attr.2, #Attr.3):
     let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    dec #Attr.3;
-    dec #Attr.2;
     ret Bool.23;
 
 procedure Test.1 ():
@@ -29,7 +27,7 @@ procedure Test.0 ():
         inc Test.13;
         dec Test.5;
         let Test.7 : {I64, Str} = CallByName Test.1;
-        let Test.6 : Int1 = lowlevel Eq Test.7 Test.13;
+        let Test.6 : Int1 = CallByName Bool.11 Test.7 Test.13;
         dec Test.13;
         dec Test.7;
         ret Test.6;

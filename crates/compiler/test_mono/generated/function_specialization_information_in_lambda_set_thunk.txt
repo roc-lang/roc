@@ -14,7 +14,7 @@ procedure Test.2 ():
 procedure Test.4 (Test.5, Test.3):
     let Test.18 : {} = Struct {};
     joinpoint Test.19 Test.17:
-        let Test.16 : I64 = lowlevel NumAdd Test.17 Test.3;
+        let Test.16 : I64 = CallByName Num.19 Test.17 Test.3;
         ret Test.16;
     in
     switch Test.5:

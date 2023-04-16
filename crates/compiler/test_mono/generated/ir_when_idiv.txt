@@ -14,7 +14,7 @@ procedure Num.40 (Num.247, Num.248):
         let Num.279 : [C {}, C I64] = TagId(0) Num.280;
         ret Num.279;
     else
-        let Num.276 : I64 = lowlevel NumDivTruncUnchecked Num.247 Num.248;
+        let Num.276 : I64 = CallByName Num.39 Num.247 Num.248;
         let Num.275 : [C {}, C I64] = TagId(1) Num.276;
         ret Num.275;
 

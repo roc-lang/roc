@@ -440,7 +440,7 @@ fn insert_inc_dec_operations_proc<'a, 'i>(
 Given an environment, insert the reference counting operations for a statement.
 Assuming that a symbol can only be defined once (no binding to the same symbol multiple times).
 */
-fn insert_refcount_operations_stmt<'v, 'a, 'i>(
+fn insert_refcount_operations_stmt<'v, 'a>(
     arena: &'a Bump,
 
     environment: &mut RefcountEnvironment<'v>,
@@ -812,7 +812,7 @@ fn insert_refcount_operations_stmt<'v, 'a, 'i>(
     }
 }
 
-fn insert_refcount_operations_binding<'a, 'i>(
+fn insert_refcount_operations_binding<'a>(
     arena: &'a Bump,
     environment: &mut RefcountEnvironment,
     binding: &Symbol,

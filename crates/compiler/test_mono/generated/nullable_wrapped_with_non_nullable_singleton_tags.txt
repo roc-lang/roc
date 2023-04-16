@@ -1,6 +1,5 @@
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.299 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    dec #Attr.3;
     ret Str.299;
 
 procedure Test.2 (Test.4):
@@ -26,10 +25,10 @@ procedure Test.0 ():
     let Test.17 : Str = CallByName Test.2 Test.20;
     let Test.19 : [<rnw>C *self, <null>, C ] = TagId(1) ;
     let Test.18 : Str = CallByName Test.2 Test.19;
-    let Test.10 : Str = lowlevel StrConcat Test.17 Test.18;
+    let Test.10 : Str = CallByName Str.3 Test.17 Test.18;
     dec Test.18;
     let Test.12 : [<rnw>C *self, <null>, C ] = TagId(2) ;
     let Test.11 : Str = CallByName Test.2 Test.12;
-    let Test.9 : Str = lowlevel StrConcat Test.10 Test.11;
+    let Test.9 : Str = CallByName Str.3 Test.10 Test.11;
     dec Test.11;
     ret Test.9;

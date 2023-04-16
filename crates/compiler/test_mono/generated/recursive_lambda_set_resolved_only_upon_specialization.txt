@@ -13,7 +13,7 @@ procedure Num.21 (#Attr.2, #Attr.3):
 procedure Test.1 (Test.26, Test.27):
     joinpoint Test.11 Test.2 Test.3:
         let Test.24 : U8 = 0i64;
-        let Test.20 : Int1 = lowlevel Eq Test.2 Test.24;
+        let Test.20 : Int1 = CallByName Bool.11 Test.2 Test.24;
         if Test.20 then
             let Test.22 : U8 = 1i64;
             let Test.23 : U8 = GetTagId Test.3;
@@ -29,7 +29,7 @@ procedure Test.1 (Test.26, Test.27):
             
         else
             let Test.19 : U8 = 1i64;
-            let Test.13 : U8 = lowlevel NumSub Test.2 Test.19;
+            let Test.13 : U8 = CallByName Num.20 Test.2 Test.19;
             let Test.14 : [<rnu><null>, C *self U8] = TagId(0) Test.3 Test.2;
             jump Test.11 Test.13 Test.14;
     in
@@ -41,7 +41,7 @@ procedure Test.4 (Test.28, Test.29):
         let Test.3 : [<rnu><null>, C *self U8] = UnionAtIndex (Id 0) (Index 0) #Attr.12;
         inc Test.3;
         dec #Attr.12;
-        let Test.17 : U8 = lowlevel NumMul Test.2 Test.5;
+        let Test.17 : U8 = CallByName Num.21 Test.2 Test.5;
         let Test.18 : U8 = GetTagId Test.3;
         switch Test.18:
             case 0:

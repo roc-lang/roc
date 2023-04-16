@@ -16,12 +16,12 @@ procedure Test.1 (Test.4):
 
 procedure Test.5 (Test.14, #Attr.12):
     let Test.4 : U64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.16 : Str = lowlevel NumToStr Test.4;
+    let Test.16 : Str = CallByName Num.96 Test.4;
     ret Test.16;
 
 procedure Test.5 (Test.14, #Attr.12):
     let Test.4 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.22 : Str = lowlevel NumToStr Test.4;
+    let Test.22 : Str = CallByName Num.96 Test.4;
     ret Test.22;
 
 procedure Test.0 ():

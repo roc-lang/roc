@@ -26,16 +26,16 @@ procedure Num.19 (#Attr.2, #Attr.3):
 
 procedure Test.4 (Test.5, #Attr.12):
     let Test.1 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.15 : U8 = lowlevel NumAdd Test.5 Test.1;
+    let Test.15 : U8 = CallByName Num.19 Test.5 Test.1;
     ret Test.15;
 
 procedure Test.6 (Test.7, #Attr.12):
     let Test.2 : U8 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.17 : U8 = lowlevel NumAdd Test.7 Test.2;
+    let Test.17 : U8 = CallByName Num.19 Test.7 Test.2;
     ret Test.17;
 
 procedure Test.8 (Test.9):
-    let Test.19 : U8 = lowlevel NumAdd Test.9 Test.9;
+    let Test.19 : U8 = CallByName Num.19 Test.9 Test.9;
     ret Test.19;
 
 procedure Test.0 ():
