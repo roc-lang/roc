@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use bumpalo::collections::vec::Vec;
+use bumpalo::collections::CollectIn;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
@@ -258,12 +259,10 @@ pub fn refcount_reset_proc_body<'a>(
 
         let alloc_addr_stmt = {
             let alignment = root.create_symbol(ident_ids, "alignment");
-            let alignment_expr = Expr::Literal(Literal::Int(
-                (layout_interner
-                    .get(layout)
-                    .alignment_bytes(layout_interner, root.target_info) as i128)
-                    .to_ne_bytes(),
-            ));
+            let alignment_int = layout_interner
+                .get(layout)
+                .allocation_alignment_bytes(layout_interner, root.target_info);
+            let alignment_expr = Expr::Literal(Literal::Int((alignment_int as i128).to_ne_bytes()));
             let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
             let alloc_addr_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
@@ -594,6 +593,7 @@ fn modify_refcount<'a>(
         }
 
         HelperOp::Dec | HelperOp::DecRef(_) => {
+            debug_assert!(alignment >= root.target_info.ptr_width() as u32);
             let alignment_sym = root.create_symbol(ident_ids, "alignment");
             let alignment_expr = Expr::Literal(Literal::Int((alignment as i128).to_ne_bytes()));
             let alignment_stmt = |next| Stmt::Let(alignment_sym, alignment_expr, LAYOUT_U32, next);
@@ -771,7 +771,10 @@ fn refcount_list<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let elem_alignment = layout_interner.alignment_bytes(elem_layout);
+    let alignment = Ord::max(
+        root.target_info.ptr_width() as u32,
+        layout_interner.alignment_bytes(elem_layout),
+    );
 
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_list = modify_refcount(
@@ -779,7 +782,7 @@ fn refcount_list<'a>(
         ident_ids,
         ctx,
         rc_ptr,
-        elem_alignment,
+        alignment,
         arena.alloc(ret_stmt),
     );
 
@@ -1277,6 +1280,13 @@ fn refcount_union_contents<'a>(
         // (Order is important, to avoid use-after-free for Dec)
         let following = Stmt::Jump(jp_contents_modified, &[]);
 
+        let field_layouts = field_layouts
+            .iter()
+            .copied()
+            .enumerate()
+            .collect_in::<Vec<_>>(root.arena)
+            .into_bump_slice();
+
         let fields_stmt = refcount_tag_fields(
             root,
             ident_ids,
@@ -1341,8 +1351,8 @@ fn refcount_union_rec<'a>(
     let rc_structure_stmt = {
         let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
 
-        let alignment =
-            Layout::Union(union_layout).alignment_bytes(layout_interner, root.target_info);
+        let alignment = Layout::Union(union_layout)
+            .allocation_alignment_bytes(layout_interner, root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
         let modify_structure_stmt = modify_refcount(
             root,
@@ -1453,7 +1463,7 @@ fn refcount_union_tailrec<'a>(
             )
         };
 
-        let alignment = layout_interner.alignment_bytes(layout);
+        let alignment = layout_interner.allocation_alignment_bytes(layout);
         let modify_structure_stmt = modify_refcount(
             root,
             ident_ids,
@@ -1501,7 +1511,7 @@ fn refcount_union_tailrec<'a>(
                     let mut tail_stmt = None;
                     for (i, field) in field_layouts.iter().enumerate() {
                         if i != tailrec_index {
-                            filtered.push(*field);
+                            filtered.push((i, *field));
                         } else {
                             let field_val =
                                 root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
@@ -1535,7 +1545,14 @@ fn refcount_union_tailrec<'a>(
                         )),
                     ));
 
-                    (*field_layouts, tail_stmt)
+                    let field_layouts = field_layouts
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .collect_in::<Vec<_>>(root.arena)
+                        .into_bump_slice();
+
+                    (field_layouts, tail_stmt)
                 };
 
             let fields_stmt = refcount_tag_fields(
@@ -1606,20 +1623,20 @@ fn refcount_tag_fields<'a>(
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
-    field_layouts: &'a [InLayout<'a>],
+    field_layouts: &'a [(usize, InLayout<'a>)],
     structure: Symbol,
     tag_id: TagIdIntType,
     following: Stmt<'a>,
 ) -> Stmt<'a> {
     let mut stmt = following;
 
-    for (i, field_layout) in field_layouts.iter().enumerate().rev() {
+    for (i, field_layout) in field_layouts.iter().rev() {
         if layout_interner.contains_refcounted(*field_layout) {
             let field_val = root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
             let field_val_expr = Expr::UnionAtIndex {
                 union_layout,
                 tag_id,
-                index: i as u64,
+                index: *i as u64,
                 structure,
             };
             let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
@@ -1662,7 +1679,7 @@ fn refcount_boxed<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout_interner.alignment_bytes(layout);
+    let alignment = layout_interner.allocation_alignment_bytes(layout);
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_outer = modify_refcount(
         root,
