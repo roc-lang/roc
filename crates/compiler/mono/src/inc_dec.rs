@@ -451,7 +451,6 @@ Assuming that a symbol can only be defined once (no binding to the same symbol m
 */
 fn insert_refcount_operations_stmt<'v, 'a>(
     arena: &'a Bump,
-
     environment: &mut RefcountEnvironment<'v>,
     stmt: &Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -718,7 +717,6 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             remainder,
         } => {
             // Assuming that the values in the closure of the body of this jointpoint are already bound.
-
             // Assuming that all symbols are still owned. (So that we can determine what symbols got consumed in the join point.)
             debug_assert!(environment
                 .symbols_ownership
@@ -753,7 +751,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
 
             let mut joinpoint_consumption = MutSet::default();
 
-            let new_body = loop {
+            let (new_body, mut new_body_environment) = loop {
                 // Copy the env to make sure each iteration has a fresh environment.
                 let mut current_body_env = body_env.clone();
 
@@ -780,7 +778,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 };
 
                 if joinpoint_consumption == current_joinpoint_consumption {
-                    break new_body;
+                    break (new_body, current_body_env);
                 } else {
                     debug_assert!(
                         current_joinpoint_consumption.is_superset(&joinpoint_consumption),
@@ -792,6 +790,24 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 }
             };
 
+            // Insert decrement statements for unused parameters (which are still marked as owned).
+            // If the parameters are never dead, this could be skipped.
+            let dead_symbols = parameters
+                .iter()
+                .filter_map(|Param { symbol, .. }| {
+                    new_body_environment
+                        .symbols_ownership
+                        .contains_key(symbol)
+                        .then_some(*symbol)
+                })
+                .collect_in::<Vec<_>>(arena);
+            let newer_body = consume_and_insert_dec_stmts(
+                arena,
+                &mut new_body_environment,
+                dead_symbols,
+                new_body,
+            );
+
             environment.add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption);
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
             environment.remove_joinpoint_consumption(*joinpoint_id);
@@ -799,7 +815,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             arena.alloc(Stmt::Join {
                 id: *joinpoint_id,
                 parameters,
-                body: new_body,
+                body: newer_body,
                 remainder: new_remainder,
             })
         }
