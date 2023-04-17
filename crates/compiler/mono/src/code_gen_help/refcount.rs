@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use bumpalo::collections::vec::Vec;
+use bumpalo::collections::CollectIn;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
@@ -1279,6 +1280,13 @@ fn refcount_union_contents<'a>(
         // (Order is important, to avoid use-after-free for Dec)
         let following = Stmt::Jump(jp_contents_modified, &[]);
 
+        let field_layouts = field_layouts
+            .iter()
+            .copied()
+            .enumerate()
+            .collect_in::<Vec<_>>(root.arena)
+            .into_bump_slice();
+
         let fields_stmt = refcount_tag_fields(
             root,
             ident_ids,
@@ -1503,7 +1511,7 @@ fn refcount_union_tailrec<'a>(
                     let mut tail_stmt = None;
                     for (i, field) in field_layouts.iter().enumerate() {
                         if i != tailrec_index {
-                            filtered.push(*field);
+                            filtered.push((i, *field));
                         } else {
                             let field_val =
                                 root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
@@ -1537,7 +1545,14 @@ fn refcount_union_tailrec<'a>(
                         )),
                     ));
 
-                    (*field_layouts, tail_stmt)
+                    let field_layouts = field_layouts
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .collect_in::<Vec<_>>(root.arena)
+                        .into_bump_slice();
+
+                    (field_layouts, tail_stmt)
                 };
 
             let fields_stmt = refcount_tag_fields(
@@ -1608,20 +1623,20 @@ fn refcount_tag_fields<'a>(
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
-    field_layouts: &'a [InLayout<'a>],
+    field_layouts: &'a [(usize, InLayout<'a>)],
     structure: Symbol,
     tag_id: TagIdIntType,
     following: Stmt<'a>,
 ) -> Stmt<'a> {
     let mut stmt = following;
 
-    for (i, field_layout) in field_layouts.iter().enumerate().rev() {
+    for (i, field_layout) in field_layouts.iter().rev() {
         if layout_interner.contains_refcounted(*field_layout) {
             let field_val = root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
             let field_val_expr = Expr::UnionAtIndex {
                 union_layout,
                 tag_id,
-                index: i as u64,
+                index: *i as u64,
                 structure,
             };
             let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
