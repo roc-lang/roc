@@ -2661,9 +2661,7 @@ impl<'a> Layout<'a> {
             Layout::RecursivePointer(_) => {
                 unreachable!("should be looked up to get an actual layout")
             }
-            Layout::Boxed(inner) => interner
-                .get(*inner)
-                .allocation_alignment_bytes(interner, target_info),
+            Layout::Boxed(inner) => Ord::max(ptr_width, interner.get(*inner).alignment_bytes(interner, target_info)),
         }
     }
 

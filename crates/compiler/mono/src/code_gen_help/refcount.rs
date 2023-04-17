@@ -258,12 +258,10 @@ pub fn refcount_reset_proc_body<'a>(
 
         let alloc_addr_stmt = {
             let alignment = root.create_symbol(ident_ids, "alignment");
-            let alignment_expr = Expr::Literal(Literal::Int(
-                (layout_interner
-                    .get(layout)
-                    .alignment_bytes(layout_interner, root.target_info) as i128)
-                    .to_ne_bytes(),
-            ));
+            let alignment_int = layout_interner
+                .get(layout)
+                .allocation_alignment_bytes(layout_interner, root.target_info);
+            let alignment_expr = Expr::Literal(Literal::Int((alignment_int as i128).to_ne_bytes()));
             let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
             let alloc_addr_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
@@ -594,6 +592,7 @@ fn modify_refcount<'a>(
         }
 
         HelperOp::Dec | HelperOp::DecRef(_) => {
+            debug_assert!(alignment >= root.target_info.ptr_width() as u32);
             let alignment_sym = root.create_symbol(ident_ids, "alignment");
             let alignment_expr = Expr::Literal(Literal::Int((alignment as i128).to_ne_bytes()));
             let alignment_stmt = |next| Stmt::Let(alignment_sym, alignment_expr, LAYOUT_U32, next);
@@ -771,7 +770,10 @@ fn refcount_list<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let elem_alignment = layout_interner.alignment_bytes(elem_layout);
+    let alignment = Ord::max(
+        root.target_info.ptr_width() as u32,
+        layout_interner.alignment_bytes(elem_layout),
+    );
 
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_list = modify_refcount(
@@ -779,7 +781,7 @@ fn refcount_list<'a>(
         ident_ids,
         ctx,
         rc_ptr,
-        elem_alignment,
+        alignment,
         arena.alloc(ret_stmt),
     );
 
@@ -1341,8 +1343,8 @@ fn refcount_union_rec<'a>(
     let rc_structure_stmt = {
         let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
 
-        let alignment =
-            Layout::Union(union_layout).alignment_bytes(layout_interner, root.target_info);
+        let alignment = Layout::Union(union_layout)
+            .allocation_alignment_bytes(layout_interner, root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
         let modify_structure_stmt = modify_refcount(
             root,
@@ -1453,7 +1455,7 @@ fn refcount_union_tailrec<'a>(
             )
         };
 
-        let alignment = layout_interner.alignment_bytes(layout);
+        let alignment = layout_interner.allocation_alignment_bytes(layout);
         let modify_structure_stmt = modify_refcount(
             root,
             ident_ids,
@@ -1662,7 +1664,7 @@ fn refcount_boxed<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout_interner.alignment_bytes(layout);
+    let alignment = layout_interner.allocation_alignment_bytes(layout);
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_outer = modify_refcount(
         root,
