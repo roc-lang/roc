@@ -54,7 +54,6 @@ impl<'a> WasiDispatcher<'a> {
         memory: &mut [u8],
     ) -> Option<Value> {
         let success_code = Some(Value::I32(Errno::Success as i32));
-
         match function_name {
             "args_get" => {
                 // uint8_t ** argv,
@@ -97,7 +96,37 @@ impl<'a> WasiDispatcher<'a> {
             "fd_allocate" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_close" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_datasync" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_fdstat_get" => todo!("WASI {}({:?})", function_name, arguments),
+            "fd_fdstat_get" => {
+                // (i32, i32) -> i32
+
+                // file descriptor
+                let fd = arguments[0].expect_i32().unwrap() as usize;
+                // ptr to a wasi_fdstat_t
+                let stat_mut_ptr = arguments[1].expect_i32().unwrap() as usize;
+
+                match fd {
+                    1 => {
+                        // Tell WASI that stdout is a tty (no seek or tell)
+                        // https://github.com/WebAssembly/wasi-libc/blob/659ff414560721b1660a19685110e484a081c3d4/libc-bottom-half/sources/isatty.c
+                        // *Not* a tty if:
+                        //     (statbuf.fs_filetype != __WASI_FILETYPE_CHARACTER_DEVICE ||
+                        //         (statbuf.fs_rights_base & (__WASI_RIGHTS_FD_SEEK | __WASI_RIGHTS_FD_TELL)) != 0)
+                        // So it's sufficient to set:
+                        //     .fs_filetype = __WASI_FILETYPE_CHARACTER_DEVICE
+                        //     .fs_rights_base = 0
+
+                        const WASI_FILETYPE_CHARACTER_DEVICE: u8 = 2;
+                        memory[stat_mut_ptr] = WASI_FILETYPE_CHARACTER_DEVICE;
+
+                        for b in memory[stat_mut_ptr + 1..stat_mut_ptr + 24].iter_mut() {
+                            *b = 0;
+                        }
+                    }
+                    _ => todo!("WASI {}({:?})", function_name, arguments),
+                }
+
+                success_code
+            }
             "fd_fdstat_set_flags" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_fdstat_set_rights" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_filestat_get" => todo!("WASI {}({:?})", function_name, arguments),
@@ -211,14 +240,15 @@ impl<'a> WasiDispatcher<'a> {
 
                 let mut n_written: i32 = 0;
                 let mut negative_length_count = 0;
-                for _ in 0..iovs_len {
+                for i in 0..iovs_len {
                     // https://man7.org/linux/man-pages/man2/readv.2.html
                     // struct iovec {
                     //     void  *iov_base;    /* Starting address */
                     //     size_t iov_len;     /* Number of bytes to transfer */
                     // };
-                    let iov_base = read_u32(memory, ptr_iovs) as usize;
-                    let iov_len = read_i32(memory, ptr_iovs + 4);
+                    let ptr_iov = ptr_iovs + (8 * i as usize); // index into the array of iovec's
+                    let iov_base = read_u32(memory, ptr_iov) as usize;
+                    let iov_len = read_i32(memory, ptr_iov + 4);
                     if iov_len < 0 {
                         // I found negative-length iov's when I implemented this in JS for the web REPL (see wasi.js)
                         // I'm not sure why, but this solution worked, and it's the same WASI libc - there's only one.
