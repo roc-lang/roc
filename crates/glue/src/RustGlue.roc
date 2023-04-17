@@ -52,6 +52,7 @@ convertTypesToFile = \types ->
                         buf
 
                 TagUnion (NullableWrapped { name, indexOfNullTag, tags, discriminantSize, discriminantOffset }) ->
+                    # TODO: generate this as `TypeName(*mut u8)` if the payload contains functions / unsized types
                     generateRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset (Some indexOfNullTag)
 
                 TagUnion (NullableUnwrapped { name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull }) ->
@@ -244,14 +245,14 @@ generateStruct = \buf, types, id, name, structFields, visibility ->
 
     pub =
         when visibility is
-            Public -> "pub"
+            Public -> "pub "
             Private -> ""
 
     structType = Types.shape types id
 
     buf
     |> generateDeriveStr types structType IncludeDebug
-    |> Str.concat "#[repr(\(repr))]\n\(pub) struct \(escapedName) {\n"
+    |> Str.concat "#[repr(\(repr))]\n\(pub)struct \(escapedName) {\n"
     |> generateStructFields types Public structFields
     |> Str.concat "}\n\n"
 
@@ -836,6 +837,12 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
 
                     Self((ptr as usize | tag_id as usize) as *mut _)
                 }
+
+                pub fn get_\(tagName)(mut self) -> \(escapedName)_\(tagName) {
+                    debug_assert!(self.is_\(tagName)());
+
+                    unsafe { core::mem::ManuallyDrop::take(&mut self.ptr_read_union().\(tagName)) }
+                }
             """
 
     constructors =
@@ -854,7 +861,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                             let tag_id = discriminant_\(escapedName)::\(tagName);
 
                             let payload_union = unsafe { self.ptr_read_union() };
-                            let payload = union_\(escapedName) { 
+                            let payload = union_\(escapedName) {
                                 \(tagName): unsafe { payload_union.\(tagName).clone() },
                             };
 
@@ -880,7 +887,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                             let payload_union1 = unsafe { self.ptr_read_union() };
                             let payload_union2 = unsafe { other.ptr_read_union() };
 
-                            unsafe { 
+                            unsafe {
                                 payload_union1.\(tagName) == payload_union2.\(tagName)
                             }
                         },
@@ -923,7 +930,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                         \(tagName) => {
                             let payload_union = unsafe { self.ptr_read_union() };
 
-                            unsafe { 
+                            unsafe {
                                 f.debug_tuple("\(escapedName)::\(tagName)")\(debugFields).finish()
                             }
                         },
@@ -937,7 +944,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
     hashCase = \{ name: tagName }, index ->
         if Some (Num.intCast index) == nullTagIndex then
             """
-                        \(tagName) => {} 
+                        \(tagName) => {}
             """
         else
             """
@@ -963,7 +970,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                             let payload_union1 = unsafe { self.ptr_read_union() };
                             let payload_union2 = unsafe { other.ptr_read_union() };
 
-                            unsafe { 
+                            unsafe {
                                 payload_union1.\(tagName).cmp(&payload_union2.\(tagName))
                             }
                         },
@@ -988,7 +995,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(alignOfSelf));
 
         impl \(escapedName) {
-            fn discriminant(&self) -> discriminant_\(escapedName) { 
+            pub fn discriminant(&self) -> discriminant_\(escapedName) {
                 let discriminants = {
                     use \(discriminantName)::*;
 

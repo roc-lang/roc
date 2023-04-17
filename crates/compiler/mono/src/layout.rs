@@ -634,7 +634,10 @@ impl<'a> RawFunctionLayout<'a> {
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
-    fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Cacheable<RawFunctionLayoutResult<'a>> {
+    pub(crate) fn from_var(
+        env: &mut Env<'a, '_>,
+        var: Variable,
+    ) -> Cacheable<RawFunctionLayoutResult<'a>> {
         env.cached_raw_function_or(var, |env| {
             if env.is_seen(var) {
                 unreachable!("The initial variable of a signature cannot be seen already")
@@ -2174,11 +2177,11 @@ macro_rules! list_element_layout {
 }
 
 pub struct Env<'a, 'b> {
-    target_info: TargetInfo,
-    arena: &'a Bump,
-    seen: Vec<'a, Variable>,
-    subs: &'b Subs,
-    cache: &'b mut LayoutCache<'a>,
+    pub(crate) target_info: TargetInfo,
+    pub(crate) arena: &'a Bump,
+    pub(crate) seen: Vec<'a, Variable>,
+    pub(crate) subs: &'b Subs,
+    pub(crate) cache: &'b mut LayoutCache<'a>,
 }
 
 impl<'a, 'b> Env<'a, 'b> {
