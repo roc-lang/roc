@@ -54,7 +54,6 @@ impl<'a> WasiDispatcher<'a> {
         memory: &mut [u8],
     ) -> Option<Value> {
         let success_code = Some(Value::I32(Errno::Success as i32));
-
         match function_name {
             "args_get" => {
                 // uint8_t ** argv,
@@ -241,14 +240,15 @@ impl<'a> WasiDispatcher<'a> {
 
                 let mut n_written: i32 = 0;
                 let mut negative_length_count = 0;
-                for _ in 0..iovs_len {
+                for i in 0..iovs_len {
                     // https://man7.org/linux/man-pages/man2/readv.2.html
                     // struct iovec {
                     //     void  *iov_base;    /* Starting address */
                     //     size_t iov_len;     /* Number of bytes to transfer */
                     // };
-                    let iov_base = read_u32(memory, ptr_iovs) as usize;
-                    let iov_len = read_i32(memory, ptr_iovs + 4);
+                    let ptr_iov = ptr_iovs + (8 * i as usize); // index into the array of iovec's
+                    let iov_base = read_u32(memory, ptr_iov) as usize;
+                    let iov_len = read_i32(memory, ptr_iov + 4);
                     if iov_len < 0 {
                         // I found negative-length iov's when I implemented this in JS for the web REPL (see wasi.js)
                         // I'm not sure why, but this solution worked, and it's the same WASI libc - there's only one.
@@ -261,13 +261,9 @@ impl<'a> WasiDispatcher<'a> {
                     match &mut write_lock {
                         WriteLock::StdOut(stdout) => {
                             n_written += stdout.write(bytes).unwrap() as i32;
-                            // in practice, the newline is not included in iov_len
-                            stdout.write(b"\n").unwrap();
                         }
                         WriteLock::Stderr(stderr) => {
                             n_written += stderr.write(bytes).unwrap() as i32;
-                            // in practice, the newline is not included in iov_len
-                            stderr.write(b"\n").unwrap();
                         }
                         WriteLock::RegularFile(content) => {
                             content.extend_from_slice(bytes);
