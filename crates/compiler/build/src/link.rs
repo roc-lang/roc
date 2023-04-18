@@ -1152,7 +1152,7 @@ fn link_macos(
             output_path.set_extension("dylib");
 
             (
-                vec!["-dylib", "-undefined", "dynamic_lookup", "-no_fixup_chains"],
+                vec!["-dylib", "-undefined", "dynamic_lookup"],
                 output_path,
             )
         }
