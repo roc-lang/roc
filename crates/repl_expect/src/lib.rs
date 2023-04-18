@@ -1180,4 +1180,74 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn tuple_access() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                expect
+                    t = ("One", "Two")
+                    t.1 == "One"
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                3│>  expect
+                4│>      t = ("One", "Two")
+                5│>      t.1 == "One"
+
+                When it failed, these variables had these values:
+
+                t : (
+                    Str,
+                    Str,
+                )a
+                t = ("One", "Two")
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn match_on_opaque_number_type() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                hexToByte : U8, U8 -> U8
+                hexToByte = \upper, lower ->
+                    Num.bitwiseOr (Num.shiftRightBy upper 4) lower
+
+                expect
+                    actual = hexToByte 7 4
+                    expected = 't'
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 7│>  expect
+                 8│>      actual = hexToByte 7 4
+                 9│>      expected = 't'
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                actual : U8
+                actual = 4
+
+                expected : Int Unsigned8
+                expected = 116
+                "#
+            ),
+        );
+    }
 }

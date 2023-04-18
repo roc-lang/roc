@@ -3609,7 +3609,7 @@ fn check_for_infinite_type(
                 }
                 Content::LambdaSet(subs::LambdaSet {
                     solved,
-                    recursion_var: _,
+                    recursion_var: OptVariable::NONE,
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {

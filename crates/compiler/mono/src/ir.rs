@@ -5016,9 +5016,12 @@ pub fn with_hole<'a>(
                             );
                         }
                         CopyExisting(index) => {
-                            let record_needs_specialization =
-                                procs.ability_member_aliases.get(structure).is_some();
-                            let specialized_structure_sym = if record_needs_specialization {
+                            let structure_needs_specialization =
+                                procs.ability_member_aliases.get(structure).is_some()
+                                    || procs.is_module_thunk(structure)
+                                    || procs.is_imported_module_thunk(structure);
+
+                            let specialized_structure_sym = if structure_needs_specialization {
                                 // We need to specialize the record now; create a new one for it.
                                 // TODO: reuse this symbol for all updates
                                 env.unique_symbol()
@@ -5035,10 +5038,7 @@ pub fn with_hole<'a>(
                             stmt =
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
 
-                            // If the records needs specialization or it's a thunk, we need to
-                            // create the specialized definition or force the thunk, respectively.
-                            // Both cases are handled below.
-                            if record_needs_specialization || procs.is_module_thunk(structure) {
+                            if structure_needs_specialization {
                                 stmt = specialize_symbol(
                                     env,
                                     procs,

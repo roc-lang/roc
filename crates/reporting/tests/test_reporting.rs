@@ -13381,4 +13381,33 @@ I recommend using camelCase. It's the standard style in Roc code!
             "#
         )
     );
+
+    test_report!(
+        apply_opaque_as_function,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Parser a := Str -> a
+
+            parser : Parser Str
+            parser = @Parser \s -> Str.concat s "asd"
+
+            main : Str
+            main = parser "hi"
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `parser` value is an opaque type, so it cannot be called with an
+    argument:
+
+    9│  main = parser "hi"
+               ^^^^^^
+
+    I can't call an opaque type because I don't know what it is! Maybe you
+    meant to unwrap it first?
+    "###
+    );
 }

@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 libc = "0.2"
+syntect = "5.0"
 roc_highlight = { path = "../../../crates/highlight" }
 roc_std = { path = "../../../crates/roc_std" }
 

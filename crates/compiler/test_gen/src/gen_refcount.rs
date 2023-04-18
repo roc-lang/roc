@@ -496,3 +496,33 @@ fn boxed_str_dec() {
         ]
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn non_nullable_unwrapped_alignment_8() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+            Expr : [ZAdd Expr Expr, Val I64, Var I64]
+
+            eval : Expr -> I64
+            eval = \e ->
+                when e is
+                    Var _ -> 0
+                    Val v -> v
+                    ZAdd l r -> eval l + eval r
+
+            expr : Expr
+            expr = (ZAdd (Val 4) (Val 5))
+
+            eval expr
+            "#
+        ),
+        i64,
+        &[
+            Deallocated, // Val 4
+            Deallocated, // Val 5
+            Deallocated, // ZAdd _ _
+        ]
+    );
+}

@@ -8,10 +8,14 @@ use std::{
 
 use lazy_static::lazy_static;
 use libtest_mimic::{run, Arguments, Failed, Trial};
+use mono::MonoOptions;
 use regex::Regex;
+use roc_collections::VecMap;
 use test_solve_helpers::{
     infer_queries, Elaboration, InferOptions, InferredProgram, InferredQuery, MUTLILINE_MARKER,
 };
+
+mod mono;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Arguments::from_args();
@@ -32,13 +36,25 @@ lazy_static! {
         .join("uitest")
         .join("tests");
 
+    /// # +opt can:<opt>
+    static ref RE_OPT_CAN: Regex =
+        Regex::new(r#"# \+opt can:(?P<opt>.*)"#).unwrap();
+
     /// # +opt infer:<opt>
     static ref RE_OPT_INFER: Regex =
         Regex::new(r#"# \+opt infer:(?P<opt>.*)"#).unwrap();
 
-    /// # +opt print:<opt>
-    static ref RE_OPT_PRINT: Regex =
-        Regex::new(r#"# \+opt print:(?P<opt>.*)"#).unwrap();
+    /// # +opt mono:<opt>
+    static ref RE_OPT_MONO: Regex =
+        Regex::new(r#"# \+opt mono:(?P<opt>.*)"#).unwrap();
+
+    /// # +emit:<opt>
+    static ref RE_EMIT: Regex =
+        Regex::new(r#"# \+emit:(?P<opt>.*)"#).unwrap();
+
+    /// ## module <name>
+    static ref RE_MODULE: Regex =
+        Regex::new(r#"## module (?P<name>.*)"#).unwrap();
 }
 
 fn collect_uitest_files() -> io::Result<Vec<PathBuf>> {
@@ -78,12 +94,22 @@ fn into_test(path: PathBuf) -> io::Result<Trial> {
 fn run_test(path: PathBuf) -> Result<(), Failed> {
     let data = std::fs::read_to_string(&path)?;
     let TestCase {
+        can_options,
         infer_options,
-        print_options,
-        source,
-    } = TestCase::parse(data)?;
+        emit_options,
+        mono_options,
+        program,
+    } = TestCase::parse(&data)?;
 
-    let inferred_program = infer_queries(&source, infer_options)?;
+    let inferred_program = infer_queries(
+        program.test_module,
+        program
+            .other_modules
+            .iter()
+            .map(|(md, src)| (&**md, &**src)),
+        infer_options,
+        can_options.allow_errors,
+    )?;
 
     {
         let mut fd = fs::OpenOptions::new()
@@ -91,7 +117,14 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
             .truncate(true)
             .open(&path)?;
 
-        assemble_query_output(&mut fd, &source, inferred_program, print_options)?;
+        assemble_query_output(
+            &mut fd,
+            program,
+            inferred_program,
+            can_options,
+            mono_options,
+            emit_options,
+        )?;
     }
 
     check_for_changes(&path)?;
@@ -101,30 +134,114 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
 
 const EMIT_HEADER: &str = "# -emit:";
 
-struct TestCase {
+struct Modules<'a> {
+    before_any: &'a str,
+    other_modules: VecMap<&'a str, &'a str>,
+    test_module: &'a str,
+}
+
+struct TestCase<'a> {
+    can_options: CanOptions,
     infer_options: InferOptions,
-    print_options: PrintOptions,
-    source: String,
+    mono_options: MonoOptions,
+    emit_options: EmitOptions,
+    program: Modules<'a>,
 }
 
 #[derive(Default)]
-struct PrintOptions {
-    can_decls: bool,
+struct CanOptions {
+    allow_errors: bool,
 }
 
-impl TestCase {
-    fn parse(mut data: String) -> Result<Self, Failed> {
+#[derive(Default)]
+struct EmitOptions {
+    can_decls: bool,
+    mono: bool,
+}
+
+impl<'a> TestCase<'a> {
+    fn parse(mut data: &'a str) -> Result<Self, Failed> {
         // Drop anything following `# -emit:` header lines; that's the output.
         if let Some(drop_at) = data.find(EMIT_HEADER) {
-            data.truncate(drop_at);
-            data.truncate(data.trim_end().len());
+            data = data[..drop_at].trim_end();
         }
 
+        let can_options = Self::parse_can_options(data)?;
+        let infer_options = Self::parse_infer_options(data)?;
+        let mono_options = Self::parse_mono_options(data)?;
+        let emit_options = Self::parse_emit_options(data)?;
+
+        let program = Self::parse_modules(data);
+
         Ok(TestCase {
-            infer_options: Self::parse_infer_options(&data)?,
-            print_options: Self::parse_print_options(&data)?,
-            source: data,
+            can_options,
+            infer_options,
+            mono_options,
+            emit_options,
+            program,
         })
+    }
+
+    fn parse_modules(data: &'a str) -> Modules<'a> {
+        let mut module_starts = RE_MODULE.captures_iter(data).peekable();
+
+        let first_module_start = match module_starts.peek() {
+            None => {
+                // This is just a single module with no name; it is the test module.
+                return Modules {
+                    before_any: Default::default(),
+                    other_modules: Default::default(),
+                    test_module: data,
+                };
+            }
+            Some(p) => p.get(0).unwrap().start(),
+        };
+
+        let before_any = data[..first_module_start].trim();
+
+        let mut test_module = None;
+        let mut other_modules = VecMap::new();
+
+        while let Some(module_start) = module_starts.next() {
+            let module_name = module_start.name("name").unwrap().as_str();
+            let module_start = module_start.get(0).unwrap().end();
+            let module = match module_starts.peek() {
+                None => &data[module_start..],
+                Some(next_module_start) => {
+                    let module_end = next_module_start.get(0).unwrap().start();
+                    &data[module_start..module_end]
+                }
+            }
+            .trim();
+
+            if module_name == "Test" {
+                test_module = Some(module);
+            } else {
+                other_modules.insert(module_name, module);
+            }
+        }
+
+        let test_module = test_module.expect("no Test module found");
+        Modules {
+            before_any,
+            other_modules,
+            test_module,
+        }
+    }
+
+    fn parse_can_options(data: &str) -> Result<CanOptions, Failed> {
+        let mut can_opts = CanOptions::default();
+
+        let found_can_opts = RE_OPT_CAN.captures_iter(data);
+        for can_opt in found_can_opts {
+            let opt = can_opt.name("opt").unwrap().as_str();
+            match opt.trim() {
+                "allow_errors" => can_opts.allow_errors = true,
+                other => return Err(format!("unknown can option: {other:?}").into()),
+            }
+        }
+
+        Ok(can_opts)
     }
 
     fn parse_infer_options(data: &str) -> Result<InferOptions, Failed> {
@@ -146,19 +263,35 @@ impl TestCase {
         Ok(infer_opts)
     }
 
-    fn parse_print_options(data: &str) -> Result<PrintOptions, Failed> {
-        let mut print_opts = PrintOptions::default();
+    fn parse_mono_options(data: &str) -> Result<MonoOptions, Failed> {
+        let mut mono_opts = MonoOptions::default();
 
-        let found_infer_opts = RE_OPT_PRINT.captures_iter(data);
+        let found_infer_opts = RE_OPT_MONO.captures_iter(data);
         for infer_opt in found_infer_opts {
             let opt = infer_opt.name("opt").unwrap().as_str();
             match opt.trim() {
-                "can_decls" => print_opts.can_decls = true,
-                other => return Err(format!("unknown print option: {other:?}").into()),
+                "no_check" => mono_opts.no_check = true,
+                other => return Err(format!("unknown mono option: {other:?}").into()),
             }
         }
 
-        Ok(print_opts)
+        Ok(mono_opts)
+    }
+
+    fn parse_emit_options(data: &str) -> Result<EmitOptions, Failed> {
+        let mut emit_opts = EmitOptions::default();
+
+        let found_infer_opts = RE_EMIT.captures_iter(data);
+        for infer_opt in found_infer_opts {
+            let opt = infer_opt.name("opt").unwrap().as_str();
+            match opt.trim() {
+                "can_decls" => emit_opts.can_decls = true,
+                "mono" => emit_opts.mono = true,
+                other => return Err(format!("unknown emit option: {other:?}").into()),
+            }
+        }
+
+        Ok(emit_opts)
     }
 }
 
@@ -184,23 +317,58 @@ fn check_for_changes(path: &Path) -> Result<(), Failed> {
 /// Assemble the output for a test, with queries elaborated in-line.
 fn assemble_query_output(
     writer: &mut impl io::Write,
-    source: &str,
+    program: Modules<'_>,
     inferred_program: InferredProgram,
-    print_options: PrintOptions,
+    can_options: CanOptions,
+    mono_options: MonoOptions,
+    emit_options: EmitOptions,
 ) -> io::Result<()> {
+    let Modules {
+        before_any,
+        other_modules,
+        test_module,
+    } = program;
+
+    if !before_any.is_empty() {
+        writeln!(writer, "{before_any}\n")?;
+    }
+
+    for (module, source) in other_modules.iter() {
+        writeln!(writer, "## module {module}")?;
+        writeln!(writer, "{}\n", source)?;
+    }
+
+    if !other_modules.is_empty() {
+        writeln!(writer, "## module Test")?;
+    }
+
     // Reverse the queries so that we can pop them off the end as we pass through the lines.
     let (queries, program) = inferred_program.decompose();
     let mut sorted_queries = queries.into_sorted();
     sorted_queries.reverse();
 
     let mut reflow = Reflow::new_unindented(writer);
-    write_source_with_answers(&mut reflow, source, sorted_queries, 0)?;
+    write_source_with_answers(&mut reflow, test_module, sorted_queries, 0)?;
 
-    // Finish up with any remaining print options we were asked to provide.
-    let PrintOptions { can_decls } = print_options;
+    // Finish up with any remaining emit options we were asked to provide.
+    let EmitOptions { can_decls, mono } = emit_options;
     if can_decls {
         writeln!(writer, "\n{EMIT_HEADER}can_decls")?;
         program.write_can_decls(writer)?;
+    }
+
+    if mono {
+        writeln!(writer, "\n{EMIT_HEADER}mono")?;
+        // Unfortunately, with the current setup we must now recompile into the IR.
+        // TODO: extend the data returned by a monomorphized module to include
+        // that of a solved module.
+        mono::write_compiled_ir(
+            writer,
+            test_module,
+            other_modules,
+            mono_options,
+            can_options.allow_errors,
+        )?;
     }
 
     Ok(())

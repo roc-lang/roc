@@ -1138,8 +1138,8 @@ fn to_expr_report<'b>(
                     ),
                 }
             }
-            Reason::FnCall { name, arity } => match count_arguments(&found) {
-                0 => {
+            Reason::FnCall { name, arity } => match describe_wanted_function(&found) {
+                DescribedFunction::NotAFunction(tag) => {
                     let this_value = match name {
                         None => alloc.text("This value"),
                         Some(symbol) => alloc.concat([
@@ -1149,30 +1149,43 @@ fn to_expr_report<'b>(
                         ]),
                     };
 
-                    let lines = vec![
-                        alloc.concat([
-                            this_value,
-                            alloc.string(format!(
-                                " is not a function, but it was given {}:",
-                                if arity == 1 {
-                                    "1 argument".into()
-                                } else {
-                                    format!("{} arguments", arity)
-                                }
-                            )),
+                    use NotAFunctionTag::*;
+                    let doc = match tag {
+                        OpaqueNeedsUnwrap => alloc.stack([
+                            alloc.concat([
+                                this_value,
+                                alloc.reflow(
+                                    " is an opaque type, so it cannot be called with an argument:",
+                                ),
+                            ]),
+                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?"),
                         ]),
-                        alloc.region(lines.convert_region(expr_region)),
-                        alloc.reflow("Are there any missing commas? Or missing parentheses?"),
-                    ];
+                        Other => alloc.stack([
+                            alloc.concat([
+                                this_value,
+                                alloc.string(format!(
+                                    " is not a function, but it was given {}:",
+                                    if arity == 1 {
+                                        "1 argument".into()
+                                    } else {
+                                        format!("{} arguments", arity)
+                                    }
+                                )),
+                            ]),
+                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.reflow("Are there any missing commas? Or missing parentheses?"),
+                        ]),
+                    };
 
                     Report {
                         filename,
                         title: "TOO MANY ARGS".to_string(),
-                        doc: alloc.stack(lines),
+                        doc,
                         severity,
                     }
                 }
-                n => {
+                DescribedFunction::Arguments(n) => {
                     let this_function = match name {
                         None => alloc.text("This function"),
                         Some(symbol) => alloc.concat([
@@ -1543,13 +1556,35 @@ fn does_not_implement<'a>(
     ])
 }
 
-fn count_arguments(tipe: &ErrorType) -> usize {
+enum DescribedFunction {
+    Arguments(usize),
+    NotAFunction(NotAFunctionTag),
+}
+
+enum NotAFunctionTag {
+    OpaqueNeedsUnwrap,
+    Other,
+}
+
+fn describe_wanted_function(tipe: &ErrorType) -> DescribedFunction {
     use ErrorType::*;
 
     match tipe {
-        Function(args, _, _) => args.len(),
-        Alias(_, _, actual, _) => count_arguments(actual),
-        _ => 0,
+        Function(args, _, _) => DescribedFunction::Arguments(args.len()),
+        Alias(_, _, actual, AliasKind::Structural) => describe_wanted_function(actual),
+        Alias(_, _, actual, AliasKind::Opaque) => {
+            let tag = if matches!(
+                describe_wanted_function(actual),
+                DescribedFunction::Arguments(_)
+            ) {
+                NotAFunctionTag::OpaqueNeedsUnwrap
+            } else {
+                NotAFunctionTag::Other
+            };
+
+            DescribedFunction::NotAFunction(tag)
+        }
+        _ => DescribedFunction::NotAFunction(NotAFunctionTag::Other),
     }
 }
 
