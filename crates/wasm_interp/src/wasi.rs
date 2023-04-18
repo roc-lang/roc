@@ -240,6 +240,7 @@ impl<'a> WasiDispatcher<'a> {
 
                 let mut n_written: i32 = 0;
                 let mut negative_length_count = 0;
+                let mut write_result = Ok(());
                 for i in 0..iovs_len {
                     // https://man7.org/linux/man-pages/man2/readv.2.html
                     // struct iovec {
@@ -258,18 +259,15 @@ impl<'a> WasiDispatcher<'a> {
                     }
                     let bytes = &memory[iov_base..][..iov_len as usize];
 
-                    match &mut write_lock {
-                        WriteLock::StdOut(stdout) => {
-                            n_written += stdout.write(bytes).unwrap() as i32;
-                        }
-                        WriteLock::Stderr(stderr) => {
-                            n_written += stderr.write(bytes).unwrap() as i32;
-                        }
-                        WriteLock::RegularFile(content) => {
-                            content.extend_from_slice(bytes);
-                            n_written += bytes.len() as i32;
-                        }
+                    write_result = match &mut write_lock {
+                        WriteLock::StdOut(stdout) => stdout.write_all(bytes),
+                        WriteLock::Stderr(stderr) => stderr.write_all(bytes),
+                        WriteLock::RegularFile(content) => content.write_all(bytes),
+                    };
+                    if write_result.is_err() {
+                        break;
                     }
+                    n_written += bytes.len() as i32;
                 }
 
                 write_i32(memory, ptr_nwritten, n_written);
@@ -281,7 +279,10 @@ impl<'a> WasiDispatcher<'a> {
                     );
                 }
 
-                success_code
+                match write_result {
+                    Ok(()) => success_code,
+                    Err(_) => Some(Value::I32(Errno::Io as i32)),
+                }
             }
             "path_create_directory" => todo!("WASI {}({:?})", function_name, arguments),
             "path_filestat_get" => todo!("WASI {}({:?})", function_name, arguments),
