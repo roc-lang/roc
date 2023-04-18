@@ -257,40 +257,6 @@ pub fn refcount_reset_proc_body<'a>(
             )
         };
 
-        let alloc_addr_stmt = {
-            let alignment = root.create_symbol(ident_ids, "alignment");
-            let alignment_int = layout_interner
-                .get(layout)
-                .allocation_alignment_bytes(layout_interner, root.target_info);
-            let alignment_expr = Expr::Literal(Literal::Int((alignment_int as i128).to_ne_bytes()));
-            let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
-            let alloc_addr_expr = Expr::Call(Call {
-                call_type: CallType::LowLevel {
-                    op: LowLevel::NumSubWrap,
-                    update_mode: UpdateModeId::BACKEND_DUMMY,
-                },
-                arguments: root.arena.alloc([addr, alignment]),
-            });
-
-            Stmt::Let(
-                alignment,
-                alignment_expr,
-                root.layout_isize,
-                root.arena.alloc(
-                    //
-                    Stmt::Let(
-                        alloc_addr,
-                        alloc_addr_expr,
-                        root.layout_isize,
-                        root.arena.alloc(
-                            //
-                            Stmt::Ret(alloc_addr),
-                        ),
-                    ),
-                ),
-            )
-        };
-
         let rc_contents_stmt = refcount_union_contents(
             root,
             ident_ids,
@@ -302,7 +268,7 @@ pub fn refcount_reset_proc_body<'a>(
             structure,
             tag_id_sym,
             tag_id_layout,
-            alloc_addr_stmt,
+            Stmt::Ret(addr),
         );
 
         tag_id_stmt(root.arena.alloc(
