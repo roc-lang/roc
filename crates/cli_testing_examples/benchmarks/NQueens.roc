@@ -5,32 +5,31 @@ app "nqueens"
 
 main : Task.Task {} []
 main =
-    Task.after
-        Task.getInt
-        \n ->
+    inputResult <- Task.attempt Task.getInt
+
+    when inputResult is
+        Ok n ->
             queens n # original koka 13
-            |> Num.toStr
-            |> Task.putLine
+                |> Num.toStr
+                |> Task.putLine
+
+        Err GetIntError ->
+            Task.putLine "Error: Failed to get Integer from stdin."
 
 ConsList a : [Nil, Cons a (ConsList a)]
 
 queens = \n -> length (findSolutions n n)
 
-length : ConsList a -> I64
-length = \xs -> lengthHelp xs 0
+findSolutions = \n, k ->
+    if k <= 0 then # should we use U64 as input type here instead?
+        Cons Nil Nil
+    else
+        extend n Nil (findSolutions n (k - 1))
 
-lengthHelp : ConsList a, I64 -> I64
-lengthHelp = \foobar, acc ->
-    when foobar is
-        Cons _ lrest -> lengthHelp lrest (1 + acc)
+extend = \n, acc, solutions ->
+    when solutions is
         Nil -> acc
-
-safe : I64, I64, ConsList I64 -> Bool
-safe = \queen, diagonal, xs ->
-    when xs is
-        Nil -> Bool.true
-        Cons q t ->
-            queen != q && queen != q + diagonal && queen != q - diagonal && safe queen (diagonal + 1) t
+        Cons soln rest -> extend n (appendSafe n soln acc) rest
 
 appendSafe : I64, ConsList I64, ConsList (ConsList I64) -> ConsList (ConsList I64)
 appendSafe = \k, soln, solns ->
@@ -41,13 +40,22 @@ appendSafe = \k, soln, solns ->
     else
         appendSafe (k - 1) soln solns
 
-extend = \n, acc, solutions ->
-    when solutions is
-        Nil -> acc
-        Cons soln rest -> extend n (appendSafe n soln acc) rest
 
-findSolutions = \n, k ->
-    if k == 0 then
-        Cons Nil Nil
-    else
-        extend n Nil (findSolutions n (k - 1))
+safe : I64, I64, ConsList I64 -> Bool
+safe = \queen, diagonal, xs ->
+    when xs is
+        Nil -> Bool.true
+        Cons q t ->
+            queen != q && queen != q + diagonal && queen != q - diagonal && safe queen (diagonal + 1) t
+
+
+length : ConsList a -> I64
+length = \xs ->
+    dbg "length"
+    lengthHelp xs 0
+
+lengthHelp : ConsList a, I64 -> I64
+lengthHelp = \foobar, acc ->
+    when foobar is
+        Cons _ lrest -> lengthHelp lrest (1 + acc)
+        Nil -> acc
