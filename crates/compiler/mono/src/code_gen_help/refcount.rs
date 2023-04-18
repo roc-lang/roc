@@ -678,12 +678,12 @@ pub fn rc_ptr_from_data_ptr_help<'a>(
     let rc_addr_sym = root.create_symbol(ident_ids, "rc_addr");
     let sub_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::NumSub,
+            op: LowLevel::NumSubSaturated,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: root.arena.alloc([addr_sym, ptr_size_sym]),
     });
-    let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, root.layout_isize, next);
+    let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, Layout::usize(root.target_info), next);
 
     // Typecast the refcount address from integer to pointer
     let cast_expr = Expr::Call(Call {
