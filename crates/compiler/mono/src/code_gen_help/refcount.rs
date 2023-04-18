@@ -439,12 +439,10 @@ pub fn refcount_resetref_proc_body<'a>(
     // Reset structure is unique. Return a pointer to the allocation.
     let then_stmt = {
         let alignment = root.create_symbol(ident_ids, "alignment");
-        let alignment_expr = Expr::Literal(Literal::Int(
-            (layout_interner
-                .get(layout)
-                .alignment_bytes(layout_interner, root.target_info) as i128)
-                .to_ne_bytes(),
-        ));
+        let alignment_int = layout_interner
+            .get(layout)
+            .allocation_alignment_bytes(layout_interner, root.target_info);
+        let alignment_expr = Expr::Literal(Literal::Int((alignment_int as i128).to_ne_bytes()));
         let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
         let alloc_addr_expr = Expr::Call(Call {
             call_type: CallType::LowLevel {
