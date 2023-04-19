@@ -2185,11 +2185,14 @@ impl FloatingPointImmediate {
     }
 }
 
-// Below here are the functions for all of the assembly instructions.
+// Below here are the functions for all of the base assembly instructions.
 // Their names are based on the instruction and operators combined.
 // You should call `buf.reserve()` if you push or extend more than once.
 // Unit tests are added at the bottom of the file to ensure correct asm generation.
 // Please keep these in alphanumeric order.
+// Floating-point (and advanced SIMD) instructions are at the bottom.
+
+// ARM manual section C6
 
 /// `ADD Xd, Xn, imm12` -> Add Xn and imm12 and place the result into Xd.
 #[inline(always)]
@@ -2715,6 +2718,9 @@ fn udiv_reg64_reg64_reg64(
 
     buf.extend(inst.bytes());
 }
+
+// Floating point (and advanced SIMD) instructions
+// ARM manual section C7
 
 #[inline(always)]
 fn fadd_freg_freg_freg(
