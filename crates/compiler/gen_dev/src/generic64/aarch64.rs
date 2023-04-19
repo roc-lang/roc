@@ -2773,6 +2773,7 @@ fn fmov_freg_freg(
 /// See Table C2-1 in the ARM manual for a table of every float that can be encoded in 8 bits.
 /// If the float cannot be encoded, return None.
 /// This operation is the inverse of VFPExpandImm in the ARM manual.
+#[inline(always)]
 fn encode_f32_to_imm8(imm: f32) -> Option<u8> {
     let n = 32;
     let e = 8; // number of exponent bits in a 32-bit float
@@ -2823,6 +2824,7 @@ fn encode_f32_to_imm8(imm: f32) -> Option<u8> {
 /// See Table C2-1 in the ARM manual for a table of every float that can be encoded in 8 bits.
 /// If the float cannot be encoded, return None.
 /// This operation is the inverse of VFPExpandImm in the ARM manual.
+#[inline(always)]
 fn encode_f64_to_imm8(imm: f64) -> Option<u8> {
     let n = 64;
     let e = 11; // number of exponent bits in a 64-bit float
