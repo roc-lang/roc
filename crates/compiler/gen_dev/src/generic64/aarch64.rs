@@ -2722,6 +2722,26 @@ fn udiv_reg64_reg64_reg64(
 // Floating point (and advanced SIMD) instructions
 // ARM manual section C7
 
+/// `FABS Sd/Dd, Sn/Dn` -> Take the absolute value of Sn/Dn and place the result into Sd/Dd.
+#[inline(always)]
+fn fabs_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    dst: AArch64FloatReg,
+    src: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
+            opcode: 0b000001,
+            ptype: ftype,
+            rd: dst,
+            rn: src,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+/// `FADD Sd/Dd, Sn/Dn, Sm/Dm` -> Add Sn/Dn and Sm/Dm and place the result into Sd/Dd.
 #[inline(always)]
 fn fadd_freg_freg_freg(
     buf: &mut Vec<'_, u8>,
@@ -2742,24 +2762,7 @@ fn fadd_freg_freg_freg(
     buf.extend(inst.bytes());
 }
 
-#[inline(always)]
-fn fabs_freg_freg(
-    buf: &mut Vec<'_, u8>,
-    ftype: FloatType,
-    dst: AArch64FloatReg,
-    src: AArch64FloatReg,
-) {
-    let inst =
-        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
-            opcode: 0b000001,
-            ptype: ftype,
-            rd: dst,
-            rn: src,
-        });
-
-    buf.extend(inst.bytes());
-}
-
+/// `FCMP Sn/Dn, Sm/Dm` -> Compare Sn/Dn and Sm/Dm, setting condition flags.
 #[inline(always)]
 fn fcmp_freg_freg(
     buf: &mut Vec<'_, u8>,
@@ -2777,6 +2780,7 @@ fn fcmp_freg_freg(
     buf.extend(inst.bytes());
 }
 
+/// `FCVT Sd, Dn` -> Convert 64-bit float Dn to 32-bit float Sd.
 #[inline(always)]
 fn fcvt_freg32_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
     let inst =
@@ -2790,6 +2794,7 @@ fn fcvt_freg32_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64F
     buf.extend(inst.bytes());
 }
 
+/// `FCVT Dd, Sn` -> Convert 32-bit float Sn to 64-bit float Dd.
 #[inline(always)]
 fn fcvt_freg64_freg32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
     let inst =
@@ -2803,6 +2808,7 @@ fn fcvt_freg64_freg32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64F
     buf.extend(inst.bytes());
 }
 
+/// `FDIV Sd/Dd, Sn/Dn, Sm/Dm` -> Divide Sn/Dn by Sm/Dm and place the result into Sd/Dd.
 #[inline(always)]
 fn fdiv_freg_freg_freg(
     buf: &mut Vec<'_, u8>,
@@ -2823,6 +2829,7 @@ fn fdiv_freg_freg_freg(
     buf.extend(inst.bytes());
 }
 
+/// `FMOV Sd/Dd, Sn/Dn` -> Move Sn/Dn to Sd/Dd.
 #[inline(always)]
 fn fmov_freg_freg(
     buf: &mut Vec<'_, u8>,
@@ -2956,6 +2963,7 @@ fn fmov_freg_imm8(buf: &mut Vec<'_, u8>, ftype: FloatType, dst: AArch64FloatReg,
     buf.extend(inst.bytes());
 }
 
+/// `FMUL Sd/Dd, Sn/Dn, Sm/Dm` -> Multiply Sn/Dn by Sm/Dm and store the result in Sd/Dd.
 #[inline(always)]
 fn fmul_freg_freg_freg(
     buf: &mut Vec<'_, u8>,
@@ -2976,6 +2984,7 @@ fn fmul_freg_freg_freg(
     buf.extend(inst.bytes());
 }
 
+/// `FSQRT Sd/Dd, Sn/Dn` -> Compute the square root of Sn/Dn and store the result in Sd/Dd.
 #[inline(always)]
 fn fsqrt_freg_freg(
     buf: &mut Vec<'_, u8>,
@@ -2995,6 +3004,7 @@ fn fsqrt_freg_freg(
 }
 
 /// Currently, we're only using MOVI to set a float register to 0.0.
+/// `MOVI Dd, #0.0` -> Move 0.0 to Dd
 #[inline(always)]
 fn movi_freg_zero(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg) {
     let inst = AdvancedSimdModifiedImmediate::new(dst);
@@ -3002,6 +3012,7 @@ fn movi_freg_zero(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg) {
     buf.extend(inst.bytes());
 }
 
+/// `SCVTF Sd/Dd, Xn` -> Convert Xn to a float and store the result in Sd/Dd.
 #[inline(always)]
 fn scvtf_freg_reg64(
     buf: &mut Vec<'_, u8>,
@@ -3772,6 +3783,8 @@ mod tests {
             ALL_GENERAL_REGS
         );
     }
+
+    // Float instructions
 
     #[test]
     fn test_fabs_freg_freg() {
