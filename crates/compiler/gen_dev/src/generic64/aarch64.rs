@@ -1023,39 +1023,23 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn to_float_freg64_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src: AArch64GeneralReg,
-    ) {
-        todo!("registers to float for AArch64");
+    fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64GeneralReg) {
+        scvtf_freg_reg64(buf, FloatType::Double, dst, src);
     }
 
     #[inline(always)]
-    fn to_float_freg32_reg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src: AArch64GeneralReg,
-    ) {
-        todo!("registers to float for AArch64");
+    fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64GeneralReg) {
+        scvtf_freg_reg64(buf, FloatType::Single, dst, src);
     }
 
     #[inline(always)]
-    fn to_float_freg32_freg64(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src: AArch64FloatReg,
-    ) {
-        todo!("registers to float for AArch64");
+    fn to_float_freg32_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
+        fcvt_freg32_freg64(buf, dst, src);
     }
 
     #[inline(always)]
-    fn to_float_freg64_freg32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src: AArch64FloatReg,
-    ) {
-        todo!("registers to float for AArch64");
+    fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
+        fcvt_freg64_freg32(buf, dst, src);
     }
 
     #[inline(always)]
@@ -1931,6 +1915,62 @@ impl AdvancedSimdModifiedImmediate {
     }
 }
 
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct ConversionBetweenFloatingPointAndInteger {
+    sf: bool,
+    fixed: bool,
+    s: bool,
+    fixed2: Integer<u8, packed_bits::Bits<5>>,
+    ptype: Integer<u8, packed_bits::Bits<2>>,
+    fixed3: bool,
+    rmode: Integer<u8, packed_bits::Bits<2>>,
+    opcode: Integer<u8, packed_bits::Bits<3>>,
+    fixed4: Integer<u8, packed_bits::Bits<6>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for ConversionBetweenFloatingPointAndInteger {}
+
+pub struct ConversionBetweenFloatingPointAndIntegerParams {
+    ptype: FloatType,
+    rmode: u8,
+    opcode: u8,
+    rn: AArch64GeneralReg,
+    rd: AArch64FloatReg,
+}
+
+impl ConversionBetweenFloatingPointAndInteger {
+    #[inline(always)]
+    fn new(
+        ConversionBetweenFloatingPointAndIntegerParams {
+            ptype,
+            rmode,
+            opcode,
+            rn,
+            rd,
+        }: ConversionBetweenFloatingPointAndIntegerParams,
+    ) -> Self {
+        debug_assert!(rmode <= 0b11);
+        debug_assert!(opcode <= 0b111);
+
+        Self {
+            sf: true,
+            fixed: false,
+            s: false,
+            fixed2: 0b11110.into(),
+            ptype: ptype.id().into(),
+            fixed3: true,
+            rmode: rmode.into(),
+            opcode: opcode.into(),
+            fixed4: 0b000000.into(),
+            rn: rn.id().into(),
+            rd: rd.id().into(),
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq)]
 pub enum FloatType {
     /// 32 bit
@@ -2732,6 +2772,32 @@ fn fcmp_freg_freg(
 }
 
 #[inline(always)]
+fn fcvt_freg32_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
+    let inst =
+        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
+            opcode: 0b000100,
+            ptype: FloatType::Double,
+            rd: dst,
+            rn: src,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn fcvt_freg64_freg32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
+    let inst =
+        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
+            opcode: 0b000101,
+            ptype: FloatType::Single,
+            rd: dst,
+            rn: src,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
 fn fdiv_freg_freg_freg(
     buf: &mut Vec<'_, u8>,
     ftype: FloatType,
@@ -2926,6 +2992,26 @@ fn fsqrt_freg_freg(
 #[inline(always)]
 fn movi_freg_zero(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg) {
     let inst = AdvancedSimdModifiedImmediate::new(dst);
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn scvtf_freg_reg64(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatType,
+    dst: AArch64FloatReg,
+    src: AArch64GeneralReg,
+) {
+    let inst = ConversionBetweenFloatingPointAndInteger::new(
+        ConversionBetweenFloatingPointAndIntegerParams {
+            opcode: 0b010,
+            rmode: 0b00,
+            ptype: ftype,
+            rd: dst,
+            rn: src,
+        },
+    );
 
     buf.extend(inst.bytes());
 }
@@ -3732,6 +3818,34 @@ mod tests {
     }
 
     #[test]
+    fn test_fcvt_freg32_freg64() {
+        disassembler_test!(
+            fcvt_freg32_freg64,
+            |reg1: AArch64FloatReg, reg2: AArch64FloatReg| format!(
+                "fcvt {}, {}",
+                reg1.capstone_string(FloatType::Single),
+                reg2.capstone_string(FloatType::Double)
+            ),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_fcvt_freg64_freg32() {
+        disassembler_test!(
+            fcvt_freg64_freg32,
+            |reg1: AArch64FloatReg, reg2: AArch64FloatReg| format!(
+                "fcvt {}, {}",
+                reg1.capstone_string(FloatType::Double),
+                reg2.capstone_string(FloatType::Single)
+            ),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
     fn test_fdiv_freg_freg_freg() {
         disassembler_test!(
             fdiv_freg_freg_freg,
@@ -3958,6 +4072,21 @@ mod tests {
                 reg.capstone_string(FloatType::Double)
             ),
             ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_scvtf_freg_reg64() {
+        disassembler_test!(
+            scvtf_freg_reg64,
+            |ftype: FloatType, reg1: AArch64FloatReg, reg2: AArch64GeneralReg| format!(
+                "scvtf {}, {}",
+                reg1.capstone_string(ftype),
+                reg2.capstone_string(UsesZR)
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS
         );
     }
 }
