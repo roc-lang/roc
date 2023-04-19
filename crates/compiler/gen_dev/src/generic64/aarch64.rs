@@ -3889,6 +3889,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unusual_byte_groupings)]
     fn test_encode_f32_to_imm8() {
         // See ARM manual Table C2-1: A64 Floating-point modified immediate constants
         assert_eq!(encode_f32_to_imm8(2.0), Some(0b0_000_0000));
@@ -3938,6 +3939,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unusual_byte_groupings)]
     fn test_encode_f64_to_imm8() {
         // See ARM manual Table C2-1: A64 Floating-point modified immediate constants
         assert_eq!(encode_f64_to_imm8(2.0), Some(0b0_000_0000));
