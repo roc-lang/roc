@@ -28,6 +28,7 @@ procedure List.80 (List.517, List.518, List.519, List.520, List.521):
             let List.505 : U64 = CallByName Num.19 List.436 List.506;
             jump List.500 List.433 List.503 List.435 List.505 List.437;
         else
+            dec List.433;
             ret List.434;
     in
     jump List.500 List.517 List.518 List.519 List.520 List.521;
@@ -65,7 +66,6 @@ procedure Test.11 (Test.53, Test.54):
                 case 0:
                     dec Test.7;
                     let Test.28 : Str = CallByName Test.2 Test.29;
-                    dec Test.29;
                     ret Test.28;
             
                 case 1:
@@ -89,7 +89,6 @@ procedure Test.11 (Test.53, Test.54):
     jump Test.27 Test.53 Test.54;
 
 procedure Test.2 (Test.13):
-    inc Test.13;
     ret Test.13;
 
 procedure Test.3 (Test.14):
@@ -136,7 +135,6 @@ procedure Test.9 (Test.10, #Attr.12):
         case 0:
             dec Test.7;
             let Test.39 : Str = CallByName Test.2 Test.10;
-            dec Test.10;
             jump Test.38 Test.39;
     
         case 1:
@@ -156,14 +154,12 @@ procedure Test.0 ():
     let Test.23 : Int1 = CallByName Bool.2;
     let Test.22 : Int1 = CallByName Test.1 Test.23;
     let Test.16 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.18 Test.20 Test.21 Test.22;
-    dec Test.20;
     let Test.18 : Str = "hello";
     let Test.19 : U8 = GetTagId Test.16;
     switch Test.19:
         case 0:
             dec Test.16;
             let Test.17 : Str = CallByName Test.2 Test.18;
-            dec Test.18;
             ret Test.17;
     
         case 1:

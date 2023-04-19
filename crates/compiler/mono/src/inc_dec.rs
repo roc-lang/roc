@@ -1,1554 +1,1233 @@
-use crate::borrow::{Ownership, ParamMap, BORROWED, OWNED};
-use crate::ir::{
-    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
-    UpdateModeIds,
-};
-use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
-use bumpalo::collections::Vec;
+// This program was written by Jelle Teeuwissen within a final
+// thesis project of the Computing Science master program at Utrecht
+// University under supervision of Wouter Swierstra (w.s.swierstra@uu.nl).
+
+// Implementation based of Perceus: Garbage Free Reference Counting with Reuse
+// https://www.microsoft.com/en-us/research/uploads/prod/2021/06/perceus-pldi21.pdf
+
+use std::{collections::HashMap, hash::BuildHasherDefault};
+
+use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_collections::{all::WyHash, MutMap, MutSet};
+use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
-/// Data and Function ownership relation for higher-order lowlevels
-///
-/// Normally, the borrowing algorithm figures out how to own/borrow data so that
-/// the borrows match up. But that fails for our higher-order lowlevels, because
-/// they are rigid (cannot add extra inc/dec in there dynamically) and opaque to
-/// the borrow inference.
-///
-/// So, we must fix this up ourselves. This code is deliberately verbose to make
-/// it easier to understand without full context.
-///
-/// If we take `List.map list f` as an example, then there are two orders of freedom:
-///
-/// - `list` can be either owned or borrowed by `List.map`
-/// - `f` can require either owned or borrowed elements from `list`
-///
-/// Hence we get the four options below: the data (`list` in the example) is owned or borrowed by
-/// the higher-order function, and the function argument (`f`) either owns or borrows the elements.
-#[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, Copy)]
-#[repr(u8)]
-enum DataFunction {
-    /// `list` is owned, and `f` expects owned values. That means that when we run the map, all
-    /// list elements will be consumed (because they are passed to `f`, which takes owned values)
-    /// Because we own the whole list, and must consume it, we need to `decref` the list.
-    /// `decref` just decrements the container, and will never recursively decrement elements
-    DataOwnedFunctionOwns,
-    /// `list` is owned, and `f` expects borrowed values. After running `f` for each element, the
-    /// elements are not consumed, and neither is the list. We must consume it though, because we
-    /// own the `list`. Therefore we need to perform a `dec`
-    DataOwnedFunctionBorrows,
-    /// `list` is borrowed, `f` borrows, so the trivial implementation is correct: just map `f`
-    /// over elements of `list`, and don't do anything else.
-    DataBorrowedFunctionBorrows,
-    /// The trickiest case: we only borrow the `list`, but the mapped function `f` needs owned
-    /// values. There are two options
-    ///
-    /// - define some `fBorrow` that takes a borrowed value, `inc`'s it (similar to `.clone()` on
-    ///     an `Rc<T>` in rust) and then passes the (now owned) value to `f`, then rewrite the call
-    ///     to `List.map list fBorrow`
-    /// - `inc` the list (which recursively increments the elements), map `f` over the list,
-    ///     consuming one RC token on the elements, finally `decref` the list.
-    ///
-    /// For simplicity, we use the second option right now, but the first option is probably
-    /// preferable long-term.
-    DataBorrowedFunctionOwns,
-}
+use crate::{
+    borrow::{lowlevel_borrow_signature, Ownership},
+    ir::{
+        BranchInfo, Call, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
+        ModifyRc, Param, Proc, ProcLayout, Stmt,
+    },
+    layout::{InLayout, LayoutInterner, STLayoutInterner},
+    low_level::HigherOrder,
+};
 
-impl DataFunction {
-    fn new(vars: &VarMap, lowlevel_argument: Symbol, passed_function_argument: Param) -> Self {
-        use DataFunction::*;
-
-        let data_borrowed = !vars[&lowlevel_argument].consume;
-        let function_ownership = passed_function_argument.ownership;
-
-        match (data_borrowed, function_ownership) {
-            (BORROWED, Ownership::Borrowed) => DataBorrowedFunctionBorrows,
-            (BORROWED, Ownership::Owned) => DataBorrowedFunctionOwns,
-            (OWNED, Ownership::Borrowed) => DataOwnedFunctionBorrows,
-            (OWNED, Ownership::Owned) => DataOwnedFunctionOwns,
-        }
-    }
-}
-
-pub fn free_variables(stmt: &Stmt<'_>) -> MutSet<Symbol> {
-    let (mut occurring, bound) = occurring_variables(stmt);
-
-    for ref s in bound {
-        occurring.remove(s);
-    }
-
-    occurring
-}
-
-pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
-    let mut stack = std::vec![stmt];
-    let mut result = MutSet::default();
-    let mut bound_variables = MutSet::default();
-
-    while let Some(stmt) = stack.pop() {
-        use Stmt::*;
-
-        match stmt {
-            Let(symbol, expr, _, cont) => {
-                occurring_variables_expr(expr, &mut result);
-                result.insert(*symbol);
-                bound_variables.insert(*symbol);
-                stack.push(cont);
-            }
-
-            Ret(symbol) => {
-                result.insert(*symbol);
-            }
-
-            Refcounting(modify, cont) => {
-                let symbol = modify.get_symbol();
-                result.insert(symbol);
-                stack.push(cont);
-            }
-
-            Dbg {
-                symbol, remainder, ..
-            } => {
-                result.insert(*symbol);
-                stack.push(remainder);
-            }
-
-            Expect {
-                condition,
-                remainder,
-                lookups,
-                ..
-            } => {
-                result.insert(*condition);
-                result.extend(lookups.iter().copied());
-                stack.push(remainder);
-            }
-
-            ExpectFx {
-                condition,
-                remainder,
-                lookups,
-                ..
-            } => {
-                result.insert(*condition);
-                result.extend(lookups.iter().copied());
-                stack.push(remainder);
-            }
-
-            Jump(_, arguments) => {
-                result.extend(arguments.iter().copied());
-            }
-
-            Join {
-                parameters,
-                body: continuation,
-                remainder,
-                ..
-            } => {
-                result.extend(parameters.iter().map(|p| p.symbol));
-
-                stack.push(continuation);
-                stack.push(remainder);
-            }
-
-            Switch {
-                cond_symbol,
-                branches,
-                default_branch,
-                ..
-            } => {
-                result.insert(*cond_symbol);
-
-                stack.extend(branches.iter().map(|(_, _, s)| s));
-                stack.push(default_branch.1);
-            }
-
-            Crash(sym, _) => {
-                result.insert(*sym);
-            }
-        }
-    }
-
-    (result, bound_variables)
-}
-
-fn occurring_variables_call(call: &crate::ir::Call<'_>, result: &mut MutSet<Symbol>) {
-    // NOTE though the function name does occur, it is a static constant in the program
-    // for liveness, it should not be included here.
-    result.extend(call.arguments.iter().copied());
-}
-
-pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
-    use Expr::*;
-
-    match expr {
-        StructAtIndex {
-            structure: symbol, ..
-        } => {
-            result.insert(*symbol);
-        }
-
-        Call(call) => occurring_variables_call(call, result),
-
-        Array {
-            elems: arguments, ..
-        } => result.extend(arguments.iter().filter_map(|e| e.to_symbol())),
-
-        Tag { arguments, .. } | Struct(arguments) => {
-            result.extend(arguments.iter().copied());
-        }
-        Reuse {
-            symbol, arguments, ..
-        } => {
-            result.extend(arguments.iter().copied());
-            result.insert(*symbol);
-        }
-        Reset { symbol: x, .. } => {
-            result.insert(*x);
-        }
-
-        ExprBox { symbol } | ExprUnbox { symbol } => {
-            result.insert(*symbol);
-        }
-
-        EmptyArray | RuntimeErrorFunction(_) | Literal(_) | NullPointer => {}
-
-        GetTagId {
-            structure: symbol, ..
-        } => {
-            result.insert(*symbol);
-        }
-
-        UnionAtIndex {
-            structure: symbol, ..
-        } => {
-            result.insert(*symbol);
-        }
-    }
-}
-
-/* Insert explicit RC instructions. So, it assumes the input code does not contain `inc` nor `dec` instructions.
-   This transformation is applied before lower level optimizations
-   that introduce the instructions `release` and `set`
+/**
+Insert the reference count operations for procedures.
 */
-
-#[derive(Clone, Debug, Copy)]
-struct VarInfo {
-    reference: bool,  // true if the variable may be a reference (aka pointer) at runtime
-    persistent: bool, // true if the variable is statically known to be marked a Persistent at runtime
-    consume: bool,    // true if the variable RC must be "consumed"
-    reset: bool,      // true if the variable is the result of a Reset operation
-}
-
-type VarMap = MutMap<Symbol, VarInfo>;
-pub type LiveVarSet = MutSet<Symbol>;
-pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
-
-#[derive(Clone, Debug)]
-struct Context<'a, 'i> {
+pub fn insert_inc_dec_operations<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i STLayoutInterner<'a>,
-    vars: VarMap,
-    jp_live_vars: JPLiveVarMap, // map: join point => live variables
-    param_map: &'a ParamMap<'a>,
-}
-
-fn update_live_vars<'a>(expr: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
-    let mut v = v.clone();
-
-    occurring_variables_expr(expr, &mut v);
-
-    v
-}
-
-/// `isFirstOcc xs x i = true` if `xs[i]` is the first occurrence of `xs[i]` in `xs`
-fn is_first_occurrence(xs: &[Symbol], i: usize) -> bool {
-    match xs.get(i) {
-        None => unreachable!(),
-        Some(s) => i == xs.iter().position(|v| s == v).unwrap(),
-    }
-}
-
-/// Return `n`, the number of times `x` is consumed.
-/// - `ys` is a sequence of instruction parameters where we search for `x`.
-/// - `consumeParamPred i = true` if parameter `i` is consumed.
-fn get_num_consumptions<F>(x: Symbol, ys: &[Symbol], consume_param_pred: F) -> usize
-where
-    F: Fn(usize) -> bool,
-{
-    let mut n = 0;
-
-    for (i, y) in ys.iter().enumerate() {
-        if x == *y && consume_param_pred(i) {
-            n += 1;
-        }
-    }
-    n
-}
-
-/// Return true if `x` also occurs in `ys` in a position that is not consumed.
-/// That is, it is also passed as a borrow reference.
-fn is_borrow_param_help<F>(x: Symbol, ys: &[Symbol], consume_param_pred: F) -> bool
-where
-    F: Fn(usize) -> bool,
-{
-    ys.iter()
-        .enumerate()
-        .any(|(i, y)| x == *y && !consume_param_pred(i))
-}
-
-fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
-    // default to owned arguments
-    let is_owned = |i: usize| match ps.get(i) {
-        Some(param) => match param.ownership {
-            Ownership::Owned => true,
-            Ownership::Borrowed => false,
-        },
-        None => unreachable!("or?"),
-    };
-    is_borrow_param_help(x, ys, is_owned)
-}
-
-// We do not need to consume the projection of a variable that is not consumed
-fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
-    match e {
-        Expr::StructAtIndex { structure: x, .. } => match m.get(x) {
-            Some(info) => info.consume,
-            None => true,
-        },
-        Expr::UnionAtIndex { structure: x, .. } => match m.get(x) {
-            Some(info) => info.consume,
-            None => true,
-        },
-        _ => true,
-    }
-}
-
-impl<'a, 'i> Context<'a, 'i> {
-    pub fn new(
-        arena: &'a Bump,
-        layout_interner: &'i STLayoutInterner<'a>,
-        param_map: &'a ParamMap<'a>,
-    ) -> Self {
-        let mut vars = MutMap::default();
-
-        for symbol in param_map.iter_symbols() {
-            vars.insert(
-                *symbol,
-                VarInfo {
-                    reference: false, // assume function symbols are global constants
-                    persistent: true, // assume function symbols are global constants
-                    consume: false,   // no need to consume this variable
-                    reset: false,     // reset symbols cannot be passed as function arguments
-                },
-            );
-        }
-
-        Self {
-            arena,
-            layout_interner,
-            vars,
-            jp_live_vars: MutMap::default(),
-            param_map,
-        }
+    procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
+) {
+    // Create a SymbolRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
+    let mut symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
+    for proc_symbol in procedures.keys().map(|(symbol, _layout)| *symbol) {
+        symbol_rc_types_env.insert_proc_symbol(proc_symbol);
     }
 
-    fn get_var_info(&self, symbol: Symbol) -> VarInfo {
-        match self.vars.get(&symbol) {
-            Some(info) => *info,
-            None => {
-                if cfg!(debug_assertions) {
-                    eprintln!(
-                        "Symbol {:?} {} has no info in self.vars",
-                        symbol,
-                        symbol, // self.vars
-                    );
-                }
-
-                VarInfo {
-                    persistent: true,
-                    reference: false,
-                    consume: false,
-                    reset: false,
-                }
-            }
-        }
-    }
-
-    fn add_inc(&self, symbol: Symbol, inc_amount: u64, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
-        debug_assert!(inc_amount > 0);
-
-        let info = self.get_var_info(symbol);
-
-        if info.persistent {
-            // persistent values are never reference counted
-            return stmt;
-        }
-
-        // if this symbol is never a reference, don't emit
-        if !info.reference {
-            return stmt;
-        }
-
-        let modify = ModifyRc::Inc(symbol, inc_amount);
-        self.arena.alloc(Stmt::Refcounting(modify, stmt))
-    }
-
-    fn add_dec(&self, symbol: Symbol, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
-        let info = self.get_var_info(symbol);
-
-        if info.persistent {
-            // persistent values are never reference counted
-            return stmt;
-        }
-
-        // if this symbol is never a reference, don't emit
-        if !info.reference {
-            return stmt;
-        }
-
-        let modify = if info.reset {
-            ModifyRc::DecRef(symbol)
-        } else {
-            ModifyRc::Dec(symbol)
-        };
-
-        self.arena.alloc(Stmt::Refcounting(modify, stmt))
-    }
-
-    fn add_inc_before_consume_all(
-        &self,
-        xs: &[Symbol],
-        b: &'a Stmt<'a>,
-        live_vars_after: &LiveVarSet,
-    ) -> &'a Stmt<'a> {
-        self.add_inc_before_help(xs, |_: usize| true, b, live_vars_after)
-    }
-
-    fn add_inc_before_help<F>(
-        &self,
-        xs: &[Symbol],
-        consume_param_pred: F,
-        mut b: &'a Stmt<'a>,
-        live_vars_after: &LiveVarSet,
-    ) -> &'a Stmt<'a>
-    where
-        F: Fn(usize) -> bool + Clone,
-    {
-        for (i, x) in xs.iter().enumerate() {
-            let info = self.get_var_info(*x);
-            if !info.reference || !is_first_occurrence(xs, i) {
-                // do nothing
-            } else {
-                let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone()); // number of times the argument is used
-
-                // `x` is not a variable that must be consumed by the current procedure
-                let need_not_consume = !info.consume;
-
-                // `x` is live after executing instruction
-                let is_live_after = live_vars_after.contains(x);
-
-                // `x` is used in a position that is passed as a borrow reference
-                let is_borrowed = is_borrow_param_help(*x, xs, consume_param_pred.clone());
-
-                let num_incs = if need_not_consume || is_live_after || is_borrowed {
-                    num_consumptions
-                } else {
-                    num_consumptions - 1
-                };
-
-                if num_incs >= 1 {
-                    b = self.add_inc(*x, num_incs as u64, b)
-                }
-            }
-        }
-        b
-    }
-
-    fn add_inc_before(
-        &self,
-        xs: &[Symbol],
-        ps: &[Param],
-        b: &'a Stmt<'a>,
-        live_vars_after: &LiveVarSet,
-    ) -> &'a Stmt<'a> {
-        // default to owned arguments
-        let pred = |i: usize| match ps.get(i) {
-            Some(param) => match param.ownership {
-                Ownership::Owned => true,
-                Ownership::Borrowed => false,
-            },
-            None => unreachable!("or?"),
-        };
-        self.add_inc_before_help(xs, pred, b, live_vars_after)
-    }
-
-    fn add_dec_if_needed(
-        &self,
-        x: Symbol,
-        b: &'a Stmt<'a>,
-        b_live_vars: &LiveVarSet,
-    ) -> &'a Stmt<'a> {
-        if self.must_consume(x) && !b_live_vars.contains(&x) {
-            self.add_dec(x, b)
-        } else {
-            b
-        }
-    }
-
-    fn must_consume(&self, x: Symbol) -> bool {
-        let info = self.get_var_info(x);
-        info.reference && info.consume
-    }
-
-    fn add_dec_after_application(
-        &self,
-        xs: &[Symbol],
-        ps: &[Param],
-        mut b: &'a Stmt<'a>,
-        b_live_vars: &LiveVarSet,
-    ) -> &'a Stmt<'a> {
-        for (i, x) in xs.iter().enumerate() {
-            // We must add a `dec` if `x` must be consumed, it is alive after the application,
-            // and it has been borrowed by the application.
-            // Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
-            // This is why we check whether it is the first occurrence.
-            if self.must_consume(*x)
-                && is_first_occurrence(xs, i)
-                && is_borrow_param(*x, xs, ps)
-                && !b_live_vars.contains(x)
-            {
-                b = self.add_dec(*x, b);
-            }
-        }
-
-        b
-    }
-
-    fn add_dec_after_lowlevel(
-        &self,
-        xs: &[Symbol],
-        ps: &[bool],
-        mut b: &'a Stmt<'a>,
-        b_live_vars: &LiveVarSet,
-    ) -> &'a Stmt<'a> {
-        for (i, (x, is_borrow)) in xs.iter().zip(ps.iter()).enumerate() {
-            /* We must add a `dec` if `x` must be consumed, it is alive after the application,
-            and it has been borrowed by the application.
-            Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
-            This is why we check whether it is the first occurrence. */
-
-            if self.must_consume(*x)
-                && is_first_occurrence(xs, i)
-                && *is_borrow
-                && !b_live_vars.contains(x)
-            {
-                b = self.add_dec(*x, b);
-            }
-        }
-
-        b
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn visit_call(
-        &self,
-        codegen: &mut CodegenTools<'i>,
-        z: Symbol,
-        call_type: crate::ir::CallType<'a>,
-        arguments: &'a [Symbol],
-        l: InLayout<'a>,
-        b: &'a Stmt<'a>,
-        b_live_vars: &LiveVarSet,
-    ) -> &'a Stmt<'a> {
-        use crate::ir::CallType::*;
-
-        match &call_type {
-            LowLevel { op, .. } => {
-                let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
-
-                let v = Expr::Call(crate::ir::Call {
-                    call_type,
-                    arguments,
-                });
-
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
-
-            HigherOrder(lowlevel) => {
-                self.visit_higher_order_lowlevel(codegen, z, lowlevel, arguments, l, b, b_live_vars)
-            }
-
-            Foreign { .. } => {
-                let ps = crate::borrow::foreign_borrow_signature(self.arena, arguments.len());
-                let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
-
-                let v = Expr::Call(crate::ir::Call {
-                    call_type,
-                    arguments,
-                });
-
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
-
-            ByName {
-                name,
-                ret_layout,
-                arg_layouts,
-                ..
-            } => {
-                let top_level = ProcLayout::new(self.arena, arg_layouts, name.niche(), *ret_layout);
-
-                // get the borrow signature
-                let ps = self
-                    .param_map
-                    .get_symbol(self.layout_interner, name.name(), top_level)
-                    .expect("function is defined");
-
-                let v = Expr::Call(crate::ir::Call {
-                    call_type,
-                    arguments,
-                });
-
-                let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
-                let b = self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                self.add_inc_before(arguments, ps, b, b_live_vars)
-            }
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn visit_higher_order_lowlevel(
-        &self,
-        codegen: &mut CodegenTools<'i>,
-        z: Symbol,
-        lowlevel: &'a crate::ir::HigherOrderLowLevel,
-        arguments: &'a [Symbol],
-        l: InLayout<'a>,
-        b: &'a Stmt<'a>,
-        b_live_vars: &LiveVarSet,
-    ) -> &'a Stmt<'a> {
-        use crate::low_level::HigherOrder::*;
-        use DataFunction::*;
-
-        let HigherOrderLowLevel {
-            op,
-            passed_function,
-            ..
-        } = lowlevel;
-
-        macro_rules! create_call {
-            ($borrows:expr) => {
-                create_holl_call(self.arena, lowlevel, $borrows, arguments)
-            };
-        }
-
-        let function_layout = ProcLayout {
-            arguments: passed_function.argument_layouts,
-            result: passed_function.return_layout,
-            niche: passed_function.name.niche(),
-        };
-
-        let function_ps = match self.param_map.get_symbol(
-            self.layout_interner,
-            passed_function.name.name(),
-            function_layout,
+    // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
+    // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
+    // Thus, these rc operations are performed on the caller of the wrapper instead, and we skip rc on the lowlevel.
+    // It might be possible to inline the lowlevels at this point already,
+    // but previous attempt conflicted as the parameters layouts and return layout do not match.
+    for ((symbol, _layout), proc) in procedures.iter_mut() {
+        if matches!(
+            LowLevelWrapperType::from_symbol(*symbol),
+            LowLevelWrapperType::NotALowLevelWrapper
         ) {
-            Some(function_ps) => function_ps,
-            None => unreachable!(),
-        };
-
-        macro_rules! handle_ownerships_post {
-            ($stmt:expr, $args:expr) => {{
-                let mut stmt = $stmt;
-
-                for (argument, function_ps) in $args.iter().copied() {
-                    let ownership = DataFunction::new(&self.vars, argument, function_ps);
-
-                    match ownership {
-                        DataOwnedFunctionOwns | DataBorrowedFunctionOwns => {
-                            // elements have been consumed, must still consume the list itself
-                            let rest = self.arena.alloc(stmt);
-                            let rc = Stmt::Refcounting(ModifyRc::DecRef(argument), rest);
-
-                            stmt = self.arena.alloc(rc);
-                        }
-                        DataOwnedFunctionBorrows => {
-                            // must consume list and elements
-                            let rest = self.arena.alloc(stmt);
-                            let rc = Stmt::Refcounting(ModifyRc::Dec(argument), rest);
-
-                            stmt = self.arena.alloc(rc);
-                        }
-                        DataBorrowedFunctionBorrows => {
-                            // list borrows, function borrows, so there is nothing to do
-                        }
-                    }
-                }
-
-                stmt
-            }};
+            // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
+            // As the symbols should be limited in scope for the current proc.
+            let symbol_rc_types_env = symbol_rc_types_env.clone();
+            insert_inc_dec_operations_proc(arena, symbol_rc_types_env, proc);
         }
+    }
+}
 
-        macro_rules! handle_ownerships_pre {
-            ($stmt:expr, $args:expr) => {{
-                let mut stmt = self.arena.alloc($stmt);
+/**
+Enum indicating whether a symbol should be reference counted or not.
+This includes layouts that themselves can be stack allocated but that contain a heap allocated item.
+*/
+#[derive(Copy, Clone)]
+enum VarRcType {
+    ReferenceCounted,
+    NotReferenceCounted,
+}
 
-                for (argument, function_ps) in $args.iter().copied() {
-                    let ownership = DataFunction::new(&self.vars, argument, function_ps);
+/*
+A map keeping track of which symbols are reference counted and which are not.
+Implemented as two sets for efficiency.
+*/
+#[derive(Clone, Default)]
+struct SymbolRcTypes {
+    owned: MutSet<Symbol>,
+    borrowed: MutSet<Symbol>,
+}
 
-                    match ownership {
-                        DataBorrowedFunctionOwns => {
-                            // the data is borrowed; increment it to own the values so the function
-                            // can use them
-                            let rc = Stmt::Refcounting(ModifyRc::Inc(argument, 1), stmt);
-
-                            stmt = self.arena.alloc(rc);
-                        }
-                        DataOwnedFunctionOwns | DataOwnedFunctionBorrows => {
-                            // we actually own the data; nothing to do
-                        }
-                        DataBorrowedFunctionBorrows => {
-                            // list borrows, function borrows, so there is nothing to do
-                        }
-                    }
-                }
-
-                stmt
-            }};
-        }
-
-        // incrementing/consuming the closure (if needed) is done by the zig implementation. We
-        // don't want to touch the RC on the roc side, so treat these as borrowed.
-        const FUNCTION: bool = BORROWED;
-        const CLOSURE_DATA: bool = BORROWED;
-
-        let borrows = [FUNCTION, CLOSURE_DATA];
-        let after_arguments = &arguments[op.function_index()..];
-
-        match *op {
-            ListMap { xs } => {
-                let ownerships = [(xs, function_ps[0])];
-
-                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
-
-                let b = handle_ownerships_post!(b, ownerships);
-
-                let v = create_call!(function_ps.get(1));
-
-                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+impl SymbolRcTypes {
+    /**
+    Insert a symbol with the given reference count type in the correct set.
+    */
+    fn insert(&mut self, symbol: Symbol, var_rc_type: VarRcType) {
+        match var_rc_type {
+            VarRcType::ReferenceCounted => {
+                self.owned.insert(symbol);
             }
-            ListMap2 { xs, ys } => {
-                let ownerships = [(xs, function_ps[0]), (ys, function_ps[1])];
-
-                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
-
-                let b = handle_ownerships_post!(b, ownerships);
-
-                let v = create_call!(function_ps.get(2));
-
-                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
-            }
-            ListMap3 { xs, ys, zs } => {
-                let ownerships = [
-                    (xs, function_ps[0]),
-                    (ys, function_ps[1]),
-                    (zs, function_ps[2]),
-                ];
-
-                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
-
-                let b = handle_ownerships_post!(b, ownerships);
-
-                let v = create_call!(function_ps.get(3));
-
-                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
-            }
-            ListMap4 { xs, ys, zs, ws } => {
-                let ownerships = [
-                    (xs, function_ps[0]),
-                    (ys, function_ps[1]),
-                    (zs, function_ps[2]),
-                    (ws, function_ps[3]),
-                ];
-
-                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
-
-                let b = handle_ownerships_post!(b, ownerships);
-
-                let v = create_call!(function_ps.get(3));
-
-                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
-            }
-            ListSortWith { xs } => {
-                // NOTE: we may apply the function to the same argument multiple times. for that to
-                // be valid, the function must borrow its argument. This is not enforced at the
-                // moment
-                //
-                // we also don't check that both arguments have the same ownership characteristics
-                let ownerships = [(xs, function_ps[0])];
-
-                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
-
-                // list-sort will sort in-place; that really changes how RC should work
-                let b = {
-                    let ownership = DataFunction::new(&self.vars, xs, function_ps[0]);
-
-                    match ownership {
-                        DataOwnedFunctionOwns => {
-                            // if non-unique, elements have been consumed, must still consume the
-                            // list itself
-                            let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), b);
-
-                            let condition_stmt = branch_on_list_uniqueness(
-                                self.arena,
-                                codegen,
-                                xs,
-                                l,
-                                b.clone(),
-                                self.arena.alloc(rc),
-                            );
-
-                            &*self.arena.alloc(condition_stmt)
-                        }
-                        DataOwnedFunctionBorrows => {
-                            // must consume list and elements
-                            let rc = Stmt::Refcounting(ModifyRc::Dec(xs), b);
-
-                            let condition_stmt = branch_on_list_uniqueness(
-                                self.arena,
-                                codegen,
-                                xs,
-                                l,
-                                b.clone(),
-                                self.arena.alloc(rc),
-                            );
-
-                            &*self.arena.alloc(condition_stmt)
-                        }
-                        DataBorrowedFunctionOwns => {
-                            // elements have been consumed, must still consume the list itself
-                            let rest = self.arena.alloc(b);
-                            let rc = Stmt::Refcounting(ModifyRc::DecRef(xs), rest);
-
-                            &*self.arena.alloc(rc)
-                        }
-                        DataBorrowedFunctionBorrows => {
-                            // list borrows, function borrows, so there is nothing to do
-                            b
-                        }
-                    }
-                };
-
-                let v = create_call!(function_ps.get(2));
-
-                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
+            VarRcType::NotReferenceCounted => {
+                self.borrowed.insert(symbol);
             }
         }
     }
 
-    #[allow(clippy::many_single_char_names)]
-    fn visit_variable_declaration(
-        &self,
-        codegen: &mut CodegenTools<'i>,
-        z: Symbol,
-        v: Expr<'a>,
-        l: InLayout<'a>,
-        b: &'a Stmt<'a>,
-        b_live_vars: &LiveVarSet,
-    ) -> (&'a Stmt<'a>, LiveVarSet) {
-        use Expr::*;
+    /**
+    Get the reference count type of a symbol.
+     */
+    fn get(&self, symbol: &Symbol) -> Option<VarRcType> {
+        if self.owned.contains(symbol) {
+            debug_assert!(!self.borrowed.contains(symbol));
+            Some(VarRcType::ReferenceCounted)
+        } else if self.borrowed.contains(symbol) {
+            Some(VarRcType::NotReferenceCounted)
+        } else {
+            None
+        }
+    }
+}
 
-        let mut live_vars = update_live_vars(&v, b_live_vars);
-        live_vars.remove(&z);
+/**
+Environment to keep track which of the symbols should be reference counted and which ones should not.
+ */
+#[derive(Clone)]
+struct SymbolRcTypesEnv<'a, 'i> {
+    // A map keeping track of which symbols are reference counted and which are not.
+    symbols_rc_type: SymbolRcTypes,
 
-        let new_b = match v {
-            Reuse { arguments: ys, .. } | Tag { arguments: ys, .. } | Struct(ys) => self
-                .add_inc_before_consume_all(
-                    ys,
-                    self.arena.alloc(Stmt::Let(z, v, l, b)),
-                    b_live_vars,
-                ),
+    layout_interner: &'i STLayoutInterner<'a>,
+}
 
-            Array { elems, .. } => {
-                let ys = Vec::from_iter_in(elems.iter().filter_map(|e| e.to_symbol()), self.arena);
-                self.add_inc_before_consume_all(
-                    &ys,
-                    self.arena.alloc(Stmt::Let(z, v, l, b)),
-                    b_live_vars,
-                )
-            }
-
-            Call(crate::ir::Call {
-                call_type,
-                arguments,
-            }) => self.visit_call(codegen, z, call_type, arguments, l, b, b_live_vars),
-
-            StructAtIndex { structure: x, .. } => {
-                let b = self.add_dec_if_needed(x, b, b_live_vars);
-                let info_x = self.get_var_info(x);
-                let b = if info_x.consume {
-                    self.add_inc(z, 1, b)
-                } else {
-                    b
-                };
-
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
-
-            GetTagId { structure: x, .. } => {
-                let b = self.add_dec_if_needed(x, b, b_live_vars);
-                let info_x = self.get_var_info(x);
-                let b = if info_x.consume {
-                    self.add_inc(z, 1, b)
-                } else {
-                    b
-                };
-
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
-
-            UnionAtIndex { structure: x, .. } => {
-                let b = self.add_dec_if_needed(x, b, b_live_vars);
-                let info_x = self.get_var_info(x);
-                let b = if info_x.consume {
-                    self.add_inc(z, 1, b)
-                } else {
-                    b
-                };
-
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
-
-            ExprBox { symbol: x } => {
-                // mimics Tag
-                self.add_inc_before_consume_all(
-                    &[x],
-                    self.arena.alloc(Stmt::Let(z, v, l, b)),
-                    b_live_vars,
-                )
-            }
-
-            ExprUnbox { symbol: x } => {
-                // mimics UnionAtIndex
-                let b = self.add_dec_if_needed(x, b, b_live_vars);
-                let info_x = self.get_var_info(x);
-                let b = if info_x.consume {
-                    self.add_inc(z, 1, b)
-                } else {
-                    b
-                };
-
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
-
-            EmptyArray | Literal(_) | Reset { .. } | NullPointer | RuntimeErrorFunction(_) => {
-                // EmptyArray is always stack-allocated function pointers are persistent
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
-        };
-
-        (new_b, live_vars)
+impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
+    /**
+    Create a new SymbolRcTypesEnv from a layout interner.
+    */
+    fn from_layout_interner(layout_interner: &'i STLayoutInterner<'a>) -> SymbolRcTypesEnv<'a, 'i> {
+        SymbolRcTypesEnv {
+            symbols_rc_type: SymbolRcTypes::default(),
+            layout_interner,
+        }
     }
 
-    fn update_var_info(&self, symbol: Symbol, layout: &InLayout<'a>, expr: &Expr<'a>) -> Self {
-        // is this value a constant? TODO do function pointers also fall into this category?
-        let persistent = false;
-
-        // must this value be consumed?
-        let consume = consume_expr(&self.vars, expr);
-
-        let reset = matches!(expr, Expr::Reset { .. });
-
-        self.update_var_info_help(symbol, layout, persistent, consume, reset)
+    /**
+    Insert the reference count type of top level functions.
+    As functions are not reference counted, they can be marked as such.
+    */
+    fn insert_proc_symbol(&mut self, proc_symbol: Symbol) {
+        self.symbols_rc_type
+            .insert(proc_symbol, VarRcType::NotReferenceCounted);
     }
 
-    fn update_var_info_help(
-        &self,
-        symbol: Symbol,
-        layout: &InLayout<'a>,
-        persistent: bool,
-        consume: bool,
-        reset: bool,
-    ) -> Self {
-        // should we perform incs and decs on this value?
-        let reference = self.layout_interner.contains_refcounted(*layout);
-
-        let info = VarInfo {
-            reference,
-            persistent,
-            consume,
-            reset,
-        };
-
-        let mut ctx = self.clone();
-
-        ctx.vars.insert(symbol, info);
-
-        ctx
-    }
-
-    fn update_var_info_with_params(&self, ps: &[Param]) -> Self {
-        let mut ctx = self.clone();
-
-        for p in ps.iter() {
-            let info = VarInfo {
-                reference: self.layout_interner.contains_refcounted(p.layout),
-                consume: match p.ownership {
-                    Ownership::Owned => true,
-                    Ownership::Borrowed => false,
-                },
-                persistent: false,
-                reset: false,
-            };
-            ctx.vars.insert(p.symbol, info);
+    /**
+    Insert the reference count types of all symbols in a procedure.
+    */
+    fn insert_symbols_rc_type_proc(&mut self, proc: &Proc<'a>) {
+        // First collect the argument types.
+        for (layout, symbol) in proc.args.iter() {
+            self.insert_symbol_layout_rc_type(symbol, layout);
         }
 
-        ctx
+        // Then collect the types of the symbols in the body.
+        self.insert_symbols_rc_type_stmt(&proc.body);
     }
 
-    // Add `dec` instructions for parameters that are
-    //
-    //  - references - not alive in `b` - not borrow.
-    //
-    // That is, we must make sure these parameters are consumed.
-    fn add_dec_for_dead_params(
-        &self,
-        ps: &[Param<'a>],
-        mut b: &'a Stmt<'a>,
-        b_live_vars: &LiveVarSet,
-    ) -> &'a Stmt<'a> {
-        for p in ps.iter() {
-            if p.ownership == Ownership::Owned
-                && self.layout_interner.contains_refcounted(p.layout)
-                && !b_live_vars.contains(&p.symbol)
-            {
-                b = self.add_dec(p.symbol, b)
-            }
-        }
-
-        b
-    }
-
-    fn add_dec_for_alt(
-        &self,
-        case_live_vars: &LiveVarSet,
-        alt_live_vars: &LiveVarSet,
-        mut b: &'a Stmt<'a>,
-    ) -> &'a Stmt<'a> {
-        for x in case_live_vars.iter() {
-            if !alt_live_vars.contains(x) && self.must_consume(*x) {
-                b = self.add_dec(*x, b);
-            }
-        }
-
-        b
-    }
-
-    fn visit_stmt(
-        &self,
-        codegen: &mut CodegenTools<'i>,
-        stmt: &'a Stmt<'a>,
-    ) -> (&'a Stmt<'a>, LiveVarSet) {
-        use Stmt::*;
-
-        // let-chains can be very long, especially for large (list) literals in (rust) debug mode,
-        // this function can overflow the stack for such values so we have to write an explicit
-        // loop.
-        {
-            let mut cont = stmt;
-            let mut triples = Vec::new_in(self.arena);
-            while let Stmt::Let(symbol, expr, layout, new_cont) = cont {
-                triples.push((symbol, expr, layout));
-                cont = new_cont;
-            }
-
-            if !triples.is_empty() {
-                let mut ctx = self.clone();
-                for (symbol, expr, layout) in triples.iter() {
-                    ctx = ctx.update_var_info(**symbol, layout, expr);
-                }
-                let (mut b, mut b_live_vars) = ctx.visit_stmt(codegen, cont);
-                for (symbol, expr, layout) in triples.into_iter().rev() {
-                    let pair = ctx.visit_variable_declaration(
-                        codegen,
-                        *symbol,
-                        (*expr).clone(),
-                        *layout,
-                        b,
-                        &b_live_vars,
-                    );
-
-                    b = pair.0;
-                    b_live_vars = pair.1;
-                }
-
-                return (b, b_live_vars);
-            }
-        }
-
+    /**
+    Insert the reference count types of all symbols in a statement.
+    */
+    fn insert_symbols_rc_type_stmt(&mut self, stmt: &Stmt<'a>) {
         match stmt {
-            Let(symbol, expr, layout, cont) => {
-                let ctx = self.update_var_info(*symbol, layout, expr);
-                let (b, b_live_vars) = ctx.visit_stmt(codegen, cont);
-                ctx.visit_variable_declaration(
-                    codegen,
-                    *symbol,
-                    expr.clone(),
-                    *layout,
-                    b,
-                    &b_live_vars,
-                )
+            Stmt::Let(
+                binding,
+                // Expressions can be omitted, as they won't create new symbols.
+                _expr,
+                layout,
+                continuation,
+            ) => {
+                self.insert_symbol_layout_rc_type(binding, layout);
+                self.insert_symbols_rc_type_stmt(continuation);
             }
-
-            Join {
-                id: j,
-                parameters: _,
-                remainder: b,
-                body: v,
-            } => {
-                // get the parameters with borrow signature
-                let xs = self.param_map.get_join_point(*j);
-
-                let (v, v_live_vars) = {
-                    let ctx = self.update_var_info_with_params(xs);
-                    ctx.visit_stmt(codegen, v)
-                };
-
-                let mut ctx = self.clone();
-                let v = ctx.add_dec_for_dead_params(xs, v, &v_live_vars);
-
-                update_jp_live_vars(*j, xs, v, &mut ctx.jp_live_vars);
-
-                let (b, b_live_vars) = ctx.visit_stmt(codegen, b);
-
-                (
-                    ctx.arena.alloc(Join {
-                        id: *j,
-                        parameters: xs,
-                        remainder: b,
-                        body: v,
-                    }),
-                    b_live_vars,
-                )
-            }
-
-            Ret(x) => {
-                let info = self.get_var_info(*x);
-
-                let mut live_vars = MutSet::default();
-                live_vars.insert(*x);
-
-                if info.reference && !info.consume {
-                    (self.add_inc(*x, 1, stmt), live_vars)
-                } else {
-                    (stmt, live_vars)
-                }
-            }
-
-            Jump(j, xs) => {
-                let empty = MutSet::default();
-                let j_live_vars = match self.jp_live_vars.get(j) {
-                    Some(vars) => vars,
-                    None => &empty,
-                };
-                // TODO use borrow signature here?
-                let ps = self.param_map.get_join_point(*j);
-
-                let b = self.add_inc_before(xs, ps, stmt, j_live_vars);
-
-                let b_live_vars = collect_stmt(b, &self.jp_live_vars, MutSet::default());
-
-                (b, b_live_vars)
-            }
-
-            Switch {
-                cond_symbol,
-                cond_layout,
+            Stmt::Switch {
+                // The switch condition is an integer and thus not reference counted.
+                cond_symbol: _,
+                cond_layout: _,
                 branches,
                 default_branch,
-                ret_layout,
+                ret_layout: _,
             } => {
-                let case_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
+                // Collect the types of the symbols in all the branches, including the default one.
+                for (info, stmt) in branches
+                    .iter()
+                    .map(|(_branch, info, stmt)| (info, stmt))
+                    .chain([(&default_branch.0, default_branch.1)])
+                {
+                    match info {
+                        BranchInfo::None => (),
+                        BranchInfo::Constructor {
+                            scrutinee,
+                            layout,
+                            tag_id: _,
+                        } => {
+                            self.insert_symbol_layout_rc_type(scrutinee, layout);
+                        }
+                    }
 
-                let branches = Vec::from_iter_in(
-                    branches.iter().map(|(label, info, branch)| {
-                        // TODO should we use ctor info like Lean?
-                        let ctx = self.clone();
-                        let (b, alt_live_vars) = ctx.visit_stmt(codegen, branch);
-                        let b = ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b);
-
-                        (*label, info.clone(), b.clone())
-                    }),
-                    self.arena,
-                )
-                .into_bump_slice();
-
-                let default_branch = {
-                    // TODO should we use ctor info like Lean?
-                    let ctx = self.clone();
-                    let (b, alt_live_vars) = ctx.visit_stmt(codegen, default_branch.1);
-
-                    (
-                        default_branch.0.clone(),
-                        ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b),
-                    )
-                };
-
-                let switch = self.arena.alloc(Switch {
-                    cond_symbol: *cond_symbol,
-                    branches,
-                    default_branch,
-                    cond_layout: *cond_layout,
-                    ret_layout: *ret_layout,
-                });
-
-                (switch, case_live_vars)
-            }
-
-            Dbg {
-                symbol,
-                variable,
-                remainder,
-            } => {
-                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
-
-                let expect = self.arena.alloc(Stmt::Dbg {
-                    symbol: *symbol,
-                    variable: *variable,
-                    remainder: b,
-                });
-
-                let expect = self.add_inc_before_consume_all(&[*symbol], expect, &b_live_vars);
-
-                b_live_vars.extend([symbol]);
-
-                (expect, b_live_vars)
-            }
-
-            Expect {
-                remainder,
-                condition,
-                region,
-                lookups,
-                variables,
-            } => {
-                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
-
-                let expect = self.arena.alloc(Stmt::Expect {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    variables,
-                    remainder: b,
-                });
-
-                let expect = self.add_inc_before_consume_all(lookups, expect, &b_live_vars);
-
-                b_live_vars.extend(lookups.iter().copied());
-
-                (expect, b_live_vars)
-            }
-
-            ExpectFx {
-                remainder,
-                condition,
-                region,
-                lookups,
-                variables,
-            } => {
-                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
-
-                let expect = self.arena.alloc(Stmt::ExpectFx {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    variables,
-                    remainder: b,
-                });
-
-                let expect = self.add_inc_before_consume_all(lookups, expect, &b_live_vars);
-
-                b_live_vars.extend(lookups.iter().copied());
-
-                (expect, b_live_vars)
-            }
-
-            Crash(x, _) => {
-                let info = self.get_var_info(*x);
-
-                let mut live_vars = MutSet::default();
-                live_vars.insert(*x);
-
-                if info.reference && !info.consume {
-                    (self.add_inc(*x, 1, stmt), live_vars)
-                } else {
-                    (stmt, live_vars)
+                    self.insert_symbols_rc_type_stmt(stmt);
                 }
             }
+            Stmt::Ret(_symbol) => {
+                // The return does not introduce new symbols.
+            }
+            Stmt::Refcounting(_, _) => unreachable!(
+                "Refcounting operations should not be present in the AST at this point."
+            ),
+            Stmt::Expect { remainder, .. }
+            | Stmt::ExpectFx { remainder, .. }
+            | Stmt::Dbg { remainder, .. } => {
+                self.insert_symbols_rc_type_stmt(remainder);
+            }
+            Stmt::Join {
+                id: _,
+                parameters,
+                body,
+                remainder: continuation,
+            } => {
+                for parameter in parameters.iter() {
+                    self.insert_symbol_layout_rc_type(&parameter.symbol, &parameter.layout);
+                }
 
-            Refcounting(_, _) => (stmt, MutSet::default()),
+                self.insert_symbols_rc_type_stmt(body);
+                self.insert_symbols_rc_type_stmt(continuation);
+            }
+            Stmt::Jump(_, _) => {
+                // A join point does not introduce new symbols.
+            }
+            Stmt::Crash(_, _) => {
+                // A crash does not introduce new symbols.
+            }
         }
+    }
+
+    /*
+    Insert the reference count type of a symbol given its layout.
+    */
+    fn insert_symbol_layout_rc_type(&mut self, symbol: &Symbol, layout: &InLayout) {
+        // This will reference count the entire struct, even if only one field is reference counted.
+        // In another pass we can inline these operations, potentially improving reuse.
+        let contains_refcounted = self.layout_interner.contains_refcounted(*layout);
+        let rc_type = match contains_refcounted {
+            true => VarRcType::ReferenceCounted,
+            false => VarRcType::NotReferenceCounted,
+        };
+        self.symbols_rc_type.insert(*symbol, rc_type);
     }
 }
 
-fn branch_on_list_uniqueness<'a, 'i>(
-    arena: &'a Bump,
-    codegen: &mut CodegenTools<'i>,
-    list_symbol: Symbol,
-    return_layout: InLayout<'a>,
-    then_branch_stmt: Stmt<'a>,
-    else_branch_stmt: &'a Stmt<'a>,
-) -> Stmt<'a> {
-    let condition_symbol = Symbol::new(codegen.home, codegen.ident_ids.add_str("listIsUnique"));
+type SymbolsOwnership = MutMap<Symbol, Ownership>;
 
-    let when_stmt = Stmt::if_then_else(
-        arena,
-        condition_symbol,
-        return_layout,
-        then_branch_stmt,
-        else_branch_stmt,
-    );
+/**
+Type containing data about the symbols consumption of a join point.
+*/
+type JoinPointConsumption = MutSet<Symbol>;
 
-    let stmt = arena.alloc(when_stmt);
-
-    // define the condition
-
-    let condition_call_type = CallType::LowLevel {
-        op: roc_module::low_level::LowLevel::ListIsUnique,
-        update_mode: codegen.update_mode_ids.next_id(),
-    };
-
-    let condition_call = crate::ir::Call {
-        call_type: condition_call_type,
-        arguments: arena.alloc([list_symbol]),
-    };
-
-    Stmt::Let(
-        condition_symbol,
-        Expr::Call(condition_call),
-        Layout::BOOL,
-        stmt,
-    )
+/**
+The environment for the reference counting pass.
+Contains the symbols rc types and the ownership.
+*/
+#[derive(Clone)]
+struct RefcountEnvironment<'v> {
+    // Keep track which symbols are reference counted and which are not.
+    symbols_rc_types: &'v SymbolRcTypes,
+    // The Koka implementation assumes everything that is not owned to be borrowed.
+    symbols_ownership: SymbolsOwnership,
+    jointpoint_closures: MutMap<JoinPointId, JoinPointConsumption>,
 }
 
-fn create_holl_call<'a>(
-    arena: &'a Bump,
-    holl: &'a crate::ir::HigherOrderLowLevel,
-    param: Option<&Param>,
-    arguments: &'a [Symbol],
-) -> Expr<'a> {
-    let call = crate::ir::Call {
-        call_type: if let Some(Ownership::Owned) = param.map(|p| p.ownership) {
-            let mut passed_function = holl.passed_function;
-            passed_function.owns_captured_environment = true;
+impl<'v> RefcountEnvironment<'v> {
+    /**
+    Retrieve the rc type of a symbol.
+    */
+    fn get_symbol_rc_type(&mut self, symbol: &Symbol) -> VarRcType {
+        self.symbols_rc_types
+            .get(symbol)
+            .expect("symbol should have rc type")
+    }
 
-            let higher_order = HigherOrderLowLevel {
-                op: holl.op,
-                closure_env_layout: holl.closure_env_layout,
-                update_mode: holl.update_mode,
-                passed_function,
-            };
+    /*
+    Retrieve whether the symbol is owned or borrowed.
+    If it was owned, set it to borrowed (as it is consumed/the symbol can be used as owned only once without incrementing).
+    If the symbol is not reference counted, do nothing and return None.
+    */
+    fn consume_symbol(&mut self, symbol: &Symbol) -> Option<Ownership> {
+        if !self.symbols_ownership.contains_key(symbol) {
+            return None;
+        }
 
-            CallType::HigherOrder(arena.alloc(higher_order))
-        } else {
-            debug_assert!(!holl.passed_function.owns_captured_environment);
-            CallType::HigherOrder(holl)
-        },
-        arguments,
-    };
+        // Consume the symbol and return the previous ownership.
+        Some(self.consume_rc_symbol(*symbol))
+    }
 
-    Expr::Call(call)
+    /*
+    Retrieve whether the symbol is owned or borrowed.
+    If it was owned, set it to borrowed (as it is consumed/the symbol can be used as owned only once without incrementing).
+    */
+    fn consume_rc_symbol(&mut self, symbol: Symbol) -> Ownership {
+        // Consume the symbol by setting it to borrowed (if it was owned before), and return the previous ownership.
+        self.symbols_ownership
+            .insert(symbol, Ownership::Borrowed)
+            .expect("Expected symbol to be in environment")
+    }
+
+    /**
+       Retrieve the ownership of a symbol.
+       If the symbol is not reference counted, it will None.
+    */
+    fn get_symbol_ownership(&self, symbol: &Symbol) -> Option<&Ownership> {
+        self.symbols_ownership.get(symbol)
+    }
+
+    /**
+    Add a symbol to the environment if it is reference counted.
+    */
+    fn add_symbol(&mut self, symbol: Symbol) {
+        match self.get_symbol_rc_type(&symbol) {
+            VarRcType::ReferenceCounted => {
+                self.symbols_ownership.insert(symbol, Ownership::Owned);
+            }
+            VarRcType::NotReferenceCounted => {
+                // If this symbol is not reference counted, we don't need to do anything.
+            }
+        }
+    }
+
+    /**
+    Remove a symbol from the environment.
+    Is used when a symbol is no longer in scope (before a let binding).
+     */
+    fn remove_symbol(&mut self, symbol: Symbol) {
+        self.symbols_ownership.remove(&symbol);
+    }
+
+    /**
+    Add a joinpoint id and the consumed closure to the environment.
+    Used when analyzing a join point. So that a jump can update the environment on call.
+    */
+    fn add_joinpoint_consumption(
+        &mut self,
+        joinpoint_id: JoinPointId,
+        consumption: JoinPointConsumption,
+    ) {
+        self.jointpoint_closures.insert(joinpoint_id, consumption);
+    }
+
+    /**
+    Get the consumed closure from a join point id.
+    */
+    fn get_joinpoint_consumption(&self, joinpoint_id: JoinPointId) -> &JoinPointConsumption {
+        self.jointpoint_closures
+            .get(&joinpoint_id)
+            .expect("Expected closure to be in environment")
+    }
+
+    /**
+    Remove a joinpoint id and the consumed closure from the environment.
+    Used after analyzing the continuation of a join point.
+    */
+    fn remove_joinpoint_consumption(&mut self, joinpoint_id: JoinPointId) {
+        let closure = self.jointpoint_closures.remove(&joinpoint_id);
+        debug_assert!(closure.is_some(), "Expected closure to be in environment");
+    }
+
+    /**
+    Return owned usages.
+    Collect the usage of all the reference counted symbols in the iterator and return as a map.
+    */
+    fn owned_usages(&self, symbols: impl IntoIterator<Item = Symbol>) -> MutMap<Symbol, u64> {
+        // A groupby or something similar would be nice here.
+        let mut symbol_usage = MutMap::default();
+        for symbol in symbols {
+            match {
+                self.symbols_rc_types
+                    .get(&symbol)
+                    .expect("Expected symbol to be in the map")
+            } {
+                // If the symbol is reference counted, we need to increment the usage count.
+                VarRcType::ReferenceCounted => {
+                    *symbol_usage.entry(symbol).or_default() += 1;
+                }
+                // If the symbol is not reference counted, we don't need to do anything.
+                VarRcType::NotReferenceCounted => continue,
+            }
+        }
+        symbol_usage
+    }
+
+    /**
+    Filter the given symbols to only contain reference counted symbols.
+    */
+    fn borrowed_usages(&self, symbols: impl IntoIterator<Item = Symbol>) -> MutSet<Symbol> {
+        symbols
+            .into_iter()
+            .filter(|symbol| {
+                // If the symbol is reference counted, we need to increment the usage count.
+                // If the symbol is not reference counted, we don't need to do anything.
+                matches!(
+                    self.symbols_rc_types
+                        .get(symbol)
+                        .expect("Expected symbol to be in the map"),
+                    VarRcType::ReferenceCounted
+                )
+            })
+            .collect()
+    }
 }
 
-pub fn collect_stmt(
-    stmt: &Stmt<'_>,
-    jp_live_vars: &JPLiveVarMap,
-    mut vars: LiveVarSet,
-) -> LiveVarSet {
-    use Stmt::*;
+/**
+ Insert the reference counting operations into a statement.
+*/
+fn insert_inc_dec_operations_proc<'a, 'i>(
+    arena: &'a Bump,
+    mut symbol_rc_types_env: SymbolRcTypesEnv<'a, 'i>,
+    proc: &mut Proc<'a>,
+) {
+    // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
+    // As the symbols should be limited in scope for the current proc.
+    symbol_rc_types_env.insert_symbols_rc_type_proc(proc);
 
-    match stmt {
-        Let(symbol, expr, _, cont) => {
-            vars = collect_stmt(cont, jp_live_vars, vars);
-            vars.remove(symbol);
-            let mut result = MutSet::default();
-            occurring_variables_expr(expr, &mut result);
-            vars.extend(result);
+    let mut environment = RefcountEnvironment {
+        symbols_rc_types: &symbol_rc_types_env.symbols_rc_type,
+        symbols_ownership: MutMap::default(),
+        jointpoint_closures: MutMap::default(),
+    };
 
-            vars
-        }
+    // Add all arguments to the environment (if they are reference counted)
+    let proc_symbols = proc.args.iter().map(|(_layout, symbol)| symbol);
+    for symbol in proc_symbols.clone() {
+        environment.add_symbol(*symbol);
+    }
 
-        Ret(symbol) => {
-            vars.insert(*symbol);
-            vars
-        }
+    // Update the body with reference count statements.
+    let new_body = insert_refcount_operations_stmt(arena, &mut environment, &proc.body);
 
-        Refcounting(modify, cont) => {
-            let symbol = modify.get_symbol();
-            vars.insert(symbol);
-            collect_stmt(cont, jp_live_vars, vars)
-        }
+    // Insert decrement statements for unused parameters (which are still marked as owned).
+    let rc_proc_symbols = proc_symbols
+        .filter(|symbol| environment.symbols_ownership.contains_key(symbol))
+        .copied()
+        .collect_in::<Vec<_>>(arena);
+    let newer_body =
+        consume_and_insert_dec_stmts(arena, &mut environment, rc_proc_symbols, new_body);
 
-        Dbg {
-            symbol, remainder, ..
-        } => {
-            vars.insert(*symbol);
-            collect_stmt(remainder, jp_live_vars, vars)
-        }
+    // Assert that just the arguments are in the environment. And (after decrementing the unused ones) that they are all borrowed.
+    debug_assert!(environment
+        .symbols_ownership
+        .iter()
+        .all(|(symbol, ownership)| {
+            // All symbols should be borrowed.
+            ownership.is_borrowed() && proc.args.iter().any(|(_layout, s)| s == symbol)
+        }));
 
-        Expect {
-            condition,
-            remainder,
-            lookups,
-            ..
-        } => {
-            vars.insert(*condition);
-            vars.extend(lookups.iter().copied());
-            collect_stmt(remainder, jp_live_vars, vars)
-        }
+    proc.body = newer_body.clone();
+}
 
-        ExpectFx {
-            condition,
-            remainder,
-            lookups,
-            ..
-        } => {
-            vars.insert(*condition);
-            vars.extend(lookups.iter().copied());
-            collect_stmt(remainder, jp_live_vars, vars)
-        }
-
-        Join {
-            id: j,
-            parameters,
-            remainder: b,
-            body: v,
-        } => {
-            let mut j_live_vars = collect_stmt(v, jp_live_vars, MutSet::default());
-            for param in parameters.iter() {
-                j_live_vars.remove(&param.symbol);
+/**
+Given an environment, insert the reference counting operations for a statement.
+Assuming that a symbol can only be defined once (no binding to the same symbol multiple times).
+*/
+fn insert_refcount_operations_stmt<'v, 'a>(
+    arena: &'a Bump,
+    environment: &mut RefcountEnvironment<'v>,
+    stmt: &Stmt<'a>,
+) -> &'a Stmt<'a> {
+    match &stmt {
+        // The expression borrows the values owned (used) by the continuation.
+        Stmt::Let(_, _, _, _) => {
+            // Collect all the subsequent let bindings (including the current one).
+            // To prevent the stack from overflowing when there are many let bindings.
+            let mut triples = vec![];
+            let mut current_stmt = stmt;
+            while let Stmt::Let(binding, expr, layout, next_stmt) = current_stmt {
+                triples.push((binding, expr, layout));
+                current_stmt = next_stmt
             }
 
-            let mut jp_live_vars = jp_live_vars.clone();
-            jp_live_vars.insert(*j, j_live_vars);
+            debug_assert!(
+                !triples.is_empty(),
+                "Expected at least one let binding in the vector"
+            );
+            debug_assert!(
+                !matches!(current_stmt, Stmt::Let(_, _, _, _)),
+                "All let bindings should be in the vector"
+            );
 
-            collect_stmt(b, &jp_live_vars, vars)
-        }
-
-        Jump(id, arguments) => {
-            vars.extend(arguments.iter().copied());
-
-            // NOTE deviation from Lean
-            // we fall through when no join point is available
-            if let Some(jvars) = jp_live_vars.get(id) {
-                vars.extend(jvars);
+            for (binding, _, _) in triples.iter() {
+                environment.add_symbol(**binding); // Add the bound symbol to the environment. As it can be used in the continuation.
             }
 
-            vars
-        }
+            triples
+                .into_iter()
+                .rev()
+                // First evaluate the continuation and let it consume it's free symbols.
+                .fold(
+                    insert_refcount_operations_stmt(arena, environment, current_stmt),
+                    |new_stmt, (binding, expr, layout)| {
+                        // If the binding is still owned in the environment, it is not used in the continuation and we can drop it right away.
+                        let new_stmt_without_unused = match environment
+                            .get_symbol_ownership(binding)
+                        {
+                            Some(Ownership::Owned) => insert_dec_stmt(arena, *binding, new_stmt),
+                            _ => new_stmt,
+                        };
 
-        Switch {
+                        // And as the symbol should not be in scope before this let binding, remove it from the environment.
+                        environment.remove_symbol(*binding);
+
+                        insert_refcount_operations_binding(
+                            arena,
+                            environment,
+                            binding,
+                            expr,
+                            layout,
+                            new_stmt_without_unused,
+                        )
+                    },
+                )
+        }
+        Stmt::Switch {
             cond_symbol,
+            cond_layout,
             branches,
             default_branch,
-            ..
+            ret_layout,
         } => {
-            vars.insert(*cond_symbol);
+            let new_branches = branches
+                .iter()
+                .map(|(label, info, branch)| {
+                    let mut branch_env = environment.clone();
 
-            for (_, _info, branch) in branches.iter() {
-                vars.extend(collect_stmt(branch, jp_live_vars, vars.clone()));
+                    let new_branch =
+                        insert_refcount_operations_stmt(arena, &mut branch_env, branch);
+
+                    (*label, info.clone(), new_branch, branch_env)
+                })
+                .collect_in::<Vec<_>>(arena);
+
+            let new_default_branch = {
+                let (info, branch) = default_branch;
+
+                let mut branch_env = environment.clone();
+                let new_branch = insert_refcount_operations_stmt(arena, &mut branch_env, branch);
+
+                (info.clone(), new_branch, branch_env)
+            };
+
+            // Determine what symbols are consumed in some of the branches.
+            // So we can make sure they are consumed in the current environment and all branches.
+            let consume_symbols = {
+                let branch_envs = {
+                    let mut branch_environments =
+                        Vec::with_capacity_in(new_branches.len() + 1, arena);
+
+                    for (_, _, _, branch_env) in new_branches.iter() {
+                        branch_environments.push(branch_env);
+                    }
+
+                    branch_environments.push(&new_default_branch.2);
+
+                    branch_environments
+                };
+
+                {
+                    let mut consume_symbols = MutSet::default();
+
+                    // If the symbol is currently borrowed, it must be borrowed in all branches and we don't have to do anything.
+                    for (symbol, _) in environment
+                        .symbols_ownership
+                        .iter()
+                        .filter(|(_, o)| o.is_owned())
+                    {
+                        let error = "All symbols defined in the current environment should be in the environment of the branches.";
+                        let consumed =
+                            branch_envs
+                                .iter()
+                                .any(|branch_env: &&RefcountEnvironment<'v>| {
+                                    matches!(
+                                        branch_env.get_symbol_ownership(symbol).expect(error),
+                                        Ownership::Borrowed
+                                    )
+                                });
+                        if consumed {
+                            // If the symbol is currently owned, and not in a some branches, it must be consumed in all branches
+                            consume_symbols.insert(*symbol);
+                        }
+                        // Otherwise it can stay owned.
+                    }
+
+                    consume_symbols
+                }
+            };
+
+            // Given the consume_symbols we can determine what additional symbols should be dropped in each branch.
+            let msg = "All symbols defined in the current environment should be in the environment of the branches.";
+            let newer_branches = Vec::from_iter_in(
+                new_branches
+                    .into_iter()
+                    .map(|(label, info, branch, branch_env)| {
+                        // If the symbol is owned in the branch, it is not used in the branch and we can drop it.
+                        let consume_symbols_branch =
+                            consume_symbols.iter().copied().filter(|consume_symbol| {
+                                branch_env
+                                    .get_symbol_ownership(consume_symbol)
+                                    .expect(msg)
+                                    .is_owned()
+                            });
+
+                        let newer_branch = insert_dec_stmts(arena, consume_symbols_branch, branch);
+                        (label, info, newer_branch.clone())
+                    }),
+                arena,
+            )
+            .into_bump_slice();
+
+            let newer_default_branch = {
+                let (info, branch, branch_env) = new_default_branch;
+                // If the symbol is owned in the branch, it is not used in the branch and we can drop it.
+                let msg = "All symbols defined in the current environment should be in the environment of the branches.";
+                let consume_symbols_branch =
+                    consume_symbols.iter().copied().filter(|consume_symbol| {
+                        branch_env
+                            .get_symbol_ownership(consume_symbol)
+                            .expect(msg)
+                            .is_owned()
+                    });
+
+                let newer_branch = insert_dec_stmts(arena, consume_symbols_branch, branch);
+
+                (info, newer_branch)
+            };
+
+            // In addition to updating the branches, we need to update the current environment.
+            for consume_symbol in consume_symbols.iter() {
+                environment.consume_symbol(consume_symbol);
             }
 
-            vars.extend(collect_stmt(default_branch.1, jp_live_vars, vars.clone()));
-
-            vars
+            arena.alloc(Stmt::Switch {
+                cond_symbol: *cond_symbol,
+                cond_layout: *cond_layout,
+                branches: newer_branches,
+                default_branch: newer_default_branch,
+                ret_layout: *ret_layout,
+            })
         }
+        Stmt::Ret(s) => {
+            let ownership = environment.consume_symbol(s);
+            debug_assert!(matches!(ownership, None | Some(Ownership::Owned))); // the return value should be owned or not reference counted at the return.
+            return arena.alloc(Stmt::Ret(*s));
+        }
+        Stmt::Refcounting(_, _) => unreachable!("refcounting should not be in the AST yet"),
+        Stmt::Expect {
+            condition,
+            region,
+            lookups,
+            variables,
+            remainder,
+        } => {
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
-        Crash(m, _) => {
-            vars.insert(*m);
-            vars
+            let new_expect = arena.alloc(Stmt::Expect {
+                condition: *condition,
+                region: *region,
+                lookups,
+                variables,
+                remainder: new_remainder,
+            });
+
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                environment.owned_usages(lookups.iter().copied()),
+                new_expect,
+            )
+        }
+        Stmt::ExpectFx {
+            condition,
+            region,
+            lookups,
+            variables,
+            remainder,
+        } => {
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+
+            let new_expectfx = arena.alloc(Stmt::ExpectFx {
+                condition: *condition,
+                region: *region,
+                lookups,
+                variables,
+                remainder: new_remainder,
+            });
+
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                environment.owned_usages(lookups.iter().copied()),
+                new_expectfx,
+            )
+        }
+        Stmt::Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+
+            let new_debug = arena.alloc(Stmt::Dbg {
+                symbol: *symbol,
+                variable: *variable,
+                remainder: new_remainder,
+            });
+
+            // TODO this assumes the debug statement to consume the variable. I'm not sure if that is (always) the case.
+            // But the old inc_dec pass passes variables
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                environment.owned_usages([*symbol]),
+                new_debug,
+            )
+        }
+        Stmt::Join {
+            id: joinpoint_id,
+            parameters,
+            body,
+            remainder,
+        } => {
+            // Assuming that the values in the closure of the body of this jointpoint are already bound.
+            // Assuming that all symbols are still owned. (So that we can determine what symbols got consumed in the join point.)
+            debug_assert!(environment
+                .symbols_ownership
+                .iter()
+                .all(|(_, ownership)| ownership.is_owned()));
+
+            let mut body_env = environment.clone();
+
+            let parameter_symbols_set = parameters
+                .iter()
+                .map(|Param { symbol, .. }| *symbol)
+                .collect::<MutSet<_>>();
+            for symbol in parameter_symbols_set.iter().copied() {
+                body_env.add_symbol(symbol)
+            }
+
+            /*
+            We use a fixed point iteration to determine what symbols are consumed in the join point.
+            We need to do this because the join point might be called recursively.
+            If we consume symbols in the closure, like y in the example below:
+
+            add = \x, y ->
+                jp 1 \acc, count ->
+                    if count == 0
+                    then acc + y
+                    else jump 1 (acc+1) (count-1)
+                jump 1 0 x
+
+            If we were to just use an empty consumption without iteration,
+            the analysis will not know that y is still used in the jump and thus will drop if after the else.
+            */
+
+            let mut joinpoint_consumption = MutSet::default();
+
+            let (new_body, mut new_body_environment) = loop {
+                // Copy the env to make sure each iteration has a fresh environment.
+                let mut current_body_env = body_env.clone();
+
+                current_body_env
+                    .add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption.clone());
+                let new_body = insert_refcount_operations_stmt(arena, &mut current_body_env, body);
+                current_body_env.remove_joinpoint_consumption(*joinpoint_id);
+
+                // We save the parameters consumed by this join point. So we can do the same when we jump to this joinpoint.
+                // This includes parameter symbols, this might help with unused closure symbols.
+                let current_joinpoint_consumption = {
+                    let consumed_symbols = current_body_env
+                        .symbols_ownership
+                        .iter()
+                        .filter_map(|(symbol, ownership)| {
+                            ownership.is_borrowed().then_some(*symbol)
+                        })
+                        .collect::<MutSet<_>>();
+
+                    consumed_symbols
+                        .difference(&parameter_symbols_set)
+                        .copied()
+                        .collect::<MutSet<Symbol>>()
+                };
+
+                if joinpoint_consumption == current_joinpoint_consumption {
+                    break (new_body, current_body_env);
+                } else {
+                    debug_assert!(
+                        current_joinpoint_consumption.is_superset(&joinpoint_consumption),
+                        "The current consumption should be a superset of the previous consumption.
+                        As the consumption should only ever increase.
+                        Otherwise we will be looping forever."
+                    );
+                    joinpoint_consumption = current_joinpoint_consumption;
+                }
+            };
+
+            // Insert decrement statements for unused parameters (which are still marked as owned).
+            // If the parameters are never dead, this could be skipped.
+            let dead_symbols = parameters
+                .iter()
+                .filter_map(|Param { symbol, .. }| {
+                    new_body_environment
+                        .symbols_ownership
+                        .contains_key(symbol)
+                        .then_some(*symbol)
+                })
+                .collect_in::<Vec<_>>(arena);
+            let newer_body = consume_and_insert_dec_stmts(
+                arena,
+                &mut new_body_environment,
+                dead_symbols,
+                new_body,
+            );
+
+            environment.add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption);
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+            environment.remove_joinpoint_consumption(*joinpoint_id);
+
+            arena.alloc(Stmt::Join {
+                id: *joinpoint_id,
+                parameters,
+                body: newer_body,
+                remainder: new_remainder,
+            })
+        }
+        Stmt::Jump(joinpoint_id, arguments) => {
+            let consumed_symbols = environment.get_joinpoint_consumption(*joinpoint_id);
+            for consumed_symbol in consumed_symbols.clone().iter() {
+                environment.consume_symbol(consumed_symbol);
+            }
+
+            let new_jump = arena.alloc(Stmt::Jump(*joinpoint_id, arguments));
+
+            // Note that this should only insert increments if a later join point has a current parameter as consumed closure.
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                environment.owned_usages(arguments.iter().copied()),
+                new_jump,
+            )
+        }
+        Stmt::Crash(symbol, crash_tag) => {
+            // We don't have to worry about reference counting *after* the crash.
+            // But we do need to make sure the symbol of the crash is live until the crash.
+            // So we insert increment statements for the symbol (if it is reference counted)
+            let new_crash = arena.alloc(Stmt::Crash(*symbol, *crash_tag));
+
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                environment.owned_usages([*symbol]),
+                new_crash,
+            )
         }
     }
 }
 
-fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiveVarMap) {
-    let j_live_vars = MutSet::default();
-    let mut j_live_vars = collect_stmt(v, m, j_live_vars);
-
-    for param in ys {
-        j_live_vars.remove(&param.symbol);
-    }
-
-    m.insert(j, j_live_vars);
-}
-
-struct CodegenTools<'i> {
-    home: ModuleId,
-    ident_ids: &'i mut IdentIds,
-    update_mode_ids: &'i mut UpdateModeIds,
-}
-
-pub fn visit_procs<'a, 'i>(
+fn insert_refcount_operations_binding<'a>(
     arena: &'a Bump,
-    layout_interner: &'i STLayoutInterner<'a>,
-    home: ModuleId,
-    ident_ids: &'i mut IdentIds,
-    update_mode_ids: &'i mut UpdateModeIds,
-    param_map: &'a ParamMap<'a>,
-    procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) {
-    let ctx = Context::new(arena, layout_interner, param_map);
+    environment: &mut RefcountEnvironment,
+    binding: &Symbol,
+    expr: &Expr<'a>,
+    layout: &InLayout<'a>,
+    stmt: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    macro_rules! dec_borrowed {
+        ($symbols:expr,$stmt:expr) => {
+            // Insert decrement operations for borrowed symbols if they are currently owned.
+            consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages($symbols),
+                stmt,
+            )
+        };
+    }
 
-    let mut codegen = CodegenTools {
-        home,
-        ident_ids,
-        update_mode_ids,
+    macro_rules! new_let {
+        ($stmt:expr) => {
+            arena.alloc(Stmt::Let(*binding, expr.clone(), *layout, $stmt))
+        };
+    }
+
+    macro_rules! inc_owned {
+        ($symbols:expr, $stmt:expr) => {
+            // Insert increment operations for the owned symbols used in the expression.
+            consume_and_insert_inc_stmts(
+                arena,
+                environment,
+                environment.owned_usages($symbols),
+                $stmt,
+            )
+        };
+    }
+
+    match expr {
+        Expr::Literal(_) | Expr::NullPointer | Expr::EmptyArray | Expr::RuntimeErrorFunction(_) => {
+            // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
+            new_let!(stmt)
+        }
+        Expr::Call(Call {
+            arguments,
+            call_type,
+        }) => match call_type {
+            // A by name call refers to a normal function call.
+            // Normal functions take all their parameters as owned, so we can mark them all as such.
+            CallType::ByName { name, .. } => {
+                // Lowlevels are wrapped in another function in order to add type signatures which help with inference.
+                // But the reference counting algorithm inserts reference counting operations in the wrapper function.
+                // But in a later stage, calls to the wrapper function were replaced by calls to the lowlevel function.
+                // Effectively removing the inserted reference counting operations.
+                // Thus to prevent that, we inline the operations here already.
+                if let LowLevelWrapperType::CanBeReplacedBy(op) =
+                    LowLevelWrapperType::from_symbol(name.name())
+                {
+                    let borrow_signature = lowlevel_borrow_signature(arena, op);
+                    let arguments_with_borrow_signature = arguments
+                        .iter()
+                        .copied()
+                        .zip(borrow_signature.iter().copied());
+                    let owned_arguments = arguments_with_borrow_signature
+                        .clone()
+                        .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
+                    let borrowed_arguments =
+                        arguments_with_borrow_signature.filter_map(|(symbol, ownership)| {
+                            ownership.is_borrowed().then_some(symbol)
+                        });
+
+                    let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
+
+                    let new_let = new_let!(new_stmt);
+
+                    inc_owned!(owned_arguments, new_let)
+                } else {
+                    let new_let = new_let!(stmt);
+
+                    inc_owned!(arguments.iter().copied(), new_let)
+                }
+            }
+            CallType::Foreign { .. } => {
+                // Foreign functions should be responsible for their own memory management.
+                // But previously they were assumed to be called with borrowed parameters, so we do the same now.
+                let new_stmt = dec_borrowed!(arguments.iter().copied(), stmt);
+
+                new_let!(new_stmt)
+            }
+            // Doesn't include higher order
+            CallType::LowLevel {
+                op: operator,
+                update_mode: _,
+            } => {
+                let borrow_signature = lowlevel_borrow_signature(arena, *operator);
+                let arguments_with_borrow_signature = arguments
+                    .iter()
+                    .copied()
+                    .zip(borrow_signature.iter().copied());
+                let owned_arguments = arguments_with_borrow_signature
+                    .clone()
+                    .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
+                let borrowed_arguments = arguments_with_borrow_signature
+                    .filter_map(|(symbol, ownership)| ownership.is_borrowed().then_some(symbol));
+
+                let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
+
+                let new_let = new_let!(new_stmt);
+
+                inc_owned!(owned_arguments, new_let)
+            }
+            CallType::HigherOrder(HigherOrderLowLevel {
+                op: operator,
+
+                closure_env_layout: _,
+
+                /// update mode of the higher order lowlevel itself
+                    update_mode: _,
+
+                passed_function,
+            }) => {
+                // Functions always take their arguments as owned.
+                // (Except lowlevels, but those are wrapped in functions that take their arguments as owned and perform rc.)
+
+                // This should always be true, not sure where this could be set to false.
+                debug_assert!(passed_function.owns_captured_environment);
+
+                // define macro that inserts a decref statement for a symbol amount of symbols
+                macro_rules! decref_lists {
+                    ($stmt:expr, $symbol:expr) => {
+                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef($symbol), $stmt))
+                    };
+
+                    ($stmt:expr, $symbol:expr, $($symbols:expr),+) => {{
+                        decref_lists!(decref_lists!($stmt, $symbol), $($symbols),+)
+                    }};
+                }
+
+                match operator {
+                    HigherOrder::ListMap { xs } => {
+                        if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                            let new_stmt = decref_lists!(new_stmt, *xs);
+
+                            let new_let = new_let!(new_stmt);
+
+                            inc_owned!([*xs].into_iter(), new_let)
+                        } else {
+                            panic!("ListMap should have 3 arguments");
+                        }
+                    }
+                    HigherOrder::ListMap2 { xs, ys } => {
+                        if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
+                            &arguments
+                        {
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                            let new_stmt = decref_lists!(new_stmt, *xs, *ys);
+
+                            let new_let = new_let!(new_stmt);
+
+                            inc_owned!([*xs, *ys].into_iter(), new_let)
+                        } else {
+                            panic!("ListMap2 should have 4 arguments");
+                        }
+                    }
+                    HigherOrder::ListMap3 { xs, ys, zs } => {
+                        if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
+                            &arguments
+                        {
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                            let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs);
+
+                            let new_let = new_let!(new_stmt);
+
+                            inc_owned!([*xs, *ys, *zs].into_iter(), new_let)
+                        } else {
+                            panic!("ListMap3 should have 5 arguments");
+                        }
+                    }
+                    HigherOrder::ListMap4 { xs, ys, zs, ws } => {
+                        if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
+                            &arguments
+                        {
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                            let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs, *ws);
+
+                            let new_let = new_let!(new_stmt);
+
+                            inc_owned!([*xs, *ys, *zs, *ws].into_iter(), new_let)
+                        } else {
+                            panic!("ListMap4 should have 6 arguments");
+                        }
+                    }
+                    HigherOrder::ListSortWith { xs } => {
+                        // TODO if non-unique, elements have been consumed, must still consume the list itself
+                        if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
+                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                            let new_let = new_let!(new_stmt);
+
+                            inc_owned!([*xs].into_iter(), new_let)
+                        } else {
+                            panic!("ListSortWith should have 3 arguments");
+                        }
+                    }
+                }
+            }
+        },
+        Expr::Tag { arguments, .. } | Expr::Struct(arguments) => {
+            let new_let = new_let!(stmt);
+
+            inc_owned!(arguments.iter().copied(), new_let)
+        }
+        Expr::ExprBox { symbol } => {
+            let new_let = new_let!(stmt);
+
+            inc_owned!([*symbol], new_let)
+        }
+        Expr::GetTagId { structure, .. }
+        | Expr::StructAtIndex { structure, .. }
+        | Expr::UnionAtIndex { structure, .. }
+        | Expr::ExprUnbox { symbol: structure } => {
+            // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
+            // But we do want to make sure to decrement this item if it is the last reference.
+
+            let new_stmt = dec_borrowed!([*structure], stmt);
+
+            // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
+            let newer_stmt = if matches!(
+                environment.get_symbol_rc_type(binding),
+                VarRcType::ReferenceCounted
+            ) {
+                match expr {
+                    Expr::StructAtIndex { .. }
+                    | Expr::UnionAtIndex { .. }
+                    | Expr::ExprUnbox { .. } => insert_inc_stmt(arena, *binding, 1, new_stmt),
+                    // No usage of an element of a reference counted symbol. No need to increment.
+                    Expr::GetTagId { .. } => new_stmt,
+                    _ => unreachable!("Unexpected expression type"),
+                }
+            } else {
+                // If the symbol is not reference counted, we don't need to increment it.
+                new_stmt
+            };
+
+            new_let!(newer_stmt)
+        }
+        Expr::Array {
+            elem_layout: _,
+            elems,
+        } => {
+            // For an array creation, we insert all the used elements.
+            let new_let = new_let!(stmt);
+
+            inc_owned!(
+                elems.iter().filter_map(|element| match element {
+                    // Literal elements are not reference counted.
+                    ListLiteralElement::Literal(_) => None,
+                    // Symbol elements might be reference counted.
+                    ListLiteralElement::Symbol(symbol) => Some(*symbol),
+                }),
+                new_let
+            )
+        }
+        Expr::Reuse { .. } | Expr::Reset { .. } | Expr::ResetRef { .. } => {
+            unreachable!("Reset(ref) and reuse should not exist at this point")
+        }
+    }
+}
+
+/**
+Insert increment statements for the given symbols compensating for the ownership.
+*/
+fn consume_and_insert_inc_stmts<'a>(
+    arena: &'a Bump,
+    environment: &mut RefcountEnvironment,
+    usage: impl IntoIterator<Item = (Symbol, u64)>,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    usage
+        .into_iter()
+        .fold(continuation, |continuation, (symbol, usage_count)| {
+            consume_and_insert_inc_stmt(arena, environment, symbol, usage_count, continuation)
+        })
+}
+
+/**
+Insert an increment statement for the given symbol compensating for the ownership.
+*/
+fn consume_and_insert_inc_stmt<'a>(
+    arena: &'a Bump,
+    environment: &mut RefcountEnvironment,
+    symbol: Symbol,
+    usage_count: u64,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    debug_assert!(usage_count > 0, "Usage count must be positive");
+    let new_count = match environment.consume_rc_symbol(symbol) {
+        // If the symbol is borrowed, we need to increment the reference count for each usage.
+        Ownership::Borrowed => usage_count,
+        // If the symbol is owned, we need to increment the reference count for each usage except one.
+        Ownership::Owned => usage_count - 1,
     };
 
-    for (key, proc) in procs.iter_mut() {
-        visit_proc(
-            arena,
-            layout_interner,
-            &mut codegen,
-            param_map,
-            &ctx,
-            proc,
-            key.1,
-        );
+    insert_inc_stmt(arena, symbol, new_count, continuation)
+}
+
+/**
+Insert a increment statement for the given symbol.
+*/
+fn insert_inc_stmt<'a>(
+    arena: &'a Bump,
+    symbol: Symbol,
+    count: u64,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    match count {
+        0 => continuation,
+        positive_count => arena.alloc(Stmt::Refcounting(
+            ModifyRc::Inc(symbol, positive_count),
+            continuation,
+        )),
     }
 }
 
-fn visit_proc<'a, 'i>(
+/**
+Insert decrement statements for the given symbols if they are owned.
+*/
+fn consume_and_insert_dec_stmts<'a>(
     arena: &'a Bump,
-    interner: &STLayoutInterner<'a>,
-    codegen: &mut CodegenTools<'i>,
-    param_map: &'a ParamMap<'a>,
-    ctx: &Context<'a, 'i>,
-    proc: &mut Proc<'a>,
-    layout: ProcLayout<'a>,
-) {
-    let params = match param_map.get_symbol(interner, proc.name.name(), layout) {
-        Some(slice) => slice,
-        None => Vec::from_iter_in(
-            proc.args.iter().cloned().map(|(layout, symbol)| Param {
-                symbol,
-                ownership: Ownership::Owned,
-                layout,
-            }),
-            arena,
-        )
-        .into_bump_slice(),
-    };
+    environment: &mut RefcountEnvironment,
+    symbols: impl IntoIterator<Item = Symbol>,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    symbols
+        .into_iter()
+        .fold(continuation, |continuation, symbol| {
+            consume_and_insert_dec_stmt(arena, environment, symbol, continuation)
+        })
+}
 
-    let stmt = arena.alloc(proc.body.clone());
-    let ctx = ctx.update_var_info_with_params(params);
-    let (b, b_live_vars) = ctx.visit_stmt(codegen, stmt);
-    let b = ctx.add_dec_for_dead_params(params, b, &b_live_vars);
+/**
+Insert a decrement statement for the given symbol if it is owned.
+*/
+fn consume_and_insert_dec_stmt<'a>(
+    arena: &'a Bump,
+    environment: &mut RefcountEnvironment,
+    symbol: Symbol,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    match environment.consume_rc_symbol(symbol) {
+        // If the symbol is borrowed, don't have to decrement the reference count.
+        Ownership::Borrowed => continuation,
+        // If the symbol is owned, we do need to decrement the reference count.
+        Ownership::Owned => insert_dec_stmt(arena, symbol, continuation),
+    }
+}
 
-    proc.body = b.clone();
+/**
+Insert decrement statements for the given symbols.
+*/
+fn insert_dec_stmts<'a>(
+    arena: &'a Bump,
+    symbols: impl Iterator<Item = Symbol>,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    symbols.fold(continuation, |continuation, symbol| {
+        insert_dec_stmt(arena, symbol, continuation)
+    })
+}
+
+/**
+Insert a decrement statement for the given symbol.
+*/
+fn insert_dec_stmt<'a>(
+    arena: &'a Bump,
+    symbol: Symbol,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    arena.alloc(Stmt::Refcounting(ModifyRc::Dec(symbol), continuation))
 }

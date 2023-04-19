@@ -22,11 +22,11 @@ procedure Test.2 (Test.7, Test.8):
     ret Test.41;
 
 procedure Test.3 (Test.17):
+    dec Test.17;
     let Test.33 : {} = Struct {};
     ret Test.33;
 
 procedure Test.4 (Test.18):
-    inc Test.18;
     ret Test.18;
 
 procedure Test.9 (Test.26, #Attr.12):
@@ -35,7 +35,6 @@ procedure Test.9 (Test.26, #Attr.12):
     let Test.46 : {} = Struct {};
     let Test.45 : Str = CallByName Test.16 Test.46;
     let Test.42 : Str = CallByName Test.4 Test.45;
-    dec Test.45;
     let Test.44 : {} = Struct {};
     let Test.43 : Str = CallByName Test.13 Test.44 Test.42;
     ret Test.43;
@@ -46,7 +45,6 @@ procedure Test.9 (Test.26, #Attr.12):
     let Test.32 : {} = Struct {};
     let Test.31 : Str = CallByName Test.15 Test.32;
     let Test.28 : {} = CallByName Test.3 Test.31;
-    dec Test.31;
     let Test.30 : {} = Struct {};
     let Test.29 : Str = CallByName Test.11 Test.30;
     ret Test.29;

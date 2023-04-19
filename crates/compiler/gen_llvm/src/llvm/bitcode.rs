@@ -539,6 +539,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
 pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
     layout: InLayout<'a>,
@@ -599,12 +600,11 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 env.builder
                     .build_pointer_cast(value_ptr2, value_ptr_type, "load_opaque");
 
-            let value1 = env
-                .builder
-                .new_build_load(value_type, value_cast1, "load_opaque");
-            let value2 = env
-                .builder
-                .new_build_load(value_type, value_cast2, "load_opaque");
+            let value1 = load_roc_value(env, layout_interner, layout, value_cast1, "load_opaque");
+            let value2 = load_roc_value(env, layout_interner, layout, value_cast2, "load_opaque");
+
+            increment_refcount_layout(env, layout_interner, layout_ids, 1, value1, layout);
+            increment_refcount_layout(env, layout_interner, layout_ids, 1, value2, layout);
 
             let default = [value1.into(), value2.into()];
 

@@ -4,8 +4,6 @@ procedure Bool.1 ():
 
 procedure Bool.11 (#Attr.2, #Attr.3):
     let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    dec #Attr.3;
-    dec #Attr.2;
     ret Bool.23;
 
 procedure Bool.11 (#Attr.2, #Attr.3):
@@ -181,8 +179,8 @@ procedure Json.42 (Json.298):
     let Json.562 : U8 = 34i64;
     let Json.561 : List U8 = Array [Json.562];
     let Json.491 : Int1 = CallByName Bool.11 Json.299 Json.561;
-    dec Json.561;
     dec Json.299;
+    dec Json.561;
     if Json.491 then
         dec Json.298;
         let Json.504 : {} = Struct {};
@@ -333,6 +331,7 @@ procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
 
 procedure Str.72 (Str.244):
     let Str.245 : {I64, U8} = CallByName Str.47 Str.244;
+    dec Str.244;
     let Str.304 : U8 = StructAtIndex 1 Str.245;
     let Str.305 : U8 = 0i64;
     let Str.301 : Int1 = CallByName Bool.11 Str.304 Str.305;
@@ -382,7 +381,6 @@ procedure Test.0 ():
         inc Test.3;
         dec Test.1;
         let Test.19 : [C {}, C I64] = CallByName Str.27 Test.3;
-        dec Test.3;
         let Test.25 : U8 = 1i64;
         let Test.26 : U8 = GetTagId Test.19;
         let Test.27 : Int1 = lowlevel Eq Test.25 Test.26;
@@ -409,8 +407,8 @@ procedure Test.12 ():
     let Test.18 : I64 = -1234i64;
     let Test.16 : {List U8, I64} = Struct {Test.17, Test.18};
     let Test.15 : [C Str, C {List U8, I64}] = TagId(1) Test.16;
-    inc Test.10;
     let Test.14 : Int1 = CallByName Bool.11 Test.10 Test.15;
+    dec Test.15;
     expect Test.14;
     let Test.13 : {} = Struct {};
     ret Test.13;

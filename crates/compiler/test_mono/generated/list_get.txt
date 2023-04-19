@@ -3,9 +3,11 @@ procedure List.2 (List.96, List.97):
     let List.496 : Int1 = CallByName Num.22 List.97 List.500;
     if List.496 then
         let List.498 : I64 = CallByName List.66 List.96 List.97;
+        dec List.96;
         let List.497 : [C {}, C I64] = TagId(1) List.498;
         ret List.497;
     else
+        dec List.96;
         let List.495 : {} = Struct {};
         let List.494 : [C {}, C I64] = TagId(0) List.495;
         ret List.494;
@@ -26,7 +28,6 @@ procedure Test.1 (Test.2):
     let Test.6 : List I64 = Array [1i64, 2i64, 3i64];
     let Test.7 : U64 = 0i64;
     let Test.5 : [C {}, C I64] = CallByName List.2 Test.6 Test.7;
-    dec Test.6;
     ret Test.5;
 
 procedure Test.0 ():

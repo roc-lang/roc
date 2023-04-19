@@ -5,7 +5,7 @@ use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
     LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout,
-    STLayoutInterner, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -308,7 +308,6 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<InLayout<'a>>,
     pub ret_layout: InLayout<'a>,
     pub is_self_recursive: SelfRecursive,
-    pub must_own_arguments: bool,
     pub host_exposed_layouts: HostExposedLayouts<'a>,
 }
 
@@ -406,50 +405,6 @@ impl<'a> Proc<'a> {
             .unwrap();
         w.push(b'\n');
         String::from_utf8(w).unwrap()
-    }
-
-    pub fn insert_refcount_operations<'i>(
-        arena: &'a Bump,
-        layout_interner: &'i STLayoutInterner<'a>,
-        home: ModuleId,
-        ident_ids: &'i mut IdentIds,
-        update_mode_ids: &'i mut UpdateModeIds,
-        procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-        host_exposed_procs: &[Symbol],
-    ) {
-        let borrow_params =
-            crate::borrow::infer_borrow(arena, layout_interner, procs, host_exposed_procs);
-
-        crate::inc_dec::visit_procs(
-            arena,
-            layout_interner,
-            home,
-            ident_ids,
-            update_mode_ids,
-            arena.alloc(borrow_params),
-            procs,
-        );
-    }
-
-    pub fn insert_reset_reuse_operations<'i>(
-        arena: &'a Bump,
-        layout_interner: &'i mut STLayoutInterner<'a>,
-        home: ModuleId,
-        ident_ids: &'i mut IdentIds,
-        update_mode_ids: &'i mut UpdateModeIds,
-        procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    ) {
-        for proc in procs.values_mut() {
-            let new_proc = crate::reset_reuse::insert_reset_reuse(
-                arena,
-                layout_interner,
-                home,
-                ident_ids,
-                update_mode_ids,
-                proc.clone(),
-            );
-            *proc = new_proc;
-        }
     }
 
     fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
@@ -1926,6 +1881,13 @@ pub enum Expr<'a> {
         update_mode: UpdateModeId,
     },
 
+    // Just like Reset, but does not recursively decrement the children.
+    // Used in reuse analysis to replace a decref with a resetRef to avoid decrementing when the dec ref didn't.
+    ResetRef {
+        symbol: Symbol,
+        update_mode: UpdateModeId,
+    },
+
     RuntimeErrorFunction(&'a str),
 }
 
@@ -2045,11 +2007,21 @@ impl<'a> Expr<'a> {
             Reset {
                 symbol,
                 update_mode,
-            } => alloc.text(format!(
-                "Reset {{ symbol: {:?}, id: {} }}",
-                symbol, update_mode.id
-            )),
-
+            } => alloc
+                .text("Reset { symbol: ")
+                .append(symbol_to_doc(alloc, *symbol, pretty))
+                .append(", id: ")
+                .append(format!("{:?}", update_mode))
+                .append(" }"),
+            ResetRef {
+                symbol,
+                update_mode,
+            } => alloc
+                .text("ResetRef { symbol: ")
+                .append(symbol_to_doc(alloc, *symbol, pretty))
+                .append(", id: ")
+                .append(format!("{:?}", update_mode))
+                .append(" }"),
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
@@ -3202,7 +3174,6 @@ fn generate_runtime_error_function<'a>(
         closure_data_layout: None,
         ret_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        must_own_arguments: false,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
     }
 }
@@ -3295,7 +3266,6 @@ fn generate_host_exposed_function<'a>(
                 closure_data_layout: None,
                 ret_layout: result,
                 is_self_recursive: SelfRecursive::NotSelfRecursive,
-                must_own_arguments: false,
                 host_exposed_layouts: HostExposedLayouts::NotHostExposed,
             };
 
@@ -3360,7 +3330,6 @@ fn generate_host_exposed_lambda_set<'a>(
         closure_data_layout: None,
         ret_layout: return_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        must_own_arguments: false,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
     };
 
@@ -3457,7 +3426,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout: Some(closure_data_layout),
                 ret_layout,
                 is_self_recursive: recursivity,
-                must_own_arguments: false,
                 host_exposed_layouts,
             }
         }
@@ -3657,7 +3625,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
-                must_own_arguments: false,
                 host_exposed_layouts,
             }
         }
@@ -5500,7 +5467,7 @@ pub fn with_hole<'a>(
                                     let passed_function = PassedFunction {
                                         name: lambda_name,
                                         captured_environment: closure_data_symbol,
-                                        owns_captured_environment: false,
+                                        owns_captured_environment: true,
                                         specialization_id,
                                         argument_layouts: arg_layouts,
                                         return_layout: ret_layout,
@@ -7501,7 +7468,9 @@ fn substitute_in_expr<'a>(
 
         NullPointer => None,
 
-        Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
+        Reuse { .. } | Reset { .. } | ResetRef { .. } => {
+            unreachable!("reset/resetref/reuse have not been introduced yet")
+        }
 
         Struct(args) => {
             let mut did_change = false;
@@ -9764,7 +9733,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         };
 
@@ -9860,7 +9828,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         };
 

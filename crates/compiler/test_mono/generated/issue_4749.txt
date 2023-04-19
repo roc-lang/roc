@@ -4,8 +4,6 @@ procedure Bool.1 ():
 
 procedure Bool.11 (#Attr.2, #Attr.3):
     let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    dec #Attr.3;
-    dec #Attr.2;
     ret Bool.23;
 
 procedure Bool.11 (#Attr.2, #Attr.3):
@@ -47,6 +45,7 @@ procedure Decode.27 (Decode.107, Decode.108):
     let Decode.109 : [C {}, C Str] = StructAtIndex 1 Decode.122;
     inc Decode.109;
     dec Decode.122;
+    inc Decode.110;
     let Decode.125 : Int1 = CallByName List.1 Decode.110;
     if Decode.125 then
         dec Decode.110;
@@ -207,8 +206,8 @@ procedure Json.42 (Json.298):
     let Json.562 : U8 = 34i64;
     let Json.561 : List U8 = Array [Json.562];
     let Json.491 : Int1 = CallByName Bool.11 Json.299 Json.561;
-    dec Json.561;
     dec Json.299;
+    dec Json.561;
     if Json.491 then
         dec Json.298;
         let Json.504 : {} = Struct {};
@@ -254,6 +253,7 @@ procedure Json.43 ():
 
 procedure List.1 (List.95):
     let List.495 : U64 = CallByName List.6 List.95;
+    dec List.95;
     let List.496 : U64 = 0i64;
     let List.494 : Int1 = CallByName Bool.11 List.495 List.496;
     ret List.494;
@@ -377,8 +377,8 @@ procedure Test.3 ():
     let Test.1 : [C [C List U8, C ], C Str] = CallByName Decode.27 Test.0 Test.8;
     let Test.7 : Str = "Roc";
     let Test.6 : [C [C List U8, C ], C Str] = TagId(1) Test.7;
-    inc Test.1;
     let Test.5 : Int1 = CallByName Bool.11 Test.1 Test.6;
+    dec Test.6;
     expect Test.5;
     let Test.4 : {} = Struct {};
     ret Test.4;

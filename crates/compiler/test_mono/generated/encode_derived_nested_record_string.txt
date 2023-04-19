@@ -88,7 +88,6 @@ procedure Json.118 (Json.119, Json.486, Json.117):
     let Json.494 : {List U8, U64} = Struct {Json.121, Json.517};
     let Json.495 : {} = Struct {};
     let Json.493 : {List U8, U64} = CallByName List.18 Json.117 Json.494 Json.495;
-    dec Json.117;
     let Json.123 : List U8 = StructAtIndex 0 Json.493;
     inc Json.123;
     dec Json.493;
@@ -105,7 +104,6 @@ procedure Json.118 (Json.119, Json.486, Json.117):
     let Json.534 : {List U8, U64} = Struct {Json.121, Json.557};
     let Json.535 : {} = Struct {};
     let Json.533 : {List U8, U64} = CallByName List.18 Json.117 Json.534 Json.535;
-    dec Json.117;
     let Json.123 : List U8 = StructAtIndex 0 Json.533;
     inc Json.123;
     dec Json.533;
@@ -268,6 +266,7 @@ procedure List.80 (List.547, List.548, List.549, List.550, List.551):
             let List.527 : U64 = CallByName Num.19 List.436 List.528;
             jump List.522 List.433 List.525 List.435 List.527 List.437;
         else
+            dec List.433;
             ret List.434;
     in
     jump List.522 List.547 List.548 List.549 List.550 List.551;
@@ -282,6 +281,7 @@ procedure List.80 (List.621, List.622, List.623, List.624, List.625):
             let List.600 : U64 = CallByName Num.19 List.436 List.601;
             jump List.595 List.433 List.598 List.435 List.600 List.437;
         else
+            dec List.433;
             ret List.434;
     in
     jump List.595 List.621 List.622 List.623 List.624 List.625;

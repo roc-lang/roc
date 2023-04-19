@@ -257,40 +257,6 @@ pub fn refcount_reset_proc_body<'a>(
             )
         };
 
-        let alloc_addr_stmt = {
-            let alignment = root.create_symbol(ident_ids, "alignment");
-            let alignment_int = layout_interner
-                .get(layout)
-                .allocation_alignment_bytes(layout_interner, root.target_info);
-            let alignment_expr = Expr::Literal(Literal::Int((alignment_int as i128).to_ne_bytes()));
-            let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
-            let alloc_addr_expr = Expr::Call(Call {
-                call_type: CallType::LowLevel {
-                    op: LowLevel::NumSubWrap,
-                    update_mode: UpdateModeId::BACKEND_DUMMY,
-                },
-                arguments: root.arena.alloc([addr, alignment]),
-            });
-
-            Stmt::Let(
-                alignment,
-                alignment_expr,
-                root.layout_isize,
-                root.arena.alloc(
-                    //
-                    Stmt::Let(
-                        alloc_addr,
-                        alloc_addr_expr,
-                        root.layout_isize,
-                        root.arena.alloc(
-                            //
-                            Stmt::Ret(alloc_addr),
-                        ),
-                    ),
-                ),
-            )
-        };
-
         let rc_contents_stmt = refcount_union_contents(
             root,
             ident_ids,
@@ -302,13 +268,173 @@ pub fn refcount_reset_proc_body<'a>(
             structure,
             tag_id_sym,
             tag_id_layout,
-            alloc_addr_stmt,
+            Stmt::Ret(addr),
         );
 
         tag_id_stmt(root.arena.alloc(
             //
             rc_contents_stmt,
         ))
+    };
+
+    // Reset structure is not unique. Decrement it and return a NULL pointer.
+    let else_stmt = {
+        let decrement_unit = root.create_symbol(ident_ids, "decrement_unit");
+        let decrement_expr = root
+            .call_specialized_op(
+                ident_ids,
+                ctx,
+                layout_interner,
+                layout,
+                root.arena.alloc([structure]),
+            )
+            .unwrap();
+        let decrement_stmt = |next| Stmt::Let(decrement_unit, decrement_expr, LAYOUT_UNIT, next);
+
+        // Zero
+        let zero = root.create_symbol(ident_ids, "zero");
+        let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
+        let zero_stmt = |next| Stmt::Let(zero, zero_expr, root.layout_isize, next);
+
+        // Null pointer with union layout
+        let null = root.create_symbol(ident_ids, "null");
+        let null_stmt =
+            |next| let_lowlevel(root.arena, root.layout_isize, null, PtrCast, &[zero], next);
+
+        decrement_stmt(root.arena.alloc(
+            //
+            zero_stmt(root.arena.alloc(
+                //
+                null_stmt(root.arena.alloc(
+                    //
+                    Stmt::Ret(null),
+                )),
+            )),
+        ))
+    };
+
+    let if_stmt = Stmt::Switch {
+        cond_symbol: is_unique,
+        cond_layout: LAYOUT_BOOL,
+        branches: root.arena.alloc([(1, BranchInfo::None, then_stmt)]),
+        default_branch: (BranchInfo::None, root.arena.alloc(else_stmt)),
+        ret_layout: layout,
+    };
+
+    // Uniqueness test
+    let is_unique_stmt = {
+        let_lowlevel(
+            root.arena,
+            LAYOUT_BOOL,
+            is_unique,
+            Eq,
+            &[rc, refcount_1],
+            root.arena.alloc(if_stmt),
+        )
+    };
+
+    // Constant for unique refcount
+    let refcount_1_encoded = match root.target_info.ptr_width() {
+        PtrWidth::Bytes4 => i32::MIN as i128,
+        PtrWidth::Bytes8 => i64::MIN as i128,
+    }
+    .to_ne_bytes();
+    let refcount_1_expr = Expr::Literal(Literal::Int(refcount_1_encoded));
+    let refcount_1_stmt = Stmt::Let(
+        refcount_1,
+        refcount_1_expr,
+        root.layout_isize,
+        root.arena.alloc(is_unique_stmt),
+    );
+
+    // Refcount value
+    let rc_expr = Expr::UnionAtIndex {
+        structure: rc_ptr,
+        tag_id: 0,
+        union_layout: root.union_refcount,
+        index: 0,
+    };
+    let rc_stmt = Stmt::Let(
+        rc,
+        rc_expr,
+        root.layout_isize,
+        root.arena.alloc(refcount_1_stmt),
+    );
+
+    // Refcount pointer
+    let rc_ptr_stmt = {
+        rc_ptr_from_data_ptr_help(
+            root,
+            ident_ids,
+            structure,
+            rc_ptr,
+            union_layout.stores_tag_id_in_pointer(root.target_info),
+            root.arena.alloc(rc_stmt),
+            addr,
+            recursion_ptr,
+        )
+    };
+
+    rc_ptr_stmt
+}
+
+pub fn refcount_resetref_proc_body<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
+    structure: Symbol,
+) -> Stmt<'a> {
+    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
+    let rc = root.create_symbol(ident_ids, "rc");
+    let refcount_1 = root.create_symbol(ident_ids, "refcount_1");
+    let is_unique = root.create_symbol(ident_ids, "is_unique");
+    let addr = root.create_symbol(ident_ids, "addr");
+
+    let union_layout = match layout_interner.get(layout) {
+        Layout::Union(u) => u,
+        _ => unimplemented!("Reset is only implemented for UnionLayout"),
+    };
+
+    // Whenever we recurse into a child layout we will want to Decrement
+    ctx.op = HelperOp::Dec;
+    ctx.recursive_union = Some(union_layout);
+    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
+
+    // Reset structure is unique. Return a pointer to the allocation.
+    let then_stmt = {
+        let alignment = root.create_symbol(ident_ids, "alignment");
+        let alignment_int = layout_interner
+            .get(layout)
+            .allocation_alignment_bytes(layout_interner, root.target_info);
+        let alignment_expr = Expr::Literal(Literal::Int((alignment_int as i128).to_ne_bytes()));
+        let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
+        let alloc_addr_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::NumSubWrap,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: root.arena.alloc([addr, alignment]),
+        });
+
+        Stmt::Let(
+            alignment,
+            alignment_expr,
+            root.layout_isize,
+            root.arena.alloc(
+                //
+                Stmt::Let(
+                    alloc_addr,
+                    alloc_addr_expr,
+                    root.layout_isize,
+                    root.arena.alloc(
+                        //
+                        Stmt::Ret(alloc_addr),
+                    ),
+                ),
+            ),
+        )
     };
 
     // Reset structure is not unique. Decrement it and return a NULL pointer.
@@ -516,12 +642,12 @@ pub fn rc_ptr_from_data_ptr_help<'a>(
     let rc_addr_sym = root.create_symbol(ident_ids, "rc_addr");
     let sub_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::NumSub,
+            op: LowLevel::NumSubSaturated,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: root.arena.alloc([addr_sym, ptr_size_sym]),
     });
-    let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, root.layout_isize, next);
+    let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, Layout::usize(root.target_info), next);
 
     // Typecast the refcount address from integer to pointer
     let cast_expr = Expr::Call(Call {

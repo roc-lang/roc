@@ -346,14 +346,16 @@ fn eq_tag_union_help<'a>(
     let mut tag_branches = Vec::with_capacity_in(tag_layouts.len(), root.arena);
 
     // If there's a null tag, check it first. We might not need to load any data from memory.
-    if let NullableId::Wrapped(id) = nullable_id {
-        tag_branches.push((id as u64, BranchInfo::None, Stmt::Ret(Symbol::BOOL_TRUE)))
-    } else if let NullableId::Unwrapped(id) = nullable_id {
-        tag_branches.push((
+    match nullable_id {
+        NullableId::Wrapped(id) => {
+            tag_branches.push((id as u64, BranchInfo::None, Stmt::Ret(Symbol::BOOL_TRUE)))
+        }
+        NullableId::Unwrapped(id) => tag_branches.push((
             id as TagIdIntType as u64,
             BranchInfo::None,
             Stmt::Ret(Symbol::BOOL_TRUE),
-        ))
+        )),
+        _ => (),
     }
 
     let default_tag = if let NullableId::Unwrapped(tag_id) = nullable_id {

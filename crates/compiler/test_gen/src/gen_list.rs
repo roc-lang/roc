@@ -2257,7 +2257,7 @@ fn gen_wrap_len() {
             "#
         ),
         RocList::from_slice(&[3]),
-        RocList<i64>
+        RocList<usize>
     );
 }
 
