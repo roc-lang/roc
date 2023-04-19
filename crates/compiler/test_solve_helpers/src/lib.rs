@@ -20,7 +20,7 @@ use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 use roc_solve_problem::TypeError;
 use roc_types::{
     pretty_print::{name_and_print_var, DebugPrint},
-    subs::{Subs, Variable},
+    subs::{instantiate_rigids, Subs, Variable},
 };
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -44,8 +44,9 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-pub fn run_load_and_infer(
+pub fn run_load_and_infer<'a>(
     src: &str,
+    dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
     no_promote: bool,
 ) -> Result<(LoadedModule, String), std::io::Error> {
     use tempfile::tempdir;
@@ -65,6 +66,11 @@ pub fn run_load_and_infer(
 
     let loaded = {
         let dir = tempdir()?;
+
+        for (file, source) in dependencies {
+            std::fs::write(dir.path().join(format!("{file}.roc")), source)?;
+        }
+
         let filename = PathBuf::from("Test.roc");
         let file_path = dir.path().join(filename);
         let result = roc_load::load_and_typecheck_str(
@@ -248,9 +254,9 @@ fn parse_queries(src: &str, line_info: &LineInfo) -> Vec<TypeQuery> {
 
 #[derive(Default, Clone, Copy)]
 pub struct InferOptions {
+    pub allow_errors: bool,
     pub print_can_decls: bool,
     pub print_only_under_alias: bool,
-    pub allow_errors: bool,
     pub no_promote: bool,
 }
 
@@ -338,7 +344,12 @@ impl InferredProgram {
     }
 }
 
-pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram, Box<dyn Error>> {
+pub fn infer_queries<'a>(
+    src: &str,
+    dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
+    options: InferOptions,
+    allow_can_errors: bool,
+) -> Result<InferredProgram, Box<dyn Error>> {
     let (
         LoadedModule {
             module_id: home,
@@ -351,7 +362,7 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
             ..
         },
         src,
-    ) = run_load_and_infer(src, options.no_promote)?;
+    ) = run_load_and_infer(src, dependencies, options.no_promote)?;
 
     let declarations = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
@@ -359,23 +370,20 @@ pub fn infer_queries(src: &str, options: InferOptions) -> Result<InferredProgram
     let can_problems = can_problems.remove(&home).unwrap_or_default();
     let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-    if !options.allow_errors {
+    {
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);
 
-        if !can_problems.is_empty() {
+        if !can_problems.is_empty() && !allow_can_errors {
             return Err(format!("Canonicalization problems: {can_problems}",).into());
         }
-        if !type_problems.is_empty() {
+        if !type_problems.is_empty() && !options.allow_errors {
             return Err(format!("Type problems: {type_problems}",).into());
         }
     }
 
     let line_info = LineInfo::new(&src);
     let queries = parse_queries(&src, &line_info);
-    if queries.is_empty() {
-        return Err("No queries provided!".into());
-    }
 
     let mut inferred_queries = Vec::with_capacity(queries.len());
     let exposed_by_module = ExposedByModule::default();
@@ -533,6 +541,7 @@ impl<'a> QueryCtx<'a> {
         let def_region = Region::new(start_pos, end_pos);
         let def_source = &self.source[start_pos.offset as usize..end_pos.offset as usize];
 
+        instantiate_rigids(self.subs, def.var());
         roc_late_solve::unify(
             self.home,
             self.arena,
@@ -559,41 +568,4 @@ impl<'a> QueryCtx<'a> {
             queries_in_instantiation: InferredQueries(queries_in_instantiation),
         })
     }
-}
-
-pub fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: InferOptions) {
-    let InferredProgram {
-        program,
-        inferred_queries,
-    } = infer_queries(src, options).unwrap();
-
-    let mut output_parts = Vec::with_capacity(inferred_queries.len() + 2);
-
-    if options.print_can_decls {
-        use roc_can::debug::{pretty_print_declarations, PPCtx};
-        let ctx = PPCtx {
-            home: program.home,
-            interns: &program.interns,
-            print_lambda_names: true,
-        };
-        let pretty_decls = pretty_print_declarations(&ctx, &program.declarations);
-        output_parts.push(pretty_decls);
-        output_parts.push("\n".to_owned());
-    }
-
-    for InferredQuery { elaboration, .. } in inferred_queries {
-        let output_part = match elaboration {
-            Elaboration::Specialization {
-                specialized_name,
-                typ,
-            } => format!("{specialized_name} : {typ}"),
-            Elaboration::Source { source, typ } => format!("{source} : {typ}"),
-            Elaboration::Instantiation { .. } => panic!("Use uitest instead"),
-        };
-        output_parts.push(output_part);
-    }
-
-    let pretty_output = output_parts.join("\n");
-
-    expected(&pretty_output);
 }

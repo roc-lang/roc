@@ -4,8 +4,6 @@ procedure Bool.1 ():
 
 procedure Bool.11 (#Attr.2, #Attr.3):
     let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    dec #Attr.3;
-    dec #Attr.2;
     ret Bool.23;
 
 procedure Bool.11 (#Attr.2, #Attr.3):
@@ -47,6 +45,7 @@ procedure Decode.27 (Decode.107, Decode.108):
     let Decode.109 : [C {}, C Str] = StructAtIndex 1 Decode.122;
     inc Decode.109;
     dec Decode.122;
+    inc Decode.110;
     let Decode.125 : Int1 = CallByName List.1 Decode.110;
     if Decode.125 then
         dec Decode.110;
@@ -82,10 +81,11 @@ procedure Json.448 (Json.449, Json.904):
     let Json.451 : List U8 = StructAtIndex 1 Json.1041;
     inc Json.451;
     dec Json.1041;
+    inc Json.451;
     let Json.1037 : Int1 = CallByName List.1 Json.451;
     if Json.1037 then
-        dec Json.452;
         dec Json.451;
+        dec Json.452;
         let Json.1040 : {} = Struct {};
         let Json.1039 : [C {}, C Str] = TagId(0) Json.1040;
         let Json.1038 : {List U8, [C {}, C Str]} = Struct {Json.449, Json.1039};
@@ -112,8 +112,8 @@ procedure Json.448 (Json.449, Json.904):
             let Json.905 : {List U8, [C {}, C Str]} = Struct {Json.452, Json.906};
             ret Json.905;
         else
-            dec Json.457;
             dec Json.452;
+            dec Json.457;
             let Json.909 : {} = Struct {};
             let Json.908 : [C {}, C Str] = TagId(0) Json.909;
             let Json.907 : {List U8, [C {}, C Str]} = Struct {Json.449, Json.908};
@@ -127,6 +127,7 @@ procedure Json.55 ():
 procedure Json.56 (Json.462):
     let Json.1053 : [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64] = TagId(4) ;
     let Json.1054 : {} = Struct {};
+    inc Json.462;
     let Json.1042 : [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64] = CallByName List.26 Json.462 Json.1053 Json.1054;
     let Json.1050 : U8 = 2i64;
     let Json.1051 : U8 = GetTagId Json.1042;
@@ -490,8 +491,10 @@ procedure Json.65 (Json.1160):
         inc Json.522;
         dec Json.899;
         let Json.1035 : U64 = 0i64;
+        inc Json.521;
         let Json.523 : [C {}, C U8] = CallByName List.2 Json.521 Json.1035;
         let Json.1034 : U64 = 1i64;
+        inc Json.521;
         let Json.524 : [C {}, C U8] = CallByName List.2 Json.521 Json.1034;
         let Json.1033 : U64 = 2i64;
         inc Json.521;
@@ -591,6 +594,7 @@ procedure Json.65 (Json.1160):
 
 procedure List.1 (List.95):
     let List.552 : U64 = CallByName List.6 List.95;
+    dec List.95;
     let List.553 : U64 = 0i64;
     let List.551 : Int1 = CallByName Bool.11 List.552 List.553;
     ret List.551;
@@ -600,9 +604,11 @@ procedure List.2 (List.96, List.97):
     let List.547 : Int1 = CallByName Num.22 List.97 List.550;
     if List.547 then
         let List.549 : U8 = CallByName List.66 List.96 List.97;
+        dec List.96;
         let List.548 : [C {}, C U8] = TagId(1) List.549;
         ret List.548;
     else
+        dec List.96;
         let List.546 : {} = Struct {};
         let List.545 : [C {}, C U8] = TagId(0) List.546;
         ret List.545;
@@ -707,10 +713,12 @@ procedure List.80 (List.612, List.613, List.614, List.615, List.616):
                 let List.575 : U64 = CallByName Num.19 List.436 List.576;
                 jump List.570 List.433 List.438 List.435 List.575 List.437;
             else
+                dec List.433;
                 let List.439 : [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64] = UnionAtIndex (Id 0) (Index 0) List.573;
                 let List.577 : [C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64], C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64]] = TagId(0) List.439;
                 ret List.577;
         else
+            dec List.433;
             let List.571 : [C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64], C [C U64, C U64, C U64, C , C , C U64, C U64, C U64, C U64]] = TagId(1) List.434;
             ret List.571;
     in
@@ -788,8 +796,8 @@ procedure Test.3 ():
     let Test.1 : [C [C List U8, C ], C Str] = CallByName Decode.27 Test.0 Test.8;
     let Test.7 : Str = "Roc";
     let Test.6 : [C [C List U8, C ], C Str] = TagId(1) Test.7;
-    inc Test.1;
     let Test.5 : Int1 = CallByName Bool.11 Test.1 Test.6;
+    dec Test.6;
     expect Test.5;
     let Test.4 : {} = Struct {};
     ret Test.4;

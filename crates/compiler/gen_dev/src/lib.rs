@@ -1602,7 +1602,7 @@ trait Backend<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::Reset { symbol, .. } => {
+                    Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
                         self.set_last_seen(*symbol, stmt);
                     }
                     Expr::EmptyArray => {}

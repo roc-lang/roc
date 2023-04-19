@@ -474,6 +474,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
             &Expr::Reset {
                 symbol,
                 update_mode: _,
+            }
+            | &Expr::ResetRef {
+                symbol,
+                update_mode: _,
             } => {
                 self.check_sym_exists(symbol);
                 None

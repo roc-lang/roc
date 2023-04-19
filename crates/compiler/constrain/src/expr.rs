@@ -2097,6 +2097,7 @@ fn constrain_destructure_def(
                 loc_pattern,
                 &mut ftv,
                 &mut def_pattern_state.headers,
+                IsRecursiveDef::No,
             );
 
             let env = &mut Env {
@@ -2674,6 +2675,7 @@ fn constrain_typed_def(
         &def.loc_pattern,
         &mut ftv,
         &mut def_pattern_state.headers,
+        IsRecursiveDef::No,
     );
 
     let env = &mut Env {
@@ -3323,6 +3325,12 @@ pub struct InstantiateRigids {
     pub new_infer_variables: Vec<Variable>,
 }
 
+#[derive(PartialEq, Eq)]
+enum IsRecursiveDef {
+    Yes,
+    No,
+}
+
 fn instantiate_rigids(
     types: &mut Types,
     constraints: &mut Constraints,
@@ -3331,65 +3339,82 @@ fn instantiate_rigids(
     loc_pattern: &Loc<Pattern>,
     ftv: &mut MutMap<Lowercase, Variable>, // rigids defined before the current annotation
     headers: &mut VecMap<Symbol, Loc<TypeOrVar>>,
+    is_recursive_def: IsRecursiveDef,
 ) -> InstantiateRigids {
-    let mut annotation = annotation.clone();
-    let mut new_rigid_variables: Vec<Variable> = Vec::new();
+    let mut new_rigid_variables = vec![];
+    let mut new_infer_variables = vec![];
 
-    let mut rigid_substitution: MutMap<Variable, Variable> = MutMap::default();
-    for named in introduced_vars.iter_named() {
-        use std::collections::hash_map::Entry::*;
+    let mut generate_fresh_ann = |types: &mut Types| {
+        let mut annotation = annotation.clone();
 
-        match ftv.entry(named.name().clone()) {
-            Occupied(occupied) => {
-                let existing_rigid = occupied.get();
-                rigid_substitution.insert(named.variable(), *existing_rigid);
+        let mut rigid_substitution: MutMap<Variable, Variable> = MutMap::default();
+        for named in introduced_vars.iter_named() {
+            use std::collections::hash_map::Entry::*;
+
+            match ftv.entry(named.name().clone()) {
+                Occupied(occupied) => {
+                    let existing_rigid = occupied.get();
+                    rigid_substitution.insert(named.variable(), *existing_rigid);
+                }
+                Vacant(vacant) => {
+                    // It's possible to use this rigid in nested defs
+                    vacant.insert(named.variable());
+                    new_rigid_variables.push(named.variable());
+                }
             }
-            Vacant(vacant) => {
-                // It's possible to use this rigid in nested defs
-                vacant.insert(named.variable());
-                new_rigid_variables.push(named.variable());
-            }
+        }
+
+        // wildcards are always freshly introduced in this annotation
+        new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
+
+        // lambda set vars are always freshly introduced in this annotation
+        new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
+
+        // ext-infer vars are always freshly introduced in this annotation
+        new_rigid_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
+
+        new_infer_variables.extend(introduced_vars.inferred.iter().map(|v| v.value));
+
+        // Instantiate rigid variables
+        if !rigid_substitution.is_empty() {
+            annotation.substitute_variables(&rigid_substitution);
+        }
+
+        types.from_old_type(&annotation)
+    };
+
+    let signature = generate_fresh_ann(types);
+    {
+        // If this is a recursive def, we must also generate a fresh annotation to be used as the
+        // type annotation that will be used in the first def headers introduced during the solving
+        // of the recursive definition.
+        //
+        // That is, this annotation serves as step (1) of XREF(rec-def-strategy). We don't want to
+        // link to the final annotation, since it may be incomplete (or incorrect, see step (1)).
+        // So, we generate a fresh annotation here, and return a separate fresh annotation below;
+        // the latter annotation is the one used to construct the finalized type.
+        let annotation_index = if is_recursive_def == IsRecursiveDef::Yes {
+            generate_fresh_ann(types)
+        } else {
+            signature
+        };
+
+        let loc_annotation_ref = Loc::at(loc_pattern.region, annotation_index);
+        if let Pattern::Identifier(symbol) = loc_pattern.value {
+            let annotation_index = constraints.push_type(types, annotation_index);
+            headers.insert(symbol, Loc::at(loc_pattern.region, annotation_index));
+        } else if let Some(new_headers) = crate::pattern::headers_from_annotation(
+            types,
+            constraints,
+            &loc_pattern.value,
+            &loc_annotation_ref,
+        ) {
+            headers.extend(new_headers)
         }
     }
 
-    // wildcards are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
-
-    // lambda set vars are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
-
-    // ext-infer vars are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
-
-    let new_infer_variables: Vec<Variable> =
-        introduced_vars.inferred.iter().map(|v| v.value).collect();
-
-    // Instantiate rigid variables
-    if !rigid_substitution.is_empty() {
-        annotation.substitute_variables(&rigid_substitution);
-    }
-    let annotation_index = types.from_old_type(&annotation);
-
-    // TODO investigate when we can skip this. It seems to only be required for correctness
-    // for recursive functions. For non-recursive functions the final type is correct, but
-    // alias information is sometimes lost
-    //
-    // Skipping all of this cloning here would be neat!
-    let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
-    if let Pattern::Identifier(symbol) = loc_pattern.value {
-        let annotation_index = constraints.push_type(types, annotation_index);
-        headers.insert(symbol, Loc::at(loc_pattern.region, annotation_index));
-    } else if let Some(new_headers) = crate::pattern::headers_from_annotation(
-        types,
-        constraints,
-        &loc_pattern.value,
-        &loc_annotation_ref,
-    ) {
-        headers.extend(new_headers)
-    }
-
     InstantiateRigids {
-        signature: annotation_index,
+        signature,
         new_rigid_variables,
         new_infer_variables,
     }
@@ -3867,7 +3892,7 @@ pub fn rec_defs_help_simple(
         }
     }
 
-    // Strategy for recursive defs:
+    // NB(rec-def-strategy) Strategy for recursive defs:
     //
     // 1. Let-generalize all rigid annotations. These are the source of truth we'll solve
     //    everything else with. If there are circular type errors here, they will be caught
@@ -4068,11 +4093,12 @@ fn rec_defs_help(
                     &def.loc_pattern,
                     &mut ftv,
                     &mut def_pattern_state.headers,
+                    IsRecursiveDef::Yes,
                 );
 
                 let is_hybrid = !new_infer_variables.is_empty();
 
-                hybrid_and_flex_info.vars.extend(new_infer_variables);
+                hybrid_and_flex_info.vars.extend(&new_infer_variables);
 
                 let signature_index = constraints.push_type(types, signature);
 
@@ -4113,13 +4139,14 @@ fn rec_defs_help(
                         let region = def.loc_expr.region;
 
                         let loc_body_expr = &**loc_body;
-                        let mut state = PatternState {
+                        let mut argument_pattern_state = PatternState {
                             headers: VecMap::default(),
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
                             delayed_is_open_constraints: vec![],
                         };
-                        let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
+                        let mut vars =
+                            Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
                         let ret_type_index = constraints.push_type(types, ret_type);
@@ -4133,7 +4160,7 @@ fn rec_defs_help(
                             env,
                             def,
                             &mut def_pattern_state,
-                            &mut state,
+                            &mut argument_pattern_state,
                             arguments,
                             arg_types,
                         );
@@ -4157,27 +4184,31 @@ fn rec_defs_help(
                             let typ = types.function(pattern_types, lambda_set, ret_type);
                             constraints.push_type(types, typ)
                         };
-                        let body_type =
-                            constraints.push_expected_type(NoExpectation(ret_type_index));
-                        let expr_con = constrain_expr(
-                            types,
-                            constraints,
-                            env,
-                            loc_body_expr.region,
-                            &loc_body_expr.value,
-                            body_type,
-                        );
+                        let expr_con = {
+                            let body_type =
+                                constraints.push_expected_type(NoExpectation(ret_type_index));
+
+                            constrain_expr(
+                                types,
+                                constraints,
+                                env,
+                                loc_body_expr.region,
+                                &loc_body_expr.value,
+                                body_type,
+                            )
+                        };
                         let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
                         vars.push(*fn_var);
 
-                        let state_constraints = constraints.and_constraint(state.constraints);
+                        let state_constraints =
+                            constraints.and_constraint(argument_pattern_state.constraints);
                         let expected_index = constraints.push_expected_type(expected);
                         let cons = [
                             constraints.let_constraint(
                                 [],
-                                state.vars,
-                                state.headers,
+                                argument_pattern_state.vars,
+                                argument_pattern_state.headers,
                                 state_constraints,
                                 expr_con,
                                 generalizable,
@@ -4216,9 +4247,15 @@ fn rec_defs_help(
                         } else {
                             rigid_info.vars.extend(&new_rigid_variables);
 
+                            let rigids = new_rigid_variables;
+                            let flex = def_pattern_state
+                                .vars
+                                .into_iter()
+                                .chain(new_infer_variables);
+
                             rigid_info.constraints.push(constraints.let_constraint(
-                                new_rigid_variables,
-                                def_pattern_state.vars,
+                                rigids,
+                                flex,
                                 [], // no headers introduced (at this level)
                                 def_con,
                                 Constraint::True,
@@ -4278,7 +4315,7 @@ fn rec_defs_help(
         }
     }
 
-    // Strategy for recursive defs:
+    // NB(rec-def-strategy) Strategy for recursive defs:
     //
     // 1. Let-generalize all rigid annotations. These are the source of truth we'll solve
     //    everything else with. If there are circular type errors here, they will be caught

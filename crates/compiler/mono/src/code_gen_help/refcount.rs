@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use bumpalo::collections::vec::Vec;
+use bumpalo::collections::CollectIn;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
@@ -256,42 +257,6 @@ pub fn refcount_reset_proc_body<'a>(
             )
         };
 
-        let alloc_addr_stmt = {
-            let alignment = root.create_symbol(ident_ids, "alignment");
-            let alignment_expr = Expr::Literal(Literal::Int(
-                (layout_interner
-                    .get(layout)
-                    .alignment_bytes(layout_interner, root.target_info) as i128)
-                    .to_ne_bytes(),
-            ));
-            let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
-            let alloc_addr_expr = Expr::Call(Call {
-                call_type: CallType::LowLevel {
-                    op: LowLevel::NumSubWrap,
-                    update_mode: UpdateModeId::BACKEND_DUMMY,
-                },
-                arguments: root.arena.alloc([addr, alignment]),
-            });
-
-            Stmt::Let(
-                alignment,
-                alignment_expr,
-                root.layout_isize,
-                root.arena.alloc(
-                    //
-                    Stmt::Let(
-                        alloc_addr,
-                        alloc_addr_expr,
-                        root.layout_isize,
-                        root.arena.alloc(
-                            //
-                            Stmt::Ret(alloc_addr),
-                        ),
-                    ),
-                ),
-            )
-        };
-
         let rc_contents_stmt = refcount_union_contents(
             root,
             ident_ids,
@@ -303,13 +268,173 @@ pub fn refcount_reset_proc_body<'a>(
             structure,
             tag_id_sym,
             tag_id_layout,
-            alloc_addr_stmt,
+            Stmt::Ret(addr),
         );
 
         tag_id_stmt(root.arena.alloc(
             //
             rc_contents_stmt,
         ))
+    };
+
+    // Reset structure is not unique. Decrement it and return a NULL pointer.
+    let else_stmt = {
+        let decrement_unit = root.create_symbol(ident_ids, "decrement_unit");
+        let decrement_expr = root
+            .call_specialized_op(
+                ident_ids,
+                ctx,
+                layout_interner,
+                layout,
+                root.arena.alloc([structure]),
+            )
+            .unwrap();
+        let decrement_stmt = |next| Stmt::Let(decrement_unit, decrement_expr, LAYOUT_UNIT, next);
+
+        // Zero
+        let zero = root.create_symbol(ident_ids, "zero");
+        let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
+        let zero_stmt = |next| Stmt::Let(zero, zero_expr, root.layout_isize, next);
+
+        // Null pointer with union layout
+        let null = root.create_symbol(ident_ids, "null");
+        let null_stmt =
+            |next| let_lowlevel(root.arena, root.layout_isize, null, PtrCast, &[zero], next);
+
+        decrement_stmt(root.arena.alloc(
+            //
+            zero_stmt(root.arena.alloc(
+                //
+                null_stmt(root.arena.alloc(
+                    //
+                    Stmt::Ret(null),
+                )),
+            )),
+        ))
+    };
+
+    let if_stmt = Stmt::Switch {
+        cond_symbol: is_unique,
+        cond_layout: LAYOUT_BOOL,
+        branches: root.arena.alloc([(1, BranchInfo::None, then_stmt)]),
+        default_branch: (BranchInfo::None, root.arena.alloc(else_stmt)),
+        ret_layout: layout,
+    };
+
+    // Uniqueness test
+    let is_unique_stmt = {
+        let_lowlevel(
+            root.arena,
+            LAYOUT_BOOL,
+            is_unique,
+            Eq,
+            &[rc, refcount_1],
+            root.arena.alloc(if_stmt),
+        )
+    };
+
+    // Constant for unique refcount
+    let refcount_1_encoded = match root.target_info.ptr_width() {
+        PtrWidth::Bytes4 => i32::MIN as i128,
+        PtrWidth::Bytes8 => i64::MIN as i128,
+    }
+    .to_ne_bytes();
+    let refcount_1_expr = Expr::Literal(Literal::Int(refcount_1_encoded));
+    let refcount_1_stmt = Stmt::Let(
+        refcount_1,
+        refcount_1_expr,
+        root.layout_isize,
+        root.arena.alloc(is_unique_stmt),
+    );
+
+    // Refcount value
+    let rc_expr = Expr::UnionAtIndex {
+        structure: rc_ptr,
+        tag_id: 0,
+        union_layout: root.union_refcount,
+        index: 0,
+    };
+    let rc_stmt = Stmt::Let(
+        rc,
+        rc_expr,
+        root.layout_isize,
+        root.arena.alloc(refcount_1_stmt),
+    );
+
+    // Refcount pointer
+    let rc_ptr_stmt = {
+        rc_ptr_from_data_ptr_help(
+            root,
+            ident_ids,
+            structure,
+            rc_ptr,
+            union_layout.stores_tag_id_in_pointer(root.target_info),
+            root.arena.alloc(rc_stmt),
+            addr,
+            recursion_ptr,
+        )
+    };
+
+    rc_ptr_stmt
+}
+
+pub fn refcount_resetref_proc_body<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
+    structure: Symbol,
+) -> Stmt<'a> {
+    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
+    let rc = root.create_symbol(ident_ids, "rc");
+    let refcount_1 = root.create_symbol(ident_ids, "refcount_1");
+    let is_unique = root.create_symbol(ident_ids, "is_unique");
+    let addr = root.create_symbol(ident_ids, "addr");
+
+    let union_layout = match layout_interner.get(layout) {
+        Layout::Union(u) => u,
+        _ => unimplemented!("Reset is only implemented for UnionLayout"),
+    };
+
+    // Whenever we recurse into a child layout we will want to Decrement
+    ctx.op = HelperOp::Dec;
+    ctx.recursive_union = Some(union_layout);
+    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
+
+    // Reset structure is unique. Return a pointer to the allocation.
+    let then_stmt = {
+        let alignment = root.create_symbol(ident_ids, "alignment");
+        let alignment_int = layout_interner
+            .get(layout)
+            .allocation_alignment_bytes(layout_interner, root.target_info);
+        let alignment_expr = Expr::Literal(Literal::Int((alignment_int as i128).to_ne_bytes()));
+        let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
+        let alloc_addr_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::NumSubWrap,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: root.arena.alloc([addr, alignment]),
+        });
+
+        Stmt::Let(
+            alignment,
+            alignment_expr,
+            root.layout_isize,
+            root.arena.alloc(
+                //
+                Stmt::Let(
+                    alloc_addr,
+                    alloc_addr_expr,
+                    root.layout_isize,
+                    root.arena.alloc(
+                        //
+                        Stmt::Ret(alloc_addr),
+                    ),
+                ),
+            ),
+        )
     };
 
     // Reset structure is not unique. Decrement it and return a NULL pointer.
@@ -517,12 +642,12 @@ pub fn rc_ptr_from_data_ptr_help<'a>(
     let rc_addr_sym = root.create_symbol(ident_ids, "rc_addr");
     let sub_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::NumSub,
+            op: LowLevel::NumSubSaturated,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: root.arena.alloc([addr_sym, ptr_size_sym]),
     });
-    let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, root.layout_isize, next);
+    let sub_stmt = |next| Stmt::Let(rc_addr_sym, sub_expr, Layout::usize(root.target_info), next);
 
     // Typecast the refcount address from integer to pointer
     let cast_expr = Expr::Call(Call {
@@ -594,6 +719,7 @@ fn modify_refcount<'a>(
         }
 
         HelperOp::Dec | HelperOp::DecRef(_) => {
+            debug_assert!(alignment >= root.target_info.ptr_width() as u32);
             let alignment_sym = root.create_symbol(ident_ids, "alignment");
             let alignment_expr = Expr::Literal(Literal::Int((alignment as i128).to_ne_bytes()));
             let alignment_stmt = |next| Stmt::Let(alignment_sym, alignment_expr, LAYOUT_U32, next);
@@ -771,7 +897,10 @@ fn refcount_list<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let elem_alignment = layout_interner.alignment_bytes(elem_layout);
+    let alignment = Ord::max(
+        root.target_info.ptr_width() as u32,
+        layout_interner.alignment_bytes(elem_layout),
+    );
 
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_list = modify_refcount(
@@ -779,7 +908,7 @@ fn refcount_list<'a>(
         ident_ids,
         ctx,
         rc_ptr,
-        elem_alignment,
+        alignment,
         arena.alloc(ret_stmt),
     );
 
@@ -1277,6 +1406,13 @@ fn refcount_union_contents<'a>(
         // (Order is important, to avoid use-after-free for Dec)
         let following = Stmt::Jump(jp_contents_modified, &[]);
 
+        let field_layouts = field_layouts
+            .iter()
+            .copied()
+            .enumerate()
+            .collect_in::<Vec<_>>(root.arena)
+            .into_bump_slice();
+
         let fields_stmt = refcount_tag_fields(
             root,
             ident_ids,
@@ -1341,8 +1477,8 @@ fn refcount_union_rec<'a>(
     let rc_structure_stmt = {
         let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
 
-        let alignment =
-            Layout::Union(union_layout).alignment_bytes(layout_interner, root.target_info);
+        let alignment = Layout::Union(union_layout)
+            .allocation_alignment_bytes(layout_interner, root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
         let modify_structure_stmt = modify_refcount(
             root,
@@ -1453,7 +1589,7 @@ fn refcount_union_tailrec<'a>(
             )
         };
 
-        let alignment = layout_interner.alignment_bytes(layout);
+        let alignment = layout_interner.allocation_alignment_bytes(layout);
         let modify_structure_stmt = modify_refcount(
             root,
             ident_ids,
@@ -1501,7 +1637,7 @@ fn refcount_union_tailrec<'a>(
                     let mut tail_stmt = None;
                     for (i, field) in field_layouts.iter().enumerate() {
                         if i != tailrec_index {
-                            filtered.push(*field);
+                            filtered.push((i, *field));
                         } else {
                             let field_val =
                                 root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
@@ -1535,7 +1671,14 @@ fn refcount_union_tailrec<'a>(
                         )),
                     ));
 
-                    (*field_layouts, tail_stmt)
+                    let field_layouts = field_layouts
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .collect_in::<Vec<_>>(root.arena)
+                        .into_bump_slice();
+
+                    (field_layouts, tail_stmt)
                 };
 
             let fields_stmt = refcount_tag_fields(
@@ -1606,20 +1749,20 @@ fn refcount_tag_fields<'a>(
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
-    field_layouts: &'a [InLayout<'a>],
+    field_layouts: &'a [(usize, InLayout<'a>)],
     structure: Symbol,
     tag_id: TagIdIntType,
     following: Stmt<'a>,
 ) -> Stmt<'a> {
     let mut stmt = following;
 
-    for (i, field_layout) in field_layouts.iter().enumerate().rev() {
+    for (i, field_layout) in field_layouts.iter().rev() {
         if layout_interner.contains_refcounted(*field_layout) {
             let field_val = root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
             let field_val_expr = Expr::UnionAtIndex {
                 union_layout,
                 tag_id,
-                index: i as u64,
+                index: *i as u64,
                 structure,
             };
             let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
@@ -1662,7 +1805,7 @@ fn refcount_boxed<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout_interner.alignment_bytes(layout);
+    let alignment = layout_interner.allocation_alignment_bytes(layout);
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_outer = modify_refcount(
         root,

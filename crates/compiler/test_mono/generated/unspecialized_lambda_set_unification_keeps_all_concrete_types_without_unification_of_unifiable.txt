@@ -47,6 +47,11 @@ procedure Encode.23 (Encode.98):
     ret Encode.98;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    dec Encode.99;
+    let Encode.138 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Crash Encode.138
+
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.111 : List U8 = CallByName Test.5 Encode.99 Encode.101 Encode.107;
     ret Encode.111;
 
@@ -69,10 +74,6 @@ procedure Encode.24 (Encode.99, Encode.107, Encode.101):
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.134 : List U8 = CallByName Json.188 Encode.99 Encode.101 Encode.107;
     ret Encode.134;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.138 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
-    Crash Encode.138
 
 procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
@@ -111,7 +112,6 @@ procedure Json.188 (Json.189, Json.904, #Attr.12):
     let Json.914 : {List U8, U64} = Struct {Json.191, Json.926};
     let Json.915 : {} = Struct {};
     let Json.913 : {List U8, U64} = CallByName List.18 Json.187 Json.914 Json.915;
-    dec Json.187;
     let Json.193 : List U8 = StructAtIndex 0 Json.913;
     inc Json.193;
     dec Json.913;
@@ -150,7 +150,6 @@ procedure Json.188 (Json.189, Json.904, #Attr.12):
     let Json.964 : {List U8, U64} = Struct {Json.191, Json.976};
     let Json.965 : {} = Struct {};
     let Json.963 : {List U8, U64} = CallByName List.18 Json.187 Json.964 Json.965;
-    dec Json.187;
     let Json.193 : List U8 = StructAtIndex 0 Json.963;
     inc Json.193;
     dec Json.963;
@@ -192,7 +191,6 @@ procedure Json.190 (Json.906, Json.196):
     dec Json.906;
     let Json.975 : {} = Struct {};
     let Json.197 : List U8 = CallByName Encode.24 Json.194 Json.196 Json.975;
-    dec Json.194;
     joinpoint Json.970 Json.198:
         let Json.968 : U64 = 1i64;
         let Json.967 : U64 = CallByName Num.20 Json.195 Json.968;
@@ -279,6 +277,7 @@ procedure List.80 (List.551, List.552, List.553, List.554, List.555):
             let List.531 : U64 = CallByName Num.19 List.436 List.532;
             jump List.526 List.433 List.529 List.435 List.531 List.437;
         else
+            dec List.433;
             ret List.434;
     in
     jump List.526 List.551 List.552 List.553 List.554 List.555;
@@ -293,6 +292,7 @@ procedure List.80 (List.624, List.625, List.626, List.627, List.628):
             let List.604 : U64 = CallByName Num.19 List.436 List.605;
             jump List.599 List.433 List.602 List.435 List.604 List.437;
         else
+            dec List.433;
             ret List.434;
     in
     jump List.599 List.624 List.625 List.626 List.627 List.628;

@@ -140,7 +140,7 @@ impl Pattern {
             RecordDestructure { destructs, .. } => {
                 // If all destructs are surely exhaustive, then this is surely exhaustive.
                 destructs.iter().all(|d| match &d.value.typ {
-                    DestructType::Required | DestructType::Optional(_, _) => false,
+                    DestructType::Required | DestructType::Optional(_, _) => true,
                     DestructType::Guard(_, pat) => pat.value.surely_exhaustive(),
                 })
             }

@@ -24,6 +24,7 @@ procedure List.80 (List.517, List.518, List.519, List.520, List.521):
             let List.505 : U64 = CallByName Num.19 List.436 List.506;
             jump List.500 List.433 List.503 List.435 List.505 List.437;
         else
+            dec List.433;
             ret List.434;
     in
     jump List.500 List.517 List.518 List.519 List.520 List.521;
@@ -52,5 +53,4 @@ procedure Test.0 ():
     let Test.8 : List [<rnu>C *self, <null>] = Array [];
     let Test.15 : {} = Struct {};
     let Test.9 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.18 Test.8 Test.6 Test.15;
-    dec Test.8;
     ret Test.9;
