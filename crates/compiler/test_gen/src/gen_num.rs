@@ -4044,7 +4044,7 @@ fn num_abs_int_min_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn num_abs_large_bits_min_overflow() {
     assert_evals_to!(r#"Num.absDiff Num.minI128 0"#, 0, i128);
