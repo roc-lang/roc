@@ -659,6 +659,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm: f32,
     ) {
         // See https://stackoverflow.com/a/64608524
+        if imm == 0.0 && !imm.is_sign_negative() {
+            movi_freg_zero(buf, dst);
+            return;
+        }
         match encode_f32_to_imm8(imm) {
             Some(imm8) => {
                 fmov_freg_imm8(buf, FloatType::Single, dst, imm8);
@@ -676,6 +680,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm: f64,
     ) {
         // See https://stackoverflow.com/a/64608524
+        if imm == 0.0 && !imm.is_sign_negative() {
+            movi_freg_zero(buf, dst);
+            return;
+        }
         match encode_f64_to_imm8(imm) {
             Some(imm8) => {
                 fmov_freg_imm8(buf, FloatType::Double, dst, imm8);
@@ -1876,6 +1884,53 @@ impl LoadStoreRegisterImmediate {
     }
 }
 
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct AdvancedSimdModifiedImmediate {
+    fixed: bool,
+    q: bool,
+    op: bool,
+    fixed2: Integer<u16, packed_bits::Bits<10>>,
+    a: bool,
+    b: bool,
+    c: bool,
+    cmode: Integer<u8, packed_bits::Bits<4>>,
+    o2: bool,
+    fixed3: bool,
+    d: bool,
+    e: bool,
+    f: bool,
+    g: bool,
+    h: bool,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for AdvancedSimdModifiedImmediate {}
+
+impl AdvancedSimdModifiedImmediate {
+    #[inline(always)]
+    fn new(rd: AArch64FloatReg) -> Self {
+        Self {
+            fixed: false,
+            q: false,
+            op: true,
+            fixed2: 0b0111100000.into(),
+            a: false,
+            b: false,
+            c: false,
+            cmode: 0b1110.into(),
+            o2: false,
+            fixed3: true,
+            d: false,
+            e: false,
+            f: false,
+            g: false,
+            h: false,
+            rd: rd.id().into(),
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq)]
 pub enum FloatType {
     /// 32 bit
@@ -2861,6 +2916,14 @@ fn fsqrt_freg_freg(
             rd: dst,
             rn: src,
         });
+
+    buf.extend(inst.bytes());
+}
+
+/// Currently, we're only using MOVI to set a float register to 0.0.
+#[inline(always)]
+fn movi_freg_zero(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg) {
+    let inst = AdvancedSimdModifiedImmediate::new(dst);
 
     buf.extend(inst.bytes());
 }
@@ -3880,6 +3943,18 @@ mod tests {
             ),
             ALL_FLOAT_TYPES,
             ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_movi_freg_zero() {
+        disassembler_test!(
+            movi_freg_zero,
+            |reg: AArch64FloatReg| format!(
+                "movi {}, #0000000000000000",
+                reg.capstone_string(FloatType::Double)
+            ),
             ALL_FLOAT_REGS
         );
     }
