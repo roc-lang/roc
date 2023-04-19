@@ -653,21 +653,37 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn mov_freg32_imm32(
-        _buf: &mut Vec<'_, u8>,
+        buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,
-        _dst: AArch64FloatReg,
-        _imm: f32,
+        dst: AArch64FloatReg,
+        imm: f32,
     ) {
-        todo!("loading f32 literal for AArch64");
+        // See https://stackoverflow.com/a/64608524
+        match encode_f32_to_imm8(imm) {
+            Some(imm8) => {
+                fmov_freg_imm8(buf, FloatType::Single, dst, imm8);
+            }
+            None => {
+                todo!("loading f32 literal over 8 bits for AArch64");
+            }
+        }
     }
     #[inline(always)]
     fn mov_freg64_imm64(
-        _buf: &mut Vec<'_, u8>,
+        buf: &mut Vec<'_, u8>,
         _relocs: &mut Vec<'_, Relocation>,
-        _dst: AArch64FloatReg,
-        _imm: f64,
+        dst: AArch64FloatReg,
+        imm: f64,
     ) {
-        todo!("loading f64 literal for AArch64");
+        // See https://stackoverflow.com/a/64608524
+        match encode_f64_to_imm8(imm) {
+            Some(imm8) => {
+                fmov_freg_imm8(buf, FloatType::Double, dst, imm8);
+            }
+            None => {
+                todo!("loading f64 literal over 8 bits for AArch64");
+            }
+        }
     }
     #[inline(always)]
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm: i64) {
@@ -2033,6 +2049,47 @@ impl FloatingPointDataProcessingTwoSource {
     }
 }
 
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct FloatingPointImmediate {
+    m: bool,
+    fixed: bool,
+    s: bool,
+    fixed2: Integer<u8, packed_bits::Bits<5>>,
+    ptype: Integer<u8, packed_bits::Bits<2>>,
+    fixed3: bool,
+    imm8: u8,
+    fixed4: Integer<u8, packed_bits::Bits<3>>,
+    imm5: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for FloatingPointImmediate {}
+
+pub struct FloatingPointImmediateParams {
+    ptype: FloatType,
+    imm8: u8,
+    rd: AArch64FloatReg,
+}
+
+impl FloatingPointImmediate {
+    #[inline(always)]
+    fn new(FloatingPointImmediateParams { ptype, imm8, rd }: FloatingPointImmediateParams) -> Self {
+        Self {
+            m: false,
+            fixed: false,
+            s: false,
+            fixed2: 0b11110.into(),
+            ptype: ptype.id().into(),
+            fixed3: true,
+            imm8,
+            fixed4: 0b100.into(),
+            imm5: 0b00000.into(),
+            rd: rd.id().into(),
+        }
+    }
+}
+
 // Below here are the functions for all of the assembly instructions.
 // Their names are based on the instruction and operators combined.
 // You should call `buf.reserve()` if you push or extend more than once.
@@ -2609,8 +2666,12 @@ fn fcmp_freg_freg(
     src1: AArch64FloatReg,
     src2: AArch64FloatReg,
 ) {
-    let inst =
-        FloatingPointCompare::new(FloatingPointCompareParams { ptype: ftype, rn: src1, rm: src2, opcode2: 0b00000 });
+    let inst = FloatingPointCompare::new(FloatingPointCompareParams {
+        ptype: ftype,
+        rn: src1,
+        rm: src2,
+        opcode2: 0b00000,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -2649,6 +2710,119 @@ fn fmov_freg_freg(
             rd: dst,
             rn: src,
         });
+
+    buf.extend(inst.bytes());
+}
+
+/// Encode a 32-bit float into an 8-bit immediate for FMOV.
+/// See Table C2-1 in the ARM manual for a table of every float that can be encoded in 8 bits.
+/// If the float cannot be encoded, return None.
+/// This operation is the inverse of VFPExpandImm in the ARM manual.
+fn encode_f32_to_imm8(imm: f32) -> Option<u8> {
+    let n = 32;
+    let e = 8; // number of exponent bits in a 32-bit float
+    let f = n - e - 1; // 23: number of fraction bits in a 32-bit float
+
+    let bits = imm.to_bits();
+
+    let sign = (bits >> (n - 1)) & 1; // bits<31>
+    let exp = (bits >> f) & ((1 << e) - 1); // bits<30:23>
+    let frac = bits & ((1 << f) - 1); // bits<22:0>
+
+    let exp_first = (exp >> (e - 1)) & 1; // exp<7>
+    let exp_middle = (exp >> 2) & ((1 << (e - 3)) - 1); // exp<6:2>
+    let exp_last = exp & 0b11; // exp<1:0>
+                               // If exp_first is 0, exp_middle must be all 1s.
+    if exp_first == 0 && exp_middle != ((1 << (e - 3)) - 1) {
+        return None;
+    }
+    // If exp_first is 1, exp_middle must be all 0s.
+    if exp_first == 1 && exp_middle != 0 {
+        return None;
+    }
+
+    let frac_begin = frac >> (f - 4); // frac<22:19>
+    let frac_end = frac & ((1 << (f - 4)) - 1); // frac<18:0>
+                                                // frac_end must be all 0s.
+    if frac_end != 0 {
+        return None;
+    }
+
+    // The sign is the same.
+    let ret_sign = sign << 7;
+    // The first bit of the exponent is inverted.
+    let ret_exp_first = (exp_first ^ 1) << 6;
+    // The rest of the exponent is the same as the last 2 bits of the original exponent.
+    let ret_exp_last = exp_last << 4;
+    // The fraction is the same as the first 4 bits of the original fraction.
+    let ret_frac = frac_begin;
+
+    Some(
+        (ret_sign | ret_exp_first | ret_exp_last | ret_frac)
+            .try_into()
+            .unwrap(),
+    )
+}
+
+/// Encode a 64-bit float into an 8-bit immediate for FMOV.
+/// See Table C2-1 in the ARM manual for a table of every float that can be encoded in 8 bits.
+/// If the float cannot be encoded, return None.
+/// This operation is the inverse of VFPExpandImm in the ARM manual.
+fn encode_f64_to_imm8(imm: f64) -> Option<u8> {
+    let n = 64;
+    let e = 11; // number of exponent bits in a 64-bit float
+    let f = n - e - 1; // 52: number of fraction bits in a 64-bit float
+
+    let bits = imm.to_bits();
+
+    let sign = (bits >> (n - 1)) & 1; // bits<63>
+    let exp = (bits >> f) & ((1 << e) - 1); // bits<62:52>
+    let frac = bits & ((1 << f) - 1); // bits<51:0>
+
+    let exp_first = (exp >> (e - 1)) & 1; // exp<10>
+    let exp_middle = (exp >> 2) & ((1 << (e - 3)) - 1); // exp<9:2>
+    let exp_last = exp & 0b11; // exp<0:1>
+                               // If exp_first is 0, exp_middle must be all 1s.
+    if exp_first == 0 && exp_middle != ((1 << (e - 3)) - 1) {
+        return None;
+    }
+    // If exp_first is 1, exp_middle must be all 0s.
+    if exp_first == 1 && exp_middle != 0 {
+        return None;
+    }
+
+    let frac_begin = frac >> (f - 4); // frac<51:48>
+    let frac_end = frac & ((1 << (f - 4)) - 1); // frac<47:0>
+                                                // frac_end must be all 0s.
+    if frac_end != 0 {
+        return None;
+    }
+
+    // The sign is the same.
+    let ret_sign = sign << 7;
+    // The first bit of the exponent is inverted.
+    let ret_exp_first = (exp_first ^ 1) << 6;
+    // The rest of the exponent is the same as the last 2 bits of the original exponent.
+    let ret_exp_last = exp_last << 4;
+    // The fraction is the same as the first 4 bits of the original fraction.
+    let ret_frac = frac_begin;
+
+    Some(
+        (ret_sign | ret_exp_first | ret_exp_last | ret_frac)
+            .try_into()
+            .unwrap(),
+    )
+}
+
+/// `FMOV Sd/Dd, imm8` -> Move imm8 to a float register.
+/// imm8 is a float encoded using encode_f32_to_imm8 or encode_f64_to_imm8.
+#[inline(always)]
+fn fmov_freg_imm8(buf: &mut Vec<'_, u8>, ftype: FloatType, dst: AArch64FloatReg, imm8: u8) {
+    let inst = FloatingPointImmediate::new(FloatingPointImmediateParams {
+        ptype: ftype,
+        rd: dst,
+        imm8,
+    });
 
     buf.extend(inst.bytes());
 }
@@ -3524,6 +3698,154 @@ mod tests {
             ALL_FLOAT_TYPES,
             ALL_FLOAT_REGS,
             ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_encode_f32_to_imm8() {
+        // See ARM manual Table C2-1: A64 Floating-point modified immediate constants
+        assert_eq!(encode_f32_to_imm8(2.0), Some(0b0_000_0000));
+        assert_eq!(encode_f32_to_imm8(4.0), Some(0b0_001_0000));
+        assert_eq!(encode_f32_to_imm8(8.0), Some(0b0_010_0000));
+        assert_eq!(encode_f32_to_imm8(16.0), Some(0b0_011_0000));
+        assert_eq!(encode_f32_to_imm8(0.125), Some(0b0_100_0000));
+        assert_eq!(encode_f32_to_imm8(0.25), Some(0b0_101_0000));
+        assert_eq!(encode_f32_to_imm8(0.5), Some(0b0_110_0000));
+        assert_eq!(encode_f32_to_imm8(1.0), Some(0b0_111_0000));
+
+        assert_eq!(encode_f32_to_imm8(2.125), Some(0b0_000_0001));
+        assert_eq!(encode_f32_to_imm8(2.25), Some(0b0_000_0010));
+        assert_eq!(encode_f32_to_imm8(2.375), Some(0b0_000_0011));
+        assert_eq!(encode_f32_to_imm8(2.5), Some(0b0_000_0100));
+        assert_eq!(encode_f32_to_imm8(2.625), Some(0b0_000_0101));
+        assert_eq!(encode_f32_to_imm8(2.75), Some(0b0_000_0110));
+        assert_eq!(encode_f32_to_imm8(2.875), Some(0b0_000_0111));
+        assert_eq!(encode_f32_to_imm8(3.0), Some(0b0_000_1000));
+        assert_eq!(encode_f32_to_imm8(3.125), Some(0b0_000_1001));
+        assert_eq!(encode_f32_to_imm8(3.25), Some(0b0_000_1010));
+        assert_eq!(encode_f32_to_imm8(3.375), Some(0b0_000_1011));
+        assert_eq!(encode_f32_to_imm8(3.5), Some(0b0_000_1100));
+        assert_eq!(encode_f32_to_imm8(3.625), Some(0b0_000_1101));
+        assert_eq!(encode_f32_to_imm8(3.75), Some(0b0_000_1110));
+        assert_eq!(encode_f32_to_imm8(3.875), Some(0b0_000_1111));
+
+        assert_eq!(encode_f32_to_imm8(-2.0), Some(0b1_000_0000));
+        assert_eq!(encode_f32_to_imm8(-0.25), Some(0b1_101_0000));
+        assert_eq!(encode_f32_to_imm8(-2.5), Some(0b1_000_0100));
+        assert_eq!(encode_f32_to_imm8(-3.375), Some(0b1_000_1011));
+
+        assert_eq!(encode_f32_to_imm8(1.9375), Some(0b0_111_1111));
+        assert_eq!(encode_f32_to_imm8(-1.9375), Some(0b1_111_1111));
+
+        assert_eq!(encode_f32_to_imm8(23.0), Some(0b0_011_0111));
+        assert_eq!(encode_f32_to_imm8(-23.0), Some(0b1_011_0111));
+
+        assert_eq!(encode_f32_to_imm8(0.0), None);
+        assert_eq!(encode_f32_to_imm8(-0.0), None);
+        assert_eq!(encode_f32_to_imm8(32.0), None);
+        assert_eq!(encode_f32_to_imm8(-32.0), None);
+        assert_eq!(encode_f32_to_imm8(0.0625), None);
+        assert_eq!(encode_f32_to_imm8(-0.0625), None);
+        assert_eq!(encode_f32_to_imm8(0.3), None);
+        assert_eq!(encode_f32_to_imm8(-0.3), None);
+    }
+
+    #[test]
+    fn test_encode_f64_to_imm8() {
+        // See ARM manual Table C2-1: A64 Floating-point modified immediate constants
+        assert_eq!(encode_f64_to_imm8(2.0), Some(0b0_000_0000));
+        assert_eq!(encode_f64_to_imm8(4.0), Some(0b0_001_0000));
+        assert_eq!(encode_f64_to_imm8(8.0), Some(0b0_010_0000));
+        assert_eq!(encode_f64_to_imm8(16.0), Some(0b0_011_0000));
+        assert_eq!(encode_f64_to_imm8(0.125), Some(0b0_100_0000));
+        assert_eq!(encode_f64_to_imm8(0.25), Some(0b0_101_0000));
+        assert_eq!(encode_f64_to_imm8(0.5), Some(0b0_110_0000));
+        assert_eq!(encode_f64_to_imm8(1.0), Some(0b0_111_0000));
+
+        assert_eq!(encode_f64_to_imm8(2.125), Some(0b0_000_0001));
+        assert_eq!(encode_f64_to_imm8(2.25), Some(0b0_000_0010));
+        assert_eq!(encode_f64_to_imm8(2.375), Some(0b0_000_0011));
+        assert_eq!(encode_f64_to_imm8(2.5), Some(0b0_000_0100));
+        assert_eq!(encode_f64_to_imm8(2.625), Some(0b0_000_0101));
+        assert_eq!(encode_f64_to_imm8(2.75), Some(0b0_000_0110));
+        assert_eq!(encode_f64_to_imm8(2.875), Some(0b0_000_0111));
+        assert_eq!(encode_f64_to_imm8(3.0), Some(0b0_000_1000));
+        assert_eq!(encode_f64_to_imm8(3.125), Some(0b0_000_1001));
+        assert_eq!(encode_f64_to_imm8(3.25), Some(0b0_000_1010));
+        assert_eq!(encode_f64_to_imm8(3.375), Some(0b0_000_1011));
+        assert_eq!(encode_f64_to_imm8(3.5), Some(0b0_000_1100));
+        assert_eq!(encode_f64_to_imm8(3.625), Some(0b0_000_1101));
+        assert_eq!(encode_f64_to_imm8(3.75), Some(0b0_000_1110));
+        assert_eq!(encode_f64_to_imm8(3.875), Some(0b0_000_1111));
+
+        assert_eq!(encode_f64_to_imm8(-2.0), Some(0b1_000_0000));
+        assert_eq!(encode_f64_to_imm8(-0.25), Some(0b1_101_0000));
+        assert_eq!(encode_f64_to_imm8(-2.5), Some(0b1_000_0100));
+        assert_eq!(encode_f64_to_imm8(-3.375), Some(0b1_000_1011));
+
+        assert_eq!(encode_f64_to_imm8(1.9375), Some(0b0_111_1111));
+        assert_eq!(encode_f64_to_imm8(-1.9375), Some(0b1_111_1111));
+
+        assert_eq!(encode_f64_to_imm8(23.0), Some(0b0_011_0111));
+        assert_eq!(encode_f64_to_imm8(-23.0), Some(0b1_011_0111));
+
+        assert_eq!(encode_f64_to_imm8(0.0), None);
+        assert_eq!(encode_f64_to_imm8(-0.0), None);
+        assert_eq!(encode_f64_to_imm8(32.0), None);
+        assert_eq!(encode_f64_to_imm8(-32.0), None);
+        assert_eq!(encode_f64_to_imm8(0.0625), None);
+        assert_eq!(encode_f64_to_imm8(-0.0625), None);
+        assert_eq!(encode_f64_to_imm8(0.3), None);
+        assert_eq!(encode_f64_to_imm8(-0.3), None);
+    }
+
+    #[test]
+    fn test_fmov_freg_imm8() {
+        disassembler_test!(
+            |buf: &mut Vec<'_, u8>, ftype: FloatType, dst: AArch64FloatReg, imm: f32| {
+                // We need to encode the float immediate to 8 bits first.
+                let encoded = match ftype {
+                    FloatType::Single => encode_f32_to_imm8(imm),
+                    FloatType::Double => encode_f64_to_imm8(imm as f64),
+                };
+                fmov_freg_imm8(buf, ftype, dst, encoded.unwrap())
+            },
+            |ftype: FloatType, reg: AArch64FloatReg, imm: f32| format!(
+                "fmov {}, #{:.8}",
+                reg.capstone_string(ftype),
+                imm
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            [
+                // These are all of the possible values that can be encoded in an 8-bit float immediate.
+                // See ARM manual Table C2-1: A64 Floating-point modified immediate constants.
+                2.0, 4.0, 8.0, 16.0, 0.125, 0.25, 0.5, 1.0, 2.125, 4.25, 8.5, 17.0, 0.1328125,
+                0.265625, 0.53125, 1.0625, 2.25, 4.5, 9.0, 18.0, 0.140625, 0.28125, 0.5625, 1.125,
+                2.375, 4.75, 9.5, 19.0, 0.1484375, 0.296875, 0.59375, 1.1875, 2.5, 5.0, 10.0, 20.0,
+                0.15625, 0.3125, 0.625, 1.25, 2.625, 5.25, 10.5, 21.0, 0.1640625, 0.328125,
+                0.65625, 1.3125, 2.75, 5.5, 11.0, 22.0, 0.171875, 0.34375, 0.6875, 1.375, 2.875,
+                5.75, 11.5, 23.0, 0.1796875, 0.359375, 0.71875, 1.4375, 3.0, 6.0, 12.0, 24.0,
+                0.1875, 0.375, 0.75, 1.5, 3.125, 6.25, 12.5, 25.0, 0.1953125, 0.390625, 0.78125,
+                1.5625, 3.25, 6.5, 13.0, 26.0, 0.203125, 0.40625, 0.8125, 1.625, 3.375, 6.75, 13.5,
+                27.0, 0.2109375, 0.421875, 0.84375, 1.6875, 3.5, 7.0, 14.0, 28.0, 0.21875, 0.4375,
+                0.875, 1.75, 3.625, 7.25, 14.5, 29.0, 0.2265625, 0.453125, 0.90625, 1.8125, 3.75,
+                7.5, 15.0, 30.0, 0.234375, 0.46875, 0.9375, 1.875, 3.875, 7.75, 15.5, 31.0,
+                0.2421875, 0.484375, 0.96875, 1.9375, -2.0, -4.0, -8.0, -16.0, -0.125, -0.25, -0.5,
+                -1.0, -2.125, -4.25, -8.5, -17.0, -0.1328125, -0.265625, -0.53125, -1.0625, -2.25,
+                -4.5, -9.0, -18.0, -0.140625, -0.28125, -0.5625, -1.125, -2.375, -4.75, -9.5,
+                -19.0, -0.1484375, -0.296875, -0.59375, -1.1875, -2.5, -5.0, -10.0, -20.0,
+                -0.15625, -0.3125, -0.625, -1.25, -2.625, -5.25, -10.5, -21.0, -0.1640625,
+                -0.328125, -0.65625, -1.3125, -2.75, -5.5, -11.0, -22.0, -0.171875, -0.34375,
+                -0.6875, -1.375, -2.875, -5.75, -11.5, -23.0, -0.1796875, -0.359375, -0.71875,
+                -1.4375, -3.0, -6.0, -12.0, -24.0, -0.1875, -0.375, -0.75, -1.5, -3.125, -6.25,
+                -12.5, -25.0, -0.1953125, -0.390625, -0.78125, -1.5625, -3.25, -6.5, -13.0, -26.0,
+                -0.203125, -0.40625, -0.8125, -1.625, -3.375, -6.75, -13.5, -27.0, -0.2109375,
+                -0.421875, -0.84375, -1.6875, -3.5, -7.0, -14.0, -28.0, -0.21875, -0.4375, -0.875,
+                -1.75, -3.625, -7.25, -14.5, -29.0, -0.2265625, -0.453125, -0.90625, -1.8125,
+                -3.75, -7.5, -15.0, -30.0, -0.234375, -0.46875, -0.9375, -1.875, -3.875, -7.75,
+                -15.5, -31.0, -0.2421875, -0.484375, -0.96875, -1.9375,
+            ]
         );
     }
 
