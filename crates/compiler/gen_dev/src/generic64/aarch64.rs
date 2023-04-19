@@ -2856,19 +2856,19 @@ fn encode_f32_to_imm8(imm: f32) -> Option<u8> {
     let exp_first = (exp >> (e - 1)) & 1; // exp<7>
     let exp_middle = (exp >> 2) & ((1 << (e - 3)) - 1); // exp<6:2>
     let exp_last = exp & 0b11; // exp<1:0>
-                               // If exp_first is 0, exp_middle must be all 1s.
     if exp_first == 0 && exp_middle != ((1 << (e - 3)) - 1) {
+        // If exp_first is 0, exp_middle must be all 1s.
         return None;
     }
-    // If exp_first is 1, exp_middle must be all 0s.
     if exp_first == 1 && exp_middle != 0 {
+        // If exp_first is 1, exp_middle must be all 0s.
         return None;
     }
 
     let frac_begin = frac >> (f - 4); // frac<22:19>
     let frac_end = frac & ((1 << (f - 4)) - 1); // frac<18:0>
-                                                // frac_end must be all 0s.
     if frac_end != 0 {
+        // frac_end must be all 0s.
         return None;
     }
 
@@ -2907,19 +2907,19 @@ fn encode_f64_to_imm8(imm: f64) -> Option<u8> {
     let exp_first = (exp >> (e - 1)) & 1; // exp<10>
     let exp_middle = (exp >> 2) & ((1 << (e - 3)) - 1); // exp<9:2>
     let exp_last = exp & 0b11; // exp<0:1>
-                               // If exp_first is 0, exp_middle must be all 1s.
     if exp_first == 0 && exp_middle != ((1 << (e - 3)) - 1) {
+        // If exp_first is 0, exp_middle must be all 1s.
         return None;
     }
-    // If exp_first is 1, exp_middle must be all 0s.
     if exp_first == 1 && exp_middle != 0 {
+        // If exp_first is 1, exp_middle must be all 0s.
         return None;
     }
 
     let frac_begin = frac >> (f - 4); // frac<51:48>
     let frac_end = frac & ((1 << (f - 4)) - 1); // frac<47:0>
-                                                // frac_end must be all 0s.
     if frac_end != 0 {
+        // frac_end must be all 0s.
         return None;
     }
 
