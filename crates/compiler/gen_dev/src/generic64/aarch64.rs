@@ -2881,11 +2881,7 @@ fn encode_f32_to_imm8(imm: f32) -> Option<u8> {
     // The fraction is the same as the first 4 bits of the original fraction.
     let ret_frac = frac_begin;
 
-    Some(
-        (ret_sign | ret_exp_first | ret_exp_last | ret_frac)
-            .try_into()
-            .unwrap(),
-    )
+    Some((ret_sign | ret_exp_first | ret_exp_last | ret_frac) as u8)
 }
 
 /// Encode a 64-bit float into an 8-bit immediate for FMOV.
@@ -2932,11 +2928,7 @@ fn encode_f64_to_imm8(imm: f64) -> Option<u8> {
     // The fraction is the same as the first 4 bits of the original fraction.
     let ret_frac = frac_begin;
 
-    Some(
-        (ret_sign | ret_exp_first | ret_exp_last | ret_frac)
-            .try_into()
-            .unwrap(),
-    )
+    Some((ret_sign | ret_exp_first | ret_exp_last | ret_frac) as u8)
 }
 
 /// `FMOV Sd/Dd, imm8` -> Move imm8 to a float register.
