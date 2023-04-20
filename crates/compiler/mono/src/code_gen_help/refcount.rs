@@ -772,11 +772,10 @@ fn refcount_str<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
 ) -> Stmt<'a> {
+    let arena = root.arena;
     let string = Symbol::ARG_1;
     let layout_isize = root.layout_isize;
-    let field_layouts = root
-        .arena
-        .alloc([Layout::OPAQUE_PTR, layout_isize, layout_isize]);
+    let field_layouts = arena.alloc([Layout::OPAQUE_PTR, layout_isize, layout_isize]);
 
     // Get the last word as a signed int
     let last_word = root.create_symbol(ident_ids, "last_word");
@@ -794,57 +793,163 @@ fn refcount_str<'a>(
 
     // is_big_str = (last_word >= 0);
     // Treat last word as isize so that the small string flag is the same as the sign bit
+    // (assuming a little-endian target, where the sign bit is in the last byte of the word)
     let is_big_str = root.create_symbol(ident_ids, "is_big_str");
-    let is_big_str_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::NumGte,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: root.arena.alloc([last_word, zero]),
-    });
-    let is_big_str_stmt = |next| Stmt::Let(is_big_str, is_big_str_expr, LAYOUT_BOOL, next);
+    let is_big_str_stmt = |next| {
+        let_lowlevel(
+            arena,
+            LAYOUT_BOOL,
+            is_big_str,
+            NumGte,
+            &[last_word, zero],
+            next,
+        )
+    };
 
-    // Get the pointer to the string elements
-    let elements = root.create_symbol(ident_ids, "characters");
-    let elements_expr = Expr::StructAtIndex {
+    //
+    // Check for seamless slice
+    //
+
+    // Get the length field as a signed int
+    let length = root.create_symbol(ident_ids, "length");
+    let length_expr = Expr::StructAtIndex {
+        index: 1,
+        field_layouts,
+        structure: string,
+    };
+    let length_stmt = |next| Stmt::Let(length, length_expr, layout_isize, next);
+
+    // let is_slice = lowlevel NumLt length zero
+    let is_slice = root.create_symbol(ident_ids, "is_slice");
+    let is_slice_stmt =
+        |next| let_lowlevel(arena, LAYOUT_BOOL, is_slice, NumLt, &[length, zero], next);
+
+    //
+    // Branch on seamless slice vs "real" string
+    //
+
+    let jp_chars = JoinPointId(root.create_symbol(ident_ids, "jp_chars"));
+    let chars = root.create_symbol(ident_ids, "chars");
+    let param_elems = Param {
+        symbol: chars,
+        ownership: Ownership::Owned,
+        layout: Layout::OPAQUE_PTR,
+    };
+
+    // one = 1
+    let one = root.create_symbol(ident_ids, "one");
+    let one_expr = Expr::Literal(Literal::Int(1i128.to_ne_bytes()));
+    let one_stmt = |next| Stmt::Let(one, one_expr, layout_isize, next);
+
+    // slice_elems = lowlevel NumShiftLeftBy length one
+    let slice_chars = root.create_symbol(ident_ids, "slice_chars");
+    let slice_chars_stmt = |next| {
+        let_lowlevel(
+            arena,
+            layout_isize,
+            slice_chars,
+            NumShiftLeftBy,
+            &[length, one],
+            next,
+        )
+    };
+
+    let slice_branch = one_stmt(arena.alloc(
+        //
+        slice_chars_stmt(arena.alloc(
+            //
+            Stmt::Jump(jp_chars, arena.alloc([slice_chars])),
+        )),
+    ));
+
+    // Characters pointer for a real string
+    let string_chars = root.create_symbol(ident_ids, "string_chars");
+    let string_chars_expr = Expr::StructAtIndex {
         index: 0,
         field_layouts,
         structure: string,
     };
-    let elements_stmt = |next| Stmt::Let(elements, elements_expr, layout_isize, next);
+    let string_chars_stmt = |next| Stmt::Let(string_chars, string_chars_expr, layout_isize, next);
 
-    // A pointer to the refcount value itself
+    let string_branch = arena.alloc(
+        //
+        string_chars_stmt(arena.alloc(
+            //
+            Stmt::Jump(jp_chars, arena.alloc([string_chars])),
+        )),
+    );
+
+    let if_slice = Stmt::if_then_else(
+        root.arena,
+        is_slice,
+        Layout::UNIT,
+        slice_branch,
+        root.arena.alloc(string_branch),
+    );
+
+    //
+    // Modify Refcount
+    //
+
+    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
     let alignment = root.target_info.ptr_width() as u32;
-
-    let ret_unit_stmt = rc_return_stmt(root, ident_ids, ctx);
-    let mod_rc_stmt = modify_refcount(
+    let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
+    let modify_rc_stmt = modify_refcount(
         root,
         ident_ids,
         ctx,
-        elements,
+        chars,
         alignment,
-        root.arena.alloc(ret_unit_stmt),
+        arena.alloc(ret_stmt),
+    );
+    let addr = root.create_symbol(ident_ids, "addr");
+    let get_and_modify_rc_stmt = rc_ptr_from_data_ptr_help(
+        root,
+        ident_ids,
+        chars,
+        rc_ptr,
+        false,
+        arena.alloc(modify_rc_stmt),
+        addr,
+        Layout::OPAQUE_PTR,
     );
 
-    // Generate an `if` to skip small strings but modify big strings
-    let then_branch = elements_stmt(root.arena.alloc(mod_rc_stmt));
+    //
+    // JoinPoint for slice vs list
+    //
 
-    let if_stmt = Stmt::if_then_else(
+    let joinpoint_elems = Stmt::Join {
+        id: jp_chars,
+        parameters: arena.alloc([param_elems]),
+        body: arena.alloc(get_and_modify_rc_stmt),
+        remainder: arena.alloc(
+            //
+            length_stmt(arena.alloc(
+                //
+                is_slice_stmt(arena.alloc(
+                    //
+                    if_slice,
+                )),
+            )),
+        ),
+    };
+
+    let if_big_stmt = Stmt::if_then_else(
         root.arena,
         is_big_str,
         Layout::UNIT,
-        then_branch,
+        joinpoint_elems,
         root.arena.alloc(rc_return_stmt(root, ident_ids, ctx)),
     );
 
     // Combine the statements in sequence
-    last_word_stmt(root.arena.alloc(
+    last_word_stmt(arena.alloc(
         //
-        zero_stmt(root.arena.alloc(
+        zero_stmt(arena.alloc(
             //
-            is_big_str_stmt(root.arena.alloc(
+            is_big_str_stmt(arena.alloc(
                 //
-                if_stmt,
+                if_big_stmt,
             )),
         )),
     ))
