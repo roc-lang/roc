@@ -871,34 +871,97 @@ fn refcount_list<'a>(
     let len = root.create_symbol(ident_ids, "len");
     let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLen, &[structure], next);
 
-    // Zero
+    // let zero = 0
     let zero = root.create_symbol(ident_ids, "zero");
     let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
     let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
 
     // let is_empty = lowlevel Eq len zero
     let is_empty = root.create_symbol(ident_ids, "is_empty");
-    let is_empty_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::Eq,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: root.arena.alloc([len, zero]),
-    });
-    let is_empty_stmt = |next| Stmt::Let(is_empty, is_empty_expr, LAYOUT_BOOL, next);
+    let is_empty_stmt = |next| let_lowlevel(arena, LAYOUT_BOOL, is_empty, Eq, &[len, zero], next);
 
-    // get elements pointer
-    let elements = root.create_symbol(ident_ids, "elements");
-    let elements_expr = Expr::StructAtIndex {
-        index: 0,
-        field_layouts: arena.alloc([box_layout, layout_isize, layout_isize]),
+    //
+    // Check for seamless slice
+    //
+
+    // let capacity = StructAtIndex 2 structure
+    let capacity = root.create_symbol(ident_ids, "capacity");
+    let list_field_layouts = arena.alloc([box_layout, layout_isize, layout_isize]);
+    let capacity_expr = Expr::StructAtIndex {
+        index: 2,
+        field_layouts: list_field_layouts,
         structure,
     };
-    let elements_stmt = |next| Stmt::Let(elements, elements_expr, box_layout, next);
+    let capacity_stmt = |next| Stmt::Let(capacity, capacity_expr, layout_isize, next);
+
+    // let is_slice = lowlevel NumLt capacity zero
+    let is_slice = root.create_symbol(ident_ids, "is_slice");
+    let is_slice_stmt =
+        |next| let_lowlevel(arena, LAYOUT_BOOL, is_slice, NumLt, &[capacity, zero], next);
+
+    //
+    // Branch on slice vs list
+    //
+
+    let jp_elements = JoinPointId(root.create_symbol(ident_ids, "jp_elements"));
+    let elements = root.create_symbol(ident_ids, "elements");
+    let param_elems = Param {
+        symbol: elements,
+        ownership: Ownership::Owned,
+        layout: Layout::OPAQUE_PTR,
+    };
+
+    // one = 1
+    let one = root.create_symbol(ident_ids, "one");
+    let one_expr = Expr::Literal(Literal::Int(1i128.to_ne_bytes()));
+    let one_stmt = |next| Stmt::Let(one, one_expr, layout_isize, next);
+
+    // slice_elems = lowlevel NumShiftLeftBy capacity one
+    let slice_elems = root.create_symbol(ident_ids, "slice_elems");
+    let slice_elems_stmt = |next| {
+        let_lowlevel(
+            arena,
+            layout_isize,
+            slice_elems,
+            NumShiftLeftBy,
+            &[capacity, one],
+            next,
+        )
+    };
+
+    let slice_branch = one_stmt(arena.alloc(
+        //
+        slice_elems_stmt(arena.alloc(
+            //
+            Stmt::Jump(jp_elements, arena.alloc([slice_elems])),
+        )),
+    ));
+
+    // let list_elems = StructAtIndex 0 structure
+    let list_elems = root.create_symbol(ident_ids, "list_elems");
+    let list_elems_expr = Expr::StructAtIndex {
+        index: 0,
+        field_layouts: list_field_layouts,
+        structure,
+    };
+    let list_elems_stmt = |next| Stmt::Let(list_elems, list_elems_expr, box_layout, next);
+
+    let list_branch = list_elems_stmt(arena.alloc(
+        //
+        Stmt::Jump(jp_elements, arena.alloc([list_elems])),
+    ));
+
+    let switch_slice_list = Stmt::if_then_else(
+        root.arena,
+        is_slice,
+        Layout::UNIT,
+        slice_branch,
+        arena.alloc(list_branch),
+    );
 
     //
     // modify refcount of the list and its elements
-    // (elements first, to avoid use-after-free for Dec)
+    // (elements first, to avoid use-after-free for when decrementing)
     //
 
     let alignment = Ord::max(
@@ -916,37 +979,52 @@ fn refcount_list<'a>(
         arena.alloc(ret_stmt),
     );
 
-    let relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
-    let modify_elems_and_list = if relevant_op && layout_interner.get(elem_layout).is_refcounted() {
-        refcount_list_elems(
-            root,
-            ident_ids,
-            ctx,
-            layout_interner,
-            elem_layout,
-            LAYOUT_UNIT,
-            box_layout,
-            len,
-            elements,
-            modify_list,
-        )
-    } else {
-        modify_list
+    let is_relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
+    let modify_elems_and_list =
+        if is_relevant_op && layout_interner.get(elem_layout).is_refcounted() {
+            refcount_list_elems(
+                root,
+                ident_ids,
+                ctx,
+                layout_interner,
+                elem_layout,
+                LAYOUT_UNIT,
+                box_layout,
+                len,
+                list_elems,
+                modify_list,
+            )
+        } else {
+            modify_list
+        };
+
+    //
+    // JoinPoint for slice vs list
+    //
+
+    let joinpoint_elems = Stmt::Join {
+        id: jp_elements,
+        parameters: arena.alloc([param_elems]),
+        body: arena.alloc(modify_elems_and_list),
+        remainder: arena.alloc(switch_slice_list),
     };
 
     //
     // Do nothing if the list is empty
     //
 
-    let non_empty_branch = root.arena.alloc(
+    let non_empty_branch = arena.alloc(
         //
-        elements_stmt(root.arena.alloc(
+        capacity_stmt(arena.alloc(
             //
-            modify_elems_and_list,
+            is_slice_stmt(arena.alloc(
+                //
+                joinpoint_elems,
+            )),
         )),
     );
 
-    let if_stmt = Stmt::if_then_else(
+    let if_empty_stmt = Stmt::if_then_else(
         root.arena,
         is_empty,
         Layout::UNIT,
@@ -960,7 +1038,7 @@ fn refcount_list<'a>(
             //
             is_empty_stmt(arena.alloc(
                 //
-                if_stmt,
+                if_empty_stmt,
             )),
         )),
     ))
