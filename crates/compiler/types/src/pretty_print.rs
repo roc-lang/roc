@@ -59,6 +59,7 @@ macro_rules! write_parens {
 pub struct DebugPrint {
     pub print_lambda_sets: bool,
     pub print_only_under_alias: bool,
+    pub print_ranks: bool,
     pub ignore_polarity: bool,
     pub print_weakened_vars: bool,
 }
@@ -67,6 +68,7 @@ impl DebugPrint {
     pub const NOTHING: DebugPrint = DebugPrint {
         print_lambda_sets: false,
         print_only_under_alias: false,
+        print_ranks: false,
         ignore_polarity: false,
         print_weakened_vars: false,
     };
@@ -652,6 +654,10 @@ fn write_content<'a>(
     pol: Polarity,
 ) {
     use crate::subs::Content::*;
+
+    if env.debug.print_ranks {
+        buf.push_str(&format!("⟨@{:?}⟩", subs.get_rank(var).into_usize()));
+    }
 
     match subs.get_content_without_compacting(var) {
         FlexVar(Some(name_index)) => {
