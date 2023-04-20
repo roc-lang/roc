@@ -40,6 +40,7 @@ interface Json
         Json,
         toUtf8,
         fromUtf8,
+        fromUtf8WithOptions,
     ]
     imports [
         List,
@@ -76,9 +77,16 @@ interface Json
         Result,
     ]
 
+DecodeOption : [
+    Default,
+    DecodeMap { recordField : Str, objectName : Str },
+]
+
 ## An opaque type with the `EncoderFormatting` and
 ## `DecoderFormatting` abilities.
-Json := {} has [
+Json := {
+    decodeOption : DecodeOption,
+} has [
          EncoderFormatting {
              u8: encodeU8,
              u16: encodeU16,
@@ -122,11 +130,14 @@ Json := {} has [
          },
      ]
 
-## Returns a JSON `Decoder`
-toUtf8 = @Json {}
-
 ## Returns a JSON `Encoder`
-fromUtf8 = @Json {}
+toUtf8 = @Json {decodeOption : Default}
+
+## Returns a JSON `Decoder`
+fromUtf8 = @Json {decodeOption : Default}
+
+fromUtf8WithOptions = \{decodeOption? Default} -> 
+    @Json { decodeOption }
 
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8
@@ -173,7 +184,7 @@ encodeString = \s -> Encode.custom \bytes, @Json {} ->
 encodeList = \lst, encodeElem ->
     Encode.custom \bytes, @Json {} ->
         writeList = \{ buffer, elemsLeft }, elem ->
-            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
+            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {decodeOption : Default})
             bufferWithSuffix =
                 if elemsLeft > 1 then
                     List.append bufferWithElem (Num.toU8 ',')
@@ -195,7 +206,7 @@ encodeRecord = \fields ->
                 |> List.concat (Str.toUtf8 key)
                 |> List.append (Num.toU8 '"')
                 |> List.append (Num.toU8 ':')
-                |> appendWith value (@Json {})
+                |> appendWith value (@Json {decodeOption : Default})
 
             bufferWithSuffix =
                 if fieldsLeft > 1 then
@@ -214,7 +225,7 @@ encodeTuple = \elems ->
     Encode.custom \bytes, @Json {} ->
         writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
             bufferWithElem =
-                appendWith buffer elemEncoder (@Json {})
+                appendWith buffer elemEncoder (@Json {decodeOption : Default})
 
             bufferWithSuffix =
                 if elemsLeft > 1 then
@@ -233,7 +244,7 @@ encodeTag = \name, payload ->
     Encode.custom \bytes, @Json {} ->
         # Idea: encode `A v1 v2` as `{"A": [v1, v2]}`
         writePayload = \{ buffer, itemsLeft }, encoder ->
-            bufferWithValue = appendWith buffer encoder (@Json {})
+            bufferWithValue = appendWith buffer encoder (@Json {decodeOption : Default})
             bufferWithSuffix =
                 if itemsLeft > 1 then
                     List.append bufferWithValue (Num.toU8 ',')
@@ -425,7 +436,7 @@ decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \initialBytes,
                                 { result: Ok state, rest: beforeCommaOrBreak }
 
                             Next decoder ->
-                                Decode.decodeWith bytes decoder (@Json {})
+                                Decode.decodeWith bytes decoder (@Json {decodeOption : Default})
                     )
 
             { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
@@ -1064,7 +1075,7 @@ expect
 
 # JSON OBJECTS -----------------------------------------------------------------
 
-decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {} ->
+decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {decodeOption} ->
 
         # Recursively build up record from object field:value pairs
         decodeFields = \recordState, bytesBeforeField ->
@@ -1091,19 +1102,44 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
                     # Decode the json value
                     { val: updatedRecord, rest: bytesAfterValue } <-
                         (
-                            # Retrieve value decoder for the current field
-                            when stepField recordState fieldName is
-                                Skip ->
-                                    # TODO This doesn't seem right, shouldn't we eat
-                                    # the remaining value bytes if we are skipping this
-                                    # field?
-                                    #
-                                    # Should rest be bytesAfterNextValue or similar?
-                                    { result: Ok recordState, rest: valueBytes }
+                            when decodeOption is 
+                                Default -> 
+                                    # Retrieve value decoder for the current field
+                                    when stepField recordState fieldName is
+                                        Skip ->
+                                            # TODO This doesn't seem right, shouldn't we eat
+                                            # the remaining value bytes if we are skipping this
+                                            # field?
+                                            #
+                                            # Should rest be bytesAfterNextValue or similar?
+                                            { result: Ok recordState, rest: valueBytes }
 
-                                Keep valueDecoder ->
-                                    # Decode the value using the decoder from the recordState
-                                    Decode.decodeWith valueBytes valueDecoder fromUtf8
+                                        Keep valueDecoder ->
+                                            # Decode the value using the decoder from the recordState
+                                            Decode.decodeWith valueBytes valueDecoder fromUtf8
+                                DecodeMap { recordField, objectName } ->
+
+                                    fieldName2 = 
+                                        if objectName == fieldName then 
+                                            recordField
+                                        else
+                                            fieldName
+
+                                    # Retrieve value decoder for the current field
+                                    when stepField recordState fieldName2 is
+                                        Skip ->
+                                            # TODO This doesn't seem right, shouldn't we eat
+                                            # the remaining value bytes if we are skipping this
+                                            # field?
+                                            #
+                                            # Should rest be bytesAfterNextValue or similar?
+                                            { result: Ok recordState, rest: valueBytes }
+
+                                        Keep valueDecoder ->
+                                            # Decode the value using the decoder from the recordState
+                                            Decode.decodeWith valueBytes valueDecoder fromUtf8
+
+                            
                         )
                         |> tryDecode
 
@@ -1175,9 +1211,10 @@ ObjectState : [
 
 # Test decode of record with two strings ignoring whitespace
 expect
-    input = Str.toUtf8 " {\n\"fruit\"\t:2\n, \"owner\": \"Farmer Joe\" } "
-
-    actual = Decode.fromBytesPartial input fromUtf8
+    input = Str.toUtf8 " {\n\"Fruit\"\t:2\n, \"owner\": \"Farmer Joe\" } "
+    decodeOption = DecodeMap {recordField : "fruit", objectName : "Fruit" }
+    
+    actual = Decode.fromBytesPartial input (fromUtf8WithOptions {decodeOption})
     expected = Ok { fruit: 2, owner: "Farmer Joe" }
 
     actual.result == expected
@@ -1208,3 +1245,45 @@ expect
     expected = Ok { outer: { inner: "a" }, other: { one: "b", two: 10u8 } }
 
     actual.result == expected
+
+# Example from IETF RFC 8259 (2017)
+# {
+# "Image": {
+#     "Width":  800,
+#     "Height": 600,
+#     "Title":  "View from 15th Floor",
+#     "Thumbnail": {
+#         "Url":    "http://www.example.com/image/481989943",
+#         "Height": 125,
+#         "Width":  100
+#     },
+#     "Animated" : false,
+#     "IDs": [116, 943, 234, 38793]
+#     }
+# }
+# expect
+#     input =  
+#         """{
+#             "Image": {
+#                 "Width":  800,
+#                 "Height": 600,
+#                 "Title":  "View from 15th Floor",
+#                 "Thumbnail": {
+#                     "Url":    "http://www.example.com/image/481989943",
+#                     "Height": 125,
+#                     "Width":  100
+#                 },
+#                 "Animated" : false,
+#                 "IDs": [116, 943, 234, 38793]
+#             }
+#         }"""
+#         |> Str.toUtf8
+
+#     actual = Decode.fromBytes input fromUtf8
+#     expected = Ok { 
+#         image
+#     }
+
+#     # actual.result == expected
+
+#     2 == 3
