@@ -1978,3 +1978,11 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | <code>a \|> b</code>          |       `b a`        |
 | <code>a b c \|> f x y</code>  | `f (a b c) x y`    |
 
+ ### [Roc's Keywords](#keyword-table) {#keyword-table}
+ 
+ | | | | | | |
+ | --- | --- | --- | --- | --- | --- |
+ | app | as | dbg | crash | else | expect|
+ | expect-fx | exposes | generates | hosted | if | imports |
+ | interface | is | package | packages | platform | provides |
+ | requires | then | to | when | with| |
