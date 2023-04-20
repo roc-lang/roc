@@ -3,6 +3,6 @@ app "test" provides [main] to "./platform"
 
 main =
     \x -> when x is
-    #^ [A [B]w_a [C]w_b]
+    #^ [A [B]* [C]*]
         A B _ -> ""
         A _ C -> ""

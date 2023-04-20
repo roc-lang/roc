@@ -1331,7 +1331,7 @@ fn solve(
                     *type_index,
                 );
 
-                open_tag_union(subs, actual);
+                open_tag_union(subs, pools, actual);
 
                 state
             }
@@ -1571,7 +1571,7 @@ fn solve(
                         let almost_eq_snapshot = subs.snapshot();
                         // TODO: turn this on for bidirectional exhaustiveness checking
                         // open_tag_union(subs, real_var);
-                        open_tag_union(subs, branches_var);
+                        open_tag_union(subs, pools, branches_var);
                         let almost_eq = matches!(
                             unify(
                                 &mut UEnv::new(subs),
@@ -1901,7 +1901,7 @@ fn compact_lambdas_and_check_obligations(
     awaiting_specialization.union(new_awaiting);
 }
 
-fn open_tag_union(subs: &mut Subs, var: Variable) {
+fn open_tag_union(subs: &mut Subs, pools: &mut Pools, var: Variable) {
     let mut stack = vec![var];
     while let Some(var) = stack.pop() {
         use {Content::*, FlatType::*};
@@ -1910,9 +1910,9 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
         match desc.content {
             Structure(TagUnion(tags, ext)) => {
                 if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext.var()) {
-                    let new_ext = TagExt::Any(subs.fresh_unnamed_flex_var());
-                    subs.set_rank(new_ext.var(), desc.rank);
-                    let new_union = Structure(TagUnion(tags, new_ext));
+                    let new_ext_var = register(subs, desc.rank, pools, Content::FlexVar(None));
+
+                    let new_union = Structure(TagUnion(tags, TagExt::Any(new_ext_var)));
                     subs.set_content(var, new_union);
                 }
 
