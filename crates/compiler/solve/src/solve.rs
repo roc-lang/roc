@@ -2691,6 +2691,8 @@ fn type_to_variable<'a>(
                 let ret_var = helper!(ret_type);
                 let closure_var =
                     helper!(closure_type, AmbientFunctionPolicy::Function(destination));
+                //pools.get_mut(rank).push(closure_var);
+
                 let content =
                     Content::Structure(FlatType::Func(new_arguments, closure_var, ret_var));
 
@@ -4075,6 +4077,11 @@ fn adjust_rank_content(
 
             // NEVER TOUCH the ambient function var, it would already have been passed through.
             {
+                if subs.get_rank(*ambient_function_var) == Rank::GENERALIZED {
+                    subs.set_rank(*ambient_function_var, Rank::GENERALIZED);
+                }
+
+
                 let _ = ambient_function_var;
             }
 
@@ -4264,6 +4271,14 @@ fn deep_copy_var_help(
                     Func(arguments, closure_var, ret_var) => {
                         let new_ret_var = work!(ret_var);
                         let new_closure_var = work!(closure_var);
+
+                        debug_assert!(
+                            !subs.equivalent_without_compacting(closure_var, new_closure_var),
+                            "{:?}, {:?} == {:?}",
+                            (var, subs.dbg(var)),
+                            closure_var,
+                            new_closure_var,
+                        );
 
                         let new_arguments = copy_sequence!(arguments.len(), arguments);
 

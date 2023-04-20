@@ -154,6 +154,7 @@ pub struct Context {
     second: Variable,
     second_desc: Descriptor,
     mode: Mode,
+    fn_set: Option<(Variable, Variable)>,
 }
 
 pub trait MetaCollector: Default + std::fmt::Debug {
@@ -508,6 +509,33 @@ pub fn unify_pool<M: MetaCollector>(
             second: var2,
             second_desc: env.subs.get(var2),
             mode,
+            fn_set: None,
+        };
+
+        unify_context(env, pool, ctx)
+    }
+}
+
+#[inline(always)]
+#[must_use]
+fn unify_pool_ls<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    var1: Variable,
+    var2: Variable,
+    fn_set: (Variable, Variable),
+    mode: Mode,
+) -> Outcome<M> {
+    if env.subs.equivalent(var1, var2) {
+        Outcome::default()
+    } else {
+        let ctx = Context {
+            first: var1,
+            first_desc: env.subs.get(var1),
+            second: var2,
+            second_desc: env.subs.get(var2),
+            mode,
+            fn_set: Some(fn_set),
         };
 
         unify_context(env, pool, ctx)
@@ -1877,6 +1905,36 @@ fn unify_lambda_set_help<M: MetaCollector>(
         unspecialized: uls2,
         ambient_function: ambient_function_var2,
     } = lset2;
+
+    if ctx.fn_set.is_none() {
+        return unify_pool(
+            env,
+            pool,
+            ambient_function_var1,
+            ambient_function_var2,
+            ctx.mode,
+        );
+    }
+
+    if cfg!(debug_assertions) {
+        let (fn1, fn2) = ctx.fn_set.expect("LambdaSet unification without fn_set");
+        let (fn1, fn2) = (
+            env.subs.get_root_key_without_compacting(fn1),
+            env.subs.get_root_key_without_compacting(fn2),
+        );
+        let (am_fn1, am_fn2) = (
+            env.subs
+                .get_root_key_without_compacting(ambient_function_var1),
+            env.subs
+                .get_root_key_without_compacting(ambient_function_var2),
+        );
+
+        assert_eq!(
+            (fn1, fn2),
+            (am_fn1, am_fn2),
+            "LambdaSet unification with different ambient functions",
+        );
+    }
 
     // Assumed precondition: the ambient functions have already been unified, or are in the process
     // of being unified - otherwise, how could we have reached unification of lambda sets?
@@ -3332,7 +3390,15 @@ fn unify_flat_type<M: MetaCollector>(
         {
             let arg_outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
             let ret_outcome = unify_pool(env, pool, *l_ret, *r_ret, ctx.mode);
-            let closure_outcome = unify_pool(env, pool, *l_closure, *r_closure, ctx.mode);
+
+            let closure_outcome = unify_pool_ls(
+                env,
+                pool,
+                *l_closure,
+                *r_closure,
+                (ctx.first, ctx.second),
+                ctx.mode,
+            );
 
             let mut outcome = ret_outcome;
 

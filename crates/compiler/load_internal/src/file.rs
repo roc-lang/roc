@@ -4805,7 +4805,7 @@ fn synth_import(subs: &mut Subs, content: roc_types::subs::Content) -> Variable 
     })
 }
 
-fn synth_list_len_type(subs: &mut Subs) -> Variable {
+fn synth_list_len_type(subs: &mut Subs, import_variables: &mut Vec<Variable>) -> Variable {
     use roc_types::subs::{Content, FlatType, LambdaSet, OptVariable, SubsSlice, UnionLabels};
 
     // List.len : List a -> Nat
@@ -4831,6 +4831,7 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
         fn_var,
         Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::NAT)),
     );
+    import_variables.extend([a, list_a, fn_var, clos_list_len]);
     fn_var
 }
 
@@ -4866,10 +4867,10 @@ pub fn add_imports(
     // Patch used symbols from circular dependencies.
     if my_module == ModuleId::NUM {
         // Num needs List.len, but List imports Num.
-        let list_len_type_var = synth_list_len_type(subs);
+        let list_len_type_var = synth_list_len_type(subs, &mut import_variables);
         let list_len_type_index = constraints.push_variable(list_len_type_var);
         def_types.push((Symbol::LIST_LEN, Loc::at_zero(list_len_type_index)));
-        import_variables.push(list_len_type_var);
+        //import_variables.push(list_len_type_var);
     }
 
     // Fill in the implementation information of the abilities from the modules we import, which we
