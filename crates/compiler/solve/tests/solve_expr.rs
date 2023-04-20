@@ -7,14 +7,10 @@ extern crate bumpalo;
 
 #[cfg(test)]
 mod solve_expr {
-    use roc_can::abilities::ImplKey;
     use roc_load::LoadedModule;
     use test_solve_helpers::{format_problems, run_load_and_infer};
 
-    use roc_types::{
-        pretty_print::{name_and_print_var, DebugPrint},
-        types::MemberImpl,
-    };
+    use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 
     // HELPERS
 
@@ -90,73 +86,6 @@ mod solve_expr {
             );
         }
         assert_eq!(actual, expected.to_string());
-    }
-
-    fn check_inferred_abilities<'a, I>(src: &'a str, expected_specializations: I)
-    where
-        I: IntoIterator<Item = (&'a str, &'a str)>,
-    {
-        let LoadedModule {
-            module_id: home,
-            mut can_problems,
-            mut type_problems,
-            interns,
-            abilities_store,
-            ..
-        } = run_load_and_infer(src, [], false).unwrap().0;
-
-        let can_problems = can_problems.remove(&home).unwrap_or_default();
-        let type_problems = type_problems.remove(&home).unwrap_or_default();
-
-        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
-
-        if !type_problems.is_empty() {
-            eprintln!("{:?}", type_problems);
-            panic!();
-        }
-
-        let known_specializations = abilities_store.iter_declared_implementations().filter_map(
-            |(impl_key, member_impl)| match member_impl {
-                MemberImpl::Impl(impl_symbol) => {
-                    let specialization = abilities_store.specialization_info(*impl_symbol).expect(
-                        "declared implementations should be resolved conclusively after solving",
-                    );
-                    Some((impl_key, specialization.clone()))
-                }
-                MemberImpl::Error => None,
-            },
-        );
-
-        use std::collections::HashSet;
-        let pretty_specializations = known_specializations
-            .into_iter()
-            .map(|(impl_key, _)| {
-                let ImplKey {
-                    opaque,
-                    ability_member,
-                } = impl_key;
-                let member_data = abilities_store.member_def(ability_member).unwrap();
-                let member_str = ability_member.as_str(&interns);
-                let ability_str = member_data.parent_ability.as_str(&interns);
-                (
-                    format!("{}:{}", ability_str, member_str),
-                    opaque.as_str(&interns),
-                )
-            })
-            .collect::<HashSet<_>>();
-
-        for (parent, specialization) in expected_specializations.into_iter() {
-            let has_the_one = pretty_specializations
-                .iter()
-                // references are annoying so we do this
-                .any(|(p, s)| p == parent && s == &specialization);
-            assert!(
-                has_the_one,
-                "{:#?} not in {:#?}",
-                (parent, specialization),
-                pretty_specializations,
-            );
-        }
     }
 
     #[test]
