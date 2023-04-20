@@ -1,0 +1,10 @@
+app "test" provides [main] to "./platform"
+
+main = isCorrectOrder (IsList [IsStr ""])
+#      ^^^^^^^^^^^^^^ [IsList (List [IsList (List a), IsStr Str]), IsStr Str] -[[isCorrectOrder(1)]]-> Bool
+
+isCorrectOrder = \pair ->
+#^^^^^^^^^^^^^^{-1} [IsList (List [IsList (List a), IsStr *]), IsStr *] -[[isCorrectOrder(1)]]-> Bool
+    when pair is
+        IsList l -> List.all l isCorrectOrder
+        IsStr _ -> isCorrectOrder (IsList [pair])

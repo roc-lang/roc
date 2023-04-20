@@ -1449,8 +1449,8 @@ fn separate_union_lambdas<M: MetaCollector>(
                                 // code generator, we have not yet observed a case where they must
                                 // collapsed to the type checker of the surface syntax.
                                 // It is possible this assumption will be invalidated!
-                                maybe_mark_union_recursive(env, var1);
-                                maybe_mark_union_recursive(env, var2);
+                                maybe_mark_union_recursive(env, pool, var1);
+                                maybe_mark_union_recursive(env, pool, var2);
                             }
 
                             // Check whether the two type variables in the closure set are
@@ -2972,7 +2972,7 @@ enum OtherTags2 {
 
 /// Promotes a non-recursive tag union or lambda set to its recursive variant, if it is found to be
 /// recursive.
-fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
+fn maybe_mark_union_recursive(env: &mut Env, pool: &mut Pool, union_var: Variable) {
     let subs = &mut env.subs;
     'outer: while let Err((_, chain)) = subs.occurs(union_var) {
         // walk the chain till we find a tag union or lambda set, starting from the variable that
@@ -2981,7 +2981,9 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
             let description = subs.get(v);
             match description.content {
                 Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                    subs.mark_tag_union_recursive(v, tags, ext_var);
+                    let rec_var = subs.mark_tag_union_recursive(v, tags, ext_var);
+                    pool.push(rec_var);
+
                     continue 'outer;
                 }
                 LambdaSet(self::LambdaSet {
@@ -2990,7 +2992,14 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {
-                    subs.mark_lambda_set_recursive(v, solved, unspecialized, ambient_function_var);
+                    let rec_var = subs.mark_lambda_set_recursive(
+                        v,
+                        solved,
+                        unspecialized,
+                        ambient_function_var,
+                    );
+                    pool.push(rec_var);
+
                     continue 'outer;
                 }
                 _ => { /* fall through */ }
@@ -3119,8 +3128,8 @@ fn unify_shared_tags<M: MetaCollector>(
             // since we're expanding tag unions to equal depths as described above,
             // we'll always pass through this branch. So, we promote tag unions to recursive
             // ones here if it turns out they are that.
-            maybe_mark_union_recursive(env, actual);
-            maybe_mark_union_recursive(env, expected);
+            maybe_mark_union_recursive(env, pool, actual);
+            maybe_mark_union_recursive(env, pool, expected);
 
             let mut outcome = Outcome::<M>::default();
 

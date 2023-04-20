@@ -698,7 +698,7 @@ fn solve(
                 // after a LetCon, we must check if any of the variables that we introduced
                 // loop back to themselves after solving the ret_constraint
                 for (symbol, loc_var) in def_vars.iter() {
-                    check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                    check_for_infinite_type(subs, pools, problems, *symbol, *loc_var);
                 }
 
                 continue;
@@ -3592,6 +3592,7 @@ fn create_union_lambda(
 
 fn check_for_infinite_type(
     subs: &mut Subs,
+    pools: &mut Pools,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
     loc_var: Loc<Variable>,
@@ -3604,7 +3605,9 @@ fn check_for_infinite_type(
         for &var in chain.iter().rev() {
             match *subs.get_content_without_compacting(var) {
                 Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                    subs.mark_tag_union_recursive(var, tags, ext_var);
+                    let rec_var = subs.mark_tag_union_recursive(var, tags, ext_var);
+                    register_to_pools(subs, rec_var, pools);
+
                     continue 'next_occurs_check;
                 }
                 Content::LambdaSet(subs::LambdaSet {
@@ -3613,12 +3616,14 @@ fn check_for_infinite_type(
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {
-                    subs.mark_lambda_set_recursive(
+                    let rec_var = subs.mark_lambda_set_recursive(
                         var,
                         solved,
                         unspecialized,
                         ambient_function_var,
                     );
+                    register_to_pools(subs, rec_var, pools);
+
                     continue 'next_occurs_check;
                 }
                 _ => { /* fall through */ }
@@ -4494,4 +4499,9 @@ fn register_with_known_var(
     pools.get_mut(rank).push(var);
 
     var
+}
+
+#[inline(always)]
+fn register_to_pools(subs: &Subs, var: Variable, pools: &mut Pools) {
+    pools.get_mut(subs.get_rank(var)).push(var);
 }
