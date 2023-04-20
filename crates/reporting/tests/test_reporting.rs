@@ -13474,10 +13474,6 @@ I recommend using camelCase. It's the standard style in Roc code!
             "#
         ),
         @r###"
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
-
-    The #UserApp module does not expose anything by the name `z`.
-
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
     Something is off with the body of the `f` definition:
@@ -13488,7 +13484,7 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     The body is an anonymous function of type:
 
-        (U8, U8, * -> U8)
+        (U8, U8, Int Unsigned8 -> U8)
 
     But the type annotation on `f` says it should be:
 
@@ -13546,10 +13542,6 @@ I recommend using camelCase. It's the standard style in Roc code!
             "#
         ),
         @r###"
-    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
-
-    The #UserApp module does not expose anything by the name `z`.
-
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
     Something is off with the body of the `f` definition:
@@ -13560,7 +13552,7 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     The body is an anonymous function of type:
 
-        (U8, U8, * -> U8)
+        (U8, U8, Int Unsigned8 -> U8)
 
     But the type annotation on `f` says it should be:
 

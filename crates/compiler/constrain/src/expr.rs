@@ -3022,6 +3022,29 @@ fn constrain_typed_function_arguments(
             }
         }
     }
+
+    // There may be argument idents left over that don't line up with the function arity.
+    // Add their patterns' symbols in so that they are present in the env, even though this will
+    // wind up a type error.
+    if arguments.len() > arg_types.len() {
+        for (pattern_var, _annotated_mark, loc_pattern) in &arguments[arg_types.len()..] {
+            let pattern_var_index = constraints.push_variable(*pattern_var);
+
+            def_pattern_state.vars.push(*pattern_var);
+
+            let pattern_expected =
+                constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_var_index));
+            constrain_pattern(
+                types,
+                constraints,
+                env,
+                &loc_pattern.value,
+                loc_pattern.region,
+                pattern_expected,
+                argument_pattern_state,
+            );
+        }
+    }
 }
 
 fn constrain_typed_function_arguments_simple(
@@ -3142,6 +3165,29 @@ fn constrain_typed_function_arguments_simple(
                     .constraints
                     .push(exhaustive_constraint)
             }
+        }
+    }
+
+    // There may be argument idents left over that don't line up with the function arity.
+    // Add their patterns' symbols in so that they are present in the env, even though this will
+    // wind up a type error.
+    if arguments.len() > arg_types.len() {
+        for (pattern_var, _annotated_mark, loc_pattern) in &arguments[arg_types.len()..] {
+            let pattern_var_index = constraints.push_variable(*pattern_var);
+
+            def_pattern_state.vars.push(*pattern_var);
+
+            let pattern_expected =
+                constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_var_index));
+            constrain_pattern(
+                types,
+                constraints,
+                env,
+                &loc_pattern.value,
+                loc_pattern.region,
+                pattern_expected,
+                argument_pattern_state,
+            );
         }
     }
 }
