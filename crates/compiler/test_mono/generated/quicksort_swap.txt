@@ -15,8 +15,6 @@ procedure List.2 (List.96, List.97):
 procedure List.3 (List.104, List.105, List.106):
     let List.503 : {List I64, I64} = CallByName List.64 List.104 List.105 List.106;
     let List.502 : List I64 = StructAtIndex 0 List.503;
-    inc List.502;
-    dec List.503;
     ret List.502;
 
 procedure List.6 (#Attr.2):

@@ -16,7 +16,12 @@ procedure Dict.34 ():
 
 procedure Dict.4 (Dict.504):
     let Dict.85 : U64 = StructAtIndex 3 Dict.504;
-    dec Dict.504;
+    let #Derived_gen.2 : List {[], []} = StructAtIndex 0 Dict.504;
+    dec #Derived_gen.2;
+    let #Derived_gen.1 : List U64 = StructAtIndex 1 Dict.504;
+    dec #Derived_gen.1;
+    let #Derived_gen.0 : List I8 = StructAtIndex 2 Dict.504;
+    dec #Derived_gen.0;
     ret Dict.85;
 
 procedure List.11 (List.115, List.116):

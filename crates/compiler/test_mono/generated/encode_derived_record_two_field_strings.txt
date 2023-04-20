@@ -70,8 +70,6 @@ procedure Json.118 (Json.119, Json.486, Json.117):
     let Json.495 : {} = Struct {};
     let Json.493 : {List U8, U64} = CallByName List.18 Json.117 Json.494 Json.495;
     let Json.123 : List U8 = StructAtIndex 0 Json.493;
-    inc Json.123;
-    dec Json.493;
     let Json.492 : I64 = 125i64;
     let Json.491 : U8 = CallByName Num.127 Json.492;
     let Json.490 : List U8 = CallByName List.4 Json.123 Json.491;
@@ -79,14 +77,9 @@ procedure Json.118 (Json.119, Json.486, Json.117):
 
 procedure Json.120 (Json.488, Json.489):
     let Json.126 : Str = StructAtIndex 0 Json.489;
-    inc Json.126;
     let Json.127 : Str = StructAtIndex 1 Json.489;
-    inc Json.127;
-    dec Json.489;
     let Json.124 : List U8 = StructAtIndex 0 Json.488;
-    inc Json.124;
     let Json.125 : U64 = StructAtIndex 1 Json.488;
-    dec Json.488;
     let Json.516 : I64 = 34i64;
     let Json.515 : U8 = CallByName Num.127 Json.516;
     let Json.513 : List U8 = CallByName List.4 Json.124 Json.515;
@@ -218,14 +211,13 @@ procedure Str.9 (Str.79):
     let Str.302 : Int1 = StructAtIndex 2 Str.80;
     if Str.302 then
         let Str.304 : Str = StructAtIndex 1 Str.80;
-        inc Str.304;
-        dec Str.80;
         let Str.303 : [C {U64, U8}, C Str] = TagId(1) Str.304;
         ret Str.303;
     else
         let Str.300 : U8 = StructAtIndex 3 Str.80;
         let Str.301 : U64 = StructAtIndex 0 Str.80;
-        dec Str.80;
+        let #Derived_gen.18 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.18;
         let Str.299 : {U64, U8} = Struct {Str.301, Str.300};
         let Str.298 : [C {U64, U8}, C Str] = TagId(0) Str.299;
         ret Str.298;
