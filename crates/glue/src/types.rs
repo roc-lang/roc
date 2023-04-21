@@ -1226,81 +1226,8 @@ impl<'a> Env<'a> {
     }
 
     fn find_lambda_sets(&self, root: Variable) -> MutMap<Variable, LambdaSetId> {
-        let mut lambda_set_id = LambdaSetId::default();
-
-        let mut result = MutMap::default();
-        let mut stack = vec![root];
-
-        while let Some(var) = stack.pop() {
-            match self.subs.get_content_without_compacting(var) {
-                Content::RangedNumber(_)
-                | Content::Error
-                | Content::FlexVar(_)
-                | Content::RigidVar(_)
-                | Content::FlexAbleVar(_, _)
-                | Content::RigidAbleVar(_, _)
-                | Content::RecursionVar { .. } => {}
-                Content::Structure(flat_type) => match flat_type {
-                    FlatType::Apply(_, arguments) => {
-                        stack.extend(self.subs.get_subs_slice(*arguments).iter().rev());
-                    }
-                    FlatType::Func(_, lambda_set_var, _) => {
-                        result.insert(*lambda_set_var, lambda_set_id);
-                        lambda_set_id = lambda_set_id.next();
-
-                        // the lambda set itself can contain more lambda sets
-                        stack.push(*lambda_set_var);
-                    }
-                    FlatType::Record(fields, ext) => {
-                        stack.extend(self.subs.get_subs_slice(fields.variables()).iter().rev());
-                        stack.push(*ext);
-                    }
-                    FlatType::Tuple(elements, ext) => {
-                        stack.extend(self.subs.get_subs_slice(elements.variables()).iter().rev());
-                        stack.push(*ext);
-                    }
-                    FlatType::FunctionOrTagUnion(_, _, ext) => {
-                        // just the ext
-                        match ext {
-                            roc_types::subs::TagExt::Openness(var) => stack.push(*var),
-                            roc_types::subs::TagExt::Any(_) => { /* ignore */ }
-                        }
-                    }
-                    FlatType::TagUnion(union_tags, ext)
-                    | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
-                        for tag in union_tags.variables() {
-                            stack.extend(
-                                self.subs
-                                    .get_subs_slice(self.subs.variable_slices[tag.index as usize])
-                                    .iter()
-                                    .rev(),
-                            );
-                        }
-
-                        match ext {
-                            roc_types::subs::TagExt::Openness(var) => stack.push(*var),
-                            roc_types::subs::TagExt::Any(_) => { /* ignore */ }
-                        }
-                    }
-                    FlatType::EmptyRecord => {}
-                    FlatType::EmptyTuple => {}
-                    FlatType::EmptyTagUnion => {}
-                },
-                Content::Alias(_, _, actual, _) => {
-                    stack.push(*actual);
-                }
-                Content::LambdaSet(lambda_set) => {
-                    // the lambda set itself should already be caught by Func above, but the
-                    // capture can itself contain more lambda sets
-                    for index in lambda_set.solved.variables() {
-                        let subs_slice = self.subs.variable_slices[index.index as usize];
-                        stack.extend(self.subs.variables[subs_slice.indices()].iter());
-                    }
-                }
-            }
-        }
-
-        result
+        let stack = bumpalo::vec![in self.arena; root];
+        roc_mono::ir::find_lambda_sets_help(self.subs, stack)
     }
 
     fn add_toplevel_type(&mut self, var: Variable, types: &mut Types) -> TypeId {

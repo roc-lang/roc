@@ -3064,22 +3064,9 @@ fn specialize_external_help<'a>(
 
                     let mut aliases = BumpMap::default();
 
-                    for (id, mut raw_function_layout) in extern_names {
+                    for (id, raw_function_layout) in extern_names {
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
-
-                        // fix the recursion in the rocLovesRust example
-                        if false {
-                            raw_function_layout = match raw_function_layout {
-                                RawFunctionLayout::Function(a, mut lambda_set, _) => {
-                                    lambda_set.ret = in_layout;
-                                    RawFunctionLayout::Function(a, lambda_set, in_layout)
-                                }
-                                RawFunctionLayout::ZeroArgumentThunk(x) => {
-                                    RawFunctionLayout::ZeroArgumentThunk(x)
-                                }
-                            };
-                        }
 
                         let (key, (top_level, proc)) = generate_host_exposed_function(
                             env,
@@ -9532,7 +9519,7 @@ impl LambdaSetId {
     }
 }
 
-fn find_lambda_sets<'a, 'i>(
+fn find_lambda_sets<'a>(
     env: &mut crate::layout::Env<'a, '_>,
     initial: Variable,
 ) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
@@ -9551,24 +9538,12 @@ fn find_lambda_sets<'a, 'i>(
         }
     }
 
-    find_lambda_sets_help(env, stack)
-}
+    let lambda_set_variables = find_lambda_sets_help(env.subs, stack);
+    let mut answer =
+        bumpalo::collections::Vec::with_capacity_in(lambda_set_variables.len(), env.arena);
 
-fn find_lambda_sets_help<'a, 'i>(
-    env: &mut crate::layout::Env<'a, '_>,
-    mut stack: Vec<'a, Variable>,
-) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
-    let mut lambda_set_id = LambdaSetId(0);
-
-    let mut answer = bumpalo::collections::Vec::new_in(env.arena);
-
-    while let Some(var) = stack.pop() {
-        match env.subs.get_without_compacting(var).content {
-            Content::FlexVar(_) => todo!(),
-            Content::RigidVar(_) => todo!(),
-            Content::FlexAbleVar(_, _) => todo!(),
-            Content::RigidAbleVar(_, _) => todo!(),
-            Content::RecursionVar { .. } => todo!(),
+    for (variable, lambda_set_id) in lambda_set_variables {
+        match env.subs.get_content_without_compacting(variable) {
             Content::LambdaSet(lambda_set) => {
                 let raw_function_layout =
                     RawFunctionLayout::from_var(env, lambda_set.ambient_function)
@@ -9577,57 +9552,96 @@ fn find_lambda_sets_help<'a, 'i>(
 
                 let key = (lambda_set_id, raw_function_layout);
                 answer.push(key);
-
-                // this id is used, increment for the next one
-                lambda_set_id = lambda_set_id.next();
-
-                let it = env.subs.variable_slices[lambda_set.solved.variables().indices()].iter();
-                for slice in it {
-                    let variables = &env.subs.variables[slice.indices()];
-                    stack.extend(variables.iter().copied());
-                }
             }
+            _ => unreachable!(),
+        }
+    }
+
+    answer
+}
+
+pub fn find_lambda_sets_help(
+    subs: &Subs,
+    mut stack: Vec<'_, Variable>,
+) -> MutMap<Variable, LambdaSetId> {
+    use roc_types::subs::GetSubsSlice;
+
+    let mut lambda_set_id = LambdaSetId::default();
+
+    let mut result = MutMap::default();
+
+    while let Some(var) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            Content::RangedNumber(_)
+            | Content::Error
+            | Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _)
+            | Content::RecursionVar { .. } => {}
             Content::Structure(flat_type) => match flat_type {
-                FlatType::Apply(_, slice) => {
-                    let variables = &env.subs.variables[slice.indices()];
-                    stack.extend(variables.iter().copied());
+                FlatType::Apply(_, arguments) => {
+                    stack.extend(subs.get_subs_slice(*arguments).iter().rev());
                 }
-                FlatType::Func(arguments, lambda_set, result) => {
-                    let arguments = &env.subs.variables[arguments.indices()];
+                FlatType::Func(arguments, lambda_set_var, ret_var) => {
+                    result.insert(*lambda_set_var, lambda_set_id);
+                    lambda_set_id = lambda_set_id.next();
+
+                    let arguments = &subs.variables[arguments.indices()];
 
                     stack.extend(arguments.iter().copied());
-                    stack.push(lambda_set);
-                    stack.push(result);
+                    stack.push(*lambda_set_var);
+                    stack.push(*ret_var);
                 }
-                FlatType::Record(record_fields, ext) => {
-                    let variables = &env.subs.variables[record_fields.variables().indices()];
-                    stack.extend(variables.iter().copied());
-                    stack.push(ext);
+                FlatType::Record(fields, ext) => {
+                    stack.extend(subs.get_subs_slice(fields.variables()).iter().rev());
+                    stack.push(*ext);
                 }
-                FlatType::Tuple(_, _) => todo!(),
-                FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
-                FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
-                    for slice in env.subs.variable_slices[tags.variables().indices()].iter() {
-                        let variables = &env.subs.variables[slice.indices()];
-                        stack.extend(variables.iter().copied());
+                FlatType::Tuple(elements, ext) => {
+                    stack.extend(subs.get_subs_slice(elements.variables()).iter().rev());
+                    stack.push(*ext);
+                }
+                FlatType::FunctionOrTagUnion(_, _, ext) => {
+                    // just the ext
+                    match ext {
+                        roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                        roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                    }
+                }
+                FlatType::TagUnion(union_tags, ext)
+                | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
+                    for tag in union_tags.variables() {
+                        stack.extend(
+                            subs.get_subs_slice(subs.variable_slices[tag.index as usize])
+                                .iter()
+                                .rev(),
+                        );
                     }
 
                     match ext {
-                        roc_types::subs::TagExt::Openness(v) => stack.push(v),
-                        roc_types::subs::TagExt::Any(v) => stack.push(v),
+                        roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                        roc_types::subs::TagExt::Any(_) => { /* ignore */ }
                     }
                 }
                 FlatType::EmptyRecord => {}
                 FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {}
             },
-            Content::Alias(_, _, actual, _) => stack.push(actual),
-            Content::RangedNumber(_) => {}
-            Content::Error => {}
+            Content::Alias(_, _, actual, _) => {
+                stack.push(*actual);
+            }
+            Content::LambdaSet(lambda_set) => {
+                // the lambda set itself should already be caught by Func above, but the
+                // capture can itself contain more lambda sets
+                for index in lambda_set.solved.variables() {
+                    let subs_slice = subs.variable_slices[index.index as usize];
+                    stack.extend(subs.variables[subs_slice.indices()].iter());
+                }
+            }
         }
     }
 
-    answer
+    result
 }
 
 pub fn generate_glue_procs<'a, 'i, I>(
