@@ -1493,7 +1493,10 @@ expect camelToPascal "someCaseString" == "SomeCaseString"
 
 camelToKebeb : Str -> Str
 camelToKebeb = \str ->
-    camelToKebabHelp { taken: [], rest: Str.graphemes str }
+    rest = Str.graphemes str
+    taken = List.withCapacity (List.len rest)
+
+    camelToKebabHelp { taken, rest }
     |> .taken
     |> Str.joinWith ""
 
@@ -1517,7 +1520,10 @@ expect camelToKebeb "someCaseString" == "some-case-string"
 
 camelToSnake : Str -> Str
 camelToSnake = \str ->
-    camelToSnakeHelp { taken: [], rest: Str.graphemes str }
+    rest = Str.graphemes str
+    taken = List.withCapacity (List.len rest)
+
+    camelToSnakeHelp { taken, rest }
     |> .taken
     |> Str.joinWith ""
 
