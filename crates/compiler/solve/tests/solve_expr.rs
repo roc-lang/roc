@@ -6101,7 +6101,7 @@ mod solve_expr {
                         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8) is
+                    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.json) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#

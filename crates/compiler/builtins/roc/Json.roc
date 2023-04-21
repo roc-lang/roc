@@ -21,12 +21,12 @@
 ## result : Result Language _
 ## result =
 ##     jsonStr
-##     |> Decode.fromBytes Json.fromUtf8 # returns `Ok {name : "Röc Lang"}`
+##     |> Decode.fromBytes Json.json # returns `Ok {name : "Röc Lang"}`
 ##
 ## name =
 ##     decodedValue <- Result.map result
 ##
-##     Encode.toBytes decodedValue.name Json.toUtf8
+##     Encode.toBytes decodedValue.name Json.json
 ##
 ## expect name == Ok (Str.toUtf8 "\"Röc Lang\"")
 ## ```
@@ -138,7 +138,7 @@ Json := {
 ## Returns a JSON `Encoder` and `Decoder`
 json = @Json { fieldNameMapping: Default }
 
-## Returns a JSON `Decoder`
+## Returns a JSON `Encoder` and `Decoder` with configuration options
 jsonWithOptions = \{ fieldNameMapping ? Default } ->
     @Json { fieldNameMapping }
 

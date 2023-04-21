@@ -71,7 +71,7 @@ insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
     encode =
         \value ->
             value
-            |> Encode.toBytes Json.toUtf8
+            |> Encode.toBytes Json.json
             |> Str.fromUtf8
             |> Result.withDefault ""
 

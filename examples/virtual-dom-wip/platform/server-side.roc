@@ -14,7 +14,7 @@ main : Str, Str -> Result Str Str
 main = \initJson, hostJavaScript ->
     initJson
     |> Str.toUtf8
-    |> Decode.fromBytes Json.fromUtf8
+    |> Decode.fromBytes Json.json
     |> Result.try \initData -> initServerApp app initData hostJavaScript
     |> Result.map renderStatic
     |> Result.mapErr \err ->

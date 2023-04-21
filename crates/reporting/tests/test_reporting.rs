@@ -10697,7 +10697,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json
                 when decoded is
                     Ok rcd -> rcd.first rcd.second
                     _ -> "something went wrong"
