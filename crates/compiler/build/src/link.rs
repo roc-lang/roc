@@ -719,7 +719,7 @@ pub fn rebuild_host(
         if matches!(opt_level, OptLevel::Optimize) {
             rustc_cmd.arg("-O");
         } else if matches!(opt_level, OptLevel::Size) {
-            rustc_cmd.arg("-C opt-level=s");
+            rustc_cmd.args(["-C", "opt-level=s"]);
         }
 
         run_build_command(rustc_cmd, "host.rs", 0);
