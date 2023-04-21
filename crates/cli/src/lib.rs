@@ -1235,8 +1235,10 @@ fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path,
 }
 
 #[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq)]
+#[derive(Default)]
 pub enum Target {
     #[strum(serialize = "system")]
+    #[default]
     System,
     #[strum(serialize = "linux32")]
     Linux32,
@@ -1248,11 +1250,7 @@ pub enum Target {
     Wasm32,
 }
 
-impl Default for Target {
-    fn default() -> Self {
-        Target::System
-    }
-}
+
 
 impl Target {
     pub fn to_triple(self) -> Triple {

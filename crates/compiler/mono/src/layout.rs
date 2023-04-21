@@ -457,7 +457,7 @@ macro_rules! cached {
 }
 
 pub type TagIdIntType = u16;
-pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;
+pub const MAX_ENUM_SIZE: usize = std::mem::size_of::<TagIdIntType>() * 8;
 const GENERATE_NULLABLE: bool = true;
 
 #[derive(Debug, Clone, Copy)]
@@ -898,7 +898,7 @@ impl<'a> UnionLayout<'a> {
             } => {
                 debug_assert_ne!(nullable_id, tag_id != 0);
 
-                other_fields[index as usize]
+                other_fields[index]
             }
         };
 

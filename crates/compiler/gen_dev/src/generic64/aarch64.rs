@@ -385,11 +385,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     }
 
     #[inline(always)]
-    fn load_args<'a, 'r>(
+    fn load_args<'a>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
@@ -403,11 +403,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     }
 
     #[inline(always)]
-    fn store_args<'a, 'r>(
+    fn store_args<'a>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
@@ -422,11 +422,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         todo!("Storing args for AArch64");
     }
 
-    fn return_complex_symbol<'a, 'r>(
+    fn return_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
@@ -439,11 +439,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         todo!("Returning complex symbols for AArch64");
     }
 
-    fn load_returned_complex_symbol<'a, 'r>(
+    fn load_returned_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
@@ -532,9 +532,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         mul_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
-    fn umul_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         dst: AArch64GeneralReg,
         src1: AArch64GeneralReg,
         src2: AArch64GeneralReg,
@@ -545,9 +545,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         mul_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
-    fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         dst: AArch64GeneralReg,
         src1: AArch64GeneralReg,
         src2: AArch64GeneralReg,
@@ -558,9 +558,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         sdiv_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
-    fn udiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         dst: AArch64GeneralReg,
         src1: AArch64GeneralReg,
         src2: AArch64GeneralReg,
@@ -1096,9 +1096,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         eor_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
-    fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn shl_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         dst: AArch64GeneralReg,
         src1: AArch64GeneralReg,
         src2: AArch64GeneralReg,
@@ -1109,9 +1109,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         lsl_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
-    fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn shr_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         dst: AArch64GeneralReg,
         src1: AArch64GeneralReg,
         src2: AArch64GeneralReg,
@@ -1122,9 +1122,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         lsr_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
-    fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn sar_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         dst: AArch64GeneralReg,
         src1: AArch64GeneralReg,
         src2: AArch64GeneralReg,

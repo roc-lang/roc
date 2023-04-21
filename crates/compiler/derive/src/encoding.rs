@@ -55,7 +55,6 @@ pub(crate) fn derive_to_encoder(
             // Generalized tuple var so we can reuse this impl between many tuples:
             // if arity = n, this is (t1, ..., tn) for fresh t1, ..., tn.
             let flex_elems = (0..arity)
-                .into_iter()
                 .map(|idx| (idx as usize, env.subs.fresh_unnamed_flex_var()))
                 .collect::<Vec<_>>();
             let elems = TupleElems::insert_into_subs(env.subs, flex_elems);

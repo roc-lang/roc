@@ -219,7 +219,7 @@ where
         })
         .collect();
     if prev_group.is_empty() {
-        let remaining: Vec<N> = preds_map.into_iter().map(|(node, _)| node).collect();
+        let remaining: Vec<N> = preds_map.into_keys().collect();
         return Err((Vec::new(), remaining));
     }
     for node in &prev_group {
@@ -241,7 +241,7 @@ where
         }
         groups.push(mem::replace(&mut prev_group, next_group));
         if prev_group.is_empty() {
-            let remaining: Vec<N> = preds_map.into_iter().map(|(node, _)| node).collect();
+            let remaining: Vec<N> = preds_map.into_keys().collect();
             return Err((groups, remaining));
         }
     }

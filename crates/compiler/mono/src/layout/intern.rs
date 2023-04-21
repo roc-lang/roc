@@ -23,7 +23,7 @@ macro_rules! cache_interned_layouts {
             )*
         }
 
-        fn fill_reserved_layouts<'a>(interner: &mut STLayoutInterner<'a>) {
+        fn fill_reserved_layouts(interner: &mut STLayoutInterner<'_>) {
             assert!(interner.is_empty());
             $(
             interner.insert($layout);

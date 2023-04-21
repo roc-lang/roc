@@ -885,7 +885,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                         self.code_builder.f32_eq();
                     }
                     ValueType::F64 => {
-                        self.code_builder.f64_const(f64::from_bits(*value as u64));
+                        self.code_builder.f64_const(f64::from_bits(*value));
                         self.code_builder.f64_eq();
                     }
                 }
@@ -1114,7 +1114,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {
                 match (lit, value_type) {
-                    (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x as f64),
+                    (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x),
                     (Literal::Float(x), ValueType::F32) => self.code_builder.f32_const(*x as f32),
                     (Literal::Int(x), ValueType::I64) => {
                         self.code_builder.i64_const(i128::from_ne_bytes(*x) as i64)

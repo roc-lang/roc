@@ -1100,7 +1100,7 @@ fn link_linux(
         // Keep NIX_ env vars
         .envs(
             env::vars()
-                .filter(|&(ref k, _)| k.starts_with("NIX_"))
+                .filter(|(k, _)| k.starts_with("NIX_"))
                 .collect::<HashMap<String, String>>(),
         )
         .args([

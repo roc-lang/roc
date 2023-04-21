@@ -265,8 +265,8 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
-fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn expr_of_tag<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     data_addr: usize,
     tag_name: &TagName,
@@ -289,8 +289,8 @@ fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
 
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
-fn tag_id_from_data<'a, 'env, M: ReplAppMemory>(
-    env: &Env<'a, 'env>,
+fn tag_id_from_data<'a, M: ReplAppMemory>(
+    env: &Env<'a, '_>,
     mem: &M,
     union_layout: UnionLayout<'a>,
     data_addr: usize,
@@ -947,8 +947,8 @@ fn list_to_ast<'a, M: ReplAppMemory>(
     Expr::List(Collection::with_items(output))
 }
 
-fn single_tag_union_to_ast<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     field_layouts: &'a [InLayout<'a>],
@@ -1004,8 +1004,8 @@ where
     output
 }
 
-fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn struct_to_ast<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     record_fields: RecordFields,
@@ -1130,8 +1130,8 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
     }
 }
 
-fn struct_to_ast_tuple<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn struct_to_ast_tuple<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     tuple_elems: TupleElems,

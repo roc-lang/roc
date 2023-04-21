@@ -280,7 +280,9 @@ impl AbilityAliases {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub enum CapturedSymbols<'a> {
+    #[default]
     None,
     Captured(&'a [(Symbol, Variable)]),
 }
@@ -294,11 +296,7 @@ impl<'a> CapturedSymbols<'a> {
     }
 }
 
-impl<'a> Default for CapturedSymbols<'a> {
-    fn default() -> Self {
-        CapturedSymbols::None
-    }
-}
+
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
@@ -2722,8 +2720,8 @@ fn patterns_to_when<'a>(
 ///          { x } -> body
 ///
 /// conversion of one-pattern when expressions will do the most optimal thing
-fn pattern_to_when<'a>(
-    env: &mut Env<'a, '_>,
+fn pattern_to_when(
+    env: &mut Env<'_, '_>,
     pattern_var: Variable,
     pattern: Loc<roc_can::pattern::Pattern>,
     body_var: Variable,
@@ -5740,8 +5738,8 @@ fn compile_struct_like<'a, L, UnusedLayout>(
 }
 
 #[inline(always)]
-fn late_resolve_ability_specialization<'a>(
-    env: &mut Env<'a, '_>,
+fn late_resolve_ability_specialization(
+    env: &mut Env<'_, '_>,
     member: Symbol,
     specialization_id: Option<SpecializationId>,
     specialization_var: Variable,

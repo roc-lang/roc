@@ -200,7 +200,6 @@ pub mod test_caret_w_select {
                             .as_span()
                             .as_str()
                             .split('\n')
-                            .into_iter()
                             .collect::<Vec<&str>>();
 
                         if split_str.len() > 1 {

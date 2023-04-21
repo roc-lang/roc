@@ -307,7 +307,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     let app_code_section_va = md.last_host_section_address
         + next_multiple_of(
             md.last_host_section_size as usize,
-            section_alignment as usize,
+            section_alignment,
         ) as u64;
 
     let mut section_file_offset = md.dynhost_file_size;
@@ -470,9 +470,9 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     update_optional_header(
         executable,
         md.optional_header_offset,
-        code_bytes_added as u32,
-        file_bytes_added as u32,
-        data_bytes_added as u32,
+        code_bytes_added,
+        file_bytes_added,
+        data_bytes_added,
     );
 
     let symbols: Vec<_> = symbols
@@ -707,7 +707,7 @@ impl Preprocessor {
 
         Self {
             extra_sections_start: section_table_offset as usize
-                + sections.len() as usize * Self::SECTION_HEADER_WIDTH,
+                + sections.len() * Self::SECTION_HEADER_WIDTH,
             extra_sections_width,
             additional_header_space,
             additional_reloc_space,
@@ -1724,7 +1724,7 @@ mod test {
         )
         .unwrap();
 
-        std::fs::copy(&preprocessed_host_filename, &dir.join("app.exe")).unwrap();
+        std::fs::copy(&preprocessed_host_filename, dir.join("app.exe")).unwrap();
 
         surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &roc_app);
     }
@@ -1739,7 +1739,7 @@ mod test {
 
         runner(dir);
 
-        let output = std::process::Command::new(&dir.join("app.exe"))
+        let output = std::process::Command::new(dir.join("app.exe"))
             .current_dir(dir)
             .output()
             .unwrap();
@@ -1908,7 +1908,7 @@ mod test {
 
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
 
-        let mut command = std::process::Command::new(&zig);
+        let mut command = std::process::Command::new(zig);
         command.current_dir(dir).args([
             "build-exe",
             "host.zig",
