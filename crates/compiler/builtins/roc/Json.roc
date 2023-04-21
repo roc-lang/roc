@@ -38,9 +38,8 @@
 interface Json
     exposes [
         Json,
-        toUtf8,
-        fromUtf8,
-        fromUtf8WithOptions,
+        json,
+        jsonWithOptions,
     ]
     imports [
         List,
@@ -77,16 +76,22 @@ interface Json
         Result,
     ]
 
-DecodeOption : [
-    Default,
-    DecodeMap { recordField : Str, objectName : Str },
+## Mapping between Roc record fields and JSON object names
+FieldNameMapping : [
+    Default, # no transformation
+    SnakeCase, # snake_case
+    PascalCase, # PascalCase
+    KebabCase, # kabab-case
+    CamelCase, # camelCase
+    Custom (Str -> Str), # provide a custom formatting
 ]
 
 ## An opaque type with the `EncoderFormatting` and
 ## `DecoderFormatting` abilities.
 Json := {
-    decodeOption : DecodeOption,
-} has [
+    fieldNameMapping : FieldNameMapping,
+}
+     has [
          EncoderFormatting {
              u8: encodeU8,
              u16: encodeU16,
@@ -130,14 +135,12 @@ Json := {
          },
      ]
 
-## Returns a JSON `Encoder`
-toUtf8 = @Json {decodeOption : Default}
+## Returns a JSON `Encoder` and `Decoder`
+json = @Json { fieldNameMapping: Default }
 
 ## Returns a JSON `Decoder`
-fromUtf8 = @Json {decodeOption : Default}
-
-fromUtf8WithOptions = \{decodeOption? Default} -> 
-    @Json { decodeOption }
+jsonWithOptions = \{ fieldNameMapping ? Default } ->
+    @Json { fieldNameMapping }
 
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8
@@ -184,7 +187,7 @@ encodeString = \s -> Encode.custom \bytes, @Json {} ->
 encodeList = \lst, encodeElem ->
     Encode.custom \bytes, @Json {} ->
         writeList = \{ buffer, elemsLeft }, elem ->
-            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {decodeOption : Default})
+            bufferWithElem = appendWith buffer (encodeElem elem) json
             bufferWithSuffix =
                 if elemsLeft > 1 then
                     List.append bufferWithElem (Num.toU8 ',')
@@ -206,7 +209,7 @@ encodeRecord = \fields ->
                 |> List.concat (Str.toUtf8 key)
                 |> List.append (Num.toU8 '"')
                 |> List.append (Num.toU8 ':')
-                |> appendWith value (@Json {decodeOption : Default})
+                |> appendWith value json
 
             bufferWithSuffix =
                 if fieldsLeft > 1 then
@@ -225,7 +228,7 @@ encodeTuple = \elems ->
     Encode.custom \bytes, @Json {} ->
         writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
             bufferWithElem =
-                appendWith buffer elemEncoder (@Json {decodeOption : Default})
+                appendWith buffer elemEncoder json
 
             bufferWithSuffix =
                 if elemsLeft > 1 then
@@ -244,7 +247,7 @@ encodeTag = \name, payload ->
     Encode.custom \bytes, @Json {} ->
         # Idea: encode `A v1 v2` as `{"A": [v1, v2]}`
         writePayload = \{ buffer, itemsLeft }, encoder ->
-            bufferWithValue = appendWith buffer encoder (@Json {decodeOption : Default})
+            bufferWithValue = appendWith buffer encoder json
             bufferWithSuffix =
                 if itemsLeft > 1 then
                     List.append bufferWithValue (Num.toU8 ',')
@@ -416,12 +419,12 @@ decodeBool = Decode.custom \bytes, @Json {} ->
         _ -> { result: Err TooShort, rest: bytes }
 
 expect
-    actual = "true\n" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "true\n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok Bool.true
     actual.result == expected
 
 expect
-    actual = "false ]\n" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "false ]\n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok Bool.false
     actual.result == expected
 
@@ -436,7 +439,7 @@ decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \initialBytes,
                                 { result: Ok state, rest: beforeCommaOrBreak }
 
                             Next decoder ->
-                                Decode.decodeWith bytes decoder (@Json {decodeOption : Default})
+                                Decode.decodeWith bytes decoder json
                     )
 
             { result: commaResult, rest: nextBytes } = comma beforeCommaOrBreak
@@ -569,122 +572,122 @@ isValidEnd = \b ->
         _ -> Bool.false
 
 expect
-    actual = "0.0" |> Str.toUtf8 |> Decode.fromBytes fromUtf8
+    actual = "0.0" |> Str.toUtf8 |> Decode.fromBytes json
     expected = Ok 0.0dec
     actual == expected
 
 expect
-    actual = "0" |> Str.toUtf8 |> Decode.fromBytes fromUtf8
+    actual = "0" |> Str.toUtf8 |> Decode.fromBytes json
     expected = Ok 0u8
     actual == expected
 
 expect
-    actual = "1 " |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "1 " |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Ok 1dec, rest: [' '] }
     actual == expected
 
 expect
-    actual = "2]" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "2]" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Ok 2u64, rest: [']'] }
     actual == expected
 
 expect
-    actual = "30,\n" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "30,\n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Ok 30i64, rest: [',', '\n'] }
     actual == expected
 
 expect
     actual : DecodeResult U16
-    actual = "+1" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "+1" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Err TooShort, rest: ['+', '1'] }
     actual == expected
 
 expect
     actual : DecodeResult U16
-    actual = ".0" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = ".0" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Err TooShort, rest: ['.', '0'] }
     actual == expected
 
 expect
     actual : DecodeResult U64
-    actual = "-.1" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "-.1" |> Str.toUtf8 |> Decode.fromBytesPartial json
     actual.result == Err TooShort
 
 expect
     actual : DecodeResult Dec
-    actual = "72" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "72" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok 72dec
     actual.result == expected
 
 expect
     actual : DecodeResult Dec
-    actual = "-0" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "-0" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok 0dec
     actual.result == expected
 
 expect
     actual : DecodeResult Dec
-    actual = "-7" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "-7" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok -7dec
     actual.result == expected
 
 expect
     actual : DecodeResult Dec
-    actual = "-0\n" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "-0\n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Ok 0dec, rest: ['\n'] }
     actual == expected
 
 expect
     actual : DecodeResult Dec
-    actual = "123456789000 \n" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "123456789000 \n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = { result: Ok 123456789000dec, rest: [' ', '\n'] }
     actual == expected
 
 expect
     actual : DecodeResult Dec
-    actual = "-12.03" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "-12.03" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok -12.03
     actual.result == expected
 
 expect
     actual : DecodeResult U64
-    actual = "-12." |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "-12." |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
     actual : DecodeResult U64
-    actual = "01.1" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "01.1" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
     actual : DecodeResult U64
-    actual = ".0" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = ".0" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
     actual : DecodeResult U64
-    actual = "1.e1" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "1.e1" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
     actual : DecodeResult U64
-    actual = "-1.2E" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "-1.2E" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
     actual : DecodeResult U64
-    actual = "0.1e+" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "0.1e+" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
 expect
     actual : DecodeResult U64
-    actual = "-03" |> Str.toUtf8 |> Decode.fromBytesPartial fromUtf8
+    actual = "-03" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Err TooShort
     actual.result == expected
 
@@ -908,7 +911,7 @@ expect
 # Test decode simple string
 expect
     input = "\"hello\", " |> Str.toUtf8
-    actual = Decode.fromBytesPartial input fromUtf8
+    actual = Decode.fromBytesPartial input json
     expected = Ok "hello"
 
     actual.result == expected
@@ -916,7 +919,7 @@ expect
 # Test decode string with extended and shorthand json escapes
 expect
     input = "\"h\\\"\\u0065llo\\n\"]\n" |> Str.toUtf8
-    actual = Decode.fromBytesPartial input fromUtf8
+    actual = Decode.fromBytesPartial input json
     expected = Ok "h\"ello\n"
 
     actual.result == expected
@@ -924,7 +927,7 @@ expect
 # Test json string decoding with escapes
 expect
     input = Str.toUtf8 "\"a\r\nbc\\txz\"\t\n,  "
-    actual = Decode.fromBytesPartial input fromUtf8
+    actual = Decode.fromBytesPartial input json
     expected = Ok "a\r\nbc\txz"
 
     actual.result == expected
@@ -935,7 +938,7 @@ expect
 # expect
 #     input = "a\r\nbc\\\"xz"
 #     expected = Str.toUtf8 "\"a\r\nbc\\\"xz\""
-#     actual = Encode.toBytes input toUtf8
+#     actual = Encode.toBytes input json
 
 #     actual == expected
 
@@ -979,7 +982,7 @@ arrayElemDecoder = \elemDecoder ->
                 elemBytes = List.drop bytes n
 
                 # Decode current element
-                { result, rest } = Decode.decodeWith elemBytes elemDecoder fromUtf8
+                { result, rest } = Decode.decodeWith elemBytes elemDecoder json
 
                 when result is
                     Ok elem ->
@@ -1048,7 +1051,7 @@ expect
     input = Str.toUtf8 "[ ]"
 
     actual : DecodeResult (List U8)
-    actual = Decode.fromBytesPartial input fromUtf8
+    actual = Decode.fromBytesPartial input json
 
     actual.result == Ok []
 
@@ -1057,7 +1060,7 @@ expect
     input = Str.toUtf8 "\n[\t 1 , 2  , 3]"
 
     actual : DecodeResult (List U64)
-    actual = Decode.fromBytesPartial input fromUtf8
+    actual = Decode.fromBytesPartial input json
 
     expected = Ok [1, 2, 3]
 
@@ -1068,21 +1071,21 @@ expect
     input = Str.toUtf8 "\n\t [\n \"one\"\r , \"two\" , \n\"3\"\t]"
 
     actual : DecodeResult (List Str)
-    actual = Decode.fromBytesPartial input fromUtf8
+    actual = Decode.fromBytesPartial input json
     expected = Ok ["one", "two", "3"]
 
     actual.result == expected
 
 # JSON OBJECTS -----------------------------------------------------------------
 
-decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json {decodeOption} ->
+decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Json { fieldNameMapping } ->
 
         # Recursively build up record from object field:value pairs
         decodeFields = \recordState, bytesBeforeField ->
 
             # Decode the json string field name
-            { result: fieldNameResult, rest: bytesAfterField } =
-                Decode.decodeWith bytesBeforeField decodeString fromUtf8
+            { result: objectNameResult, rest: bytesAfterField } =
+                Decode.decodeWith bytesBeforeField decodeString json
 
             # Count the bytes until the field value
             countBytesBeforeValue =
@@ -1092,54 +1095,31 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
 
             valueBytes = List.drop bytesAfterField countBytesBeforeValue
 
-            when fieldNameResult is
+            when objectNameResult is
                 Err TooShort ->
                     # Invalid object, unable to decode field name or find colon ':'
                     # after field and before the value
                     { result: Err TooShort, rest: bytes }
 
-                Ok fieldName ->
+                Ok objectName ->
                     # Decode the json value
                     { val: updatedRecord, rest: bytesAfterValue } <-
                         (
-                            when decodeOption is 
-                                Default -> 
-                                    # Retrieve value decoder for the current field
-                                    when stepField recordState fieldName is
-                                        Skip ->
-                                            # TODO This doesn't seem right, shouldn't we eat
-                                            # the remaining value bytes if we are skipping this
-                                            # field?
-                                            #
-                                            # Should rest be bytesAfterNextValue or similar?
-                                            { result: Ok recordState, rest: valueBytes }
+                            fieldName =
+                                fromObjectNameWithMap objectName fieldNameMapping
 
-                                        Keep valueDecoder ->
-                                            # Decode the value using the decoder from the recordState
-                                            Decode.decodeWith valueBytes valueDecoder fromUtf8
-                                DecodeMap { recordField, objectName } ->
+                            # Retrieve value decoder for the current field
+                            when stepField recordState fieldName is
+                                Skip ->
+                                    # TODO This doesn't seem right, shouldn't we eat
+                                    # the remaining json object value bytes if we are skipping this
+                                    # field?
+                                    { result: Ok recordState, rest: valueBytes }
 
-                                    fieldName2 = 
-                                        if objectName == fieldName then 
-                                            recordField
-                                        else
-                                            fieldName
-
-                                    # Retrieve value decoder for the current field
-                                    when stepField recordState fieldName2 is
-                                        Skip ->
-                                            # TODO This doesn't seem right, shouldn't we eat
-                                            # the remaining value bytes if we are skipping this
-                                            # field?
-                                            #
-                                            # Should rest be bytesAfterNextValue or similar?
-                                            { result: Ok recordState, rest: valueBytes }
-
-                                        Keep valueDecoder ->
-                                            # Decode the value using the decoder from the recordState
-                                            Decode.decodeWith valueBytes valueDecoder fromUtf8
-
-                            
+                                Keep valueDecoder ->
+                                    # Decode the value using the decoder from the recordState
+                                    # Note we need to pass json config options recursively here
+                                    Decode.decodeWith valueBytes valueDecoder (@Json { fieldNameMapping })
                         )
                         |> tryDecode
 
@@ -1211,79 +1191,228 @@ ObjectState : [
 
 # Test decode of record with two strings ignoring whitespace
 expect
-    input = Str.toUtf8 " {\n\"Fruit\"\t:2\n, \"owner\": \"Farmer Joe\" } "
-    decodeOption = DecodeMap {recordField : "fruit", objectName : "Fruit" }
-    
-    actual = Decode.fromBytesPartial input (fromUtf8WithOptions {decodeOption})
-    expected = Ok { fruit: 2, owner: "Farmer Joe" }
+    input = Str.toUtf8 " {\n\"FruitCount\"\t:2\n, \"OwnerName\": \"Farmer Joe\" } "
+    decoder = jsonWithOptions { fieldNameMapping: PascalCase }
+    actual = Decode.fromBytesPartial input decoder
+    expected = Ok { fruitCount: 2, ownerName: "Farmer Joe" }
 
     actual.result == expected
 
 # Test decode of record with an array of strings and a boolean field
 expect
-    input = Str.toUtf8 "{\"fruit\": [\"Apples\",\"Bananas\",\"Pears\"], \"isFresh\": true }"
-
-    actual = Decode.fromBytesPartial input fromUtf8
-    expected = Ok { fruit: ["Apples", "Bananas", "Pears"], isFresh: Bool.true }
+    input = Str.toUtf8 "{\"fruit-flavours\": [\"Apples\",\"Bananas\",\"Pears\"], \"is-fresh\": true }"
+    decoder = jsonWithOptions { fieldNameMapping: KebabCase }
+    actual = Decode.fromBytesPartial input decoder
+    expected = Ok { fruitFlavours: ["Apples", "Bananas", "Pears"], isFresh: Bool.true }
 
     actual.result == expected
 
 # Test decode of record with a string and number field
 expect
-    input = Str.toUtf8 "{\"first\":\"ab\",\"second\":10}"
-
-    actual = Decode.fromBytesPartial input fromUtf8
-    expected = Ok { first: "ab", second: 10u8 }
+    input = Str.toUtf8 "{\"first_segment\":\"ab\",\"second_segment\":10}"
+    decoder = jsonWithOptions { fieldNameMapping: SnakeCase }
+    actual = Decode.fromBytesPartial input decoder
+    expected = Ok { firstSegment: "ab", secondSegment: 10u8 }
 
     actual.result == expected
 
 # Test decode of record of a record
 expect
-    input = Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}"
-
-    actual = Decode.fromBytesPartial input fromUtf8
+    input = Str.toUtf8 "{\"OUTER\":{\"INNER\":\"a\"},\"OTHER\":{\"ONE\":\"b\",\"TWO\":10}}"
+    decoder = jsonWithOptions { fieldNameMapping: Custom fromYellingCase }
+    actual = Decode.fromBytesPartial input decoder
     expected = Ok { outer: { inner: "a" }, other: { one: "b", two: 10u8 } }
 
     actual.result == expected
 
-# Example from IETF RFC 8259 (2017)
-# {
-# "Image": {
-#     "Width":  800,
-#     "Height": 600,
-#     "Title":  "View from 15th Floor",
-#     "Thumbnail": {
-#         "Url":    "http://www.example.com/image/481989943",
-#         "Height": 125,
-#         "Width":  100
-#     },
-#     "Animated" : false,
-#     "IDs": [116, 943, 234, 38793]
-#     }
-# }
-# expect
-#     input =  
-#         """{
-#             "Image": {
-#                 "Width":  800,
-#                 "Height": 600,
-#                 "Title":  "View from 15th Floor",
-#                 "Thumbnail": {
-#                     "Url":    "http://www.example.com/image/481989943",
-#                     "Height": 125,
-#                     "Width":  100
-#                 },
-#                 "Animated" : false,
-#                 "IDs": [116, 943, 234, 38793]
-#             }
-#         }"""
-#         |> Str.toUtf8
+fromYellingCase = \str ->
+    Str.graphemes str
+    |> List.map lowercaseLetter
+    |> Str.joinWith ""
 
-#     actual = Decode.fromBytes input fromUtf8
-#     expected = Ok { 
-#         image
-#     }
+expect fromYellingCase "YELLING" == "yelling"
 
-#     # actual.result == expected
+# Test complex example from IETF RFC 8259 (2017)
+expect
+    input =
+        """
+        {
+            "Image": {
+                "Width":  800,
+                "Height": 600,
+                "Title":  "View from 15th Floor",
+                "Thumbnail": {
+                    "Url":    "http://www.example.com/image/481989943",
+                    "Height": 125,
+                    "Width":  100
+                },
+                "Animated" : false,
+                "Ids": [116, 943, 234, 38793]
+            }
+        }
+        """
+        |> Str.toUtf8
 
-#     2 == 3
+    decoder = jsonWithOptions { fieldNameMapping: PascalCase }
+    actual = Decode.fromBytes input decoder
+    expected = Ok {
+        image: {
+            width: 800,
+            height: 600,
+            title: "View from 15th Floor",
+            thumbnail: {
+                url: "http://www.example.com/image/481989943",
+                height: 125,
+                width: 100,
+            },
+            animated: Bool.false,
+            ids: [116, 943, 234, 38793],
+        },
+    }
+
+    actual == expected
+
+fromObjectNameWithMap : Str, FieldNameMapping -> Str
+fromObjectNameWithMap = \objectName, fieldNameMapping ->
+    when fieldNameMapping is
+        Default -> objectName
+        SnakeCase -> fromSnakeCase objectName
+        PascalCase -> fromPascalCase objectName
+        KebabCase -> fromKebabCase objectName
+        CamelCase -> fromCamelCase objectName
+        Custom transformation -> transformation objectName
+
+# Convert a `snake_case` JSON Object name to a Roc Field name
+fromSnakeCase = \str ->
+    snakeToCamel str
+
+# Convert a `PascalCase` JSON Object name to a Roc Field name
+fromPascalCase = \str ->
+    pascalToCamel str
+
+# Convert a `kabab-case` JSON Object name to a Roc Field name
+fromKebabCase = \str ->
+    kebabToCamel str
+
+# Convert a `camelCase` JSON Object name to a Roc Field name
+fromCamelCase = \str ->
+    # No change as Roc field names are camelCase by default
+    str
+
+snakeToCamel : Str -> Str
+snakeToCamel = \str ->
+    segments = Str.split str "_"
+    when segments is
+        [first, ..] ->
+            segments
+            |> List.dropFirst
+            |> List.map uppercaseFirst
+            |> List.prepend first
+            |> Str.joinWith ""
+
+        _ -> str
+
+expect snakeToCamel "snake_case_string" == "snakeCaseString"
+
+pascalToCamel : Str -> Str
+pascalToCamel = \str ->
+    segments = Str.graphemes str
+    when segments is
+        [a, ..] ->
+            first = lowercaseLetter a
+            rest = List.dropFirst segments
+
+            Str.joinWith (List.prepend rest first) ""
+
+        _ -> str
+
+expect pascalToCamel "PascalCaseString" == "pascalCaseString"
+
+kebabToCamel : Str -> Str
+kebabToCamel = \str ->
+    segments = Str.split str "-"
+    when segments is
+        [first, ..] ->
+            segments
+            |> List.dropFirst
+            |> List.map uppercaseFirst
+            |> List.prepend first
+            |> Str.joinWith ""
+
+        _ -> str
+
+expect kebabToCamel "kebab-case-string" == "kebabCaseString"
+
+uppercaseFirst : Str -> Str
+uppercaseFirst = \str ->
+    segments = Str.graphemes str
+    when segments is
+        [a, ..] ->
+            first = uppercaseLetter a
+            rest = List.dropFirst segments
+
+            Str.joinWith (List.prepend rest first) ""
+
+        _ -> str
+
+uppercaseLetter : Str -> Str
+uppercaseLetter = \str ->
+    when str is
+        "a" -> "A"
+        "b" -> "B"
+        "c" -> "C"
+        "d" -> "D"
+        "e" -> "E"
+        "f" -> "F"
+        "g" -> "G"
+        "h" -> "H"
+        "i" -> "I"
+        "j" -> "J"
+        "k" -> "K"
+        "l" -> "L"
+        "m" -> "M"
+        "n" -> "N"
+        "o" -> "O"
+        "p" -> "P"
+        "q" -> "Q"
+        "r" -> "R"
+        "s" -> "S"
+        "t" -> "T"
+        "u" -> "U"
+        "v" -> "V"
+        "w" -> "W"
+        "x" -> "X"
+        "y" -> "Y"
+        "z" -> "Z"
+        _ -> str
+
+lowercaseLetter : Str -> Str
+lowercaseLetter = \str ->
+    when str is
+        "A" -> "a"
+        "B" -> "b"
+        "C" -> "c"
+        "D" -> "d"
+        "E" -> "e"
+        "F" -> "f"
+        "G" -> "g"
+        "H" -> "h"
+        "I" -> "i"
+        "J" -> "j"
+        "K" -> "k"
+        "L" -> "l"
+        "M" -> "m"
+        "N" -> "n"
+        "O" -> "o"
+        "P" -> "p"
+        "Q" -> "q"
+        "R" -> "r"
+        "S" -> "s"
+        "T" -> "t"
+        "U" -> "u"
+        "V" -> "v"
+        "W" -> "w"
+        "X" -> "x"
+        "Y" -> "y"
+        "Z" -> "z"
+        _ -> str
