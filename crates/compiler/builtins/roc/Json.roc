@@ -1326,66 +1326,38 @@ fromYellingCase = \str ->
 
 expect fromYellingCase "YELLING" == "yelling"
 
-# Test decode of complex example from IETF RFC 8259 (2017)
-expect
-    input =
-        """
-        {
-            "Image": {
-                "Width":  800,
-                "Height": 600,
-                "Title":  "View from 15th Floor",
-                "Thumbnail": {
-                    "Url":    "http://www.example.com/image/481989943",
-                    "Height": 125,
-                    "Width":  100
-                },
-                "Animated" : false,
-                "Ids": [116, 943, 234, 38793]
-            }
-        }
-        """
-        |> Str.toUtf8
+# Complex example from IETF RFC 8259 (2017)
+complexExampleJson = Str.toUtf8 "{\"Image\":{\"Animated\":false,\"Height\":600,\"Ids\":[116,943,234,38793],\"Thumbnail\":{\"Height\":125,\"Url\":\"http:\\/\\/www.example.com\\/image\\/481989943\",\"Width\":100},\"Title\":\"View from 15th Floor\",\"Width\":800}}"
+complexExampleRecord = {
+    image: {
+        width: 800,
+        height: 600,
+        title: "View from 15th Floor",
+        thumbnail: {
+            url: "http://www.example.com/image/481989943",
+            height: 125,
+            width: 100,
+        },
+        animated: Bool.false,
+        ids: [116, 943, 234, 38793],
+    },
+}
 
+# Test decode of Complex Example
+expect
+    input = complexExampleJson
     decoder = jsonWithOptions { fieldNameMapping: PascalCase }
     actual = Decode.fromBytes input decoder
-    expected = Ok {
-        image: {
-            width: 800,
-            height: 600,
-            title: "View from 15th Floor",
-            thumbnail: {
-                url: "http://www.example.com/image/481989943",
-                height: 125,
-                width: 100,
-            },
-            animated: Bool.false,
-            ids: [116, 943, 234, 38793],
-        },
-    }
+    expected = Ok complexExampleRecord
 
     actual == expected
 
-# Test encode of complex example from IETF RFC 8259 (2017)
+# Test encode of Complex Example
 expect
-    input = {
-        image: {
-            width: 800,
-            height: 600,
-            title: "View from 15th Floor",
-            thumbnail: {
-                url: "http://www.example.com/image/481989943",
-                height: 125,
-                width: 100,
-            },
-            animated: Bool.false,
-            ids: [116, 943, 234, 38793],
-        },
-    }
-
+    input = complexExampleRecord
     encoder = jsonWithOptions { fieldNameMapping: PascalCase }
     actual = Encode.toBytes input encoder
-    expected = Str.toUtf8 "{\"Image\":{\"Animated\":false,\"Height\":600,\"Ids\":[116,943,234,38793],\"Thumbnail\":{\"Height\":125,\"Url\":\"http:\\/\\/www.example.com\\/image\\/481989943\",\"Width\":100},\"Title\":\"View from 15th Floor\",\"Width\":800}}"
+    expected = complexExampleJson
 
     actual == expected
 
