@@ -4,12 +4,7 @@ use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Base, CommentOrNewline, Pattern, PatternAs};
 
-pub fn fmt_pattern<'a>(
-    buf: &mut Buf<'_>,
-    pattern: &'a Pattern<'a>,
-    indent: u16,
-    parens: Parens,
-) {
+pub fn fmt_pattern<'a>(buf: &mut Buf<'_>, pattern: &'a Pattern<'a>, indent: u16, parens: Parens) {
     pattern.format_with_options(buf, parens, Newlines::No, indent);
 }
 

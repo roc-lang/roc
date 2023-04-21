@@ -377,11 +377,7 @@ fn fmt_expect_fx<'a>(
     condition.format(buf, return_indent);
 }
 
-pub fn fmt_value_def(
-    buf: &mut Buf<'_>,
-    def: &roc_parse::ast::ValueDef<'_>,
-    indent: u16,
-) {
+pub fn fmt_value_def(buf: &mut Buf<'_>, def: &roc_parse::ast::ValueDef<'_>, indent: u16) {
     def.format(buf, indent);
 }
 
@@ -393,12 +389,7 @@ pub fn fmt_defs(buf: &mut Buf<'_>, defs: &Defs<'_>, indent: u16) {
     defs.format(buf, indent);
 }
 
-pub fn fmt_body<'a>(
-    buf: &mut Buf<'_>,
-    pattern: &'a Pattern<'a>,
-    body: &'a Expr<'a>,
-    indent: u16,
-) {
+pub fn fmt_body<'a>(buf: &mut Buf<'_>, pattern: &'a Pattern<'a>, body: &'a Expr<'a>, indent: u16) {
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
     buf.indent(indent);
     buf.push_str(" =");

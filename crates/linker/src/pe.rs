@@ -305,10 +305,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     let executable = &mut open_mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
 
     let app_code_section_va = md.last_host_section_address
-        + next_multiple_of(
-            md.last_host_section_size as usize,
-            section_alignment,
-        ) as u64;
+        + next_multiple_of(md.last_host_section_size as usize, section_alignment) as u64;
 
     let mut section_file_offset = md.dynhost_file_size;
     let mut section_virtual_address = (app_code_section_va - image_base) as u32;

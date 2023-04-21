@@ -1234,8 +1234,7 @@ fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path,
     println!("Running wasm files is not supported on this target.");
 }
 
-#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq, Default)]
 pub enum Target {
     #[strum(serialize = "system")]
     #[default]
@@ -1249,8 +1248,6 @@ pub enum Target {
     #[strum(serialize = "wasm32")]
     Wasm32,
 }
-
-
 
 impl Target {
     pub fn to_triple(self) -> Triple {

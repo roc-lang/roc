@@ -1050,8 +1050,7 @@ fn canonicalize_value_defs<'a>(
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern())
-            .peekable();
+        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern()).peekable();
 
         if new_bindings.peek().is_none() {
             env.problem(Problem::NoIdentifiersIntroduced(

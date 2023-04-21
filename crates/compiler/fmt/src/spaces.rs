@@ -21,22 +21,14 @@ use crate::{Ast, Buf};
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
 
-pub fn fmt_default_spaces(
-    buf: &mut Buf<'_>,
-    spaces: &[CommentOrNewline<'_>],
-    indent: u16,
-) {
+pub fn fmt_default_spaces(buf: &mut Buf<'_>, spaces: &[CommentOrNewline<'_>], indent: u16) {
     if spaces.is_empty() {
         buf.spaces(1);
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
 }
-pub fn fmt_default_newline(
-    buf: &mut Buf<'_>,
-    spaces: &[CommentOrNewline<'_>],
-    indent: u16,
-) {
+pub fn fmt_default_newline(buf: &mut Buf<'_>, spaces: &[CommentOrNewline<'_>], indent: u16) {
     if spaces.is_empty() {
         buf.newline();
     } else {

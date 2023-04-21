@@ -196,11 +196,7 @@ pub mod test_caret_w_select {
                         }
                     }
                     Rule::text => {
-                        let split_str = elt
-                            .as_span()
-                            .as_str()
-                            .split('\n')
-                            .collect::<Vec<&str>>();
+                        let split_str = elt.as_span().as_str().split('\n').collect::<Vec<&str>>();
 
                         if split_str.len() > 1 {
                             line_nr += split_str.len() - 1;
