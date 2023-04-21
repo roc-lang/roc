@@ -202,14 +202,17 @@ encodeList = \lst, encodeElem ->
         List.append withList (Num.toU8 ']')
 
 encodeRecord = \fields ->
-    Encode.custom \bytes, @Json {} ->
+    Encode.custom \bytes, @Json { fieldNameMapping } ->
         writeRecord = \{ buffer, fieldsLeft }, { key, value } ->
+
+            fieldName = toObjectNameUsingMap key fieldNameMapping
+
             bufferWithKeyValue =
                 List.append buffer (Num.toU8 '"')
-                |> List.concat (Str.toUtf8 key)
+                |> List.concat (Str.toUtf8 fieldName)
                 |> List.append (Num.toU8 '"')
-                |> List.append (Num.toU8 ':')
-                |> appendWith value json
+                |> List.append (Num.toU8 ':') # Note we need to encode using the json config here
+                |> appendWith value (@Json { fieldNameMapping })
 
             bufferWithSuffix =
                 if fieldsLeft > 1 then
@@ -223,6 +226,47 @@ encodeRecord = \fields ->
         { buffer: bytesWithRecord } = List.walk fields { buffer: bytesHead, fieldsLeft: List.len fields } writeRecord
 
         List.append bytesWithRecord (Num.toU8 '}')
+
+# Test encode for a record with two strings ignoring whitespace
+expect
+    input = { fruitCount: 2, ownerName: "Farmer Joe" }
+    encoder = jsonWithOptions { fieldNameMapping: PascalCase }
+    actual = Encode.toBytes input encoder
+    expected = Str.toUtf8 "{\"FruitCount\":2,\"OwnerName\":\"Farmer Joe\"}"
+
+    actual == expected
+
+# Test encode of record with an array of strings and a boolean field
+expect
+    input = { fruitFlavours: ["Apples", "Bananas", "Pears"], isFresh: Bool.true }
+    encoder = jsonWithOptions { fieldNameMapping: KebabCase }
+    actual = Encode.toBytes input encoder
+    expected = Str.toUtf8 "{\"fruit-flavours\":[\"Apples\",\"Bananas\",\"Pears\"],\"is-fresh\":true}"
+
+    actual == expected
+
+# Test encode of record with a string and number field
+expect
+    input = { firstSegment: "ab", secondSegment: 10u8 }
+    encoder = jsonWithOptions { fieldNameMapping: SnakeCase }
+    actual = Encode.toBytes input encoder
+    expected = Str.toUtf8 "{\"first_segment\":\"ab\",\"second_segment\":10}"
+
+    actual == expected
+
+# Test encode of record of a record
+expect
+    input = { outer: { inner: "a" }, other: { one: "b", two: 10u8 } }
+    encoder = jsonWithOptions { fieldNameMapping: Custom toYellingCase }
+    actual = Encode.toBytes input encoder
+    expected = Str.toUtf8 "{\"OTHER\":{\"ONE\":\"b\",\"TWO\":10},\"OUTER\":{\"INNER\":\"a\"}}"
+
+    actual == expected
+
+toYellingCase = \str ->
+    Str.graphemes str
+    |> List.map toUppercase
+    |> Str.joinWith ""
 
 encodeTuple = \elems ->
     Encode.custom \bytes, @Json {} ->
@@ -1106,7 +1150,7 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
                     { val: updatedRecord, rest: bytesAfterValue } <-
                         (
                             fieldName =
-                                fromObjectNameWithMap objectName fieldNameMapping
+                                fromObjectNameUsingMap objectName fieldNameMapping
 
                             # Retrieve value decoder for the current field
                             when stepField recordState fieldName is
@@ -1227,7 +1271,7 @@ expect
 
 fromYellingCase = \str ->
     Str.graphemes str
-    |> List.map lowercaseLetter
+    |> List.map toLowercase
     |> Str.joinWith ""
 
 expect fromYellingCase "YELLING" == "yelling"
@@ -1272,8 +1316,8 @@ expect
 
     actual == expected
 
-fromObjectNameWithMap : Str, FieldNameMapping -> Str
-fromObjectNameWithMap = \objectName, fieldNameMapping ->
+fromObjectNameUsingMap : Str, FieldNameMapping -> Str
+fromObjectNameUsingMap = \objectName, fieldNameMapping ->
     when fieldNameMapping is
         Default -> objectName
         SnakeCase -> fromSnakeCase objectName
@@ -1281,6 +1325,16 @@ fromObjectNameWithMap = \objectName, fieldNameMapping ->
         KebabCase -> fromKebabCase objectName
         CamelCase -> fromCamelCase objectName
         Custom transformation -> transformation objectName
+
+toObjectNameUsingMap : Str, FieldNameMapping -> Str
+toObjectNameUsingMap = \fieldName, fieldNameMapping ->
+    when fieldNameMapping is
+        Default -> fieldName
+        SnakeCase -> toSnakeCase fieldName
+        PascalCase -> toPascalCase fieldName
+        KebabCase -> toKebabCase fieldName
+        CamelCase -> toCamelCase fieldName
+        Custom transformation -> transformation fieldName
 
 # Convert a `snake_case` JSON Object name to a Roc Field name
 fromSnakeCase = \str ->
@@ -1296,7 +1350,24 @@ fromKebabCase = \str ->
 
 # Convert a `camelCase` JSON Object name to a Roc Field name
 fromCamelCase = \str ->
-    # No change as Roc field names are camelCase by default
+    # Nothing to change as Roc field names are camelCase by default
+    str
+
+# Convert a `camelCase` Roc Field name to a `snake_case` JSON Object name
+toSnakeCase = \str ->
+    camelToSnake str
+
+# Convert a `camelCase` Roc Field name to a `PascalCase` JSON Object name
+toPascalCase = \str ->
+    camelToPascal str
+
+# Convert a `camelCase` Roc Field name to a `kabab-case` JSON Object name
+toKebabCase = \str ->
+    camelToKebeb str
+
+# Convert a `camelCase` Roc Field name to a `camelCase` JSON Object name
+toCamelCase = \str ->
+    # Nothing to change as Roc field names are camelCase by default
     str
 
 snakeToCamel : Str -> Str
@@ -1319,7 +1390,7 @@ pascalToCamel = \str ->
     segments = Str.graphemes str
     when segments is
         [a, ..] ->
-            first = lowercaseLetter a
+            first = toLowercase a
             rest = List.dropFirst segments
 
             Str.joinWith (List.prepend rest first) ""
@@ -1343,20 +1414,82 @@ kebabToCamel = \str ->
 
 expect kebabToCamel "kebab-case-string" == "kebabCaseString"
 
-uppercaseFirst : Str -> Str
-uppercaseFirst = \str ->
+camelToPascal : Str -> Str
+camelToPascal = \str ->
     segments = Str.graphemes str
     when segments is
         [a, ..] ->
-            first = uppercaseLetter a
+            first = toUppercase a
             rest = List.dropFirst segments
 
             Str.joinWith (List.prepend rest first) ""
 
         _ -> str
 
-uppercaseLetter : Str -> Str
-uppercaseLetter = \str ->
+expect camelToPascal "someCaseString" == "SomeCaseString"
+
+camelToKebeb : Str -> Str
+camelToKebeb = \str ->
+    camelToKebabHelp { taken: [], rest: Str.graphemes str }
+    |> .taken
+    |> Str.joinWith ""
+
+camelToKebabHelp : { taken : List Str, rest : List Str } -> { taken : List Str, rest : List Str }
+camelToKebabHelp = \{ taken, rest } ->
+    when rest is
+        [] -> { taken, rest }
+        [a, ..] if isUpperCase a ->
+            camelToKebabHelp {
+                taken: List.concat taken ["-", toLowercase a],
+                rest: List.dropFirst rest,
+            }
+
+        [a, ..] ->
+            camelToKebabHelp {
+                taken: List.append taken a,
+                rest: List.dropFirst rest,
+            }
+
+expect camelToKebeb "someCaseString" == "some-case-string"
+
+camelToSnake : Str -> Str
+camelToSnake = \str ->
+    camelToSnakeHelp { taken: [], rest: Str.graphemes str }
+    |> .taken
+    |> Str.joinWith ""
+
+camelToSnakeHelp : { taken : List Str, rest : List Str } -> { taken : List Str, rest : List Str }
+camelToSnakeHelp = \{ taken, rest } ->
+    when rest is
+        [] -> { taken, rest }
+        [a, ..] if isUpperCase a ->
+            camelToSnakeHelp {
+                taken: List.concat taken ["_", toLowercase a],
+                rest: List.dropFirst rest,
+            }
+
+        [a, ..] ->
+            camelToSnakeHelp {
+                taken: List.append taken a,
+                rest: List.dropFirst rest,
+            }
+
+expect camelToSnake "someCaseString" == "some_case_string"
+
+uppercaseFirst : Str -> Str
+uppercaseFirst = \str ->
+    segments = Str.graphemes str
+    when segments is
+        [a, ..] ->
+            first = toUppercase a
+            rest = List.dropFirst segments
+
+            Str.joinWith (List.prepend rest first) ""
+
+        _ -> str
+
+toUppercase : Str -> Str
+toUppercase = \str ->
     when str is
         "a" -> "A"
         "b" -> "B"
@@ -1386,8 +1519,8 @@ uppercaseLetter = \str ->
         "z" -> "Z"
         _ -> str
 
-lowercaseLetter : Str -> Str
-lowercaseLetter = \str ->
+toLowercase : Str -> Str
+toLowercase = \str ->
     when str is
         "A" -> "a"
         "B" -> "b"
@@ -1416,3 +1549,10 @@ lowercaseLetter = \str ->
         "Y" -> "y"
         "Z" -> "z"
         _ -> str
+
+isUpperCase : Str -> Bool
+isUpperCase = \str ->
+    when str is
+        "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" -> Bool.true
+        _ -> Bool.false
+
