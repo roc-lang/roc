@@ -37,7 +37,7 @@ fn test_loop_help(end: i32, expected: i32) {
 
         // loop <void>
         buf.push(OpCode::LOOP as u8);
-        buf.push(ValueType::VOID as u8);
+        buf.push(ValueType::VOID);
 
         //   local.get $i
         buf.push(OpCode::GETLOCAL as u8);
@@ -135,7 +135,7 @@ fn test_if_else_help(condition: i32, expected: i32) {
 
         // if <blocktype>
         buf.push(OpCode::IF as u8);
-        buf.push(ValueType::VOID as u8);
+        buf.push(ValueType::VOID);
 
         // i32.const 111
         buf.push(OpCode::I32CONST as u8);
@@ -599,7 +599,7 @@ fn test_call_return_no_args() {
         ValueType::I32 as u8,
         OpCode::BLOCK as u8, /*  */
         // call from inside a block. callee's implicit return should still work correctly.
-        ValueType::VOID as u8,
+        ValueType::VOID,
         OpCode::CALL as u8,
         1, // function 1
         OpCode::SETLOCAL as u8,

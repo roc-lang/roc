@@ -195,11 +195,11 @@ enum GeneratedInfo {
 }
 
 impl GeneratedInfo {
-    fn from_header_type<'a>(
+    fn from_header_type(
         env: &mut Env,
         scope: &mut Scope,
         var_store: &mut VarStore,
-        header_type: &HeaderType<'a>,
+        header_type: &HeaderType<'_>,
     ) -> Self {
         match header_type {
             HeaderType::Hosted {

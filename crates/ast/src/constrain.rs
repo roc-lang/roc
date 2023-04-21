@@ -1959,8 +1959,8 @@ pub mod test_constrain {
     };
     use indoc::indoc;
 
-    fn run_solve<'a>(
-        arena: &'a Bump,
+    fn run_solve(
+        arena: &Bump,
         mempool: &mut Pool,
         aliases: MutMap<Symbol, roc_types::types::Alias>,
         rigid_variables: MutMap<Variable, Lowercase>,

@@ -1193,7 +1193,7 @@ fn extract<'a>(
 
 /// FIND IRRELEVANT BRANCHES
 
-fn is_irrelevant_to<'a>(selected_path: &[PathInstruction], branch: &Branch<'a>) -> bool {
+fn is_irrelevant_to(selected_path: &[PathInstruction], branch: &Branch<'_>) -> bool {
     match branch
         .patterns
         .iter()
@@ -1720,7 +1720,7 @@ fn test_to_comparison<'a>(
 
         Test::IsFloat(test_int, precision) => {
             // TODO maybe we can actually use i64 comparison here?
-            let test_float = f64::from_bits(test_int as u64);
+            let test_float = f64::from_bits(test_int);
             let lhs = Expr::Literal(Literal::Float(test_float));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::float_width(precision), lhs));
@@ -2240,7 +2240,7 @@ fn decide_to_branching<'a>(
 
                 let tag = match test {
                     Test::IsInt(v, _) => i128::from_ne_bytes(v) as u64,
-                    Test::IsFloat(v, _) => v as u64,
+                    Test::IsFloat(v, _) => v,
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
                     Test::IsCtor { tag_id, .. } => tag_id as u64,

@@ -948,7 +948,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 let memory_index = self.fetch_immediate_u32(module);
                 assert_eq!(memory_index, 0);
                 let old_bytes = self.memory.len() as u32;
-                let old_pages = old_bytes / MemorySection::PAGE_SIZE as u32;
+                let old_pages = old_bytes / MemorySection::PAGE_SIZE;
                 let grow_pages = self.value_store.pop_u32()?;
                 let grow_bytes = grow_pages * MemorySection::PAGE_SIZE;
                 let new_bytes = old_bytes + grow_bytes;
@@ -1700,7 +1700,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             } else {
                 // For calls, we print special debug stuff in do_call
                 let base = self.current_frame.locals_start + self.current_frame.locals_count;
-                let slice = self.value_store.get_slice(base as usize);
+                let slice = self.value_store.get_slice(base);
                 eprintln!("{:06x} {:17} {:x?}", file_offset, debug_string, slice);
             }
             let is_return = op_code == RETURN || (op_code == END && implicit_return);

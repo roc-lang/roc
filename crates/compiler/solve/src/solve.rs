@@ -2537,14 +2537,14 @@ enum TypeToVar {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn type_to_variable<'a>(
+fn type_to_variable(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<TypeError>,
     abilities_store: &AbilitiesStore,
     obligation_cache: &mut ObligationCache,
-    arena: &'a bumpalo::Bump,
+    arena: &bumpalo::Bump,
     aliases: &mut Aliases,
     types: &mut Types,
     typ: Index<TypeTag>,

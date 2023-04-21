@@ -62,15 +62,15 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         !Self::float_callee_saved(reg)
     }
 
-    fn setup_stack<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn setup_stack(
+        buf: &mut Vec<'_, u8>,
         general_saved_regs: &[GeneralReg],
         float_saved_regs: &[FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32;
-    fn cleanup_stack<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn cleanup_stack(
+        buf: &mut Vec<'_, u8>,
         general_saved_regs: &[GeneralReg],
         float_saved_regs: &[FloatReg],
         aligned_stack_size: i32,
@@ -78,9 +78,9 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
     );
 
     /// load_args updates the storage manager to know where every arg is stored.
-    fn load_args<'a, 'r>(
+    fn load_args<'a>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, Self>,
         layout_interner: &mut STLayoutInterner<'a>,
         args: &'a [(InLayout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
@@ -89,9 +89,9 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     /// store_args stores the args in registers and on the stack for function calling.
     /// It also updates the amount of temporary stack space needed in the storage manager.
-    fn store_args<'a, 'r>(
+    fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, Self>,
         layout_interner: &mut STLayoutInterner<'a>,
         dst: &Symbol,
         args: &[Symbol],
@@ -102,9 +102,9 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     /// return_complex_symbol returns the specified complex/non-primative symbol.
     /// It uses the layout to determine how the data should be returned.
-    fn return_complex_symbol<'a, 'r>(
+    fn return_complex_symbol<'a>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, Self>,
         layout_interner: &mut STLayoutInterner<'a>,
         sym: &Symbol,
         layout: &InLayout<'a>,
@@ -112,9 +112,9 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     /// load_returned_complex_symbol loads a complex symbol that was returned from a function call.
     /// It uses the layout to determine how the data should be loaded into the symbol.
-    fn load_returned_complex_symbol<'a, 'r>(
+    fn load_returned_complex_symbol<'a>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, Self>,
         layout_interner: &mut STLayoutInterner<'a>,
         sym: &Symbol,
         layout: &InLayout<'a>,
@@ -184,9 +184,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src2: GeneralReg,
     );
 
-    fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn shl_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -194,9 +194,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>;
 
-    fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn shr_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -204,9 +204,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>;
 
-    fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn sar_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -359,9 +359,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src1: GeneralReg,
         src2: GeneralReg,
     );
-    fn umul_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -369,18 +369,18 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>;
 
-    fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
     ) where
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>;
-    fn udiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -1776,7 +1776,7 @@ impl<
         self.storage_manager.with_tmp_general_reg(
             &mut self.buf,
             |storage_manager, buf, list_ptr| {
-                ASM::mov_reg64_base32(buf, list_ptr, base_offset as i32);
+                ASM::mov_reg64_base32(buf, list_ptr, base_offset);
                 storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp| {
                     // calculate `element_width * index`
                     ASM::mov_reg64_imm64(buf, tmp, ret_stack_size as i64);

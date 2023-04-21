@@ -596,7 +596,7 @@ fn format_output(
 
                 let term_width = match dimensions {
                     Some((width, _)) => width.min(VAR_NAME_COLUMN_MAX),
-                    None => VAR_NAME_COLUMN_MAX as usize,
+                    None => VAR_NAME_COLUMN_MAX,
                 };
 
                 let expr_with_type = format!("{expr}{EXPR_TYPE_SEPARATOR}{expr_type}");
