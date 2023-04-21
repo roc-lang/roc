@@ -76,21 +76,9 @@ interface Json
         Result,
     ]
 
-## Mapping between Roc record fields and JSON object names
-FieldNameMapping : [
-    Default, # no transformation
-    SnakeCase, # snake_case
-    PascalCase, # PascalCase
-    KebabCase, # kabab-case
-    CamelCase, # camelCase
-    Custom (Str -> Str), # provide a custom formatting
-]
-
 ## An opaque type with the `EncoderFormatting` and
 ## `DecoderFormatting` abilities.
-Json := {
-    fieldNameMapping : FieldNameMapping,
-}
+Json := { fieldNameMapping : FieldNameMapping }
      has [
          EncoderFormatting {
              u8: encodeU8,
@@ -142,47 +130,117 @@ json = @Json { fieldNameMapping: Default }
 jsonWithOptions = \{ fieldNameMapping ? Default } ->
     @Json { fieldNameMapping }
 
+## Mapping between Roc record fields and JSON object names
+FieldNameMapping : [
+    Default, # no transformation
+    SnakeCase, # snake_case
+    PascalCase, # PascalCase
+    KebabCase, # kabab-case
+    CamelCase, # camelCase
+    Custom (Str -> Str), # provide a custom formatting
+]
+
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8
 
-encodeU8 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU8 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeU16 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU16 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeU32 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU32 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeU64 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU64 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeU128 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU128 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeI8 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI8 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeI16 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI16 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeI32 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI32 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeI64 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI64 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeI128 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI128 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeF32 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeF32 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeF64 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeF64 = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeDec = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeDec = \n ->
+    Encode.custom \bytes, @Json {} ->
+        List.concat bytes (numToBytes n)
 
-encodeBool = \b -> Encode.custom \bytes, @Json {} ->
-        if
-            b
-        then
+encodeBool = \b ->
+    Encode.custom \bytes, @Json {} ->
+        if b then
             List.concat bytes (Str.toUtf8 "true")
         else
             List.concat bytes (Str.toUtf8 "false")
 
-encodeString = \s -> Encode.custom \bytes, @Json {} ->
-        List.append bytes (Num.toU8 '"')
-        |> List.concat (Str.toUtf8 s)
-        |> List.append (Num.toU8 '"')
+encodeString = \str ->
+    Encode.custom \bytes, @Json {} ->
+        bytes
+        |> List.concat ['"']
+        |> List.concat (encodeJsonEscapes str)
+        |> List.concat ['"']
+
+encodeJsonEscapes : Str -> List U8
+encodeJsonEscapes = \str ->
+    Str.toUtf8 str
+    |> List.walk [] \bytes, byte ->
+        List.concat bytes (escapedByteToJson byte)
+
+# Prepend an "\" escape byte
+escapedByteToJson : U8 -> List U8
+escapedByteToJson = \b ->
+    when b is
+        0x22 -> [0x5c, 0x22] # U+0022 Quotation mark
+        0x5c -> [0x5c, 0x5c] # U+005c Reverse solidus
+        0x2f -> [0x5c, 0x2f] # U+002f Solidus
+        0x08 -> [0x5c, 'b'] # U+0008 Backspace
+        0x0c -> [0x5c, 'f'] # U+000c Form feed
+        0x0a -> [0x5c, 'n'] # U+000a Line feed
+        0x0d -> [0x5c, 'r'] # U+000d Carriage return
+        0x09 -> [0x5c, 'r'] # U+0009 Tab
+        _ -> [b]
+
+expect escapedByteToJson '\n' == ['\\', 'n']
+expect escapedByteToJson '\\' == ['\\', '\\']
+expect escapedByteToJson '"' == ['\\', '"']
+
+# Test json string encoding with escapes
+# e.g. "\r" encodes to "\\r" or "\\u000D" as Carriage Return is U+000D
+expect
+    input = "a\r\nbc\\\"xz"
+    actual = Encode.toBytes input json
+    expected = Str.toUtf8 "\"a\\r\\nbc\\\\\\\"xz\""
+
+    actual == expected
 
 encodeList = \lst, encodeElem ->
     Encode.custom \bytes, @Json {} ->
@@ -462,11 +520,13 @@ decodeBool = Decode.custom \bytes, @Json {} ->
         ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.drop bytes 4 }
         _ -> { result: Err TooShort, rest: bytes }
 
+# Test decode of Bool
 expect
     actual = "true\n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok Bool.true
     actual.result == expected
 
+# Test decode of Bool
 expect
     actual = "false ]\n" |> Str.toUtf8 |> Decode.fromBytesPartial json
     expected = Ok Bool.false
@@ -976,16 +1036,6 @@ expect
 
     actual.result == expected
 
-# TODO fix encoding of escapes, this test is not compliant with the spec
-# Test json string encoding with escapes
-# e.g. "\r" encodes to "\\r" or "\\u000D" as Carriage Return is U+000D
-# expect
-#     input = "a\r\nbc\\\"xz"
-#     expected = Str.toUtf8 "\"a\r\nbc\\\"xz\""
-#     actual = Encode.toBytes input json
-
-#     actual == expected
-
 # JSON ARRAYS ------------------------------------------------------------------
 
 decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
@@ -1276,7 +1326,7 @@ fromYellingCase = \str ->
 
 expect fromYellingCase "YELLING" == "yelling"
 
-# Test complex example from IETF RFC 8259 (2017)
+# Test decode of complex example from IETF RFC 8259 (2017)
 expect
     input =
         """
@@ -1313,6 +1363,29 @@ expect
             ids: [116, 943, 234, 38793],
         },
     }
+
+    actual == expected
+
+# Test encode of complex example from IETF RFC 8259 (2017)
+expect
+    input = {
+        image: {
+            width: 800,
+            height: 600,
+            title: "View from 15th Floor",
+            thumbnail: {
+                url: "http://www.example.com/image/481989943",
+                height: 125,
+                width: 100,
+            },
+            animated: Bool.false,
+            ids: [116, 943, 234, 38793],
+        },
+    }
+
+    encoder = jsonWithOptions { fieldNameMapping: PascalCase }
+    actual = Encode.toBytes input encoder
+    expected = Str.toUtf8 "{\"Image\":{\"Animated\":false,\"Height\":600,\"Ids\":[116,943,234,38793],\"Thumbnail\":{\"Height\":125,\"Url\":\"http:\\/\\/www.example.com\\/image\\/481989943\",\"Width\":100},\"Title\":\"View from 15th Floor\",\"Width\":800}}"
 
     actual == expected
 
@@ -1555,4 +1628,3 @@ isUpperCase = \str ->
     when str is
         "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" -> Bool.true
         _ -> Bool.false
-
