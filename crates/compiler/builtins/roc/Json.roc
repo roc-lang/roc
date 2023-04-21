@@ -211,9 +211,18 @@ encodeString = \str ->
 
 encodeJsonEscapes : Str -> List U8
 encodeJsonEscapes = \str ->
-    Str.toUtf8 str
-    |> List.walk [] \bytes, byte ->
-        List.concat bytes (escapedByteToJson byte)
+    bytes = Str.toUtf8 str
+
+    # Reserve capacity for escaped bytes to reduce allocations
+    initial =
+        bytes
+        |> List.len
+        |> Num.mul 120
+        |> Num.divCeil 100
+        |> List.withCapacity
+
+    List.walk bytes initial \encodedBytes, byte ->
+        List.concat encodedBytes (escapedByteToJson byte)
 
 # Prepend an "\" escape byte
 escapedByteToJson : U8 -> List U8
@@ -797,35 +806,36 @@ expect
 
 # JSON STRING PRIMITIVE --------------------------------------------------------
 
-# TODO add support for 'null' decoding
-
 # Decode a Json string primitive into a RocStr
 #
 # Note that decodeStr does not handle leading whitespace, any whitespace must be
 # handled in json list or record decodin.
 decodeString = Decode.custom \bytes, @Json {} ->
-    { taken: strBytes, rest } = bytes |> takeJsonString
-
-    if List.isEmpty strBytes then
-        { result: Err TooShort, rest: bytes }
+    if List.startsWith bytes ['n', 'u', 'l', 'l'] then
+        { result: Ok "null", rest: List.drop bytes 4 }
     else
-        # Replace unicode escpapes with Roc equivalent
-        { outBytes: strBytesReplaced } =
-            replaceEscapedChars { inBytes: strBytes, outBytes: [] }
+        { taken: strBytes, rest } = takeJsonString bytes
 
-        # Try to parse RocStr from bytes
-        result =
-            strBytesReplaced
-            |> List.dropFirst # Remove starting quotation mark
-            |> List.dropLast # Remove ending quotation mark
-            |> Str.fromUtf8
+        if List.isEmpty strBytes then
+            { result: Err TooShort, rest: bytes }
+        else
+            # Replace unicode escpapes with Roc equivalent
+            { outBytes: strBytesReplaced } =
+                replaceEscapedChars { inBytes: strBytes, outBytes: [] }
 
-        when result is
-            Ok str ->
-                { result: Ok str, rest }
+            # Try to parse RocStr from bytes
+            result =
+                strBytesReplaced
+                |> List.dropFirst # Remove starting quotation mark
+                |> List.dropLast # Remove ending quotation mark
+                |> Str.fromUtf8
 
-            Err _ ->
-                { result: Err TooShort, rest: bytes }
+            when result is
+                Ok str ->
+                    { result: Ok str, rest }
+
+                Err _ ->
+                    { result: Err TooShort, rest: bytes }
 
 takeJsonString : List U8 -> { taken : List U8, rest : List U8 }
 takeJsonString = \bytes ->
@@ -1033,6 +1043,14 @@ expect
     input = Str.toUtf8 "\"a\r\nbc\\txz\"\t\n,  "
     actual = Decode.fromBytesPartial input json
     expected = Ok "a\r\nbc\txz"
+
+    actual.result == expected
+
+# Test decode of a null
+expect
+    input = Str.toUtf8 "null"
+    actual = Decode.fromBytesPartial input json
+    expected = Ok "null"
 
     actual.result == expected
 
