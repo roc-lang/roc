@@ -1,0 +1,11 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Outer k := [Empty, Wrapped k]
+
+    when (@Outer Empty) is
+        @Outer Empty -> @Outer (Wrapped "")
+        @Outer (Wrapped k) -> @Outer (Wrapped k)
+
+main = entry
+#      ^^^^^ Outer Str

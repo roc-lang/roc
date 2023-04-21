@@ -1,0 +1,8 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    fun = \a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,aa,bb -> {a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,aa,bb}
+    fun
+
+main = entry
+#      ^^^^^ w_a, w_b, w_c, w_d, w_e, w_f, w_g, w_h, w_i, w_j, w_k, w_l, w_m, w_n, w_o, w_p, w_q, w_r, w_s, w_t, w_u, w_v, w_w, w_x, w_y, w_z, w_aa, w_bb -[[fun(2)]]-> { a : w_a, aa : w_aa, b : w_b, bb : w_bb, c : w_c, d : w_d, e : w_e, f : w_f, g : w_g, h : w_h, i : w_i, j : w_j, k : w_k, l : w_l, m : w_m, n : w_n, o : w_o, p : w_p, q : w_q, r : w_r, s : w_s, t : w_t, u : w_u, v : w_v, w : w_w, x : w_x, y : w_y, z : w_z }

@@ -1,0 +1,11 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Age := U32
+
+    v : Age -> U32
+    v = \@Age n -> n
+    v
+
+main = entry
+#      ^^^^^ Age -[[v(3)]]-> U32
