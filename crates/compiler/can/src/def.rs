@@ -1050,8 +1050,12 @@ fn canonicalize_value_defs<'a>(
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
+<<<<<<< HEAD
         let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern())
             .peekable();
+=======
+        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern()).peekable();
+>>>>>>> 28146c939f11c8b65504c9d35c69fdef31b976e8
 
         if new_bindings.peek().is_none() {
             env.problem(Problem::NoIdentifiersIntroduced(
@@ -1339,7 +1343,11 @@ fn canonicalize_type_defs<'a>(
 /// Resolve all pending abilities, to add them to scope.
 #[allow(clippy::too_many_arguments)]
 fn resolve_abilities(
+<<<<<<< HEAD
     env: &mut Env,
+=======
+    env: &mut Env<'_>,
+>>>>>>> 28146c939f11c8b65504c9d35c69fdef31b976e8
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
@@ -2813,7 +2821,11 @@ fn to_pending_value_def<'a>(
 
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias(
+<<<<<<< HEAD
     env: &mut Env,
+=======
+    env: &mut Env<'_>,
+>>>>>>> 28146c939f11c8b65504c9d35c69fdef31b976e8
     original_aliases: VecMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) -> VecMap<Symbol, Alias> {
@@ -3022,7 +3034,11 @@ fn correct_mutual_recursive_type_alias(
 }
 
 fn make_tag_union_of_alias_recursive(
+<<<<<<< HEAD
     env: &mut Env,
+=======
+    env: &mut Env<'_>,
+>>>>>>> 28146c939f11c8b65504c9d35c69fdef31b976e8
     alias_name: Symbol,
     alias: &mut Alias,
     others: Vec<Symbol>,
@@ -3215,7 +3231,11 @@ fn make_tag_union_recursive_help<'a, 'b>(
 }
 
 fn mark_cyclic_alias(
+<<<<<<< HEAD
     env: &mut Env,
+=======
+    env: &mut Env<'_>,
+>>>>>>> 28146c939f11c8b65504c9d35c69fdef31b976e8
     typ: &mut Type,
     symbol: Symbol,
     alias_kind: AliasKind,

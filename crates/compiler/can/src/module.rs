@@ -199,7 +199,11 @@ impl GeneratedInfo {
         env: &mut Env,
         scope: &mut Scope,
         var_store: &mut VarStore,
+<<<<<<< HEAD
         header_type: &HeaderType,
+=======
+        header_type: &HeaderType<'_>,
+>>>>>>> 28146c939f11c8b65504c9d35c69fdef31b976e8
     ) -> Self {
         match header_type {
             HeaderType::Hosted {

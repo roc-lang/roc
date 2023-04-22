@@ -16,13 +16,13 @@ use winit::dpi::PhysicalSize;
 
 use crate::{editor::config::Config, graphics::colors};
 
-pub fn build_code_graphics<'a>(
+pub fn build_code_graphics(
     markup_ids: &[MarkNodeId],
     size: &PhysicalSize<u32>,
     txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,
-    mark_node_pool: &'a SlowPool,
+    mark_node_pool: &SlowPool,
 ) -> EdResult<RenderedWgpu> {
     let area_bounds = (size.width as f32, size.height as f32);
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);

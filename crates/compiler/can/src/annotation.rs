@@ -1142,7 +1142,11 @@ fn can_extension_type(
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
+<<<<<<< HEAD
     opt_ext: &Option<&Loc<TypeAnnotation>>,
+=======
+    opt_ext: &Option<&Loc<TypeAnnotation<'_>>>,
+>>>>>>> 28146c939f11c8b65504c9d35c69fdef31b976e8
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
 ) -> (Type, ExtImplicitOpenness) {
     fn valid_record_ext_type(typ: &Type) -> bool {
@@ -1454,7 +1458,11 @@ fn can_assigned_fields<'a>(
 fn can_assigned_tuple_elems(
     env: &mut Env,
     pol: CanPolarity,
+<<<<<<< HEAD
     elems: &&[Loc<TypeAnnotation>],
+=======
+    elems: &&[Loc<TypeAnnotation<'_>>],
+>>>>>>> 28146c939f11c8b65504c9d35c69fdef31b976e8
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,

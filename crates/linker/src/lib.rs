@@ -255,7 +255,7 @@ fn generate_dynamic_lib(target: &Triple, stub_dll_symbols: &[String], stub_lib_p
         let bytes = crate::generate_dylib::generate(target, stub_dll_symbols)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
-        if let Err(e) = std::fs::write(stub_lib_path, &bytes) {
+        if let Err(e) = std::fs::write(stub_lib_path, bytes) {
             internal_error!("failed to write stub lib to {:?}: {e}", stub_lib_path)
         }
 
@@ -290,7 +290,7 @@ fn generate_import_library(stub_lib_path: &Path, custom_names: &[String]) {
     // For when we want to do this in-memory in the future. We can also consider using
     //
     // > https://github.com/messense/implib-rs
-    let output = std::process::Command::new(&zig)
+    let output = std::process::Command::new(zig)
         .current_dir(stub_lib_path.parent().unwrap())
         .args([
             "dlltool",

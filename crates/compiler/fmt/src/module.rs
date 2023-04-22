@@ -44,9 +44,9 @@ macro_rules! keywords {
                     false
                 }
 
-                fn format_with_options<'buf>(
+                fn format_with_options(
                     &self,
-                    buf: &mut Buf<'buf>,
+                    buf: &mut Buf<'_>,
                     _parens: crate::annotation::Parens,
                     _newlines: Newlines,
                     indent: u16,

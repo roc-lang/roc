@@ -183,7 +183,7 @@ fn parse_queries(src: &str, line_info: &LineInfo) -> Vec<TypeQuery> {
             }
         };
 
-        let mut queries_on_line = RE_TYPE_QUERY.captures_iter(line).into_iter().peekable();
+        let mut queries_on_line = RE_TYPE_QUERY.captures_iter(line).peekable();
 
         if queries_on_line.peek().is_none() || line.contains(MUTLILINE_MARKER) {
             consecutive_query_lines = 0;

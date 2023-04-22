@@ -19,13 +19,13 @@ use super::{
 };
 
 // represents for example: `main = "Hello, World!"`
-pub fn assignment_mark_node<'a>(
+pub fn assignment_mark_node(
     identifier_id: IdentId,
     expr_mark_node_id: MarkNodeId,
     ast_node_id: ASTNodeId,
     mark_node_pool: &mut SlowPool,
     mark_id_ast_id_map: &mut MarkIdAstIdMap,
-    env: &Env<'a>,
+    env: &Env<'_>,
 ) -> ASTResult<MarkupNode> {
     let val_name = env.ident_ids.get_name_str_res(identifier_id)?;
 

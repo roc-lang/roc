@@ -506,7 +506,7 @@ impl<'a> CodeBuilder<'a> {
             stack_size
         );
 
-        let new_len = stack_size - pops as usize;
+        let new_len = stack_size - pops;
         current_stack.truncate(new_len);
         if push {
             current_stack.push(Symbol::WASM_TMP);

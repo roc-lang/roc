@@ -35,8 +35,8 @@ use roc_module::{module_err::ModuleResult, symbol::Interns};
 use super::from_def2::add_node;
 
 // make Markup Nodes: generate String representation, assign Highlighting Style
-pub fn expr2_to_markup<'a>(
-    env: &Env<'a>,
+pub fn expr2_to_markup(
+    env: &Env<'_>,
     expr2: &Expr2,
     expr2_node_id: ExprId,
     mark_node_pool: &mut SlowPool,

@@ -466,7 +466,7 @@ fn is_multiline_assigned_field_help<T: Formattable>(afield: &AssignedField<'_, T
     }
 }
 
-fn format_assigned_field_help< T>(
+fn format_assigned_field_help<T>(
     zelf: &AssignedField<T>,
     buf: &mut Buf,
     indent: u16,

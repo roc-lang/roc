@@ -67,7 +67,7 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
             .next()
             .unwrap();
 
-        let address = sym.address() as u64;
+        let address = sym.address();
 
         // special exceptions for memcpy and memset.
         if name == "roc_memcpy" {
@@ -705,19 +705,19 @@ fn gen_macho_le(
                 // Instead, its file size should be increased.
                 if old_file_offest > 0 {
                     cmd.fileoff
-                        .set(LittleEndian, old_file_offest + md.added_byte_count as u64);
+                        .set(LittleEndian, old_file_offest + md.added_byte_count);
                     cmd.vmaddr.set(
                         LittleEndian,
-                        cmd.vmaddr.get(NativeEndian) + md.added_byte_count as u64,
+                        cmd.vmaddr.get(NativeEndian) + md.added_byte_count,
                     );
                 } else {
                     cmd.filesize.set(
                         LittleEndian,
-                        cmd.filesize.get(NativeEndian) + md.added_byte_count as u64,
+                        cmd.filesize.get(NativeEndian) + md.added_byte_count,
                     );
                     cmd.vmsize.set(
                         LittleEndian,
-                        cmd.vmsize.get(NativeEndian) + md.added_byte_count as u64,
+                        cmd.vmsize.get(NativeEndian) + md.added_byte_count,
                     );
                 }
 
@@ -831,7 +831,7 @@ fn gen_macho_le(
                     if entry_type == macho::N_ABS || entry_type == macho::N_SECT {
                         entry.n_value.set(
                             LittleEndian,
-                            entry.n_value.get(NativeEndian) + md.added_byte_count as u64,
+                            entry.n_value.get(NativeEndian) + md.added_byte_count,
                         );
                     }
                 }
@@ -1046,7 +1046,7 @@ fn gen_macho_le(
 
                 cmd.entryoff.set(
                     LittleEndian,
-                    cmd.entryoff.get(NativeEndian) + md.added_byte_count as u64,
+                    cmd.entryoff.get(NativeEndian) + md.added_byte_count,
                 );
             }
             macho::LC_NOTE => {
@@ -1058,7 +1058,7 @@ fn gen_macho_le(
                 if cmd.size.get(NativeEndian) > 0 {
                     cmd.offset.set(
                         LittleEndian,
-                        cmd.offset.get(NativeEndian) + md.added_byte_count as u64,
+                        cmd.offset.get(NativeEndian) + md.added_byte_count,
                     );
                 }
             }
@@ -1397,8 +1397,8 @@ fn surgery_macho_help(
                     };
 
                     if let Some(target_offset) = target_offset {
-                        let virt_base = section_virtual_offset as usize + rel.0 as usize;
-                        let base = section_offset as usize + rel.0 as usize;
+                        let virt_base = section_virtual_offset + rel.0 as usize;
+                        let base = section_offset + rel.0 as usize;
                         let target: i64 = match rel.1.kind() {
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
