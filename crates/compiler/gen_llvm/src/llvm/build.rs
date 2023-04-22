@@ -3341,7 +3341,7 @@ fn const_i128<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, value: i128) -> IntValu
 
 fn const_u128<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, value: u128) -> IntValue<'ctx> {
     // truncate the lower 64 bits
-    let value = value as u128;
+    let value = value;
     let a = value as u64;
 
     // get the upper 64 bits
@@ -3488,7 +3488,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
             let int_val = if condition_int_type == context.i128_type() {
                 const_i128(env, *int as i128)
             } else {
-                condition_int_type.const_int(*int as u64, false)
+                condition_int_type.const_int(*int, false)
             };
 
             let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
