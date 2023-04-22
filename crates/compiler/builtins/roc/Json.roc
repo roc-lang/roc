@@ -811,31 +811,35 @@ expect
 # Note that decodeStr does not handle leading whitespace, any whitespace must be
 # handled in json list or record decodin.
 decodeString = Decode.custom \bytes, @Json {} ->
-    if List.startsWith bytes ['n', 'u', 'l', 'l'] then
-        { result: Ok "null", rest: List.drop bytes 4 }
-    else
-        { taken: strBytes, rest } = takeJsonString bytes
+    when bytes is 
+        ['n', 'u', 'l', 'l', ..] ->
+            { result: Ok "null", rest: List.drop bytes 4 }
+        _ ->
+            { taken: strBytes, rest } = takeJsonString bytes
 
-        if List.isEmpty strBytes then
-            { result: Err TooShort, rest: bytes }
-        else
-            # Replace unicode escpapes with Roc equivalent
-            { outBytes: strBytesReplaced } =
-                replaceEscapedChars { inBytes: strBytes, outBytes: [] }
+            if List.isEmpty strBytes then
+                { result: Err TooShort, rest: bytes }
+            else
+                # Remove starting and ending quotation marks, replace unicode 
+                # escpapes with Roc equivalent, and try to parse RocStr from 
+                # bytes 
+                result =
+                    strBytes
+                    |> List.sublist {
+                            start: 1, 
+                            len: Num.subSaturated (List.len strBytes) 2
+                        } 
+                    |> \bytesWithoutQuotationMarks -> 
+                        replaceEscapedChars { inBytes: bytesWithoutQuotationMarks, outBytes: [] }
+                    |> .outBytes
+                    |> Str.fromUtf8
 
-            # Try to parse RocStr from bytes
-            result =
-                strBytesReplaced
-                |> List.dropFirst # Remove starting quotation mark
-                |> List.dropLast # Remove ending quotation mark
-                |> Str.fromUtf8
+                when result is
+                    Ok str ->
+                        { result: Ok str, rest }
 
-            when result is
-                Ok str ->
-                    { result: Ok str, rest }
-
-                Err _ ->
-                    { result: Err TooShort, rest: bytes }
+                    Err _ ->
+                        { result: Err TooShort, rest: bytes }
 
 takeJsonString : List U8 -> { taken : List U8, rest : List U8 }
 takeJsonString = \bytes ->
