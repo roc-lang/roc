@@ -380,6 +380,34 @@ fn specialize_drops_stmt<'a, 'i>(
                                 }
                             }
                         }
+                        Layout::Boxed(_layout) => {
+                            let removed = match incremented_children.iter().next() {
+                                Some(s) => incremented_children.remove(&s.clone()),
+                                None => false,
+                            };
+
+                            let new_continuation = specialize_drops_stmt(
+                                arena,
+                                layout_interner,
+                                ident_ids,
+                                environment,
+                                continuation,
+                            );
+
+                            if removed {
+                                // No need to decrement the containing value since we already decremented the child.
+                                arena.alloc(Stmt::Refcounting(
+                                    ModifyRc::DecRef(*symbol),
+                                    new_continuation,
+                                ))
+                            } else {
+                                // No known children, keep decrementing the symbol.
+                                arena.alloc(Stmt::Refcounting(
+                                    ModifyRc::Dec(*symbol),
+                                    new_continuation,
+                                ))
+                            }
+                        }
                         // TODO: Implement this with uniqueness checks.
                         _ => {
                             let new_continuation = specialize_drops_stmt(
