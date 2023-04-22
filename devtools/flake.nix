@@ -1,5 +1,5 @@
 {
-  description = "Allows sharing dependencies between dev tools and roc";
+  description = "Allows sharing dependencies between dev tools and roc. Prevents version GLIBC_2.36 not found.";
 
   inputs = {
     # change this path to the path of your roc folder
@@ -24,7 +24,7 @@
             vscodeWithExtensions = pkgs.vscode-with-extensions.override {
               vscodeExtensions = with pkgs.vscode-extensions; [
                 matklad.rust-analyzer
-                eamodio.gitlens
+                # eamodio.gitlens
                 bbenoist.nix
                 vadimcn.vscode-lldb
                 tamasfe.even-better-toml
@@ -33,13 +33,12 @@
                      {
                         name = "roc-lang-support";
                         publisher = "benjamin-thomas";
-                        version = "0.0.3";
+                        version = "0.0.4";
                         # keep this sha for the first run, nix will tell you the correct one to change it to
                         sha256 = "sha256-mabNegZ+XPQ6EIHFk6jz2mAPLHAU6Pm3w0SiFB7IE+s=";
                       }
                     ]
                   ;
-
             };
           in [ vscodeWithExtensions devInputs ];
 

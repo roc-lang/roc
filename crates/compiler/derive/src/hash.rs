@@ -131,7 +131,6 @@ fn hash_tuple(env: &mut Env<'_>, fn_name: Symbol, arity: u32) -> (Variable, Expr
         // TODO: avoid an allocation here by pre-allocating the indices and variables `TupleElems`
         // will be instantiated with.
         let flex_elems: Vec<_> = (0..arity)
-            .into_iter()
             .map(|i| (i as usize, env.subs.fresh_unnamed_flex_var()))
             .collect();
         let elems = TupleElems::insert_into_subs(env.subs, flex_elems);

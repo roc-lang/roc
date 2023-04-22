@@ -1134,7 +1134,7 @@ fn canonicalize_has_clause(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn can_extension_type<'a>(
+fn can_extension_type(
     env: &mut Env,
     pol: CanPolarity,
     scope: &mut Scope,
@@ -1142,7 +1142,7 @@ fn can_extension_type<'a>(
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
-    opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
+    opt_ext: &Option<&Loc<TypeAnnotation>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
 ) -> (Type, ExtImplicitOpenness) {
     fn valid_record_ext_type(typ: &Type) -> bool {
@@ -1451,10 +1451,10 @@ fn can_assigned_fields<'a>(
 
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
-fn can_assigned_tuple_elems<'a>(
+fn can_assigned_tuple_elems(
     env: &mut Env,
     pol: CanPolarity,
-    elems: &&[Loc<TypeAnnotation<'a>>],
+    elems: &&[Loc<TypeAnnotation>],
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,

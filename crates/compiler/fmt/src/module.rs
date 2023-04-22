@@ -86,9 +86,9 @@ impl<V: Formattable> Formattable for Option<V> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         parens: crate::annotation::Parens,
         newlines: Newlines,
         indent: u16,
@@ -111,9 +111,9 @@ impl<'a> Formattable for ProvidesTo<'a> {
             || self.to_keyword.is_multiline()
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: crate::annotation::Parens,
         _newlines: Newlines,
         indent: u16,
@@ -130,9 +130,9 @@ impl<'a> Formattable for PlatformRequires<'a> {
         is_collection_multiline(&self.rigids) || self.signature.is_multiline()
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: crate::annotation::Parens,
         _newlines: Newlines,
         indent: u16,
@@ -146,9 +146,9 @@ impl<'a, V: Formattable> Formattable for Spaces<'a, V> {
         !self.before.is_empty() || !self.after.is_empty() || self.item.is_multiline()
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         parens: crate::annotation::Parens,
         newlines: Newlines,
         indent: u16,
@@ -164,9 +164,9 @@ impl<'a, K: Formattable, V: Formattable> Formattable for KeywordItem<'a, K, V> {
         self.keyword.is_multiline() || self.item.is_multiline()
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -177,7 +177,7 @@ impl<'a, K: Formattable, V: Formattable> Formattable for KeywordItem<'a, K, V> {
     }
 }
 
-pub fn fmt_interface_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a InterfaceHeader<'a>) {
+pub fn fmt_interface_header<'a>(buf: &mut Buf, header: &'a InterfaceHeader<'a>) {
     buf.indent(0);
     buf.push_str("interface");
     let indent = INDENT;
@@ -193,7 +193,7 @@ pub fn fmt_interface_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a Interface
     fmt_imports(buf, header.imports.item, indent);
 }
 
-pub fn fmt_hosted_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a HostedHeader<'a>) {
+pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
     buf.indent(0);
     buf.push_str("hosted");
     let indent = INDENT;
@@ -210,7 +210,7 @@ pub fn fmt_hosted_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a HostedHeader
     fmt_exposes(buf, header.generates_with.item, indent);
 }
 
-pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) {
+pub fn fmt_app_header<'a>(buf: &mut Buf, header: &'a AppHeader<'a>) {
     buf.indent(0);
     buf.push_str("app");
     let indent = INDENT;
@@ -229,7 +229,7 @@ pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) 
     header.provides.format(buf, indent);
 }
 
-pub fn fmt_package_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PackageHeader<'a>) {
+pub fn fmt_package_header<'a>(buf: &mut Buf, header: &'a PackageHeader<'a>) {
     buf.indent(0);
     buf.push_str("package");
     let indent = INDENT;
@@ -243,7 +243,7 @@ pub fn fmt_package_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PackageHead
     fmt_packages(buf, header.packages.item, indent);
 }
 
-pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHeader<'a>) {
+pub fn fmt_platform_header<'a>(buf: &mut Buf, header: &'a PlatformHeader<'a>) {
     buf.indent(0);
     buf.push_str("platform");
     let indent = INDENT;
@@ -262,7 +262,7 @@ pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHe
     fmt_provides(buf, header.provides.item, None, indent);
 }
 
-fn fmt_requires<'a, 'buf>(buf: &mut Buf<'buf>, requires: &PlatformRequires<'a>, indent: u16) {
+fn fmt_requires(buf: &mut Buf, requires: &PlatformRequires, indent: u16) {
     fmt_collection(buf, indent, Braces::Curly, requires.rigids, Newlines::No);
 
     buf.push_str(" {");
@@ -276,9 +276,9 @@ impl<'a> Formattable for TypedIdent<'a> {
         false
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -293,7 +293,7 @@ impl<'a> Formattable for TypedIdent<'a> {
     }
 }
 
-fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName, indent: u16) {
+fn fmt_package_name(buf: &mut Buf, name: PackageName, indent: u16) {
     buf.indent(indent);
     buf.push('"');
     buf.push_str_allow_spaces(name.to_str());
@@ -312,9 +312,9 @@ impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         parens: crate::annotation::Parens,
         newlines: Newlines,
         indent: u16,
@@ -335,16 +335,16 @@ impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
     }
 }
 
-fn fmt_imports<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_imports<'a>(
+    buf: &mut Buf,
     loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     indent: u16,
 ) {
     fmt_collection(buf, indent, Braces::Square, loc_entries, Newlines::No)
 }
 
-fn fmt_provides<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_provides<'a>(
+    buf: &mut Buf,
     loc_exposed_names: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     loc_provided_types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
     indent: u16,
@@ -356,7 +356,7 @@ fn fmt_provides<'a, 'buf>(
     }
 }
 
-fn fmt_to<'buf>(buf: &mut Buf<'buf>, to: To, indent: u16) {
+fn fmt_to(buf: &mut Buf, to: To, indent: u16) {
     match to {
         To::ExistingPackage(name) => {
             buf.push_str(name);
@@ -365,8 +365,8 @@ fn fmt_to<'buf>(buf: &mut Buf<'buf>, to: To, indent: u16) {
     }
 }
 
-fn fmt_exposes<'buf, N: Formattable + Copy + core::fmt::Debug>(
-    buf: &mut Buf<'buf>,
+fn fmt_exposes<N: Formattable + Copy + core::fmt::Debug>(
+    buf: &mut Buf,
     loc_entries: Collection<'_, Loc<Spaced<'_, N>>>,
     indent: u16,
 ) {
@@ -374,17 +374,17 @@ fn fmt_exposes<'buf, N: Formattable + Copy + core::fmt::Debug>(
 }
 
 pub trait FormatName {
-    fn format<'buf>(&self, buf: &mut Buf<'buf>);
+    fn format(&self, buf: &mut Buf);
 }
 
 impl<'a> FormatName for &'a str {
-    fn format<'buf>(&self, buf: &mut Buf<'buf>) {
+    fn format(&self, buf: &mut Buf) {
         buf.push_str(self)
     }
 }
 
 impl<'a> FormatName for ModuleName<'a> {
-    fn format<'buf>(&self, buf: &mut Buf<'buf>) {
+    fn format(&self, buf: &mut Buf) {
         buf.push_str(self.as_str());
     }
 }
@@ -394,9 +394,9 @@ impl<'a> Formattable for ModuleName<'a> {
         false
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
         _indent: u16,
@@ -410,9 +410,9 @@ impl<'a> Formattable for ExposedName<'a> {
         false
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -423,13 +423,13 @@ impl<'a> Formattable for ExposedName<'a> {
 }
 
 impl<'a> FormatName for ExposedName<'a> {
-    fn format<'buf>(&self, buf: &mut Buf<'buf>) {
+    fn format(&self, buf: &mut Buf) {
         buf.push_str(self.as_str());
     }
 }
 
-fn fmt_packages<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_packages<'a>(
+    buf: &mut Buf,
     loc_entries: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
     indent: u16,
 ) {
@@ -441,9 +441,9 @@ impl<'a> Formattable for PackageEntry<'a> {
         false
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -457,9 +457,9 @@ impl<'a> Formattable for ImportsEntry<'a> {
         false
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -467,14 +467,14 @@ impl<'a> Formattable for ImportsEntry<'a> {
         fmt_imports_entry(buf, self, indent);
     }
 }
-fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, indent: u16) {
+fn fmt_packages_entry(buf: &mut Buf, entry: &PackageEntry, indent: u16) {
     buf.push_str(entry.shorthand);
     buf.push(':');
     fmt_default_spaces(buf, entry.spaces_after_shorthand, indent);
     fmt_package_name(buf, entry.package_name.value, indent);
 }
 
-fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, indent: u16) {
+fn fmt_imports_entry(buf: &mut Buf, entry: &ImportsEntry, indent: u16) {
     use roc_parse::header::ImportsEntry::*;
 
     buf.indent(indent);

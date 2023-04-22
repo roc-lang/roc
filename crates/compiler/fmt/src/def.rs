@@ -15,9 +15,9 @@ impl<'a> Formattable for Defs<'a> {
         !self.tags.is_empty()
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -57,9 +57,9 @@ impl<'a> Formattable for TypeDef<'a> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -171,9 +171,9 @@ impl<'a> Formattable for TypeHeader<'a> {
         self.vars.iter().any(|v| v.is_multiline())
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -205,9 +205,9 @@ impl<'a> Formattable for ValueDef<'a> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -314,8 +314,8 @@ fn should_outdent(mut rhs: &TypeAnnotation) -> bool {
     }
 }
 
-fn fmt_dbg_in_def<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_dbg_in_def<'a>(
+    buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     is_multiline: bool,
     indent: u16,
@@ -335,8 +335,8 @@ fn fmt_dbg_in_def<'a, 'buf>(
     condition.format(buf, return_indent);
 }
 
-fn fmt_expect<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_expect<'a>(
+    buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     is_multiline: bool,
     indent: u16,
@@ -356,8 +356,8 @@ fn fmt_expect<'a, 'buf>(
     condition.format(buf, return_indent);
 }
 
-fn fmt_expect_fx<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_expect_fx<'a>(
+    buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     is_multiline: bool,
     indent: u16,
@@ -377,24 +377,24 @@ fn fmt_expect_fx<'a, 'buf>(
     condition.format(buf, return_indent);
 }
 
-pub fn fmt_value_def<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    def: &roc_parse::ast::ValueDef<'a>,
+pub fn fmt_value_def(
+    buf: &mut Buf,
+    def: &roc_parse::ast::ValueDef,
     indent: u16,
 ) {
     def.format(buf, indent);
 }
 
-pub fn fmt_type_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &roc_parse::ast::TypeDef<'a>, indent: u16) {
+pub fn fmt_type_def(buf: &mut Buf, def: &roc_parse::ast::TypeDef, indent: u16) {
     def.format(buf, indent);
 }
 
-pub fn fmt_defs<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
+pub fn fmt_defs(buf: &mut Buf, defs: &Defs, indent: u16) {
     defs.format(buf, indent);
 }
 
-pub fn fmt_body<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+pub fn fmt_body<'a>(
+    buf: &mut Buf,
     pattern: &'a Pattern<'a>,
     body: &'a Expr<'a>,
     indent: u16,
@@ -462,9 +462,9 @@ impl<'a> Formattable for AbilityMember<'a> {
         self.name.value.is_multiline() || self.typ.is_multiline()
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
