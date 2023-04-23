@@ -1173,6 +1173,21 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn function_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: X86_64GeneralReg,
+    ) {
+        lea_reg64(buf, dst);
+
+        relocs.push(Relocation::LinkedFunction {
+            offset: buf.len() as u64 - 4,
+            name: fn_name,
+        });
+    }
+
+    #[inline(always)]
     fn imul_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -2398,6 +2413,24 @@ fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i64) {
     }
 }
 
+/// `LEA r64, m` -> Store effective address for m in register r64.
+#[inline(always)]
+fn lea_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
+    let rex = add_opcode_extension(dst, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = dst as u8 % 8;
+
+    buf.extend([
+        rex,
+        0x8d,
+        0b00_000_101 | (dst_mod << 3),
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+    ])
+}
+
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
 /// This will not generate anything if dst and src are the same.
 #[inline(always)]
@@ -3410,6 +3443,15 @@ mod tests {
             |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
             [TEST_I32 as i64]
+        );
+    }
+
+    #[test]
+    fn test_lea_reg64() {
+        disassembler_test!(
+            lea_reg64,
+            |reg| format!("lea {}, [rip]", reg),
+            ALL_GENERAL_REGS
         );
     }
 
