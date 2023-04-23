@@ -1120,6 +1120,10 @@ trait Backend<'a> {
 
                 self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
+            LowLevel::StrIsEmpty => {
+                let intrinsic = bitcode::STR_IS_EMPTY.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
             x => todo!("low level, {:?}", x),
         }
     }
