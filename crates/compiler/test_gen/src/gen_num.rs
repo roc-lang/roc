@@ -3113,7 +3113,7 @@ fn when_on_i16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_to_str() {
     use roc_std::RocStr;
 

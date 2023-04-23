@@ -1109,6 +1109,17 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::NumToStr => {
+                let arg_layout = arg_layouts[0];
+                let intrinsic = match self.interner().get(arg_layout) {
+                    Layout::Builtin(Builtin::Int(width)) => &bitcode::STR_FROM_INT[width],
+                    Layout::Builtin(Builtin::Float(width)) => &bitcode::STR_FROM_FLOAT[width],
+                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_TO_STR,
+                    x => internal_error!("NumToStr is not defined for {:?}", x),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
             x => todo!("low level, {:?}", x),
         }
     }
