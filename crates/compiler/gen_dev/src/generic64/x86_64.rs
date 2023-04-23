@@ -2389,6 +2389,7 @@ fn lea_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     let rex = add_reg_extension(dst, rex);
     let dst_mod = dst as u8 % 8;
 
+    #[allow(clippy::unusual_byte_groupings)]
     buf.extend([
         rex,
         0x8d,
@@ -3781,8 +3782,8 @@ mod tests {
             cmp_reg64_reg64,
             |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
                 "cmp {}, {}",
-                dbg!(dst.low_16bits_string()),
-                dbg!(src.low_16bits_string())
+                dst.low_16bits_string(),
+                src.low_16bits_string()
             ),
             [RegisterWidth::W16],
             ALL_GENERAL_REGS,
@@ -3793,8 +3794,8 @@ mod tests {
             cmp_reg64_reg64,
             |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
                 "cmp {}, {}",
-                dbg!(dst.low_32bits_string()),
-                dbg!(src.low_32bits_string())
+                dst.low_32bits_string(),
+                src.low_32bits_string()
             ),
             [RegisterWidth::W32],
             ALL_GENERAL_REGS,

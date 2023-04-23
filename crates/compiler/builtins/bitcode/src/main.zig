@@ -134,7 +134,6 @@ comptime {
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
     exportStrFn(str.isEmpty, "is_empty");
-
     exportStrFn(str.getCapacity, "capacity");
     exportStrFn(str.startsWith, "starts_with");
     exportStrFn(str.startsWithScalar, "starts_with_scalar");

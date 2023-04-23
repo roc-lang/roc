@@ -6,7 +6,6 @@
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
 use bumpalo::{collections::Vec, Bump};
-use generic64::CompareOperation;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
@@ -1203,8 +1202,8 @@ trait Backend<'a> {
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             Symbol::BOOL_TRUE => {
-                const LITERAL: &'static Literal<'static> = &Literal::Bool(true);
-                const BOOL_LAYOUT: &'static InLayout<'static> = &Layout::BOOL;
+                const LITERAL: &Literal<'static> = &Literal::Bool(true);
+                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL;
 
                 if self.env().lazy_literals {
                     self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));
@@ -1213,8 +1212,8 @@ trait Backend<'a> {
                 }
             }
             Symbol::BOOL_FALSE => {
-                const LITERAL: &'static Literal<'static> = &Literal::Bool(false);
-                const BOOL_LAYOUT: &'static InLayout<'static> = &Layout::BOOL;
+                const LITERAL: &Literal<'static> = &Literal::Bool(false);
+                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL;
 
                 if self.env().lazy_literals {
                     self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));

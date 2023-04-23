@@ -677,7 +677,6 @@ impl<
             }
         } else {
             // This is a single element struct. Just copy the single field to the stack.
-            dbg!(&fields);
             debug_assert_eq!(fields.len(), 1);
             self.copy_symbol_to_stack_offset(
                 layout_interner,

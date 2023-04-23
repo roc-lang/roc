@@ -1605,12 +1605,10 @@ impl<
 
                 self.free_symbol(&Symbol::DEV_TMP4);
             }
-            HigherOrder::ListMap2 { xs, ys } => todo!(),
-            HigherOrder::ListMap3 { xs, ys, zs } => todo!(),
-            HigherOrder::ListMap4 { xs, ys, zs, ws } => {
-                todo!()
-            }
-            HigherOrder::ListSortWith { xs } => todo!(),
+            HigherOrder::ListMap2 { .. } => todo!(),
+            HigherOrder::ListMap3 { .. } => todo!(),
+            HigherOrder::ListMap4 { .. } => todo!(),
+            HigherOrder::ListSortWith { .. } => todo!(),
         }
     }
 
@@ -2726,8 +2724,8 @@ impl<
     ) {
         let buf = &mut self.buf;
 
-        let dst_reg = self.storage_manager.claim_general_reg(buf, &dst);
-        let src_reg = self.storage_manager.load_to_general_reg(buf, &src);
+        let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+        let src_reg = self.storage_manager.load_to_general_reg(buf, src);
 
         if source.stack_size() == target.stack_size() {
             match source.stack_size() {

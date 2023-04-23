@@ -496,8 +496,8 @@ all = \list, predicate ->
             Break {}
 
     when List.iterate list {} looper is
-        Continue {} -> Bool.true 
-        Break {} -> "" != "" 
+        Continue {} -> Bool.true
+        Break {} -> Bool.false
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.true`.
