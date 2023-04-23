@@ -140,6 +140,10 @@ FieldNameMapping : [
     Custom (Str -> Str), # provide a custom formatting
 ]
 
+# TODO encode as JSON numbers as base 10 decimal digits
+# e.g. the REPL `Num.toStr 12e42f64` gives
+# "12000000000000000000000000000000000000000000" : Str
+# which should be encoded as "12e42" : Str
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8
 
@@ -202,27 +206,68 @@ encodeBool = \b ->
         else
             List.concat bytes (Str.toUtf8 "false")
 
+# Test encode boolean
+expect
+    input = [Bool.true, Bool.false]
+    actual = Encode.toBytes input json
+    expected = Str.toUtf8 "[true,false]"
+
+    actual == expected
+
 encodeString = \str ->
     Encode.custom \bytes, @Json {} ->
-        bytes
-        |> List.concat ['"']
-        |> List.concat (encodeJsonEscapes str)
-        |> List.concat ['"']
+        List.concat bytes (encodeStrBytes str)
 
-encodeJsonEscapes : Str -> List U8
-encodeJsonEscapes = \str ->
+# TODO add support for unicode escapes (including 2,3,4 byte code points)
+# these should be encoded using a 12-byte sequence encoding the UTF-16 surrogate
+# pair. For example a string containing only G clef character U+1D11E is
+# represented as "\\uD834\\uDD1E" (note "\\" here is a single reverse solidus)
+encodeStrBytes = \str ->
     bytes = Str.toUtf8 str
 
-    # Reserve capacity for escaped bytes to reduce allocations
-    initial =
-        bytes
-        |> List.len
-        |> Num.mul 120
-        |> Num.divCeil 100
-        |> List.withCapacity
+    initialState = { bytePos: 0, status: NoEscapesFound }
 
-    List.walk bytes initial \encodedBytes, byte ->
-        List.concat encodedBytes (escapedByteToJson byte)
+    firstPassState =
+        List.walkUntil bytes initialState \{ bytePos, status }, b ->
+            when b is
+                0x22 -> Break { bytePos, status: FoundEscape } # U+0022 Quotation mark
+                0x5c -> Break { bytePos, status: FoundEscape } # U+005c Reverse solidus
+                0x2f -> Break { bytePos, status: FoundEscape } # U+002f Solidus
+                0x08 -> Break { bytePos, status: FoundEscape } # U+0008 Backspace
+                0x0c -> Break { bytePos, status: FoundEscape } # U+000c Form feed
+                0x0a -> Break { bytePos, status: FoundEscape } # U+000a Line feed
+                0x0d -> Break { bytePos, status: FoundEscape } # U+000d Carriage return
+                0x09 -> Break { bytePos, status: FoundEscape } # U+0009 Tab
+                _ -> Continue { bytePos: bytePos + 1, status }
+
+    when firstPassState.status is
+        NoEscapesFound ->
+            (List.len bytes)
+            + 2
+            |> List.withCapacity
+            |> List.concat ['"']
+            |> List.concat bytes
+            |> List.concat ['"']
+
+        FoundEscape ->
+            { before: bytesBeforeEscape, others: bytesWithEscapes } =
+                List.split bytes firstPassState.bytePos
+
+            # Reserve List with 120% capacity for escaped bytes to reduce
+            # allocations, include starting quote, and bytes up to first escape
+            initial =
+                List.len bytes
+                |> Num.mul 120
+                |> Num.divCeil 100
+                |> List.withCapacity
+                |> List.concat ['"']
+                |> List.concat bytesBeforeEscape
+
+            # Walk the remaining bytes and include escape '\' as required
+            # add closing quote
+            List.walk bytesWithEscapes initial \encodedBytes, byte ->
+                List.concat encodedBytes (escapedByteToJson byte)
+            |> List.concat ['"']
 
 # Prepend an "\" escape byte
 escapedByteToJson : U8 -> List U8
@@ -242,19 +287,34 @@ expect escapedByteToJson '\n' == ['\\', 'n']
 expect escapedByteToJson '\\' == ['\\', '\\']
 expect escapedByteToJson '"' == ['\\', '"']
 
-# Test json string encoding with escapes
-# e.g. "\r" encodes to "\\r" or "\\u000D" as Carriage Return is U+000D
+# Test encode small string
 expect
-    input = "a\r\nbc\\\"xz"
+    input = "G'day"
     actual = Encode.toBytes input json
-    expected = Str.toUtf8 "\"a\\r\\nbc\\\\\\\"xz\""
+    expected = Str.toUtf8 "\"G'day\""
+
+    actual == expected
+
+# Test encode large string
+expect
+    input = "the quick brown fox jumps over the lazy dog"
+    actual = Encode.toBytes input json
+    expected = Str.toUtf8 "\"the quick brown fox jumps over the lazy dog\""
+
+    actual == expected
+
+# Test encode with escapes e.g. "\r" encodes to "\\r"
+expect
+    input = "the quick brown fox jumps over the lazy doga\r\nbc\\\"xz"
+    actual = Encode.toBytes input json
+    expected = Str.toUtf8 "\"the quick brown fox jumps over the lazy doga\\r\\nbc\\\\\\\"xz\""
 
     actual == expected
 
 encodeList = \lst, encodeElem ->
-    Encode.custom \bytes, @Json {} ->
+    Encode.custom \bytes, @Json { fieldNameMapping } ->
         writeList = \{ buffer, elemsLeft }, elem ->
-            bufferWithElem = appendWith buffer (encodeElem elem) json
+            bufferWithElem = appendWith buffer (encodeElem elem) (@Json { fieldNameMapping })
             bufferWithSuffix =
                 if elemsLeft > 1 then
                     List.append bufferWithElem (Num.toU8 ',')
@@ -267,6 +327,15 @@ encodeList = \lst, encodeElem ->
         { buffer: withList } = List.walk lst { buffer: head, elemsLeft: List.len lst } writeList
 
         List.append withList (Num.toU8 ']')
+
+# Test encode list of floats
+expect
+    input : List F64
+    input = [-1, 0.00001, 1e12, 2.0e-2, 0.0003, 43]
+    actual = Encode.toBytes input json
+    expected = Str.toUtf8 "[-1,0.00001,1000000000000,0.02,0.0003,43]"
+
+    actual == expected
 
 encodeRecord = \fields ->
     Encode.custom \bytes, @Json { fieldNameMapping } ->
@@ -336,10 +405,10 @@ toYellingCase = \str ->
     |> Str.joinWith ""
 
 encodeTuple = \elems ->
-    Encode.custom \bytes, @Json {} ->
+    Encode.custom \bytes, @Json { fieldNameMapping } ->
         writeTuple = \{ buffer, elemsLeft }, elemEncoder ->
             bufferWithElem =
-                appendWith buffer elemEncoder json
+                appendWith buffer elemEncoder (@Json { fieldNameMapping })
 
             bufferWithSuffix =
                 if elemsLeft > 1 then
@@ -354,11 +423,19 @@ encodeTuple = \elems ->
 
         List.append bytesWithRecord (Num.toU8 ']')
 
+# Test encode of tuple
+expect
+    input = ("The Answer is", 42)
+    actual = Encode.toBytes input json
+    expected = Str.toUtf8 "[\"The Answer is\",42]"
+
+    actual == expected
+
 encodeTag = \name, payload ->
-    Encode.custom \bytes, @Json {} ->
+    Encode.custom \bytes, @Json { fieldNameMapping } ->
         # Idea: encode `A v1 v2` as `{"A": [v1, v2]}`
         writePayload = \{ buffer, itemsLeft }, encoder ->
-            bufferWithValue = appendWith buffer encoder json
+            bufferWithValue = appendWith buffer encoder (@Json { fieldNameMapping })
             bufferWithSuffix =
                 if itemsLeft > 1 then
                     List.append bufferWithValue (Num.toU8 ',')
@@ -380,6 +457,15 @@ encodeTag = \name, payload ->
         List.append bytesWithPayload (Num.toU8 ']')
         |> List.append (Num.toU8 '}')
 
+# Test encode of tag
+expect
+    input = TheAnswer "is" 42
+    encoder = jsonWithOptions { fieldNameMapping: KebabCase }
+    actual = Encode.toBytes input encoder
+    expected = Str.toUtf8 "{\"TheAnswer\":[\"is\",42]}"
+
+    actual == expected
+
 decodeU8 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
 
@@ -390,6 +476,11 @@ decodeU8 = Decode.custom \bytes, @Json {} ->
         |> Result.mapErr \_ -> TooShort
 
     { result, rest }
+
+# Test decode of U8
+expect
+    actual = Str.toUtf8 "255" |> Decode.fromBytes json
+    actual == Ok 255u8
 
 decodeU16 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
@@ -402,6 +493,11 @@ decodeU16 = Decode.custom \bytes, @Json {} ->
 
     { result, rest }
 
+# Test decode of U16
+expect
+    actual = Str.toUtf8 "65535" |> Decode.fromBytes json
+    actual == Ok 65_535u16
+
 decodeU32 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
 
@@ -412,6 +508,11 @@ decodeU32 = Decode.custom \bytes, @Json {} ->
         |> Result.mapErr \_ -> TooShort
 
     { result, rest }
+
+# Test decode of U32
+expect
+    actual = Str.toUtf8 "4000000000" |> Decode.fromBytes json
+    actual == Ok 4_000_000_000u32
 
 decodeU64 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
@@ -424,6 +525,11 @@ decodeU64 = Decode.custom \bytes, @Json {} ->
 
     { result, rest }
 
+# Test decode of U64
+expect
+    actual = Str.toUtf8 "18446744073709551614" |> Decode.fromBytes json
+    actual == Ok 18_446_744_073_709_551_614u64
+
 decodeU128 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
 
@@ -434,6 +540,17 @@ decodeU128 = Decode.custom \bytes, @Json {} ->
         |> Result.mapErr \_ -> TooShort
 
     { result, rest }
+
+# Test decode of U128
+expect
+    actual = Str.toUtf8 "1234567" |> Decode.fromBytesPartial json
+    actual.result == Ok 1234567u128
+
+# TODO should we support decoding bigints, note that valid json is only a
+# double precision float-64
+# expect
+#     actual = Str.toUtf8 "340282366920938463463374607431768211455" |> Decode.fromBytesPartial json
+#     actual.result == Ok 340_282_366_920_938_463_463_374_607_431_768_211_455u128
 
 decodeI8 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
@@ -446,6 +563,11 @@ decodeI8 = Decode.custom \bytes, @Json {} ->
 
     { result, rest }
 
+# Test decode of I8
+expect
+    actual = Str.toUtf8 "-125" |> Decode.fromBytesPartial json
+    actual.result == Ok -125i8
+
 decodeI16 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
 
@@ -456,6 +578,11 @@ decodeI16 = Decode.custom \bytes, @Json {} ->
         |> Result.mapErr \_ -> TooShort
 
     { result, rest }
+
+# Test decode of I16
+expect
+    actual = Str.toUtf8 "-32768" |> Decode.fromBytesPartial json
+    actual.result == Ok -32_768i16
 
 decodeI32 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
@@ -468,6 +595,11 @@ decodeI32 = Decode.custom \bytes, @Json {} ->
 
     { result, rest }
 
+# Test decode of I32
+expect
+    actual = Str.toUtf8 "-2147483648" |> Decode.fromBytesPartial json
+    actual.result == Ok -2_147_483_648i32
+
 decodeI64 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
 
@@ -478,6 +610,11 @@ decodeI64 = Decode.custom \bytes, @Json {} ->
         |> Result.mapErr \_ -> TooShort
 
     { result, rest }
+
+# Test decode of I64
+expect
+    actual = Str.toUtf8 "-9223372036854775808" |> Decode.fromBytesPartial json
+    actual.result == Ok -9_223_372_036_854_775_808i64
 
 decodeI128 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
@@ -490,6 +627,11 @@ decodeI128 = Decode.custom \bytes, @Json {} ->
 
     { result, rest }
 
+# Test decode of I128
+# expect
+#     actual = Str.toUtf8 "-170141183460469231731687303715884105728" |> Decode.fromBytesPartial json
+#     actual.result == Ok -170_141_183_460_469_231_731_687_303_715_884_105_728i128
+
 decodeF32 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
 
@@ -500,6 +642,14 @@ decodeF32 = Decode.custom \bytes, @Json {} ->
         |> Result.mapErr \_ -> TooShort
 
     { result, rest }
+
+# Test decode of F32
+expect
+    actual : DecodeResult F32
+    actual = Str.toUtf8 "12.34e-5" |> Decode.fromBytesPartial json
+    numStr = actual.result |> Result.map Num.toStr
+
+    Result.withDefault numStr "" == "0.00012339999375399202"
 
 decodeF64 = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
@@ -512,6 +662,14 @@ decodeF64 = Decode.custom \bytes, @Json {} ->
 
     { result, rest }
 
+# Test decode of F64
+expect
+    actual : DecodeResult F64
+    actual = Str.toUtf8 "12.34e-5" |> Decode.fromBytesPartial json
+    numStr = actual.result |> Result.map Num.toStr
+
+    Result.withDefault numStr "" == "0.0001234"
+
 decodeDec = Decode.custom \bytes, @Json {} ->
     { taken, rest } = takeJsonNumber bytes
 
@@ -522,6 +680,13 @@ decodeDec = Decode.custom \bytes, @Json {} ->
         |> Result.mapErr \_ -> TooShort
 
     { result, rest }
+
+# Test decode of Dec
+expect
+    actual : DecodeResult Dec
+    actual = Str.toUtf8 "12.0034" |> Decode.fromBytesPartial json
+
+    actual.result == Ok 12.0034dec
 
 decodeBool = Decode.custom \bytes, @Json {} ->
     when bytes is
@@ -570,6 +735,13 @@ decodeTuple = \initialState, stepElem, finalizer -> Decode.custom \initialBytes,
         when finalizer endStateResult is
             Ok val -> { result: Ok val, rest: afterTupleBytes }
             Err e -> { result: Err e, rest: afterTupleBytes }
+
+# Test decode of tuple
+expect
+    input = Str.toUtf8 "[\"The Answer is\",42]"
+    actual = Decode.fromBytesPartial input json
+
+    actual.result == Ok ("The Answer is", 42)
 
 parseExactChar : List U8, U8 -> DecodeResult {}
 parseExactChar = \bytes, char ->
@@ -669,6 +841,8 @@ NumberState : [
     Finish Nat,
 ]
 
+# TODO confirm if we would like to be able to decode
+# "340282366920938463463374607431768211455" which is MAX U128 and 39 bytes
 maxBytes : Nat
 maxBytes = 21 # Max bytes in a double precision float
 
@@ -811,25 +985,26 @@ expect
 # Note that decodeStr does not handle leading whitespace, any whitespace must be
 # handled in json list or record decodin.
 decodeString = Decode.custom \bytes, @Json {} ->
-    when bytes is 
+    when bytes is
         ['n', 'u', 'l', 'l', ..] ->
             { result: Ok "null", rest: List.drop bytes 4 }
+
         _ ->
             { taken: strBytes, rest } = takeJsonString bytes
 
             if List.isEmpty strBytes then
                 { result: Err TooShort, rest: bytes }
             else
-                # Remove starting and ending quotation marks, replace unicode 
-                # escpapes with Roc equivalent, and try to parse RocStr from 
-                # bytes 
+                # Remove starting and ending quotation marks, replace unicode
+                # escpapes with Roc equivalent, and try to parse RocStr from
+                # bytes
                 result =
                     strBytes
                     |> List.sublist {
-                            start: 1, 
-                            len: Num.subSaturated (List.len strBytes) 2
-                        } 
-                    |> \bytesWithoutQuotationMarks -> 
+                        start: 1,
+                        len: Num.subSaturated (List.len strBytes) 2,
+                    }
+                    |> \bytesWithoutQuotationMarks ->
                         replaceEscapedChars { inBytes: bytesWithoutQuotationMarks, outBytes: [] }
                     |> .outBytes
                     |> Str.fromUtf8
