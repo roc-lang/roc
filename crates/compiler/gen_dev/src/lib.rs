@@ -329,7 +329,7 @@ trait Backend<'a> {
                                 arg_layouts,
                                 ret_layout,
                             );
-                        } else if sym.is_builtin() {
+                        } else if func_sym.name().is_builtin() {
                             // These builtins can be built through `build_fn_call` as well, but the
                             // implementation in `build_builtin` inlines some of the symbols.
                             return self.build_builtin(
@@ -1141,16 +1141,24 @@ trait Backend<'a> {
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             Symbol::BOOL_TRUE => {
-                let bool_layout = Layout::BOOL;
-                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
-                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
-                self.free_symbol(&Symbol::DEV_TMP)
+                const LITERAL: &'static Literal<'static> = &Literal::Bool(true);
+                const BOOL_LAYOUT: &'static InLayout<'static> = &Layout::BOOL;
+
+                if self.env().lazy_literals {
+                    self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));
+                } else {
+                    self.load_literal(sym, BOOL_LAYOUT, LITERAL);
+                }
             }
             Symbol::BOOL_FALSE => {
-                let bool_layout = Layout::BOOL;
-                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
-                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
-                self.free_symbol(&Symbol::DEV_TMP)
+                const LITERAL: &'static Literal<'static> = &Literal::Bool(false);
+                const BOOL_LAYOUT: &'static InLayout<'static> = &Layout::BOOL;
+
+                if self.env().lazy_literals {
+                    self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));
+                } else {
+                    self.load_literal(sym, BOOL_LAYOUT, LITERAL);
+                }
             }
             Symbol::STR_IS_VALID_SCALAR => {
                 // just call the function

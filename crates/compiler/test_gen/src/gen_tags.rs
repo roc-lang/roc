@@ -907,7 +907,9 @@ fn alignment_in_multi_tag_pattern_match() {
                         { bool, int }
 
                     Empty ->
-                        { bool: Bool.false, int: 0 }
+                        # dev backend codegen bug means we cannot use this inline
+                        false = Bool.false
+                        { bool: false, int: 0 }
                 #"
         ),
         (32i64, true),
@@ -924,7 +926,8 @@ fn alignment_in_multi_tag_pattern_match() {
                     Three bool color int ->
                         { bool, color, int }
                     Empty ->
-                        { bool: Bool.false, color: Red, int: 0 }
+                        false = Bool.false
+                        { bool: false, color: Red, int: 0 }
                 #"
         ),
         (32i64, true, 2u8),
