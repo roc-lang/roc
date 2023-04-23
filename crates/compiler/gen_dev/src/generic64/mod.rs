@@ -1238,6 +1238,9 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::eq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
+            Layout::F32 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F32)),
+            Layout::F64 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F64)),
+            Layout::DEC => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::DEC)),
             Layout::STR => {
                 // use a zig call
                 self.build_fn_call(
@@ -1258,7 +1261,33 @@ impl<
                 let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
                 ASM::eq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
             }
-            x => todo!("NumEq: layout, {:?}", x),
+            other => {
+                let ident_ids = self
+                    .interns
+                    .all_ident_ids
+                    .get_mut(&self.env.module_id)
+                    .unwrap();
+
+                // generate a proc
+
+                let (eq_symbol, eq_linker_data) = self.helper_proc_gen.gen_refcount_proc(
+                    ident_ids,
+                    self.layout_interner,
+                    other,
+                    HelperOp::Eq,
+                );
+
+                let fn_name = self.function_symbol_to_string(
+                    eq_symbol,
+                    [other, other].into_iter(),
+                    None,
+                    Layout::U8,
+                );
+
+                self.helper_proc_symbols.extend(eq_linker_data);
+
+                self.build_fn_call(dst, fn_name, &[*src1, *src2], &[other, other], &Layout::U8)
+            }
         }
     }
 
