@@ -503,6 +503,22 @@ trait Backend<'a> {
                 );
                 self.build_num_add(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumAddWrap => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumAdd: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumAdd: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumAdd: expected to have the same argument and return layout"
+                );
+                self.build_num_add(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumAddChecked => {
                 self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
             }
