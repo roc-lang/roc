@@ -333,12 +333,6 @@ trait Backend<'a> {
                         ret_layout,
                         ..
                     } => {
-                        dbg!(
-                            func_sym,
-                            func_sym.name() == Symbol::BOOL_TRUE,
-                            func_sym.name().is_builtin()
-                        );
-
                         if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
                             LowLevelWrapperType::from_symbol(func_sym.name())
                         {
