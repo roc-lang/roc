@@ -1141,6 +1141,19 @@ trait Backend<'a> {
                 let intrinsic = bitcode::STR_IS_EMPTY.to_string();
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
             }
+            LowLevel::NumIntCast => {
+                let source_width = match self.interner().get(arg_layouts[0]) {
+                    Layout::Builtin(Builtin::Int(width)) => width,
+                    _ => unreachable!(),
+                };
+
+                let target_width = match self.interner().get(*ret_layout) {
+                    Layout::Builtin(Builtin::Int(width)) => width,
+                    _ => unreachable!(),
+                };
+
+                self.build_num_int_cast(sym, &args[0], source_width, target_width)
+            }
             x => todo!("low level, {:?}", x),
         }
     }
@@ -1253,6 +1266,15 @@ trait Backend<'a> {
 
     /// Move a returned value into `dst`
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
+
+    /// build_num_abs stores the absolute value of src into dst.
+    fn build_num_int_cast(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        source: IntWidth,
+        target: IntWidth,
+    );
 
     /// build_num_abs stores the absolute value of src into dst.
     fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>);

@@ -2716,6 +2716,28 @@ impl<
             FloatWidth::F64 => ASM::sqrt_freg64_freg64(buf, dst_reg, src_reg),
         }
     }
+
+    fn build_num_int_cast(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        source: IntWidth,
+        target: IntWidth,
+    ) {
+        let buf = &mut self.buf;
+
+        let dst_reg = self.storage_manager.claim_general_reg(buf, &dst);
+        let src_reg = self.storage_manager.load_to_general_reg(buf, &src);
+
+        if source.stack_size() == target.stack_size() {
+            match source.stack_size() {
+                8 => ASM::mov_reg64_reg64(buf, dst_reg, src_reg),
+                _ => todo!("int cast from {source:?} to {target:?}"),
+            }
+        } else {
+            todo!("int cast from {source:?} to {target:?}");
+        }
+    }
 }
 
 /// This impl block is for ir related instructions that need backend specific information.
