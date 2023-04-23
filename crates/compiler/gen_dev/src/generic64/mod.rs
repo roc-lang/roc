@@ -768,11 +768,6 @@ impl<
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
-        if let Some(SelfRecursive::SelfRecursive(id)) = self.is_self_recursive {
-            if &fn_name == self.proc_name.as_ref().unwrap() && self.join_map.contains_key(&id) {
-                return self.build_jump(&id, args, arg_layouts, ret_layout);
-            }
-        }
         // Save used caller saved regs.
         self.storage_manager
             .push_used_caller_saved_regs_to_stack(&mut self.buf);
