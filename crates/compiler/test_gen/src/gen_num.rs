@@ -4055,3 +4055,27 @@ fn num_abs_large_bits_min_overflow() {
 fn num_abs_float_overflow() {
     assert_evals_to!("Num.absDiff Num.maxF64 Num.minF64", f64::INFINITY, f64);
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn bool_in_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            loop : [ Continue {}, Break {} ]
+            loop = Continue {}
+
+            all = \{} -> 
+                when loop is
+                    Continue {} -> Bool.true 
+                    Break {} -> Bool.false 
+
+            main = all {}
+            "#
+        ),
+        true,
+        bool
+    );
+}

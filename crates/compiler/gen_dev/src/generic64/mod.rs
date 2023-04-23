@@ -7,13 +7,15 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::code_gen_help::CodeGenHelp;
+use roc_mono::code_gen_help::{CallerProc, CodeGenHelp, HelperOp};
 use roc_mono::ir::{
-    BranchInfo, JoinPointId, ListLiteralElement, Literal, Param, ProcLayout, SelfRecursive, Stmt,
+    BranchInfo, HigherOrderLowLevel, JoinPointId, ListLiteralElement, Literal, Param, ProcLayout,
+    SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
 };
+use roc_mono::low_level::HigherOrder;
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
@@ -496,6 +498,7 @@ pub struct Backend64Bit<
     interns: &'r mut Interns,
     helper_proc_gen: CodeGenHelp<'a>,
     helper_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
+    caller_procs: Vec<'a, CallerProc<'a>>,
     buf: Vec<'a, u8>,
     relocs: Vec<'a, Relocation>,
     proc_name: Option<String>,
@@ -533,6 +536,7 @@ pub fn new_backend_64bit<
         layout_interner,
         helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
         helper_proc_symbols: bumpalo::vec![in env.arena],
+        caller_procs: bumpalo::vec![in env.arena],
         proc_name: None,
         is_self_recursive: None,
         buf: bumpalo::vec![in env.arena],
@@ -574,6 +578,9 @@ impl<
     fn interns(&self) -> &Interns {
         self.interns
     }
+    fn interns_mut(&mut self) -> &mut Interns {
+        self.interns
+    }
     fn interner(&self) -> &STLayoutInterner<'a> {
         self.layout_interner
     }
@@ -584,12 +591,14 @@ impl<
         &mut STLayoutInterner<'a>,
         &mut Interns,
         &mut CodeGenHelp<'a>,
+        &mut Vec<'a, CallerProc<'a>>,
     ) {
         (
             self.env.module_id,
             self.layout_interner,
             self.interns,
             &mut self.helper_proc_gen,
+            &mut self.caller_procs,
         )
     }
     fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a> {
@@ -1576,6 +1585,174 @@ impl<
                 );
             }
             x => todo!("NumGte: layout, {:?}", x),
+        }
+    }
+
+    fn build_higher_order_lowlevel(
+        &mut self,
+        dst: &Symbol,
+        higher_order: &HigherOrderLowLevel<'a>,
+        ret_layout: InLayout<'a>,
+    ) {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (inc_n_data_symbol, inc_n_data_linker_data) = self.helper_proc_gen.gen_refcount_proc(
+            ident_ids,
+            self.layout_interner,
+            Layout::UNIT,
+            HelperOp::Inc,
+        );
+
+        let caller_proc = CallerProc::new(
+            self.env.arena,
+            self.env.module_id,
+            ident_ids,
+            self.layout_interner,
+            &higher_order.passed_function,
+            higher_order.closure_env_layout,
+        );
+
+        match higher_order.op {
+            HigherOrder::ListMap { xs } => {
+                let old_element_layout = higher_order.passed_function.argument_layouts[0];
+                let new_element_layout = higher_order.passed_function.return_layout;
+
+                let input_list_layout = Layout::Builtin(Builtin::List(old_element_layout));
+                let input_list_in_layout = self.layout_interner.insert(input_list_layout);
+
+                let caller = self.debug_symbol("caller");
+                let data = self.debug_symbol("data");
+                let alignment = self.debug_symbol("alignment");
+                let old_element_width = self.debug_symbol("old_element_width");
+                let new_element_width = self.debug_symbol("new_element_width");
+
+                self.load_layout_alignment(new_element_layout, alignment);
+
+                self.load_layout_stack_size(old_element_layout, old_element_width);
+                self.load_layout_stack_size(new_element_layout, new_element_width);
+
+                self.helper_proc_symbols.extend(inc_n_data_linker_data);
+                self.helper_proc_symbols
+                    .extend([(caller_proc.proc_symbol, caller_proc.proc_layout)]);
+
+                let inc_n_data_string = self.function_symbol_to_string(
+                    inc_n_data_symbol,
+                    std::iter::empty(),
+                    None,
+                    Layout::UNIT,
+                );
+
+                let caller_string = self.function_symbol_to_string(
+                    caller_proc.proc_symbol,
+                    std::iter::empty(),
+                    None,
+                    Layout::UNIT,
+                );
+
+                self.caller_procs.push(caller_proc);
+
+                let inc_n_data = Symbol::DEV_TMP5;
+                self.build_fn_pointer(&inc_n_data, inc_n_data_string);
+
+                self.build_fn_pointer(&caller, caller_string);
+
+                if let Some(_closure_data_layout) = higher_order.closure_env_layout {
+                    let data_symbol = higher_order.passed_function.captured_environment;
+                    self.storage_manager
+                        .ensure_symbol_on_stack(&mut self.buf, &data_symbol);
+                    let (new_elem_offset, _) =
+                        self.storage_manager.stack_offset_and_size(&data_symbol);
+
+                    // Load address of output element into register.
+                    let reg = self.storage_manager.claim_general_reg(&mut self.buf, &data);
+                    ASM::add_reg64_reg64_imm32(
+                        &mut self.buf,
+                        reg,
+                        CC::BASE_PTR_REG,
+                        new_elem_offset,
+                    );
+                } else {
+                    // use a null pointer
+                    self.load_literal(&data, &Layout::U64, &Literal::Int(0u128.to_be_bytes()));
+                }
+
+                self.load_literal(
+                    &Symbol::DEV_TMP3,
+                    &Layout::BOOL,
+                    &Literal::Bool(higher_order.passed_function.owns_captured_environment),
+                );
+
+                //    list: RocList,
+                //    caller: Caller1,
+                //    data: Opaque,
+                //    inc_n_data: IncN,
+                //    data_is_owned: bool,
+                //    alignment: u32,
+                //    old_element_width: usize,
+                //    new_element_width: usize,
+
+                let arguments = [
+                    xs,
+                    caller,
+                    data,
+                    inc_n_data,
+                    Symbol::DEV_TMP3,
+                    alignment,
+                    old_element_width,
+                    new_element_width,
+                ];
+
+                let ptr = Layout::U64;
+                let usize_ = Layout::U64;
+
+                let layouts = [
+                    input_list_in_layout,
+                    ptr,
+                    ptr,
+                    ptr,
+                    Layout::BOOL,
+                    Layout::U32,
+                    usize_,
+                    usize_,
+                ];
+
+                // Setup the return location.
+                let base_offset = self
+                    .storage_manager
+                    .claim_stack_area(dst, self.layout_interner.stack_size(ret_layout));
+
+                self.build_fn_call(
+                    &Symbol::DEV_TMP4,
+                    bitcode::LIST_MAP.to_string(),
+                    &arguments,
+                    &layouts,
+                    &ret_layout,
+                );
+
+                self.free_symbol(&Symbol::DEV_TMP3);
+                self.free_symbol(&Symbol::DEV_TMP5);
+
+                // Return list value from fn call
+                self.storage_manager.copy_symbol_to_stack_offset(
+                    self.layout_interner,
+                    &mut self.buf,
+                    base_offset,
+                    &Symbol::DEV_TMP4,
+                    &ret_layout,
+                );
+
+                self.free_symbol(&Symbol::DEV_TMP4);
+            }
+            HigherOrder::ListMap2 { xs, ys } => todo!(),
+            HigherOrder::ListMap3 { xs, ys, zs } => todo!(),
+            HigherOrder::ListMap4 { xs, ys, zs, ws } => {
+                todo!()
+            }
+            HigherOrder::ListSortWith { xs } => todo!(),
         }
     }
 

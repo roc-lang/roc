@@ -12,10 +12,10 @@ use roc_error_macros::internal_error;
 use roc_module::ident::ModuleName;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::code_gen_help::CodeGenHelp;
+use roc_mono::code_gen_help::{CallerProc, CodeGenHelp};
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
-    SelfRecursive, Stmt,
+    BranchInfo, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement, Literal,
+    Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
@@ -65,7 +65,20 @@ pub enum Relocation {
 trait Backend<'a> {
     fn env(&self) -> &Env<'a>;
     fn interns(&self) -> &Interns;
+    fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
+
+    fn debug_symbol(&mut self, name: &str) -> Symbol {
+        let module_id = self.env().module_id;
+        let ident_ids = self
+            .interns_mut()
+            .all_ident_ids
+            .get_mut(&module_id)
+            .unwrap();
+
+        let ident_id = ident_ids.add_str(name);
+        Symbol::new(self.env().module_id, ident_id)
+    }
 
     // This method is suboptimal, but it seems to be the only way to make rust understand
     // that all of these values can be mutable at the same time. By returning them together,
@@ -77,6 +90,7 @@ trait Backend<'a> {
         &mut STLayoutInterner<'a>,
         &mut Interns,
         &mut CodeGenHelp<'a>,
+        &mut Vec<'a, CallerProc<'a>>,
     );
 
     fn function_symbol_to_string<'b, I>(
@@ -201,7 +215,7 @@ trait Backend<'a> {
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
                 let (rc_stmt, new_specializations) = {
-                    let (module_id, layout_interner, interns, rc_proc_gen) =
+                    let (module_id, layout_interner, interns, rc_proc_gen, _) =
                         self.module_interns_helpers_mut();
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
@@ -319,6 +333,12 @@ trait Backend<'a> {
                         ret_layout,
                         ..
                     } => {
+                        dbg!(
+                            func_sym,
+                            func_sym.name() == Symbol::BOOL_TRUE,
+                            func_sym.name().is_builtin()
+                        );
+
                         if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
                             LowLevelWrapperType::from_symbol(func_sym.name())
                         {
@@ -372,6 +392,9 @@ trait Backend<'a> {
                             arg_layouts.into_bump_slice(),
                             layout,
                         )
+                    }
+                    CallType::HigherOrder(higher_order) => {
+                        self.build_higher_order_lowlevel(sym, higher_order, *layout)
                     }
                     x => todo!("the call type, {:?}", x),
                 }
@@ -1365,6 +1388,14 @@ trait Backend<'a> {
 
     /// build_list_len returns the length of a list.
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
+
+    /// generate a call to a higher-order lowlevel
+    fn build_higher_order_lowlevel(
+        &mut self,
+        dst: &Symbol,
+        holl: &HigherOrderLowLevel<'a>,
+        ret_layout: InLayout<'a>,
+    );
 
     /// build_list_with_capacity creates and returns a list with the given capacity.
     fn build_list_with_capacity(

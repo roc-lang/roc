@@ -5,8 +5,8 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
 use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
-    SelfRecursive, Stmt, UpdateModeId,
+    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, PassedFunction,
+    Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, LambdaName, Layout, LayoutInterner, Niche, STLayoutInterner, UnionLayout,
@@ -578,6 +578,175 @@ impl<'a> CodeGenHelp<'a> {
         }
 
         (can_use_tailrec, tailrec_indices)
+    }
+}
+
+pub struct CallerProc<'a> {
+    pub proc_symbol: Symbol,
+    pub proc_layout: ProcLayout<'a>,
+    pub proc: Proc<'a>,
+}
+
+impl<'a> CallerProc<'a> {
+    fn create_symbol(home: ModuleId, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
+        let ident_id = ident_ids.add_str(debug_name);
+        Symbol::new(home, ident_id)
+    }
+
+    fn create_caller_proc_symbol(
+        home: ModuleId,
+        ident_ids: &mut IdentIds,
+        operation: &str,
+        wrapped_function: Symbol,
+    ) -> Symbol {
+        let debug_name = format!("#help_{}_{}_{:?}", "caller", operation, wrapped_function,);
+
+        Self::create_symbol(home, ident_ids, &debug_name)
+    }
+
+    pub fn new(
+        arena: &'a Bump,
+        home: ModuleId,
+        ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
+        passed_function: &PassedFunction<'a>,
+        capture_layout: Option<InLayout<'a>>,
+    ) -> Self {
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(arena),
+            recursive_union: None,
+            op: HelperOp::Eq,
+        };
+
+        let box_capture_layout = if let Some(capture_layout) = capture_layout {
+            layout_interner.insert(Layout::Boxed(capture_layout))
+        } else {
+            layout_interner.insert(Layout::Boxed(Layout::UNIT))
+        };
+
+        let box_argument_layout =
+            layout_interner.insert(Layout::Boxed(passed_function.argument_layouts[0]));
+
+        let box_return_layout =
+            layout_interner.insert(Layout::Boxed(passed_function.return_layout));
+
+        let proc_layout = ProcLayout {
+            arguments: arena.alloc([box_capture_layout, box_argument_layout, box_return_layout]),
+            result: Layout::UNIT,
+            niche: Niche::NONE,
+        };
+
+        let proc_symbol =
+            Self::create_caller_proc_symbol(home, ident_ids, "map", passed_function.name.name());
+
+        ctx.new_linker_data.push((proc_symbol, proc_layout));
+
+        let unbox_capture = Expr::ExprUnbox {
+            symbol: Symbol::ARG_1,
+        };
+
+        let unbox_argument = Expr::ExprUnbox {
+            symbol: Symbol::ARG_2,
+        };
+
+        let unboxed_capture = Self::create_symbol(home, ident_ids, "unboxed_capture");
+        let unboxed_argument = Self::create_symbol(home, ident_ids, "unboxed_argument");
+        let call_result = Self::create_symbol(home, ident_ids, "call_result");
+        let unit_symbol = Self::create_symbol(home, ident_ids, "unit_symbol");
+        let ignored = Self::create_symbol(home, ident_ids, "ignored");
+
+        let call = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: passed_function.name,
+                ret_layout: passed_function.return_layout,
+                arg_layouts: passed_function.argument_layouts,
+                specialization_id: passed_function.specialization_id,
+            },
+            arguments: if capture_layout.is_some() {
+                arena.alloc([unboxed_argument, unboxed_capture])
+            } else {
+                arena.alloc([unboxed_argument])
+            },
+        });
+
+        let ptr_write = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrWrite,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: arena.alloc([Symbol::ARG_3, call_result]),
+        });
+
+        let mut body = Stmt::Let(
+            unboxed_argument,
+            unbox_argument,
+            passed_function.argument_layouts[0],
+            arena.alloc(Stmt::Let(
+                call_result,
+                call,
+                passed_function.return_layout,
+                arena.alloc(Stmt::Let(
+                    ignored,
+                    ptr_write,
+                    box_return_layout,
+                    arena.alloc(Stmt::Let(
+                        unit_symbol,
+                        Expr::Struct(&[]),
+                        Layout::UNIT,
+                        arena.alloc(Stmt::Ret(unit_symbol)),
+                    )),
+                )),
+            )),
+        );
+
+        if let Some(capture_layout) = capture_layout {
+            body = Stmt::Let(
+                unboxed_capture,
+                unbox_capture,
+                capture_layout,
+                arena.alloc(body),
+            );
+        }
+
+        let args: &'a [(InLayout<'a>, Symbol)] = {
+            arena.alloc([
+                (box_capture_layout, ARG_1),
+                (box_argument_layout, ARG_2),
+                (box_return_layout, ARG_3),
+            ])
+        };
+
+        let proc = Proc {
+            name: LambdaName::no_niche(proc_symbol),
+            args,
+            body,
+            closure_data_layout: None,
+            ret_layout: Layout::UNIT,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        };
+
+        if false {
+            let allocator = ven_pretty::BoxAllocator;
+            let doc = proc
+                .to_doc::<_, (), _>(
+                    &allocator,
+                    layout_interner,
+                    true,
+                    crate::ir::Parens::NotNeeded,
+                )
+                .1
+                .pretty(80)
+                .to_string();
+
+            println!("{}", doc);
+        }
+
+        Self {
+            proc_symbol,
+            proc_layout,
+            proc,
+        }
     }
 }
 
