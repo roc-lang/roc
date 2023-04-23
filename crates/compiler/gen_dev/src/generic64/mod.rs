@@ -216,6 +216,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String);
 
+    fn function_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: GeneralReg,
+    );
+
     /// Jumps by an offset of offset bytes unconditionally.
     /// It should always generate the same number of bytes to enable replacement if offset changes.
     /// It returns the base offset to calculate the jump from (generally the instruction after the jump).
@@ -736,6 +743,12 @@ impl<
         let offset = ASM::tail_call(&mut out);
 
         (out.into_bump_slice(), offset)
+    }
+
+    fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String) {
+        let reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+
+        ASM::function_pointer(&mut self.buf, &mut self.relocs, fn_name, reg)
     }
 
     fn build_fn_call(
@@ -1589,14 +1602,13 @@ impl<
             .storage_manager
             .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
 
-        let lowlevel_args = bumpalo::vec![
-        in self.env.arena;
+        let lowlevel_args = [
             capacity,
             // alignment
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
-         ];
+        ];
         let lowlevel_arg_layouts = [capacity_layout, Layout::U32, Layout::U64];
 
         self.build_fn_call(
@@ -1727,14 +1739,13 @@ impl<
             .storage_manager
             .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
 
-        let lowlevel_args = bumpalo::vec![
-        in self.env.arena;
+        let lowlevel_args = [
             list,
             // element
             Symbol::DEV_TMP,
             // element_width
-            Symbol::DEV_TMP2
-         ];
+            Symbol::DEV_TMP2,
+        ];
         let lowlevel_arg_layouts = [list_layout, Layout::U64, Layout::U64];
 
         self.build_fn_call(
@@ -2004,8 +2015,7 @@ impl<
             .storage_manager
             .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
 
-        let lowlevel_args = bumpalo::vec![
-        in self.env.arena;
+        let lowlevel_args = [
             list,
             // alignment
             Symbol::DEV_TMP,
@@ -2013,7 +2023,7 @@ impl<
             Symbol::DEV_TMP2,
             // element_width
             Symbol::DEV_TMP3,
-         ];
+        ];
         let lowlevel_arg_layouts = [list_layout, Layout::U32, Layout::U64, Layout::U64];
 
         self.build_fn_call(
@@ -2195,27 +2205,16 @@ impl<
         }
     }
 
-    fn expr_box(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>) {
-        let element_width_symbol = Symbol::DEV_TMP;
-        self.load_layout_stack_size(element_layout, element_width_symbol);
-
-        // Load allocation alignment (u32)
-        let element_alignment_symbol = Symbol::DEV_TMP2;
-        self.load_layout_alignment(Layout::U32, element_alignment_symbol);
-
-        self.allocate_with_refcount(
-            Symbol::DEV_TMP3,
-            element_width_symbol,
-            element_alignment_symbol,
-        );
-
-        self.free_symbol(&element_width_symbol);
-        self.free_symbol(&element_alignment_symbol);
-
-        // Fill pointer with the value
+    fn build_ptr_write(
+        &mut self,
+        sym: Symbol,
+        ptr: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+    ) {
         let ptr_reg = self
             .storage_manager
-            .load_to_general_reg(&mut self.buf, &Symbol::DEV_TMP3);
+            .load_to_general_reg(&mut self.buf, &ptr);
 
         let element_width = self.layout_interner.stack_size(element_layout) as u64;
         let element_offset = 0;
@@ -2237,6 +2236,26 @@ impl<
         // box is just a pointer on the stack
         let base_offset = self.storage_manager.claim_stack_area(&sym, 8);
         ASM::mov_base32_reg64(&mut self.buf, base_offset, ptr_reg);
+    }
+
+    fn expr_box(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>) {
+        let element_width_symbol = Symbol::DEV_TMP;
+        self.load_layout_stack_size(element_layout, element_width_symbol);
+
+        // Load allocation alignment (u32)
+        let element_alignment_symbol = Symbol::DEV_TMP2;
+        self.load_layout_alignment(Layout::U32, element_alignment_symbol);
+
+        self.allocate_with_refcount(
+            Symbol::DEV_TMP3,
+            element_width_symbol,
+            element_alignment_symbol,
+        );
+
+        self.free_symbol(&element_width_symbol);
+        self.free_symbol(&element_alignment_symbol);
+
+        self.build_ptr_write(sym, Symbol::DEV_TMP3, value, element_layout);
 
         self.free_symbol(&Symbol::DEV_TMP3);
     }

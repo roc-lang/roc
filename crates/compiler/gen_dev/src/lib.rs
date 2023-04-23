@@ -1184,6 +1184,8 @@ trait Backend<'a> {
         ret_layout: &InLayout<'a>,
     );
 
+    fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String);
+
     /// Move a returned value into `dst`
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
 
