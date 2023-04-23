@@ -456,20 +456,6 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
 
-    fn lte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
-    );
-
-    fn gte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
-    );
-
     fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: GeneralReg);
 
     fn ret(buf: &mut Vec<'_, u8>);
@@ -1350,126 +1336,6 @@ impl<
         }
     }
 
-    fn build_num_lt(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        arg_layout: &InLayout<'a>,
-    ) {
-        match self.layout_interner.get(*arg_layout) {
-            Layout::Builtin(Builtin::Int(IntWidth::I64)) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::signed_compare_reg64(
-                    &mut self.buf,
-                    RegisterWidth::W64,
-                    CompareOperation::LessThan,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                );
-            }
-            Layout::Builtin(Builtin::Int(IntWidth::U64)) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::unsigned_compare_reg64(
-                    &mut self.buf,
-                    RegisterWidth::W64,
-                    CompareOperation::LessThan,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                );
-            }
-            Layout::Builtin(Builtin::Float(width)) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
-
-                ASM::cmp_freg_freg_reg64(
-                    &mut self.buf,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                    width,
-                    CompareOperation::LessThan,
-                );
-            }
-            x => todo!("NumLt: layout, {:?}", x),
-        }
-    }
-
-    fn build_num_gt(
-        &mut self,
-        dst: &Symbol,
-        src1: &Symbol,
-        src2: &Symbol,
-        arg_layout: &InLayout<'a>,
-    ) {
-        match self.layout_interner.get(*arg_layout) {
-            Layout::Builtin(Builtin::Int(IntWidth::I64)) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::signed_compare_reg64(
-                    &mut self.buf,
-                    RegisterWidth::W64,
-                    CompareOperation::GreaterThan,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                );
-            }
-            Layout::Builtin(Builtin::Int(IntWidth::U64)) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::unsigned_compare_reg64(
-                    &mut self.buf,
-                    RegisterWidth::W64,
-                    CompareOperation::GreaterThan,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                );
-            }
-            Layout::Builtin(Builtin::Float(width)) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
-
-                ASM::cmp_freg_freg_reg64(
-                    &mut self.buf,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                    width,
-                    CompareOperation::GreaterThan,
-                );
-            }
-            x => todo!("NumGt: layout, {:?}", x),
-        }
-    }
-
     fn build_num_to_frac(
         &mut self,
         dst: &Symbol,
@@ -1528,6 +1394,26 @@ impl<
         }
     }
 
+    fn build_num_lt(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    ) {
+        self.compare(CompareOperation::LessThan, dst, src1, src2, arg_layout)
+    }
+
+    fn build_num_gt(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    ) {
+        self.compare(CompareOperation::GreaterThan, dst, src1, src2, arg_layout)
+    }
+
     fn build_num_lte(
         &mut self,
         dst: &Symbol,
@@ -1535,39 +1421,13 @@ impl<
         src2: &Symbol,
         arg_layout: &InLayout<'a>,
     ) {
-        match *arg_layout {
-            single_register_int_builtins!() => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::lte_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            Layout::F64 | Layout::F32 => {
-                let width = if *arg_layout == Layout::F64 {
-                    FloatWidth::F64
-                } else {
-                    FloatWidth::F32
-                };
-
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
-
-                ASM::cmp_freg_freg_reg64(
-                    &mut self.buf,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                    width,
-                    CompareOperation::LessThanOrEqual,
-                );
-            }
-            x => todo!("NumLte: layout, {:?}", x),
-        }
+        self.compare(
+            CompareOperation::LessThanOrEqual,
+            dst,
+            src1,
+            src2,
+            arg_layout,
+        )
     }
 
     fn build_num_gte(
@@ -1577,39 +1437,13 @@ impl<
         src2: &Symbol,
         arg_layout: &InLayout<'a>,
     ) {
-        match *arg_layout {
-            single_register_int_builtins!() => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::gte_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            Layout::F64 | Layout::F32 => {
-                let width = if *arg_layout == Layout::F64 {
-                    FloatWidth::F64
-                } else {
-                    FloatWidth::F32
-                };
-
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
-
-                ASM::cmp_freg_freg_reg64(
-                    &mut self.buf,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                    width,
-                    CompareOperation::GreaterThanOrEqual,
-                );
-            }
-            x => todo!("NumGte: layout, {:?}", x),
-        }
+        self.compare(
+            CompareOperation::GreaterThanOrEqual,
+            dst,
+            src1,
+            src2,
+            arg_layout,
+        )
     }
 
     fn build_higher_order_lowlevel(
@@ -2895,6 +2729,61 @@ impl<
         CC: CallConv<GeneralReg, FloatReg, ASM>,
     > Backend64Bit<'a, 'r, GeneralReg, FloatReg, ASM, CC>
 {
+    fn compare(
+        &mut self,
+        op: CompareOperation,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    ) {
+        match *arg_layout {
+            single_register_integers!() => {
+                let buf = &mut self.buf;
+
+                let dst = self.storage_manager.claim_general_reg(buf, dst);
+                let src1 = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2 = self.storage_manager.load_to_general_reg(buf, src2);
+
+                let int_width = arg_layout.try_int_width().unwrap();
+                let register_width = match int_width.stack_size() {
+                    8 => RegisterWidth::W64,
+                    4 => RegisterWidth::W32,
+                    2 => RegisterWidth::W16,
+                    1 => RegisterWidth::W8,
+                    _ => unreachable!(),
+                };
+
+                if int_width.is_signed() {
+                    ASM::signed_compare_reg64(buf, register_width, op, dst, src1, src2)
+                } else {
+                    ASM::unsigned_compare_reg64(buf, register_width, op, dst, src1, src2)
+                }
+            }
+            Layout::F32 | Layout::F64 => {
+                let float_width = match *arg_layout {
+                    Layout::F32 => FloatWidth::F32,
+                    Layout::F64 => FloatWidth::F64,
+                    _ => unreachable!(),
+                };
+
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+
+                ASM::cmp_freg_freg_reg64(
+                    &mut self.buf,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                    float_width,
+                    op,
+                );
+            }
+            x => todo!("NumLt: layout, {:?}", x),
+        }
+    }
+
     fn allocate_with_refcount(
         &mut self,
         dst: Symbol,

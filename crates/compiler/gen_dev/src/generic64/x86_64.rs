@@ -1622,17 +1622,13 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
+        cmp_reg64_reg64(buf, register_width, src1, src2);
+
         match operation {
-            CompareOperation::LessThan => {
-                cmp_reg64_reg64(buf, register_width, src1, src2);
-                setl_reg64(buf, dst);
-            }
-            CompareOperation::LessThanOrEqual => todo!(),
-            CompareOperation::GreaterThan => {
-                cmp_reg64_reg64(buf, register_width, src1, src2);
-                setg_reg64(buf, dst);
-            }
-            CompareOperation::GreaterThanOrEqual => todo!(),
+            CompareOperation::LessThan => setl_reg64(buf, dst),
+            CompareOperation::LessThanOrEqual => setle_reg64(buf, dst),
+            CompareOperation::GreaterThan => setg_reg64(buf, dst),
+            CompareOperation::GreaterThanOrEqual => setge_reg64(buf, dst),
         }
     }
 
@@ -1644,18 +1640,13 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        match operation {
-            CompareOperation::LessThan => {
-                cmp_reg64_reg64(buf, register_width, src1, src2);
-                setb_reg64(buf, dst);
-            }
-            CompareOperation::LessThanOrEqual => todo!(),
-            CompareOperation::GreaterThan => {
-                cmp_reg64_reg64(buf, register_width, src1, src2);
-                seta_reg64(buf, dst);
-            }
+        cmp_reg64_reg64(buf, register_width, src1, src2);
 
-            CompareOperation::GreaterThanOrEqual => todo!(),
+        match operation {
+            CompareOperation::LessThan => setb_reg64(buf, dst),
+            CompareOperation::LessThanOrEqual => setbe_reg64(buf, dst),
+            CompareOperation::GreaterThan => seta_reg64(buf, dst),
+            CompareOperation::GreaterThanOrEqual => setae_reg64(buf, dst),
         }
     }
 
@@ -1704,28 +1695,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
         cvtsi2sd_freg64_reg64(buf, dst, src);
-    }
-
-    #[inline(always)]
-    fn lte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, RegisterWidth::W64, src1, src2);
-        setle_reg64(buf, dst);
-    }
-
-    #[inline(always)]
-    fn gte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, RegisterWidth::W64, src1, src2);
-        setge_reg64(buf, dst);
     }
 
     #[inline(always)]
@@ -2992,7 +2961,13 @@ fn setae_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x93, buf, reg);
 }
 
-/// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF≠ OF).
+/// `SETBE r/m64` -> Set byte if below or equal (CF=1 or ZF=1).
+#[inline(always)]
+fn setbe_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x96, buf, reg);
+}
+
+/// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF ≠ OF).
 #[inline(always)]
 fn setle_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x9e, buf, reg);

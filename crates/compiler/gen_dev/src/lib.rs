@@ -6,6 +6,7 @@
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
 use bumpalo::{collections::Vec, Bump};
+use generic64::CompareOperation;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;

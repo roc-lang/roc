@@ -433,6 +433,22 @@ impl<'a> InLayout<'a> {
     pub fn index(&self) -> usize {
         self.0
     }
+
+    pub fn try_int_width(self) -> Option<IntWidth> {
+        match self {
+            Layout::U8 => Some(IntWidth::U8),
+            Layout::U16 => Some(IntWidth::U16),
+            Layout::U32 => Some(IntWidth::U32),
+            Layout::U64 => Some(IntWidth::U64),
+            Layout::U128 => Some(IntWidth::U128),
+            Layout::I8 => Some(IntWidth::I8),
+            Layout::I16 => Some(IntWidth::I16),
+            Layout::I32 => Some(IntWidth::I32),
+            Layout::I64 => Some(IntWidth::I64),
+            Layout::I128 => Some(IntWidth::I128),
+            _ => None,
+        }
+    }
 }
 
 /// A concurrent interner, suitable for usage between threads.
