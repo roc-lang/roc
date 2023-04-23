@@ -1247,7 +1247,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             unreachable!("The {:?} operation is turned into mono Expr", op)
         }
 
-        PtrCast | RefCountInc | RefCountDec => {
+        PtrCast | PtrWrite | RefCountInc | RefCountDec => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
 

@@ -20,6 +20,7 @@ const LAYOUT_UNIT: InLayout = Layout::UNIT;
 
 const ARG_1: Symbol = Symbol::ARG_1;
 const ARG_2: Symbol = Symbol::ARG_2;
+const ARG_3: Symbol = Symbol::ARG_3;
 
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1

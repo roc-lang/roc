@@ -1070,6 +1070,14 @@ trait Backend<'a> {
                 );
                 self.build_ptr_cast(sym, &args[0])
             }
+            LowLevel::PtrWrite => {
+                let element_layout = match self.interner().get(*ret_layout) {
+                    Layout::Boxed(boxed) => boxed,
+                    _ => unreachable!(),
+                };
+
+                self.build_ptr_write(*sym, args[0], args[1], element_layout);
+            }
             LowLevel::RefCountDec => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DECREF.to_string(),
@@ -1417,6 +1425,14 @@ trait Backend<'a> {
 
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
+
+    fn build_ptr_write(
+        &mut self,
+        sym: Symbol,
+        ptr: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+    );
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;

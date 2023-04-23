@@ -115,6 +115,7 @@ pub enum LowLevel {
     Not,
     Hash,
     PtrCast,
+    PtrWrite,
     RefCountInc,
     RefCountDec,
     BoxExpr,
@@ -219,6 +220,7 @@ macro_rules! map_symbol_to_lowlevel {
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
+                LowLevel::PtrWrite => unimplemented!(),
                 LowLevel::RefCountInc => unimplemented!(),
                 LowLevel::RefCountDec => unimplemented!(),
 
