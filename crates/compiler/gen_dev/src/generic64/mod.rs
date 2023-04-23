@@ -2905,6 +2905,62 @@ impl<
         ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
     }
 
+    fn unbox_to_stack(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        dst: Symbol,
+        stack_size: u32,
+        ptr_reg: GeneralReg,
+        tmp_reg: GeneralReg,
+    ) {
+        let mut copied = 0;
+        let size = stack_size as i32;
+
+        let base_offset = storage_manager.claim_stack_area(&dst, stack_size);
+
+        if size - copied >= 8 {
+            for _ in (0..(size - copied)).step_by(8) {
+                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+                copied += 8;
+            }
+        }
+
+        if size - copied > 0 {
+            panic!("value only partially copied");
+        }
+
+        /*
+        if size - copied >= 4 {
+            for _ in (0..(size - copied)).step_by(4) {
+                ASM::mov_reg32_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg32(buf, to_offset + copied, reg);
+
+                copied += 4;
+            }
+        }
+
+        if size - copied >= 2 {
+            for _ in (0..(size - copied)).step_by(2) {
+                ASM::mov_reg16_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg16(buf, to_offset + copied, reg);
+
+                copied += 2;
+            }
+        }
+
+        if size - copied >= 1 {
+            for _ in (0..(size - copied)).step_by(1) {
+                ASM::mov_reg8_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg8(buf, to_offset + copied, reg);
+
+                copied += 1;
+            }
+        }
+        */
+    }
+
     fn ptr_read(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
@@ -2960,6 +3016,15 @@ impl<
                 // the same as 64-bit integer (for 64-bit targets)
                 let dst_reg = storage_manager.claim_general_reg(buf, &dst);
                 ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+            }
+
+            Layout::Struct { .. } => {
+                // put it on the stack
+                let stack_size = layout_interner.stack_size(element_in_layout);
+
+                storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
+                    Self::unbox_to_stack(buf, storage_manager, dst, stack_size, ptr_reg, tmp_reg);
+                });
             }
 
             _ => todo!("unboxing of {:?}", layout_interner.dbg(element_in_layout)),
