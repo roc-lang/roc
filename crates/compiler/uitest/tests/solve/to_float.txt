@@ -1,0 +1,10 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    {
+        toF32: Num.toF32,
+        toF64: Num.toF64,
+    }
+
+main = entry
+#      ^^^^^ { toF32 : Num * -[[Num.toF32(139)]]-> F32, toF64 : Num w_a -[[Num.toF64(141)]]-> F64 }

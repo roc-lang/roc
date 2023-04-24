@@ -3998,3 +3998,60 @@ fn num_count_one_bits() {
     assert_evals_to!(r#"Num.countOneBits 0u32"#, 0, usize);
     assert_evals_to!(r#"Num.countOneBits 0b0010_1111u64"#, 5, usize);
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_abs_diff_int() {
+    assert_evals_to!(r#"Num.absDiff 0u8 0u8"#, 0, u8);
+    assert_evals_to!(r#"Num.absDiff 1u8 2u8"#, 1, u8);
+    assert_evals_to!(r#"Num.absDiff 2u8 1u8"#, 1, u8);
+    assert_evals_to!(r#"Num.absDiff -1 1"#, 2, i64);
+    assert_evals_to!(r#"Num.absDiff 1 -1"#, 2, i64);
+    assert_evals_to!(r#"Num.absDiff Num.minI64 -1"#, i64::MAX, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn num_abs_diff_large_bits() {
+    assert_evals_to!(r#"Num.absDiff 0u128 0u128"#, 0, u128);
+    assert_evals_to!(r#"Num.absDiff 1u128 2u128"#, 1, u128);
+    assert_evals_to!(r#"Num.absDiff -1i128 1i128"#, 2, i128);
+    assert_evals_to!(r#"Num.absDiff Num.minI128 -1i128"#, i128::MAX, i128);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_abs_diff_float() {
+    assert_evals_to!(r#"Num.absDiff 0.0 0.0"#, 0.0, f64);
+    assert_evals_to!(r#"Num.absDiff 1.0 2.0"#, 1.0, f64);
+    assert_evals_to!(r#"Num.absDiff 2.0 1.0"#, 1.0, f64);
+    assert_evals_to!(r#"Num.absDiff -1.0 1.0"#, 2.0, f64);
+    assert_evals_to!(r#"Num.absDiff 1.0 -1.0"#, 2.0, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+fn num_abs_max_overflow() {
+    assert_evals_to!(r#"Num.absDiff Num.maxI64 -1"#, 0, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+fn num_abs_int_min_overflow() {
+    assert_evals_to!(r#"Num.absDiff Num.minI64 0"#, 0, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+fn num_abs_large_bits_min_overflow() {
+    assert_evals_to!(r#"Num.absDiff Num.minI128 0"#, 0, i128);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_abs_float_overflow() {
+    assert_evals_to!("Num.absDiff Num.maxF64 Num.minF64", f64::INFINITY, f64);
+}

@@ -1,0 +1,11 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    F a b := b
+
+    foo = \@F {} -> @F ""
+
+    foo
+
+main = entry
+#      ^^^^^ F w_a {}w_b -[[foo(3)]]-> F w_c Str

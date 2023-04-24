@@ -1,0 +1,11 @@
+app "test" provides [zero] to "./platform"
+
+MHash has
+    hash : a -> U64 | a has MHash
+
+Id := U64 has [MHash {hash}]
+
+hash = \@Id n -> n
+
+zero = hash (@Id 0)
+#^^^^{-1} U64

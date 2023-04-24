@@ -1285,8 +1285,8 @@ fn write_flat_type<'a>(
     }
 }
 
-pub fn push_union<'a, L: Label>(
-    subs: &'a Subs,
+pub fn push_union<L: Label>(
+    subs: &Subs,
     tags: &UnionLabels<L>,
     fields: &mut Vec<(L, Vec<Variable>)>,
 ) {

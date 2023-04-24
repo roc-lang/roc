@@ -122,7 +122,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     None => Pattern::Identifier(loc_symbol.value),
                 };
 
-                let function_def = &decls.function_bodies[function_index.index() as usize];
+                let function_def = &decls.function_bodies[function_index.index()];
 
                 DeclarationInfo::Function {
                     loc_symbol,
@@ -133,7 +133,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                 }
             }
             Destructure(destructure_index) => {
-                let destructure = &decls.destructs[destructure_index.index() as usize];
+                let destructure = &decls.destructs[destructure_index.index()];
                 let loc_pattern = &destructure.loc_pattern;
 
                 let loc_expr = &decls.expressions[index];
