@@ -1,4 +1,5 @@
 use bumpalo::collections::vec::Vec;
+use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -539,10 +540,10 @@ impl<'a> CodeGenHelp<'a> {
         &self,
         layout_interner: &STLayoutInterner<'a>,
         union: UnionLayout<'a>,
-    ) -> (bool, Vec<'a, Option<usize>>) {
+    ) -> Option<Vec<'a, Option<usize>>> {
         use UnionLayout::*;
         match union {
-            NonRecursive(_) => (false, bumpalo::vec![in self.arena]),
+            NonRecursive(_) => None,
 
             Recursive(tags) => self.union_tail_recursion_fields_help(layout_interner, tags),
 
@@ -564,19 +565,22 @@ impl<'a> CodeGenHelp<'a> {
         &self,
         layout_interner: &STLayoutInterner<'a>,
         tags: &[&'a [InLayout<'a>]],
-    ) -> (bool, Vec<'a, Option<usize>>) {
-        let mut can_use_tailrec = false;
-        let mut tailrec_indices = Vec::with_capacity_in(tags.len(), self.arena);
+    ) -> Option<Vec<'a, Option<usize>>> {
+        let tailrec_indices = tags
+            .iter()
+            .map(|fields| {
+                let found_index = fields
+                    .iter()
+                    .position(|f| matches!(layout_interner.get(*f), Layout::RecursivePointer(_)));
+                found_index
+            })
+            .collect_in::<Vec<_>>(self.arena);
 
-        for fields in tags.iter() {
-            let found_index = fields
-                .iter()
-                .position(|f| matches!(layout_interner.get(*f), Layout::RecursivePointer(_)));
-            tailrec_indices.push(found_index);
-            can_use_tailrec |= found_index.is_some();
+        if tailrec_indices.iter().any(|i| i.is_some()) {
+            None
+        } else {
+            Some(tailrec_indices)
         }
-
-        (can_use_tailrec, tailrec_indices)
     }
 }
 
