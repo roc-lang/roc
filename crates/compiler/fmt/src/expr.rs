@@ -103,13 +103,7 @@ impl<'a> Formattable for Expr<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         use self::Expr::*;
 
         let apply_needs_parens = parens == Parens::InApply;
@@ -704,12 +698,7 @@ fn fmt_binops<'a>(
     loc_right_side.format_with_options(buf, Parens::InOperator, Newlines::Yes, indent);
 }
 
-fn format_spaces(
-    buf: &mut Buf,
-    spaces: &[CommentOrNewline],
-    newlines: Newlines,
-    indent: u16,
-) {
+fn format_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], newlines: Newlines, indent: u16) {
     match newlines {
         Newlines::Yes => {
             fmt_spaces(buf, spaces.iter(), indent);

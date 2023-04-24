@@ -20,8 +20,8 @@ use super::build::{
 };
 use super::convert::zig_list_type;
 
-fn call_list_bitcode_fn_1<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn call_list_bitcode_fn_1<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     list: StructValue<'ctx>,
     other_arguments: &[BasicValueEnum<'ctx>],
     fn_name: &str,
@@ -29,8 +29,8 @@ fn call_list_bitcode_fn_1<'a, 'ctx, 'env>(
     call_list_bitcode_fn(env, &[list], other_arguments, BitcodeReturns::List, fn_name)
 }
 
-pub(crate) fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_symbol_to_c_abi<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
 ) -> PointerValue<'ctx> {
@@ -49,8 +49,8 @@ pub(crate) fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
     list_alloca
 }
 
-pub(crate) fn pass_update_mode<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn pass_update_mode<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     match update_mode {
@@ -59,8 +59,8 @@ pub(crate) fn pass_update_mode<'a, 'ctx, 'env>(
     }
 }
 
-fn pass_element_as_opaque<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn pass_element_as_opaque<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     element: BasicValueEnum<'ctx>,
     layout: InLayout<'a>,
@@ -80,8 +80,8 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
         .into()
 }
 
-pub(crate) fn layout_width<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn layout_width<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -90,8 +90,8 @@ pub(crate) fn layout_width<'a, 'ctx, 'env>(
         .into()
 }
 
-pub(crate) fn pass_as_opaque<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn pass_as_opaque<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     env.builder
@@ -103,8 +103,8 @@ pub(crate) fn pass_as_opaque<'a, 'ctx, 'env>(
         .into()
 }
 
-pub(crate) fn list_with_capacity<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_with_capacity<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     capacity: IntValue<'ctx>,
     element_layout: InLayout<'a>,
@@ -122,8 +122,8 @@ pub(crate) fn list_with_capacity<'a, 'ctx, 'env>(
     )
 }
 
-pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_get_unsafe<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     element_layout: InLayout<'a>,
@@ -162,8 +162,8 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
 }
 
 /// List.reserve : List elem, Nat -> List elem
-pub(crate) fn list_reserve<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_reserve<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     list: BasicValueEnum<'ctx>,
     spare: BasicValueEnum<'ctx>,
@@ -184,8 +184,8 @@ pub(crate) fn list_reserve<'a, 'ctx, 'env>(
 }
 
 /// List.releaseExcessCapacity : List elem -> List elem
-pub(crate) fn list_release_excess_capacity<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_release_excess_capacity<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     list: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
@@ -204,8 +204,8 @@ pub(crate) fn list_release_excess_capacity<'a, 'ctx, 'env>(
 }
 
 /// List.appendUnsafe : List elem, elem -> List elem
-pub(crate) fn list_append_unsafe<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_append_unsafe<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
@@ -223,8 +223,8 @@ pub(crate) fn list_append_unsafe<'a, 'ctx, 'env>(
 }
 
 /// List.prepend : List elem, elem -> List elem
-pub(crate) fn list_prepend<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_prepend<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
@@ -243,8 +243,8 @@ pub(crate) fn list_prepend<'a, 'ctx, 'env>(
 }
 
 /// List.swap : List elem, Nat, Nat -> List elem
-pub(crate) fn list_swap<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_swap<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     original_wrapper: StructValue<'ctx>,
     index_1: IntValue<'ctx>,
@@ -267,8 +267,8 @@ pub(crate) fn list_swap<'a, 'ctx, 'env>(
 }
 
 /// List.sublist : List elem, { start : Nat, len : Nat } -> List elem
-pub(crate) fn list_sublist<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_sublist<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
@@ -292,8 +292,8 @@ pub(crate) fn list_sublist<'a, 'ctx, 'env>(
 }
 
 /// List.dropAt : List elem, Nat -> List elem
-pub(crate) fn list_drop_at<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_drop_at<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
@@ -315,8 +315,8 @@ pub(crate) fn list_drop_at<'a, 'ctx, 'env>(
 }
 
 /// List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
-pub(crate) fn list_replace_unsafe<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_replace_unsafe<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     _layout_ids: &mut LayoutIds<'a>,
     list: BasicValueEnum<'ctx>,
@@ -429,8 +429,8 @@ pub(crate) fn list_capacity_or_ref_ptr<'ctx>(
 
 // Gets a pointer to just after the refcount for a list or seamless slice.
 // The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
-pub(crate) fn list_refcount_ptr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_refcount_ptr<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     wrapper_struct: StructValue<'ctx>,
 ) -> PointerValue<'ctx> {
     call_list_bitcode_fn(
@@ -467,8 +467,8 @@ pub(crate) fn destructure<'ctx>(
 }
 
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
-pub(crate) fn list_sort_with<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_sort_with<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
     compare_wrapper: PointerValue<'ctx>,
@@ -491,8 +491,8 @@ pub(crate) fn list_sort_with<'a, 'ctx, 'env>(
 }
 
 /// List.map : List before, (before -> after) -> List after
-pub(crate) fn list_map<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_map<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
     list: BasicValueEnum<'ctx>,
@@ -515,8 +515,8 @@ pub(crate) fn list_map<'a, 'ctx, 'env>(
     )
 }
 
-pub(crate) fn list_map2<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_map2<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
@@ -549,8 +549,8 @@ pub(crate) fn list_map2<'a, 'ctx, 'env>(
     )
 }
 
-pub(crate) fn list_map3<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_map3<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
@@ -592,8 +592,8 @@ pub(crate) fn list_map3<'a, 'ctx, 'env>(
     )
 }
 
-pub(crate) fn list_map4<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_map4<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
@@ -642,8 +642,8 @@ pub(crate) fn list_map4<'a, 'ctx, 'env>(
 }
 
 /// List.concat : List elem, List elem -> List elem
-pub(crate) fn list_concat<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn list_concat<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     list1: BasicValueEnum<'ctx>,
     list2: BasicValueEnum<'ctx>,
@@ -756,9 +756,7 @@ where
     index_alloca
 }
 
-pub(crate) fn empty_polymorphic_list<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-) -> BasicValueEnum<'ctx> {
+pub(crate) fn empty_polymorphic_list<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> {
     let struct_type = zig_list_type(env);
 
     // The pointer should be null (aka zero) and the length should be zero,
@@ -796,8 +794,8 @@ pub(crate) fn load_list_ptr<'ctx>(
     cast_basic_basic(builder, generic_ptr.into(), ptr_type.into()).into_pointer_value()
 }
 
-pub(crate) fn allocate_list<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn allocate_list<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     elem_layout: InLayout<'a>,
     number_of_elements: IntValue<'ctx>,
@@ -815,8 +813,8 @@ pub(crate) fn allocate_list<'a, 'ctx, 'env>(
     allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes)
 }
 
-pub(crate) fn store_list<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn store_list<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     pointer_to_first_element: PointerValue<'ctx>,
     len: IntValue<'ctx>,
 ) -> StructValue<'ctx> {
@@ -835,8 +833,8 @@ pub(crate) fn store_list<'a, 'ctx, 'env>(
     )
 }
 
-pub(crate) fn decref<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn decref<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     wrapper_struct: StructValue<'ctx>,
     alignment: u32,
 ) {

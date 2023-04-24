@@ -65,13 +65,7 @@ impl Newlines {
 pub trait Formattable {
     fn is_multiline(&self) -> bool;
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        _parens: Parens,
-        _newlines: Newlines,
-        indent: u16,
-    );
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, _newlines: Newlines, indent: u16);
 
     fn format(&self, buf: &mut Buf, indent: u16) {
         self.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
@@ -87,13 +81,7 @@ where
         (*self).is_multiline()
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         (*self).format_with_options(buf, parens, newlines, indent)
     }
 
@@ -120,13 +108,7 @@ where
         self.value.is_multiline()
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         self.value
             .format_with_options(buf, parens, newlines, indent)
     }
@@ -206,13 +188,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         use roc_parse::ast::TypeAnnotation::*;
 
         let self_is_multiline = self.is_multiline();
@@ -424,13 +400,7 @@ impl<'a> Formattable for AssignedField<'a, TypeAnnotation<'a>> {
         is_multiline_assigned_field_help(self)
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        _parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
         format_assigned_field_help(self, buf, indent, 1, newlines == Newlines::Yes);
     }
@@ -441,13 +411,7 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
         is_multiline_assigned_field_help(self)
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        _parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
         format_assigned_field_help(self, buf, indent, 0, newlines == Newlines::Yes);
     }
@@ -592,13 +556,7 @@ impl<'a> Formattable for HasClause<'a> {
         false
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         buf.push_str(self.var.value.extract_spaces().item);
         buf.spaces(1);
         buf.push_str("has");
@@ -623,13 +581,7 @@ impl<'a> Formattable for HasImpls<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
             HasImpls::HasImpls(impls) => {
                 if newlines == Newlines::Yes {
@@ -662,13 +614,7 @@ impl<'a> Formattable for HasAbility<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
             HasAbility::HasAbility { ability, impls } => {
                 if newlines == Newlines::Yes {
@@ -703,13 +649,7 @@ impl<'a> Formattable for HasAbilities<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
             HasAbilities::Has(has_abilities) => {
                 if newlines == Newlines::Yes {

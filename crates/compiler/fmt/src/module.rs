@@ -164,13 +164,7 @@ impl<'a, K: Formattable, V: Formattable> Formattable for KeywordItem<'a, K, V> {
         self.keyword.is_multiline() || self.item.is_multiline()
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         self.keyword
             .format_with_options(buf, parens, newlines, indent);
         self.item.format_with_options(buf, parens, newlines, indent);
