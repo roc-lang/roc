@@ -1117,8 +1117,8 @@ impl<'a> ReuseEnvironment<'a> {
 /**
 Check if a layout can be reused. by verifying if the layout is a union and if the tag is not nullable.
 */
-fn symbol_layout_reusability<'a, 'i>(
-    layout_interner: &'i STLayoutInterner<'a>,
+fn symbol_layout_reusability<'a>(
+    layout_interner: &STLayoutInterner<'a>,
     environment: &ReuseEnvironment<'a>,
     symbol: &Symbol,
     layout: &InLayout<'a>,
