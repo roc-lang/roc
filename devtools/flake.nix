@@ -3,7 +3,7 @@
 
   inputs = {
     # change this path to the path of your roc folder
-    roc.url = "path:/home/username/gitrepos/roc1/roc";
+    roc.url = "path:/home/username/gitrepos/roc9/roc";
     # to easily make configs for multiple architectures
     flake-utils.url = "github:numtide/flake-utils";
   };

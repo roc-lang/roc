@@ -1784,7 +1784,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
 
 fn shift_reg64_reg64_reg64<'a, ASM, CC>(
     buf: &mut Vec<'a, u8>,
-    storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+    storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
     shift_function: fn(buf: &mut Vec<'_, u8>, X86_64GeneralReg),
     dst: X86_64GeneralReg,
     src1: X86_64GeneralReg,
