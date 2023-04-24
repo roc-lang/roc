@@ -1859,6 +1859,34 @@ fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
 }
 
 #[inline(always)]
+fn binop_reg8_reg8(op_code: u8, buf: &mut Vec<u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        let rex = add_rm_extension(dst, REX);
+        let rex = add_reg_extension(src, rex);
+
+        buf.extend([rex, op_code, 0xC0 | dst_mod | (src_mod << 3)])
+    } else {
+        let rex_prefix = [
+            X86_64GeneralReg::RBP,
+            X86_64GeneralReg::RSP,
+            X86_64GeneralReg::RSI,
+            X86_64GeneralReg::RDI,
+        ];
+
+        if rex_prefix.contains(&src) || rex_prefix.contains(&dst) {
+            buf.push(0x40);
+        }
+
+        buf.extend([op_code, 0xC0 | dst_mod | (src_mod << 3)]);
+    }
+}
+
+#[inline(always)]
 fn binop_reg16_reg16(
     op_code: u8,
     buf: &mut Vec<'_, u8>,
@@ -2401,20 +2429,83 @@ fn lea_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     ])
 }
 
-/// `MOV r/m64,r64` -> Move r64 to r/m64.
-/// This will not generate anything if dst and src are the same.
-#[inline(always)]
-fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    if dst != src {
-        raw_mov_reg64_reg64(buf, dst, src);
+fn raw_mov_reg_reg(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    match register_width {
+        RegisterWidth::W8 => binop_reg8_reg8(0x88, buf, dst, src),
+        RegisterWidth::W16 => binop_reg16_reg16(0x89, buf, dst, src),
+        RegisterWidth::W32 => binop_reg32_reg32(0x89, buf, dst, src),
+        RegisterWidth::W64 => binop_reg64_reg64(0x89, buf, dst, src),
+    }
+}
+
+fn raw_movsx_reg_reg(
+    buf: &mut Vec<u8>,
+    input_width: RegisterWidth,
+    output_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    match (input_width, output_width) {
+        (RegisterWidth::W8, RegisterWidth::W16) => {
+            buf.push(0x0F);
+            buf.push(0xBE);
+            binop_reg8_reg8(0x89, buf, dst, src);
+        }
+        (RegisterWidth::W8, RegisterWidth::W32) => {
+            buf.push(0x0F);
+            buf.push(0xBF);
+            binop_reg8_reg8(0x89, buf, dst, src);
+        }
+        (RegisterWidth::W8, RegisterWidth::W64) => {
+            buf.push(0x48);
+            buf.push(0x0F);
+            buf.push(0xBE);
+            binop_reg8_reg8(0x89, buf, dst, src);
+        }
+        (RegisterWidth::W16, RegisterWidth::W32) => {
+            buf.push(0x66);
+            buf.push(0x0F);
+            buf.push(0xBF);
+            binop_reg16_reg16(0x89, buf, dst, src);
+        }
+        (RegisterWidth::W16, RegisterWidth::W64) => {
+            buf.push(0x48);
+            buf.push(0x0F);
+            buf.push(0xBF);
+            binop_reg16_reg16(0x89, buf, dst, src);
+        }
+        (RegisterWidth::W32, RegisterWidth::W64) => {
+            buf.push(0x48);
+            buf.push(0x0F);
+            buf.push(0xBF);
+            binop_reg32_reg32(0x89, buf, dst, src);
+        }
+        _ => panic!("Invalid input/output register width combination"),
     }
 }
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
-/// This will always generate the move. It is used for verification.
+/// This will not generate anything if dst and src are the same.
 #[inline(always)]
-fn raw_mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x89, buf, dst, src);
+fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    mov_reg_reg(buf, RegisterWidth::W64, dst, src)
+}
+
+#[inline(always)]
+fn mov_reg_reg(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    if dst != src {
+        raw_mov_reg_reg(buf, register_width, dst, src);
+    }
 }
 
 // The following base and stack based operations could be optimized based on how many bytes the offset actually is.
@@ -3051,8 +3142,8 @@ mod tests {
                 X86_64GeneralReg::RDX => "edx",
                 X86_64GeneralReg::RBP => "ebp",
                 X86_64GeneralReg::RSP => "esp",
-                X86_64GeneralReg::RDI => "edi",
                 X86_64GeneralReg::RSI => "esi",
+                X86_64GeneralReg::RDI => "edi",
                 X86_64GeneralReg::R8 => "r8d",
                 X86_64GeneralReg::R9 => "r9d",
                 X86_64GeneralReg::R10 => "r10d",
@@ -3073,8 +3164,8 @@ mod tests {
                 X86_64GeneralReg::RDX => "dx",
                 X86_64GeneralReg::RBP => "bp",
                 X86_64GeneralReg::RSP => "sp",
-                X86_64GeneralReg::RDI => "di",
                 X86_64GeneralReg::RSI => "si",
+                X86_64GeneralReg::RDI => "di",
                 X86_64GeneralReg::R8 => "r8w",
                 X86_64GeneralReg::R9 => "r9w",
                 X86_64GeneralReg::R10 => "r10w",
@@ -3095,8 +3186,9 @@ mod tests {
                 X86_64GeneralReg::RDX => "dl",
                 X86_64GeneralReg::RBP => "bpl",
                 X86_64GeneralReg::RSP => "spl",
-                X86_64GeneralReg::RDI => "dil",
                 X86_64GeneralReg::RSI => "sil",
+                X86_64GeneralReg::RDI => "dil",
+
                 X86_64GeneralReg::R8 => "r8b",
                 X86_64GeneralReg::R9 => "r9b",
                 X86_64GeneralReg::R10 => "r10b",
@@ -3111,6 +3203,13 @@ mod tests {
     const TEST_I32: i32 = 0x12345678;
     const TEST_I64: i64 = 0x1234_5678_9ABC_DEF0;
 
+    const ALL_REGISTER_WIDTHS: &[RegisterWidth] = &[
+        RegisterWidth::W8,
+        RegisterWidth::W16,
+        RegisterWidth::W32,
+        RegisterWidth::W64,
+    ];
+
     const ALL_GENERAL_REGS: &[X86_64GeneralReg] = &[
         X86_64GeneralReg::RAX,
         X86_64GeneralReg::RBX,
@@ -3118,8 +3217,8 @@ mod tests {
         X86_64GeneralReg::RDX,
         X86_64GeneralReg::RBP,
         X86_64GeneralReg::RSP,
-        X86_64GeneralReg::RDI,
         X86_64GeneralReg::RSI,
+        X86_64GeneralReg::RDI,
         X86_64GeneralReg::R8,
         X86_64GeneralReg::R9,
         X86_64GeneralReg::R10,
@@ -3434,8 +3533,28 @@ mod tests {
     #[test]
     fn test_mov_reg64_reg64() {
         disassembler_test!(
-            raw_mov_reg64_reg64,
-            |reg1, reg2| format!("mov {}, {}", reg1, reg2),
+            raw_mov_reg_reg,
+            |w, reg1, reg2| {
+                match w {
+                    RegisterWidth::W8 => format!(
+                        "mov {}, {}",
+                        X86_64GeneralReg::low_8bits_string(&reg1),
+                        X86_64GeneralReg::low_8bits_string(&reg2)
+                    ),
+                    RegisterWidth::W16 => format!(
+                        "mov {}, {}",
+                        X86_64GeneralReg::low_16bits_string(&reg1),
+                        X86_64GeneralReg::low_16bits_string(&reg2)
+                    ),
+                    RegisterWidth::W32 => format!(
+                        "mov {}, {}",
+                        X86_64GeneralReg::low_32bits_string(&reg1),
+                        X86_64GeneralReg::low_32bits_string(&reg2)
+                    ),
+                    RegisterWidth::W64 => format!("mov {}, {}", reg1, reg2),
+                }
+            },
+            ALL_REGISTER_WIDTHS,
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );
