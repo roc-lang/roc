@@ -3123,10 +3123,10 @@ fn update<'a>(
 
                     drop_specialization::specialize_drops(
                         arena,
-                        &layout_interner,
+                        &mut layout_interner,
                         module_id,
                         ident_ids,
-                        &mut update_mode_ids,
+                        state.target_info,
                         &mut state.procedures,
                     );
 
