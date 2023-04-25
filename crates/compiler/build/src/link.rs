@@ -1,6 +1,6 @@
 use crate::target::{arch_str, target_zig_str};
 use libloading::{Error, Library};
-use roc_command_utils::{cargo, clang, get_lib_path, rustup, zig};
+use roc_command_utils::{cargo, clang, rustup, zig};
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
@@ -63,27 +63,53 @@ pub fn legacy_host_filename(target: &Triple) -> Option<String> {
     )
 }
 
-fn find_zig_str_path() -> PathBuf {
-    // First try using the lib path relative to the executable location.
-    let lib_path_opt = get_lib_path();
+// Attempts to find a file that is stored relative to the roc executable.
+// Since roc is built in target/debug/roc, we may need to drop that path to find the file.
+// This is used to avoid depending on the current working directory.
+pub fn get_relative_path(sub_path: &Path) -> Option<PathBuf> {
+    if sub_path.is_absolute() {
+        internal_error!(
+            "get_relative_path requires sub_path to be relative, instead got {:?}",
+            sub_path
+        );
+    }
+    let exe_relative_str_path_opt = std::env::current_exe().ok();
 
-    if let Some(lib_path) = lib_path_opt {
-        let zig_str_path = lib_path.join("str.zig");
+    if let Some(exe_relative_str_path) = exe_relative_str_path_opt {
+        #[cfg(windows)]
+        let exe_relative_str_path = roc_command_utils::strip_windows_prefix(&exe_relative_str_path);
 
-        if std::path::Path::exists(&zig_str_path) {
-            return zig_str_path;
+        let mut curr_parent_opt = exe_relative_str_path.parent();
+
+        // We need to support paths like ./roc, ./bin/roc, ./target/debug/roc and tests like ./target/debug/deps/valgrind-63c787aa176d1277
+        // This requires dropping up to 3 directories.
+        for _ in 0..=3 {
+            if let Some(curr_parent) = curr_parent_opt {
+                let potential_path = curr_parent.join(sub_path);
+
+                if std::path::Path::exists(&potential_path) {
+                    return Some(potential_path);
+                } else {
+                    curr_parent_opt = curr_parent.parent();
+                }
+            } else {
+                break;
+            }
         }
     }
 
-    let zig_str_path = PathBuf::from("crates/compiler/builtins/bitcode/src/str.zig");
+    None
+}
 
-    if std::path::Path::exists(&zig_str_path) {
+fn find_zig_str_path() -> PathBuf {
+    // First try using the repo path relative to the executable location.
+    let zig_str_path = get_relative_path(Path::new("crates/compiler/builtins/bitcode/src/str.zig"));
+    if let Some(zig_str_path) = zig_str_path {
         return zig_str_path;
     }
-
-    // when running the tests, we start in the /cli directory
-    let zig_str_path = PathBuf::from("../compiler/builtins/bitcode/src/str.zig");
-    if std::path::Path::exists(&zig_str_path) {
+    // Fallback on a lib path relative to the executable location.
+    let zig_str_path = get_relative_path(Path::new("lib/str.zig"));
+    if let Some(zig_str_path) = zig_str_path {
         return zig_str_path;
     }
 
