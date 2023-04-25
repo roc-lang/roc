@@ -81,9 +81,9 @@ pub fn get_relative_path(sub_path: &Path) -> Option<PathBuf> {
 
         let mut curr_parent_opt = exe_relative_str_path.parent();
 
-        // this differs for regular build and nix releases, so we check in multiple spots.
-        // We also need to drop at least 2 folders to go from ./target/debug/... to ./...
-        for _ in 0..3 {
+        // We need to support paths like ./roc, ./bin/roc, ./target/debug/roc and tests like ./target/debug/deps/valgrind-63c787aa176d1277
+        // This requires dropping up to 3 directories.
+        for _ in 0..=3 {
             if let Some(curr_parent) = curr_parent_opt {
                 let potenial_path = curr_parent.join(sub_path);
 
