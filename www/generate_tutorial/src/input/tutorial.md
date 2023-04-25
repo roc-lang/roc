@@ -1982,4 +1982,4 @@ Here are various Roc expressions involving operators, and what they desugar to.
 
 These are all of the language keywords supported by Roc;
 
-`if`,`then`,`else`,`when`,`as`,`is`,`dbg`,`expect`,`expect-fx`,`crash`,`interface`,`app`,`package`,`platform`,`hosted`,`exposes`,`imports`,`with`,`generates`,`package`,`packages`,`requires`,`provides`,`to`
+`if`,`then`,`else`,`when`,`as`,`is`,`dbg`,`expect`,`expect-fx`,`crash`,`interface`,`app`,`package`,`platform`,`hosted`,`exposes`,`imports`,`with`,`generates`,`packages`,`requires`,`provides`,`to`
