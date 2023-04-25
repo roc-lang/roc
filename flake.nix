@@ -90,7 +90,7 @@
           llvmPkgs.clang
           libxkbcommon
           pkg-config
-          zig # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+          zig_0_9 # roc builtins are implemented in zig, see compiler/builtins/bitcode/
 
           # lib deps
           libffi

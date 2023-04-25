@@ -6,9 +6,10 @@
 , pkgs ? import nixpkgsSource { }
 ,
 }:
-# we only this file to release a nix package, use flake.nix for development
+# we only use this file to release a nix package, use flake.nix for development
 let
   rustPlatform = pkgs.rustPlatform;
+
   llvmPkgs = pkgs.llvmPackages_13;
   # nix does not store libs in /usr/lib or /lib
   nixGlibcPath = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
@@ -51,7 +52,7 @@ rustPlatform.buildRustPackage {
     python3
     llvmPkgs.clang
     llvmPkgs.llvm.dev
-    zig
+    zig_0_9
   ]);
 
   buildInputs = (with pkgs;
