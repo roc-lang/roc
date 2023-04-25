@@ -85,10 +85,10 @@ pub fn get_relative_path(sub_path: &Path) -> Option<PathBuf> {
         // This requires dropping up to 3 directories.
         for _ in 0..=3 {
             if let Some(curr_parent) = curr_parent_opt {
-                let potenial_path = curr_parent.join(sub_path);
+                let potential_path = curr_parent.join(sub_path);
 
-                if std::path::Path::exists(&potenial_path) {
-                    return Some(potenial_path);
+                if std::path::Path::exists(&potential_path) {
+                    return Some(potential_path);
                 } else {
                     curr_parent_opt = curr_parent.parent();
                 }
