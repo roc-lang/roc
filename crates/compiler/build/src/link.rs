@@ -383,7 +383,7 @@ pub fn build_zig_host_wasm32(
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home)
-        .args(&[
+        .args([
             "build-obj",
             zig_host_src,
             emit_bin,
