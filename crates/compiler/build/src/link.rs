@@ -77,7 +77,7 @@ pub fn get_relative_path(sub_path: &Path) -> Option<PathBuf> {
 
     if let Some(exe_relative_str_path) = exe_relative_str_path_opt {
         #[cfg(windows)]
-        let exe_relative_str_path = strip_windows_prefix(&exe_relative_str_path);
+        let exe_relative_str_path = roc_command_utils::strip_windows_prefix(&exe_relative_str_path);
 
         let mut curr_parent_opt = exe_relative_str_path.parent();
 
