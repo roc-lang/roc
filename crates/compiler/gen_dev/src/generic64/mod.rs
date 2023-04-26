@@ -870,7 +870,7 @@ impl<
             Layout::I128 | Layout::U128 => {
                 let offset = self.storage_manager.claim_stack_area(dst, 16);
 
-                ASM::mov_base32_reg64(&mut self.buf, offset + 0, CC::GENERAL_RETURN_REGS[0]);
+                ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
                 ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
             }
 
@@ -2936,7 +2936,7 @@ impl<
             (U64, U128) => {
                 let src_reg = self.storage_manager.load_to_general_reg(buf, src);
 
-                let base_offset = self.storage_manager.claim_stack_area(&dst, 16);
+                let base_offset = self.storage_manager.claim_stack_area(dst, 16);
 
                 let tmp = Symbol::DEV_TMP;
                 let tmp_reg = self.storage_manager.claim_general_reg(buf, &tmp);

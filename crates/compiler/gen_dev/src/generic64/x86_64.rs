@@ -462,10 +462,10 @@ impl X64_64SystemVStoreArgs {
                 let (offset, _) = storage_manager.stack_offset_and_size(&sym);
 
                 if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
-                    let reg1 = Self::GENERAL_PARAM_REGS[self.general_i + 0];
+                    let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
                     let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
 
-                    X86_64Assembler::mov_reg64_base32(buf, reg1, offset + 0);
+                    X86_64Assembler::mov_reg64_base32(buf, reg1, offset);
                     X86_64Assembler::mov_reg64_base32(buf, reg2, offset + 8);
 
                     self.general_i += 2;
@@ -473,8 +473,8 @@ impl X64_64SystemVStoreArgs {
                     // Copy to stack using return reg as buffer.
                     let reg = Self::GENERAL_RETURN_REGS[0];
 
-                    X86_64Assembler::mov_reg64_base32(buf, reg, offset + 0);
-                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset + 0, reg);
+                    X86_64Assembler::mov_reg64_base32(buf, reg, offset);
+                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
 
                     X86_64Assembler::mov_reg64_base32(buf, reg, offset + 8);
                     X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
@@ -2550,6 +2550,7 @@ fn raw_mov_reg_reg(
     }
 }
 
+#[allow(unused)]
 fn raw_movsx_reg_reg(
     buf: &mut Vec<u8>,
     input_width: RegisterWidth,
