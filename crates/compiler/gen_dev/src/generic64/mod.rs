@@ -2954,15 +2954,10 @@ impl<
             }
         }
 
-        if size - copied > 0 {
-            panic!("value only partially copied");
-        }
-
-        /*
         if size - copied >= 4 {
             for _ in (0..(size - copied)).step_by(4) {
-                ASM::mov_reg32_base32(buf, reg, from_offset + copied);
-                ASM::mov_base32_reg32(buf, to_offset + copied, reg);
+                ASM::mov_reg32_mem32_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_base32_reg32(buf, base_offset, tmp_reg);
 
                 copied += 4;
             }
@@ -2970,8 +2965,8 @@ impl<
 
         if size - copied >= 2 {
             for _ in (0..(size - copied)).step_by(2) {
-                ASM::mov_reg16_base32(buf, reg, from_offset + copied);
-                ASM::mov_base32_reg16(buf, to_offset + copied, reg);
+                ASM::mov_reg16_mem16_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_base32_reg16(buf, base_offset, tmp_reg);
 
                 copied += 2;
             }
@@ -2979,13 +2974,12 @@ impl<
 
         if size - copied >= 1 {
             for _ in (0..(size - copied)).step_by(1) {
-                ASM::mov_reg8_base32(buf, reg, from_offset + copied);
-                ASM::mov_base32_reg8(buf, to_offset + copied, reg);
+                ASM::mov_reg8_mem8_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_base32_reg8(buf, base_offset, tmp_reg);
 
                 copied += 1;
             }
         }
-        */
     }
 
     fn ptr_read(
