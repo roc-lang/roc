@@ -581,6 +581,32 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         udiv_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
+    fn irem_reg64_reg64_reg64<'a, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!()
+    }
+
+    fn urem_reg64_reg64_reg64<'a, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!()
+    }
+
     #[inline(always)]
     fn mul_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,

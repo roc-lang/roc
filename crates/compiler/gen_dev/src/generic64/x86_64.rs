@@ -1322,6 +1322,46 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
     }
 
+    fn irem_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
+        idiv_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RDX);
+    }
+
+    fn urem_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
+        udiv_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RDX);
+    }
+
     #[inline(always)]
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
         jmp_imm32(buf, offset);

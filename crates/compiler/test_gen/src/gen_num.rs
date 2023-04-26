@@ -1176,29 +1176,21 @@ fn gen_div_checked_by_zero_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_rem_i64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    Num.rem 8 3
-                "#
-        ),
-        2,
-        i64
-    );
+    assert_evals_to!("Num.rem 8 3", 2, i64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_rem_checked_div_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Num.remChecked 8 0 is
-                        Err DivByZero -> 4
-                        Ok _ -> -23
-                "#
+            when Num.remChecked 8 0 is
+                Err DivByZero -> 4
+                Ok _ -> -23
+            "#
         ),
         4,
         i64
