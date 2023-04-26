@@ -1173,6 +1173,21 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn function_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: X86_64GeneralReg,
+    ) {
+        lea_reg64(buf, dst);
+
+        relocs.push(Relocation::LinkedFunction {
+            offset: buf.len() as u64 - 4,
+            name: fn_name,
+        });
+    }
+
+    #[inline(always)]
     fn imul_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -1607,17 +1622,13 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
+        cmp_reg64_reg64(buf, register_width, src1, src2);
+
         match operation {
-            CompareOperation::LessThan => {
-                cmp_reg64_reg64(buf, register_width, src1, src2);
-                setl_reg64(buf, dst);
-            }
-            CompareOperation::LessThanOrEqual => todo!(),
-            CompareOperation::GreaterThan => {
-                cmp_reg64_reg64(buf, register_width, src1, src2);
-                setg_reg64(buf, dst);
-            }
-            CompareOperation::GreaterThanOrEqual => todo!(),
+            CompareOperation::LessThan => setl_reg64(buf, dst),
+            CompareOperation::LessThanOrEqual => setle_reg64(buf, dst),
+            CompareOperation::GreaterThan => setg_reg64(buf, dst),
+            CompareOperation::GreaterThanOrEqual => setge_reg64(buf, dst),
         }
     }
 
@@ -1629,18 +1640,13 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        match operation {
-            CompareOperation::LessThan => {
-                cmp_reg64_reg64(buf, register_width, src1, src2);
-                setb_reg64(buf, dst);
-            }
-            CompareOperation::LessThanOrEqual => todo!(),
-            CompareOperation::GreaterThan => {
-                cmp_reg64_reg64(buf, register_width, src1, src2);
-                seta_reg64(buf, dst);
-            }
+        cmp_reg64_reg64(buf, register_width, src1, src2);
 
-            CompareOperation::GreaterThanOrEqual => todo!(),
+        match operation {
+            CompareOperation::LessThan => setb_reg64(buf, dst),
+            CompareOperation::LessThanOrEqual => setbe_reg64(buf, dst),
+            CompareOperation::GreaterThan => seta_reg64(buf, dst),
+            CompareOperation::GreaterThanOrEqual => setae_reg64(buf, dst),
         }
     }
 
@@ -1689,28 +1695,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
         cvtsi2sd_freg64_reg64(buf, dst, src);
-    }
-
-    #[inline(always)]
-    fn lte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, RegisterWidth::W64, src1, src2);
-        setle_reg64(buf, dst);
-    }
-
-    #[inline(always)]
-    fn gte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, RegisterWidth::W64, src1, src2);
-        setge_reg64(buf, dst);
     }
 
     #[inline(always)]
@@ -2398,6 +2382,25 @@ fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i64) {
     }
 }
 
+/// `LEA r64, m` -> Store effective address for m in register r64.
+#[inline(always)]
+fn lea_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
+    let rex = add_opcode_extension(dst, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = dst as u8 % 8;
+
+    #[allow(clippy::unusual_byte_groupings)]
+    buf.extend([
+        rex,
+        0x8d,
+        0b00_000_101 | (dst_mod << 3),
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+    ])
+}
+
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
 /// This will not generate anything if dst and src are the same.
 #[inline(always)]
@@ -2959,7 +2962,13 @@ fn setae_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x93, buf, reg);
 }
 
-/// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF≠ OF).
+/// `SETBE r/m64` -> Set byte if below or equal (CF=1 or ZF=1).
+#[inline(always)]
+fn setbe_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x96, buf, reg);
+}
+
+/// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF ≠ OF).
 #[inline(always)]
 fn setle_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x9e, buf, reg);
@@ -3414,6 +3423,15 @@ mod tests {
     }
 
     #[test]
+    fn test_lea_reg64() {
+        disassembler_test!(
+            lea_reg64,
+            |reg| format!("lea {}, [rip]", reg),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_mov_reg64_reg64() {
         disassembler_test!(
             raw_mov_reg64_reg64,
@@ -3764,8 +3782,8 @@ mod tests {
             cmp_reg64_reg64,
             |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
                 "cmp {}, {}",
-                dbg!(dst.low_16bits_string()),
-                dbg!(src.low_16bits_string())
+                dst.low_16bits_string(),
+                src.low_16bits_string()
             ),
             [RegisterWidth::W16],
             ALL_GENERAL_REGS,
@@ -3776,8 +3794,8 @@ mod tests {
             cmp_reg64_reg64,
             |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
                 "cmp {}, {}",
-                dbg!(dst.low_32bits_string()),
-                dbg!(src.low_32bits_string())
+                dst.low_32bits_string(),
+                src.low_32bits_string()
             ),
             [RegisterWidth::W32],
             ALL_GENERAL_REGS,

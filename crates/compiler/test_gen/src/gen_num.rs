@@ -3113,7 +3113,7 @@ fn when_on_i16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_to_str() {
     use roc_std::RocStr;
 
@@ -4054,4 +4054,28 @@ fn num_abs_large_bits_min_overflow() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_abs_float_overflow() {
     assert_evals_to!("Num.absDiff Num.maxF64 Num.minF64", f64::INFINITY, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn bool_in_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            loop : [ Continue {}, Break {} ]
+            loop = Continue {}
+
+            all = \{} -> 
+                when loop is
+                    Continue {} -> Bool.true 
+                    Break {} -> Bool.false 
+
+            main = all {}
+            "#
+        ),
+        true,
+        bool
+    );
 }
