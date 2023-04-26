@@ -610,22 +610,21 @@ pub fn build(
         opt_level_from_flags(matches)
     };
 
-    let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
-        CodeGenBackend::Wasm
-    } else {
-        match matches.is_present(FLAG_DEV) {
-            true => CodeGenBackend::Assembly,
-            false => {
-                let backend_mode = match opt_level {
-                    OptLevel::Development => LlvmBackendMode::BinaryDev,
-                    OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
-                        LlvmBackendMode::Binary
-                    }
-                };
-
-                CodeGenBackend::Llvm(backend_mode)
-            }
+    // Note: This allows using `--dev` with `--optimize`.
+    // This means frontend optimizations and dev backend.
+    let code_gen_backend = if matches.is_present(FLAG_DEV) {
+        if matches!(triple.architecture, Architecture::Wasm32) {
+            CodeGenBackend::Wasm
+        } else {
+            CodeGenBackend::Assembly
         }
+    } else {
+        let backend_mode = match opt_level {
+            OptLevel::Development => LlvmBackendMode::BinaryDev,
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+        };
+
+        CodeGenBackend::Llvm(backend_mode)
     };
 
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
@@ -641,8 +640,7 @@ pub fn build(
         Some(n) => Threading::AtMost(n),
     };
 
-    let wasm_dev_backend = matches!(opt_level, OptLevel::Development)
-        && matches!(code_gen_backend, CodeGenBackend::Wasm);
+    let wasm_dev_backend = matches!(code_gen_backend, CodeGenBackend::Wasm);
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive

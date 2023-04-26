@@ -103,7 +103,7 @@ pub fn gen_from_mono_module<'a>(
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
-        CodeGenBackend::Assembly => gen_from_mono_module_dev(
+        CodeGenBackend::Assembly | CodeGenBackend::Wasm => gen_from_mono_module_dev(
             arena,
             loaded,
             target,
@@ -111,16 +111,6 @@ pub fn gen_from_mono_module<'a>(
             wasm_dev_stack_bytes,
         ),
         CodeGenBackend::Llvm(backend_mode) => {
-            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
-        }
-        CodeGenBackend::Wasm => {
-            // emit wasm via the llvm backend
-
-            let backend_mode = match code_gen_options.opt_level {
-                OptLevel::Development => LlvmBackendMode::BinaryDev,
-                OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
-            };
-
             gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
         }
     }
