@@ -1093,6 +1093,21 @@ impl<
                     src2_reg,
                 );
             }
+            Layout::Builtin(Builtin::Int(IntWidth::I128 | IntWidth::U128)) => {
+                let int_width = match *layout {
+                    Layout::I128 => IntWidth::I128,
+                    Layout::U128 => IntWidth::U128,
+                    _ => unreachable!(),
+                };
+
+                self.build_fn_call(
+                    dst,
+                    bitcode::NUM_MUL_WRAP_INT[int_width].to_string(),
+                    &[*src1, *src2],
+                    &[*layout, *layout],
+                    layout,
+                );
+            }
             Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
@@ -2686,7 +2701,21 @@ impl<
         let buf = &mut self.buf;
 
         match int_width {
-            IntWidth::U128 | IntWidth::I128 => todo!(),
+            IntWidth::U128 | IntWidth::I128 => {
+                let layout = match int_width {
+                    IntWidth::I128 => Layout::I128,
+                    IntWidth::U128 => Layout::U128,
+                    _ => unreachable!(),
+                };
+
+                self.build_fn_call(
+                    dst,
+                    bitcode::NUM_SHIFT_RIGHT_ZERO_FILL[int_width].to_string(),
+                    &[*src1, *src2],
+                    &[layout, layout],
+                    &layout,
+                );
+            }
             _ => {
                 let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
                 let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
