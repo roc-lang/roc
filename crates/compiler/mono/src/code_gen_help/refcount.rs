@@ -204,6 +204,7 @@ pub fn refcount_reset_proc_body<'a>(
         Layout::Union(u) => u,
         _ => unimplemented!("Reset is only implemented for UnionLayout"),
     };
+
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
@@ -212,6 +213,7 @@ pub fn refcount_reset_proc_body<'a>(
     // Reset structure is unique. Decrement its children and return a pointer to the allocation.
     let then_stmt = {
         use UnionLayout::*;
+
         let tag_layouts;
         let mut null_id = None;
         match union_layout {
@@ -239,7 +241,9 @@ pub fn refcount_reset_proc_body<'a>(
                 tag_layouts = root.arena.alloc([other_fields]);
             }
         };
+
         let tag_id_layout = union_layout.tag_id_layout();
+
         let tag_id_sym = root.create_symbol(ident_ids, "tag_id");
         let tag_id_stmt = |next| {
             Stmt::Let(
@@ -252,6 +256,7 @@ pub fn refcount_reset_proc_body<'a>(
                 next,
             )
         };
+
         let rc_contents_stmt = refcount_union_contents(
             root,
             ident_ids,
@@ -265,11 +270,13 @@ pub fn refcount_reset_proc_body<'a>(
             tag_id_layout,
             Stmt::Ret(addr),
         );
+
         tag_id_stmt(root.arena.alloc(
             //
             rc_contents_stmt,
         ))
     };
+
     // Reset structure is not unique. Decrement it and return a NULL pointer.
     let else_stmt = {
         let decrement_unit = root.create_symbol(ident_ids, "decrement_unit");
@@ -283,14 +290,17 @@ pub fn refcount_reset_proc_body<'a>(
             )
             .unwrap();
         let decrement_stmt = |next| Stmt::Let(decrement_unit, decrement_expr, LAYOUT_UNIT, next);
+
         // Zero
         let zero = root.create_symbol(ident_ids, "zero");
         let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
         let zero_stmt = |next| Stmt::Let(zero, zero_expr, root.layout_isize, next);
+
         // Null pointer with union layout
         let null = root.create_symbol(ident_ids, "null");
         let null_stmt =
             |next| let_lowlevel(root.arena, root.layout_isize, null, PtrCast, &[zero], next);
+
         decrement_stmt(root.arena.alloc(
             //
             zero_stmt(root.arena.alloc(
