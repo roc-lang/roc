@@ -980,14 +980,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("saving floating point reg to stack for AArch64");
     }
     #[inline(always)]
-    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
-        if offset < 0 {
-            todo!("negative stack offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
-        } else {
-            todo!("stack offsets over 32k for AArch64");
+    fn mov_stack32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: AArch64GeneralReg,
+    ) {
+        match register_width {
+            RegisterWidth::W8 => todo!(),
+            RegisterWidth::W16 => todo!(),
+            RegisterWidth::W32 => todo!(),
+            RegisterWidth::W64 => {
+                if offset < 0 {
+                    todo!("negative stack offsets for AArch64");
+                } else if offset < (0xFFF << 8) {
+                    debug_assert!(offset % 8 == 0);
+                    str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
+                } else {
+                    todo!("stack offsets over 32k for AArch64");
+                }
+            }
         }
     }
     #[inline(always)]

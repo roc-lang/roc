@@ -536,21 +536,50 @@ impl X64_64SystemVStoreArgs {
                         self.tmp_stack_offset += size as i32;
                     }
                     Layout::Union(UnionLayout::NonRecursive(_)) => {
-                        // for now, just also store this on the stack
+                        type ASM = X86_64Assembler;
+
+                        let tmp_reg = Self::GENERAL_RETURN_REGS[0];
+                        let stack_offset = self.tmp_stack_offset as i32;
+
+                        let mut copied = 0;
                         let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-                        debug_assert_eq!(base_offset % 8, 0);
-                        for i in (0..size as i32).step_by(8) {
-                            X86_64Assembler::mov_reg64_base32(
-                                buf,
-                                Self::GENERAL_RETURN_REGS[0],
-                                base_offset + i,
-                            );
-                            X86_64Assembler::mov_stack32_reg64(
-                                buf,
-                                self.tmp_stack_offset + i,
-                                Self::GENERAL_RETURN_REGS[0],
-                            );
+
+                        if size - copied >= 8 {
+                            for _ in (0..(size - copied)).step_by(8) {
+                                ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
+                                ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
+
+                                copied += 8;
+                            }
                         }
+
+                        if size - copied >= 4 {
+                            for _ in (0..(size - copied)).step_by(4) {
+                                ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
+                                ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
+
+                                copied += 4;
+                            }
+                        }
+
+                        if size - copied >= 2 {
+                            for _ in (0..(size - copied)).step_by(2) {
+                                ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
+                                ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
+
+                                copied += 2;
+                            }
+                        }
+
+                        if size - copied >= 1 {
+                            for _ in (0..(size - copied)).step_by(1) {
+                                ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
+                                ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
+
+                                copied += 1;
+                            }
+                        }
+
                         self.tmp_stack_offset += size as i32;
                     }
                     _ => {
@@ -1631,8 +1660,13 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         movsd_base64_offset32_freg64(buf, X86_64GeneralReg::RSP, offset, src)
     }
     #[inline(always)]
-    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
-        mov_base64_offset32_reg64(buf, X86_64GeneralReg::RSP, offset, src)
+    fn mov_stack32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base_offset32_reg(buf, register_width, X86_64GeneralReg::RSP, offset, src)
     }
 
     #[inline(always)]
@@ -2582,6 +2616,22 @@ fn mov_reg_reg(
 }
 
 // The following base and stack based operations could be optimized based on how many bytes the offset actually is.
+
+#[inline(always)]
+fn mov_base_offset32_reg(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    match register_width {
+        RegisterWidth::W8 => mov_base16_offset32_reg16(buf, base, offset, src),
+        RegisterWidth::W16 => mov_base16_offset32_reg16(buf, base, offset, src),
+        RegisterWidth::W32 => mov_base32_offset32_reg32(buf, base, offset, src),
+        RegisterWidth::W64 => mov_base64_offset32_reg64(buf, base, offset, src),
+    }
+}
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64, where m64 references a base + offset.
 #[inline(always)]

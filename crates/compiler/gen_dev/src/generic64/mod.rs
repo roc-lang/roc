@@ -362,7 +362,26 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
-    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
+
+    fn mov_stack32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: GeneralReg,
+    );
+
+    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_stack32_reg(buf, RegisterWidth::W64, offset, src)
+    }
+    fn mov_stack32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_stack32_reg(buf, RegisterWidth::W32, offset, src)
+    }
+    fn mov_stack32_reg16(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_stack32_reg(buf, RegisterWidth::W16, offset, src)
+    }
+    fn mov_stack32_reg8(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_stack32_reg(buf, RegisterWidth::W8, offset, src)
+    }
 
     fn sqrt_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
     fn sqrt_freg32_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
