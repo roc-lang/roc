@@ -9,14 +9,15 @@
 
 use std::cmp::{self, Ord};
 use std::iter::Iterator;
+use std::num::NonZeroU32;
 use std::ops::Neg;
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
 
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_target::{PtrWidth, TargetInfo};
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
+use roc_target::TargetInfo;
 
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Proc, ProcLayout, Stmt,
@@ -56,6 +57,12 @@ fn specialize_drops_proc<'a, 'i>(
 ) {
     for (layout, symbol) in proc.args.iter().copied() {
         environment.add_symbol_layout(symbol, layout);
+    }
+
+    if proc.name.name().ident_id() == IdentId(17)
+        && proc.name.name().module_id() == ModuleId(NonZeroU32::new(19).unwrap())
+    {
+        let a = "foo";
     }
 
     let new_body =
@@ -129,6 +136,9 @@ fn specialize_drops_stmt<'a, 'i>(
                 } => {
                     // TODO perhaps we need the union_layout later as well? if so, create a new function/map to store it.
                     environment.add_union_child(*structure, *binding, *tag_id, *index);
+                    // Generated code might know the tag of the union without switching on it.
+                    // So if we unionAtIndex, we must know the tag and we can use it to specialize the drop.
+                    environment.symbol_tag.insert(*structure, *tag_id);
                     alloc_let_with_continuation!(environment)
                 }
                 Expr::ExprUnbox { symbol } => {
@@ -292,9 +302,9 @@ fn specialize_drops_stmt<'a, 'i>(
 
                     // This decremented symbol was not incremented before, perhaps the children were.
                     let in_layout = environment.get_symbol_layout(symbol);
-                    let layout = layout_interner.get(*in_layout);
+                    let runtime_layout = layout_interner.runtime_representation(*in_layout);
 
-                    let new_dec = match layout {
+                    let new_dec = match runtime_layout {
                         // Layout has children, try to inline them.
                         Layout::Struct { field_layouts, .. } => specialize_struct(
                             arena,
@@ -312,7 +322,6 @@ fn specialize_drops_stmt<'a, 'i>(
                             ident_ids,
                             environment,
                             symbol,
-                            *in_layout,
                             union_layout,
                             &mut incremented_children,
                             continuation,
@@ -326,6 +335,9 @@ fn specialize_drops_stmt<'a, 'i>(
                             symbol,
                             continuation,
                         ),
+                        Layout::LambdaSet(_) => {
+                            unreachable!("lambda sets should not be a runtime layout")
+                        }
                         // TODO: Implement this with uniqueness checks.
                         _ => {
                             let new_continuation = specialize_drops_stmt(
@@ -549,7 +561,6 @@ fn specialize_union<'a, 'i>(
     ident_ids: &'i mut IdentIds,
     environment: &mut DropSpecializationEnvironment<'a>,
     symbol: &Symbol,
-    layout: InLayout<'a>,
     union_layout: UnionLayout<'a>,
     incremented_children: &mut MutSet<Child>,
     continuation: &'a Stmt<'a>,
@@ -692,60 +703,81 @@ fn specialize_union<'a, 'i>(
                         | UnionLayout::NonNullableUnwrapped(_)
                         | UnionLayout::NullableWrapped { .. }
                         | UnionLayout::NullableUnwrapped { .. } => {
-                            branch_uniqueness(
-                                arena,
-                                ident_ids,
-                                layout_interner,
-                                environment,
-                                *symbol,
-                                layout,
-                                // If the symbol is unique:
-                                // - drop the children that were not incremented before
-                                // - don't do anything for the children that were incremented before
-                                // - free the parent
-                                |layout_interner, ident_ids, continuation| {
-                                    refcount_fields(
-                                        layout_interner,
-                                        ident_ids,
-                                        // Do nothing for the children that were incremented before, as the decrement will cancel out.
-                                        None,
-                                        // Decrement the children that were not incremented before. And thus don't cancel out.
-                                        Some(|arena, symbol, continuation| {
-                                            arena.alloc(Stmt::Refcounting(
-                                                ModifyRc::Dec(symbol),
-                                                continuation,
-                                            ))
-                                        }),
+                            if cfg!(feature = "gen-wasm") {
+                                // Wasm doesn't have change it's decrement behaviour when decrementing a uniquely referenced union vs otherwise.
+                                // It always behaves as if it is unique and always (recursively) decrements the children.
+                                refcount_fields(
+                                    layout_interner,
+                                    ident_ids,
+                                    // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                                    None,
+                                    // Decrement the children that were not incremented before. And thus don't cancel out.
+                                    Some(|arena, symbol, continuation| {
                                         arena.alloc(Stmt::Refcounting(
-                                            // TODO this could be replaced by a free if ever added to the IR.
-                                            ModifyRc::DecRef(*symbol),
+                                            ModifyRc::Dec(symbol),
                                             continuation,
-                                        )),
-                                    )
-                                },
-                                // If the symbol is not unique:
-                                // - increment the children that were incremented before
-                                // - don't do anything for the children that were not incremented before
-                                // - decref the parent
-                                |layout_interner, ident_ids, continuation| {
-                                    refcount_fields(
-                                        layout_interner,
-                                        ident_ids,
-                                        Some(|arena, symbol, continuation| {
+                                        ))
+                                    }),
+                                    arena.alloc(Stmt::Refcounting(
+                                        ModifyRc::DecRef(*symbol),
+                                        continuation,
+                                    )),
+                                )
+                            } else {
+                                branch_uniqueness(
+                                    arena,
+                                    ident_ids,
+                                    layout_interner,
+                                    environment,
+                                    *symbol,
+                                    // If the symbol is unique:
+                                    // - drop the children that were not incremented before
+                                    // - don't do anything for the children that were incremented before
+                                    // - free the parent
+                                    |layout_interner, ident_ids, continuation| {
+                                        refcount_fields(
+                                            layout_interner,
+                                            ident_ids,
+                                            // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                                            None,
+                                            // Decrement the children that were not incremented before. And thus don't cancel out.
+                                            Some(|arena, symbol, continuation| {
+                                                arena.alloc(Stmt::Refcounting(
+                                                    ModifyRc::Dec(symbol),
+                                                    continuation,
+                                                ))
+                                            }),
                                             arena.alloc(Stmt::Refcounting(
-                                                ModifyRc::Inc(symbol, 1),
+                                                // TODO this could be replaced by a free if ever added to the IR.
+                                                ModifyRc::DecRef(*symbol),
                                                 continuation,
-                                            ))
-                                        }),
-                                        None,
-                                        arena.alloc(Stmt::Refcounting(
-                                            ModifyRc::DecRef(*symbol),
-                                            continuation,
-                                        )),
-                                    )
-                                },
-                                new_continuation,
-                            )
+                                            )),
+                                        )
+                                    },
+                                    // If the symbol is not unique:
+                                    // - increment the children that were incremented before
+                                    // - don't do anything for the children that were not incremented before
+                                    // - decref the parent
+                                    |layout_interner, ident_ids, continuation| {
+                                        refcount_fields(
+                                            layout_interner,
+                                            ident_ids,
+                                            Some(|arena, symbol, continuation| {
+                                                arena.alloc(Stmt::Refcounting(
+                                                    ModifyRc::Inc(symbol, 1),
+                                                    continuation,
+                                                ))
+                                            }),
+                                            None,
+                                            arena.alloc(Stmt::Refcounting(
+                                                ModifyRc::DecRef(*symbol),
+                                                continuation,
+                                            )),
+                                        )
+                                    },
+                                    new_continuation,
+                                )
+                            }
                         }
                     }
                 }
@@ -855,7 +887,6 @@ fn branch_uniqueness<'a, 'i, F1, F2>(
     layout_interner: &'i mut STLayoutInterner<'a>,
     environment: &DropSpecializationEnvironment<'a>,
     symbol: Symbol,
-    layout: InLayout<'a>,
     unique: F1,
     not_unique: F2,
     continutation: &'a Stmt<'a>,
@@ -890,92 +921,33 @@ where
         join
     };
 
-    unique_symbol(
-        arena,
-        ident_ids,
-        layout_interner,
-        environment,
-        symbol,
-        layout,
-        join,
-    )
+    unique_symbol(arena, ident_ids, environment, symbol, join)
 }
 
 fn unique_symbol<'a, 'i, F>(
     arena: &'a Bump,
     ident_ids: &'i mut IdentIds,
-    layout_interner: &'i mut STLayoutInterner<'a>,
     environment: &DropSpecializationEnvironment<'a>,
     symbol: Symbol,
-    layout: InLayout<'a>,
     continuation: F,
 ) -> &'a Stmt<'a>
 where
     F: FnOnce(Symbol) -> &'a mut Stmt<'a>,
 {
-    let rc_ptr = environment.create_symbol(ident_ids, "rc_ptr");
-    let rc = environment.create_symbol(ident_ids, "rc");
-    let refcount_1 = environment.create_symbol(ident_ids, "refcount_1");
     let is_unique = environment.create_symbol(ident_ids, "is_unique");
-    let addr = environment.create_symbol(ident_ids, "addr");
 
-    let refcount_layout = Layout::isize(environment.target_info);
-    let union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([refcount_layout]));
-
-    // Uniqueness test
-    let is_unique_stmt = arena.alloc(Stmt::Let(
+    arena.alloc(Stmt::Let(
         is_unique,
         Expr::Call(Call {
             call_type: CallType::LowLevel {
-                op: LowLevel::Eq,
+                op: LowLevel::RefCountIsUnique,
                 update_mode: UpdateModeId::BACKEND_DUMMY,
             },
-            arguments: arena.alloc_slice_copy(&[rc, refcount_1]),
+            arguments: arena.alloc([symbol]),
         }),
         Layout::BOOL,
         continuation(is_unique),
-    ));
-
-    // Constant for unique refcount
-    let refcount_1_encoded = match environment.target_info.ptr_width() {
-        PtrWidth::Bytes4 => i32::MIN as i128,
-        PtrWidth::Bytes8 => i64::MIN as i128,
-    }
-    .to_ne_bytes();
-    let refcount_1_expr = Expr::Literal(Literal::Int(refcount_1_encoded));
-    let refcount_1_stmt = Stmt::Let(
-        refcount_1,
-        refcount_1_expr,
-        refcount_layout,
-        arena.alloc(is_unique_stmt),
-    );
-
-    // Refcount value
-    let rc_expr = Expr::UnionAtIndex {
-        structure: rc_ptr,
-        tag_id: 0,
-        union_layout,
-        index: 0,
-    };
-    let rc_stmt = Stmt::Let(rc, rc_expr, refcount_layout, arena.alloc(refcount_1_stmt));
-
-    // Refcount pointer
-    let rc_ptr_stmt = {
-        rc_ptr_from_data_ptr_help(
-            arena,
-            ident_ids,
-            layout_interner,
-            environment,
-            symbol,
-            layout,
-            rc_ptr,
-            union_layout.stores_tag_id_in_pointer(environment.target_info),
-            arena.alloc(rc_stmt),
-            addr,
-        )
-    };
-
-    rc_ptr_stmt
+    ))
 }
 
 fn rc_ptr_from_data_ptr_help<'a, 'i>(
