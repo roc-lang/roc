@@ -483,7 +483,7 @@ impl X64_64SystemVStoreArgs {
                 }
             }
             x if layout_interner.stack_size(x) == 0 => {}
-            x if layout_interner.stack_size(x) == 16 => {
+            x if layout_interner.stack_size(x) > 16 => {
                 // TODO: Double check this.
                 // Just copy onto the stack.
                 // Use return reg as buffer because it will be empty right now.

@@ -3032,7 +3032,7 @@ impl<
         if size - copied >= 8 {
             for _ in (0..(size - copied)).step_by(8) {
                 ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, copied);
-                ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+                ASM::mov_base32_reg64(buf, base_offset + copied, tmp_reg);
 
                 copied += 8;
             }
@@ -3041,7 +3041,7 @@ impl<
         if size - copied >= 4 {
             for _ in (0..(size - copied)).step_by(4) {
                 ASM::mov_reg32_mem32_offset32(buf, tmp_reg, ptr_reg, copied);
-                ASM::mov_base32_reg32(buf, base_offset, tmp_reg);
+                ASM::mov_base32_reg32(buf, base_offset + copied, tmp_reg);
 
                 copied += 4;
             }
@@ -3050,7 +3050,7 @@ impl<
         if size - copied >= 2 {
             for _ in (0..(size - copied)).step_by(2) {
                 ASM::mov_reg16_mem16_offset32(buf, tmp_reg, ptr_reg, copied);
-                ASM::mov_base32_reg16(buf, base_offset, tmp_reg);
+                ASM::mov_base32_reg16(buf, base_offset + copied, tmp_reg);
 
                 copied += 2;
             }
@@ -3059,7 +3059,7 @@ impl<
         if size - copied >= 1 {
             for _ in (0..(size - copied)).step_by(1) {
                 ASM::mov_reg8_mem8_offset32(buf, tmp_reg, ptr_reg, copied);
-                ASM::mov_base32_reg8(buf, base_offset, tmp_reg);
+                ASM::mov_base32_reg8(buf, base_offset + copied, tmp_reg);
 
                 copied += 1;
             }
@@ -3124,6 +3124,15 @@ impl<
             }
 
             Layout::Struct { .. } => {
+                // put it on the stack
+                let stack_size = layout_interner.stack_size(element_in_layout);
+
+                storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
+                    Self::unbox_to_stack(buf, storage_manager, dst, stack_size, ptr_reg, tmp_reg);
+                });
+            }
+
+            Layout::Union(UnionLayout::NonRecursive(_)) => {
                 // put it on the stack
                 let stack_size = layout_interner.stack_size(element_in_layout);
 
