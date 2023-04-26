@@ -21,6 +21,9 @@ use target_lexicon::Triple;
 
 pub const PROMPT: &str = concatcp!(BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
+const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
+pub const COLORED_VAR_PREFIX: &str = concatcp!(GREEN, VAR_NAME_PREFIX);
+
 
 /// The prefix we use for the automatic variable names we assign to each expr,
 /// e.g. if the prefix is "val" then the first expr you enter will be named "val1"
@@ -591,7 +594,6 @@ fn format_output(
             if let Some(var_name) = opt_var_name {
                 use unicode_segmentation::UnicodeSegmentation;
 
-                const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
                 const VAR_NAME_COLUMN_MAX: usize = 32; // Right-align the var_name at this column
 
                 let term_width = match dimensions {
@@ -621,8 +623,7 @@ fn format_output(
                     buf.push(' ');
                 }
 
-                buf.push_str(GREEN);
-                buf.push_str(VAR_NAME_PREFIX);
+                buf.push_str(COLORED_VAR_PREFIX);
                 buf.push_str(&var_name);
                 buf.push_str(END_COL);
                 buf.push('\n');

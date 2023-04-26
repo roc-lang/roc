@@ -5,6 +5,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use roc_repl_cli::{SHORT_INSTRUCTIONS, WELCOME_MESSAGE};
 use roc_test_utils::assert_multiline_str_eq;
+use roc_repl_cli::repl_state::{COLORED_VAR_PREFIX, PROMPT};
 
 const ERROR_MESSAGE_START: char = '─';
 
@@ -75,7 +76,7 @@ pub fn repl_eval(input: &str) -> Out {
 
     // Remove the initial instructions from the output.
 
-    let expected_instructions = format!("{}{}", WELCOME_MESSAGE, SHORT_INSTRUCTIONS);
+    let expected_instructions = format!("{}{}{}", WELCOME_MESSAGE, SHORT_INSTRUCTIONS, PROMPT);
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
@@ -97,17 +98,10 @@ pub fn repl_eval(input: &str) -> Out {
             panic!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
         }
     } else {
-        let expected_after_answer = "\n".to_string();
+	let answer1 = &answer[1..];
+	let split_pos = answer1.rfind(COLORED_VAR_PREFIX).unwrap_or_else(||answer1.rfind(PROMPT).unwrap_or_else(||answer1.len()));
+	let (answer, _) = answer1.split_at(split_pos);
 
-        assert!(
-            answer.ends_with(&expected_after_answer),
-            "Unexpected repl output after answer: {}",
-            answer
-        );
-
-        // Use [1..] to trim the leading '\n'
-        // and (len - 1) to trim the trailing '\n'
-        let (answer, _) = answer[1..].split_at(answer.len() - expected_after_answer.len() - 1);
 
         // Remove ANSI escape codes from the answer - for example:
         //
@@ -117,7 +111,7 @@ pub fn repl_eval(input: &str) -> Out {
     };
 
     Out {
-        stdout: String::from_utf8(answer).unwrap(),
+        stdout: String::from_utf8(answer).unwrap().trim_end().to_string(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         status: output.status,
     }

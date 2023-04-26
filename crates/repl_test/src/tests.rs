@@ -644,8 +644,7 @@ fn too_few_args() {
                         ^^^^^^^
 
                 Roc does not allow functions to be partially applied. Use a closure to
-                make partial application explicit.
-                "#
+                make partial application explicit."#
         ),
     );
 }
@@ -670,8 +669,7 @@ fn type_problem() {
 
                 But add needs its 2nd argument to be:
 
-                    Num *
-                "#
+                    Num *"#
         ),
     );
 }
@@ -954,8 +952,7 @@ fn parse_problem() {
                             ^^^
 
                 Looks like you are trying to define a function. In roc, functions are
-                always written as a lambda, like increment = \n -> n + 1.
-                "#
+                always written as a lambda, like increment = \n -> n + 1."#
         ),
     );
 }
