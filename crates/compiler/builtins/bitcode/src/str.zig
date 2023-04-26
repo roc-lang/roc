@@ -4,7 +4,6 @@ const grapheme = @import("helpers/grapheme.zig");
 const UpdateMode = utils.UpdateMode;
 const std = @import("std");
 const mem = std.mem;
-const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const unicode = std.unicode;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -316,7 +315,7 @@ pub const RocStr = extern struct {
         }
 
         // otherwise, check if the refcount is one
-        return @call(.{ .modifier = always_inline }, RocStr.isRefcountOne, .{self});
+        return @call(.always_inline, RocStr.isRefcountOne, .{self});
     }
 
     fn isRefcountOne(self: RocStr) bool {
@@ -493,7 +492,7 @@ pub const RocStr = extern struct {
 };
 
 pub fn init(bytes_ptr: [*]const u8, length: usize) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, RocStr.init, .{ bytes_ptr, length });
+    return @call(.always_inline, RocStr.init, .{ bytes_ptr, length });
 }
 
 // Str.equal
@@ -508,7 +507,7 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
 
 // Str.toScalars
 pub fn strToScalarsC(str: RocStr) callconv(.C) RocList {
-    return @call(.{ .modifier = always_inline }, strToScalars, .{str});
+    return @call(.always_inline, strToScalars, .{str});
 }
 
 fn strToScalars(string: RocStr) callconv(.C) RocList {
@@ -746,7 +745,7 @@ test "strToScalars: Multiple 4-byte UTF-8 characters" {
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(int: T) callconv(.C) RocStr {
-            return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ T, int });
+            return @call(.always_inline, strFromIntHelp, .{ T, int });
         }
     }.func;
 
@@ -774,7 +773,7 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 pub fn exportFromFloat(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(float: T) callconv(.C) RocStr {
-            return @call(.{ .modifier = always_inline }, strFromFloatHelp, .{ T, float });
+            return @call(.always_inline, strFromFloatHelp, .{ T, float });
         }
     }.func;
 
@@ -808,6 +807,11 @@ fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
 
     const str_bytes = string.asU8ptr();
     const str_len = string.len();
+    // const ref_ptr = @ptrToInt(string.getRefcountPtr()) >> 1;
+    // const init_fn: *const fn ([*]u8, usize, usize) RocStr = if (string.isSmallStr())
+    //     initFromSmallStr
+    // else
+    //     initFromBigStr;
 
     const delimiter_bytes_ptrs = delimiter.asU8ptr();
     const delimiter_len = delimiter.len();
@@ -1344,6 +1348,12 @@ pub fn strGraphemes(roc_str: RocStr) callconv(.C) RocList {
     var index: usize = 0;
     var last_codepoint_len: u8 = 0;
 
+    // const ref_ptr = @ptrToInt(roc_str.getRefcountPtr()) >> 1;
+    // const init_fn: *const fn ([*]u8, usize, usize) RocStr = if (roc_str.isSmallStr())
+    //     initFromSmallStr
+    // else
+    //     initFromBigStr;
+
     var result = RocList.allocate(@alignOf(RocStr), countGraphemeClusters(roc_str), @sizeOf(RocStr));
     const graphemes = result.elements(RocStr) orelse return result;
     var slice = roc_str.asSlice();
@@ -1380,7 +1390,7 @@ fn graphemesTest(input: []const u8, expected: []const []const u8) !void {
     defer graphemes.deinit(u8);
     if (input.len == 0) return; // empty string
     const elems = graphemes.elements(RocStr) orelse unreachable;
-    for (expected) |g, i| {
+    for (expected, 0..) |g, i| {
         try std.testing.expectEqualStrings(g, elems[i].asSlice());
     }
 }
@@ -1618,7 +1628,7 @@ test "endsWith: hello world ends with world" {
 
 // Str.concat
 pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strConcat, .{ arg1, arg2 });
+    return @call(.always_inline, strConcat, .{ arg1, arg2 });
 }
 
 fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
@@ -1680,7 +1690,7 @@ pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
         .list_capacity = list.capacity,
     };
 
-    return @call(.{ .modifier = always_inline }, strJoinWith, .{ roc_list_str, separator });
+    return @call(.always_inline, strJoinWith, .{ roc_list_str, separator });
 }
 
 fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {
@@ -1850,7 +1860,7 @@ pub fn fromUtf8RangeC(
     count: usize,
     update_mode: UpdateMode,
 ) callconv(.C) void {
-    output.* = @call(.{ .modifier = always_inline }, fromUtf8Range, .{ list, start, count, update_mode });
+    output.* = @call(.always_inline, fromUtf8Range, .{ list, start, count, update_mode });
 }
 
 pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
@@ -1927,7 +1937,49 @@ fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: U
 
 pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
     const bytes: []u8 = ptr[0..len];
-    return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{bytes});
+    return @call(.always_inline, unicode.utf8ValidateSlice, .{bytes});
+// pub fn isValidUnicode(buf: []const u8) bool {
+//     const size = @sizeOf(u64);
+//     // TODO: we should test changing the step on other platforms.
+//     // The general tradeoff is making extremely large strings potentially much faster
+//     // at the cost of small strings being slightly slower.
+//     const step = size;
+//     var i: usize = 0;
+//     while (i + step < buf.len) {
+//         var bytes: u64 = undefined;
+//         @memcpy(@ptrCast([*]u8, &bytes), @ptrCast([*]const u8, buf) + i, size);
+//         const unicode_bytes = bytes & 0x8080_8080_8080_8080;
+//         if (unicode_bytes == 0) {
+//             i += step;
+//             continue;
+//         }
+
+//         while (buf[i] < 0b1000_0000) : (i += 1) {}
+
+//         while (buf[i] >= 0b1000_0000) {
+//             // This forces prefetching, otherwise the loop can run at about half speed.
+//             if (i + 4 >= buf.len) break;
+//             var small_buf: [4]u8 = undefined;
+//             @memcpy(&small_buf, @ptrCast([*]const u8, buf) + i, 4);
+//             // TODO: Should we always inline these function calls below?
+//             if (std.unicode.utf8ByteSequenceLength(small_buf[0])) |cp_len| {
+//                 if (std.meta.isError(std.unicode.utf8Decode(small_buf[0..cp_len]))) {
+//                     return false;
+//                 }
+//                 i += cp_len;
+//             } else |_| {
+//                 return false;
+//             }
+//         }
+//     }
+
+//     if (i == buf.len) return true;
+//     while (buf[i] < 0b1000_0000) {
+//         i += 1;
+//         if (i == buf.len) return true;
+//     }
+
+//     return @call(.always_inline, unicode.utf8ValidateSlice, .{buf[i..]});
 }
 
 const Utf8DecodeError = error{

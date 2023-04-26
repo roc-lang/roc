@@ -3,10 +3,12 @@ const mem = std.mem;
 const Builder = std.build.Builder;
 const CrossTarget = std.zig.CrossTarget;
 const Arch = std.Target.Cpu.Arch;
+const log = std.log;
 
 pub fn build(b: *Builder) void {
-    b.setPreferredReleaseMode(.ReleaseFast);
-    const mode = b.standardReleaseOptions();
+    const mode = b.standardOptimizeOption(.{
+        .preferred_optimize_mode = .ReleaseFast,
+    });
 
     // Options
     const fallback_main_path = "./src/main.zig";
@@ -14,8 +16,10 @@ pub fn build(b: *Builder) void {
     const main_path = b.option([]const u8, "main-path", main_path_desc) orelse fallback_main_path;
 
     // Tests
-    var main_tests = b.addTest(main_path);
-    main_tests.setBuildMode(mode);
+    var main_tests = b.addTest(.{
+        .root_source_file = .{ .path = main_path },
+        .optimize = mode,
+    });
     main_tests.linkSystemLibrary("c");
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&main_tests.step);
@@ -56,14 +60,15 @@ fn generateLlvmIrFile(
     step_name: []const u8,
     object_name: []const u8,
 ) void {
-    const obj = b.addObject(object_name, main_path);
-    obj.setBuildMode(mode);
+    const obj = b.addObject(.{
+        .name = object_name,
+        .root_source_file = .{ .path = main_path },
+        .target = target,
+        .optimize = mode,
+    });
     obj.strip = true;
     obj.emit_llvm_ir = .emit;
     obj.emit_llvm_bc = .emit;
-    obj.emit_bin = .no_emit;
-    obj.target = target;
-
     const ir = b.step(step_name, "Build LLVM ir");
     ir.dependOn(&obj.step);
 }
@@ -81,8 +86,12 @@ fn generateObjectFile(
     step_name: []const u8,
     object_name: []const u8,
 ) void {
-    const obj = b.addObject(object_name, main_path);
-    obj.setBuildMode(mode);
+    const obj = b.addObject(.{
+        .name = object_name,
+        .root_source_file = .{ .path = main_path },
+        .target = target,
+        .optimize = mode,
+    });
     obj.linkSystemLibrary("c");
     obj.setOutputDir(".");
     obj.strip = true;
@@ -90,14 +99,17 @@ fn generateObjectFile(
     obj.link_function_sections = true;
     const obj_step = b.step(step_name, "Build object file for linking");
     obj_step.dependOn(&obj.step);
+    //    _ = b.step(step_name, "Build object file for linking");
+
+    //    obj_step.dependOn(&obj.step);
 }
 
 fn makeLinux32Target() CrossTarget {
     var target = CrossTarget.parse(.{}) catch unreachable;
 
-    target.cpu_arch = std.Target.Cpu.Arch.i386;
-    target.os_tag = std.Target.Os.Tag.linux;
-    target.abi = std.Target.Abi.musl;
+    target.cpu_arch = .x86;
+    target.os_tag = .linux;
+    target.abi = .musl;
 
     return target;
 }
@@ -115,9 +127,9 @@ fn makeLinux64Target() CrossTarget {
 fn makeWindows64Target() CrossTarget {
     var target = CrossTarget.parse(.{}) catch unreachable;
 
-    target.cpu_arch = std.Target.Cpu.Arch.x86_64;
-    target.os_tag = std.Target.Os.Tag.windows;
-    target.abi = std.Target.Abi.gnu;
+    target.cpu_arch = .x86_64;
+    target.os_tag = .windows;
+    target.abi = .gnu;
 
     return target;
 }
@@ -133,11 +145,13 @@ fn makeWasm32Target() CrossTarget {
     return target;
 }
 
+fn ignore(_: *Builder.Step, _: *std.Progress.Node) anyerror!void {}
+
 fn removeInstallSteps(b: *Builder) void {
-    for (b.top_level_steps.items) |top_level_step, i| {
-        const name = top_level_step.step.name;
+    for (b.top_level_steps.values()) |v| {
+        const name = v.step.name;
         if (mem.eql(u8, name, "install") or mem.eql(u8, name, "uninstall")) {
-            _ = b.top_level_steps.swapRemove(i);
+            v.step.makeFn = ignore;
         }
     }
 }

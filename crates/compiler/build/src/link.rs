@@ -1154,6 +1154,8 @@ fn link_linux(
 
             let mut output_path = output_path;
 
+	    let soname_arg = format!("-Wl,-soname={}", soname.display());
+
             output_path.set_extension("so.1.0");
 
             (
@@ -1162,8 +1164,7 @@ fn link_linux(
                 // Also find a way to have these be string slices instead of Strings.
                 vec![
                     "-shared".to_string(),
-                    "-soname".to_string(),
-                    soname.as_path().to_str().unwrap().to_string(),
+                    soname_arg.to_string()
                 ],
                 output_path,
             )
@@ -1176,7 +1177,7 @@ fn link_linux(
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
 
-    let mut command = Command::new("ld");
+    let mut command = Command::new("gcc");
 
     command
         // Don't allow LD_ env vars to affect this
@@ -1185,20 +1186,20 @@ fn link_linux(
         // Keep NIX_ env vars
         .envs(
             env::vars()
-                .filter(|&(ref k, _)| k.starts_with("NIX_"))
+                .filter(|&(ref k, _)| k.starts_with("NIX_") || k.starts_with("LIBRARY_PATH"))
                 .collect::<HashMap<String, String>>(),
         )
         .args([
-            "--gc-sections",
-            "--eh-frame-hdr",
-            "-A",
-            arch_str(target),
-            "-pie",
-            &*crti_path.to_string_lossy(),
-            &*crtn_path.to_string_lossy(),
+            "-Wl,--gc-sections",
+            "-Wl,--eh-frame-hdr",
+            // "-Wl,-A",
+            // arch_str(target),
+            // "-Wl,-pie",
+            // &*crti_path.to_string_lossy(),
+            // &*crtn_path.to_string_lossy(),
         ])
         .args(&base_args)
-        .args(["-dynamic-linker", ld_linux])
+        // .args(["-dynamic-linker", ld_linux])
         .args(input_paths)
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
@@ -1211,8 +1212,8 @@ fn link_linux(
             "-ldl",
             "-lrt",
             "-lutil",
-            "-lc_nonshared",
-            libgcc_path.to_str().unwrap(),
+            // "-lc_nonshared",
+            // libgcc_path.to_str().unwrap(),
             // Output
             "-o",
             output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)

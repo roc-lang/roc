@@ -68,7 +68,7 @@ comptime {
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
 
-    inline for (INTEGERS) |T, i| {
+    inline for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
 
@@ -235,10 +235,10 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, not_sure: ?usize) noreturn {
     _ = not_sure;
 
+// pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     if (builtin.is_test) {
         std.debug.print("{s}: {?}", .{ message, stacktrace });
     }
-
     unreachable;
 }
 

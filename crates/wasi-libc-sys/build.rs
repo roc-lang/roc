@@ -34,7 +34,7 @@ fn main() {
         .unwrap()
         .unwrap();
 
-    let compiler_rt_path = find(&zig_cache_dir, &OsString::from("libcompiler_rt.a"))
+    let compiler_rt_path = find(&zig_cache_dir, &OsString::from("libcompiler_rt.a.o"))
         .unwrap()
         .unwrap();
 

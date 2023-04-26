@@ -93,23 +93,23 @@ pub const RocDec = extern struct {
 
         var before_val_i128: ?i128 = null;
         if (before_val_not_adjusted) |before| {
-            var result: i128 = undefined;
-            var overflowed = @mulWithOverflow(i128, before, one_point_zero_i128, &result);
+            const ret = @mulWithOverflow(before, one_point_zero_i128);
+            const overflowed = ret[1] != 0;
             if (overflowed) {
                 @panic("TODO runtime exception for overflow!");
             }
-            before_val_i128 = result;
+            before_val_i128 = ret[0];
         }
 
         const dec: RocDec = blk: {
             if (before_val_i128) |before| {
                 if (after_val_i128) |after| {
-                    var result: i128 = undefined;
-                    var overflowed = @addWithOverflow(i128, before, after, &result);
+                    const ret = @addWithOverflow(before, after);
+                    const overflowed = ret[1] != 0;
                     if (overflowed) {
                         @panic("TODO runtime exception for overflow!");
                     }
-                    break :blk .{ .num = result };
+                    break :blk .{ .num = ret[0] };
                 } else {
                     break :blk .{ .num = before };
                 }
@@ -223,10 +223,9 @@ pub const RocDec = extern struct {
     }
 
     pub fn addWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
-        var answer: i128 = undefined;
-        const overflowed = @addWithOverflow(i128, self.num, other.num, &answer);
-
-        return .{ .value = RocDec{ .num = answer }, .has_overflowed = overflowed };
+        const ret = @addWithOverflow(self.num, other.num);
+        const overflowed = ret[1] != 0;
+        return .{ .value = RocDec{ .num = ret[0] }, .has_overflowed = overflowed };
     }
 
     pub fn add(self: RocDec, other: RocDec) RocDec {
@@ -255,10 +254,9 @@ pub const RocDec = extern struct {
     }
 
     pub fn subWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
-        var answer: i128 = undefined;
-        const overflowed = @subWithOverflow(i128, self.num, other.num, &answer);
-
-        return .{ .value = RocDec{ .num = answer }, .has_overflowed = overflowed };
+        const ret = @subWithOverflow(self.num, other.num);
+        const overflowed = ret[1] != 0;
+        return .{ .value = RocDec{ .num = ret[0] }, .has_overflowed = overflowed };
     }
 
     pub fn sub(self: RocDec, other: RocDec) RocDec {
@@ -445,7 +443,8 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
 
     // Add 1.
     // This can't overflow because the initial numbers are only 127bit due to removing the sign bit.
-    var overflowed = @addWithOverflow(u128, lhs_lo, 1, &lhs_lo);
+    const ret = @addWithOverflow(lhs_lo, 1);
+    const overflowed = ret[1] != 0;
     lhs_hi = blk: {
         if (overflowed) {
             break :blk lhs_hi + 1;
@@ -479,69 +478,38 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     const k = lk.lo;
 
     // b = e + f + h
-    var e_plus_f: u128 = undefined;
-    overflowed = @addWithOverflow(u128, e, f, &e_plus_f);
-    var b_carry1: u128 = undefined;
-    if (overflowed) {
-        b_carry1 = 1;
-    } else {
-        b_carry1 = 0;
-    }
+    const ret2 = @addWithOverflow(e, f);
+    const e_plus_f: u128 = ret2[0];
+    const b_carry1: u128 = ret2[1];
 
-    var idk: u128 = undefined;
-    overflowed = @addWithOverflow(u128, e_plus_f, h, &idk);
-    var b_carry2: u128 = undefined;
-    if (overflowed) {
-        b_carry2 = 1;
-    } else {
-        b_carry2 = 0;
-    }
+    const ret3 = @addWithOverflow(e_plus_f, h);
+    const b_carry2: u128 = ret3[1];
 
     // c = carry + g + j + k // it doesn't say +k but I think it should be?
-    var g_plus_j: u128 = undefined;
-    overflowed = @addWithOverflow(u128, g, j, &g_plus_j);
-    var c_carry1: u128 = undefined;
-    if (overflowed) {
-        c_carry1 = 1;
-    } else {
-        c_carry1 = 0;
-    }
+    const ret4 = @addWithOverflow(g, j);
+    const g_plus_j: u128 = ret4[0];
+    const c_carry1: u128 = ret4[1];
 
-    var g_plus_j_plus_k: u128 = undefined;
-    overflowed = @addWithOverflow(u128, g_plus_j, k, &g_plus_j_plus_k);
-    var c_carry2: u128 = undefined;
-    if (overflowed) {
-        c_carry2 = 1;
-    } else {
-        c_carry2 = 0;
-    }
+    const ret5 = @addWithOverflow(g_plus_j, k);
+    const g_plus_j_plus_k = ret5[0];
+    const c_carry2: u128 = ret5[1];
 
-    var c_without_bcarry2: u128 = undefined;
-    overflowed = @addWithOverflow(u128, g_plus_j_plus_k, b_carry1, &c_without_bcarry2);
-    var c_carry3: u128 = undefined;
-    if (overflowed) {
-        c_carry3 = 1;
-    } else {
-        c_carry3 = 0;
-    }
+    const ret6 = @addWithOverflow(g_plus_j_plus_k, b_carry1);
+    const c_without_bcarry2: u128 = ret6[0];
+    const c_carry3: u128 = ret6[1];
 
-    var c: u128 = undefined;
-    overflowed = @addWithOverflow(u128, c_without_bcarry2, b_carry2, &c);
-    var c_carry4: u128 = undefined;
-    if (overflowed) {
-        c_carry4 = 1;
-    } else {
-        c_carry4 = 0;
-    }
+    const ret7 = @addWithOverflow(c_without_bcarry2, b_carry2);
+    const c = ret7[0];
+    const c_carry4: u128 = ret7[1];
 
     // d = carry + l
-    var d: u128 = undefined;
-    overflowed = @addWithOverflow(u128, l, c_carry1, &d);
-    overflowed = overflowed or @addWithOverflow(u128, d, c_carry2, &d);
-    overflowed = overflowed or @addWithOverflow(u128, d, c_carry3, &d);
-    overflowed = overflowed or @addWithOverflow(u128, d, c_carry4, &d);
+    const ret8 = @addWithOverflow(l, c_carry1);
+    const d = ret8[0];
+    const ret9 = @addWithOverflow(ret8[0], c_carry2);
+    const ret10 = @addWithOverflow(ret9[0], c_carry3);
+    const ret11 = @addWithOverflow(ret10[0], c_carry4);
 
-    if (overflowed) {
+    if (ret8[1] + ret9[1] + ret10[1] + ret11[1] > 0) {
         @panic("TODO runtime exception for overflow!");
     }
 
@@ -672,41 +640,53 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         // NOTE: Modified from `(d - r - 1) >> (N_UTWORD_BITS - 1)` to be an
         // **arithmetic** shift.
 
-        var lo: u128 = undefined;
-        var lo_overflowed: bool = undefined;
-        var hi: u128 = undefined;
+        const ret0 = @subWithOverflow(denom, r.lo);
+        const lo0 = ret0[0];
+        const lo_overflowed0 = ret0[1];
+        const hi0 = 0 -% @intCast(u128, lo_overflowed0) -% r.hi;
 
-        lo_overflowed = @subWithOverflow(u128, denom, r.lo, &lo);
-        hi = 0 -% @intCast(u128, @bitCast(u1, lo_overflowed)) -% r.hi;
-
-        lo_overflowed = @subWithOverflow(u128, lo, 1, &lo);
-        hi = hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
+        const ret1 = @subWithOverflow(lo0, 1);
+        //        const lo1 = ret1[0];
+        const lo_overflowed1 = ret1[1];
+        const hi1 = hi0 -% @intCast(u128, lo_overflowed1);
 
         // TODO this U256 was originally created by:
         //
         // ((hi as i128) >> 127).as_u256()
         //
-        // ...however, I can't figure out where that function is defined.
-        // Maybe it's defined using a macro or something. Anyway, hopefully
-        // this is what it would do in this scenario.
-        var s = .{
-            .hi = 0,
-            .lo = math.shr(u128, hi, 127),
+        // As an implementation of `as_u256`, we wrap a negative value around to the maximum value of U256.
+
+        var s_u128 = math.shr(u128, hi1, 127);
+        var s_hi: u128 = undefined;
+        var s_lo: u128 = undefined;
+        if (s_u128 == 1) {
+            s_hi = math.maxInt(u128);
+            s_lo = math.maxInt(u128);
+        } else {
+            s_hi = 0;
+            s_lo = 0;
+        }
+        const s = .{
+            .hi = s_hi,
+            .lo = s_lo,
         };
 
         carry = s.lo & 1;
 
         // var (lo, carry) = r.lo.overflowing_sub(denom & s.lo);
-        lo_overflowed = @subWithOverflow(u128, r.lo, (denom & s.lo), &lo);
-        hi = r.hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
+        const ret2 = @subWithOverflow(r.lo, (denom & s.lo));
+        const lo2 = ret2[0];
+        const lo_overflowed2 = ret2[1];
 
-        r = .{ .hi = hi, .lo = lo };
+        const hi2 = r.hi -% @intCast(u128, lo_overflowed2);
+
+        r = .{ .hi = hi2, .lo = lo2 };
 
         sr -= 1;
     }
 
-    var hi = (q.hi << 1) | (q.lo >> (127));
-    var lo = (q.lo << 1) | carry;
+    const hi = (q.hi << 1) | (q.lo >> (127));
+    const lo = (q.lo << 1) | carry;
 
     return .{ .hi = hi, .lo = lo };
 }
@@ -1058,7 +1038,7 @@ test "div: 10 / 3" {
 // exports
 
 pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
-    if (@call(.{ .modifier = always_inline }, RocDec.fromStr, .{arg})) |dec| {
+    if (@call(.always_inline, RocDec.fromStr, .{arg})) |dec| {
         return .{ .errorcode = 0, .value = dec.num };
     } else {
         return .{ .errorcode = 1, .value = 0 };
@@ -1066,61 +1046,61 @@ pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
 }
 
 pub fn toStr(arg: RocDec) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, RocDec.toStr, .{arg});
+    return @call(.always_inline, RocDec.toStr, .{arg});
 }
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
-    return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");
+    return if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");
 }
 
 pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
-    return @call(.{ .modifier = always_inline }, RocDec.eq, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.eq, .{ arg1, arg2 });
 }
 
 pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
-    return @call(.{ .modifier = always_inline }, RocDec.neq, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.neq, .{ arg1, arg2 });
 }
 
 pub fn negateC(arg: RocDec) callconv(.C) i128 {
-    return if (@call(.{ .modifier = always_inline }, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
+    return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
 }
 
 pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
-    return @call(.{ .modifier = always_inline }, RocDec.addWithOverflow, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.addWithOverflow, .{ arg1, arg2 });
 }
 
 pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
-    return @call(.{ .modifier = always_inline }, RocDec.subWithOverflow, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.subWithOverflow, .{ arg1, arg2 });
 }
 
 pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
-    return @call(.{ .modifier = always_inline }, RocDec.mulWithOverflow, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.mulWithOverflow, .{ arg1, arg2 });
 }
 
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.div, .{ arg1, arg2 }).num;
+    return @call(.always_inline, RocDec.div, .{ arg1, arg2 }).num;
 }
 
 pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.add, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.add, .{ arg1, arg2 });
 }
 
 pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.addSaturated, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.addSaturated, .{ arg1, arg2 });
 }
 
 pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.sub, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.sub, .{ arg1, arg2 });
 }
 
 pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.subSaturated, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.subSaturated, .{ arg1, arg2 });
 }
 
 pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.mul, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.mul, .{ arg1, arg2 });
 }
 
 pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.mulSaturated, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
 }
