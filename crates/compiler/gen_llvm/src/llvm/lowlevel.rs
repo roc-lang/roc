@@ -1251,6 +1251,11 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
 
+        RefCountIsUnique => {
+            arguments!(input);
+            call_bitcode_fn(env, &[input], &bitcode::UTILS_IS_UNIQUE)
+        }
+
         Unreachable => match RocReturn::from_layout(env, layout_interner, layout) {
             RocReturn::Return => {
                 let basic_type = basic_type_from_layout(env, layout_interner, layout);

@@ -174,6 +174,7 @@ comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
     exportUtilsFn(utils.increfC, "incref");
     exportUtilsFn(utils.decrefC, "decref");
+    exportUtilsFn(utils.isUnique, "is_unique");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
 

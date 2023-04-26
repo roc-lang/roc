@@ -1949,6 +1949,7 @@ impl<'a> LowLevelCall<'a> {
             }
             RefCountInc => self.load_args_and_call_zig(backend, bitcode::UTILS_INCREF),
             RefCountDec => self.load_args_and_call_zig(backend, bitcode::UTILS_DECREF),
+            RefCountIsUnique => self.load_args_and_call_zig(backend, bitcode::UTILS_IS_UNIQUE),
 
             PtrCast => {
                 let code_builder = &mut backend.code_builder;

@@ -231,6 +231,22 @@ inline fn decref_ptr_to_refcount(
     }
 }
 
+pub export fn isUnique(
+    bytes_or_null: ?[*]u8,
+) bool {
+    var bytes = bytes_or_null orelse return true;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+
+    const refcount = (isizes - 1)[0];
+
+    return refcount == REFCOUNT_ONE_ISIZE;
+}
+
 // We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
 // Here is [their growth strategy](https://github.com/facebook/folly/blob/3e0525988fd444201b19b76b390a5927c15cb697/folly/FBVector.h#L1128) for push_back:
 //
