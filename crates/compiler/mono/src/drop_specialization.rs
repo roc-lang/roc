@@ -326,9 +326,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             symbol,
                             continuation,
                         ),
-                        Layout::LambdaSet(_) => {
-                            unreachable!("lambda sets should not be a runtime layout")
-                        }
+                        // TODO: lambda sets should not be reachable, yet they are.
                         // TODO: Implement this with uniqueness checks.
                         _ => {
                             let new_continuation = specialize_drops_stmt(
@@ -905,8 +903,8 @@ where
         let join = arena.alloc(Stmt::Join {
             id: join_id,
             parameters: arena.alloc([]),
-            body: switch,
-            remainder: continutation,
+            body: continutation,
+            remainder: switch,
         });
 
         join

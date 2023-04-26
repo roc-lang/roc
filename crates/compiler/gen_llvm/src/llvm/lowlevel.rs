@@ -1252,8 +1252,15 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
         }
 
         RefCountIsUnique => {
-            arguments!(input);
-            call_bitcode_fn(env, &[input], &bitcode::UTILS_IS_UNIQUE)
+            arguments!(data_ptr);
+
+            let ptr = env.builder.build_pointer_cast(
+                data_ptr.into_pointer_value(),
+                env.context.i8_type().ptr_type(AddressSpace::default()),
+                "cast_to_i8_ptr",
+            );
+
+            call_bitcode_fn(env, &[ptr.into()], &bitcode::UTILS_IS_UNIQUE)
         }
 
         Unreachable => match RocReturn::from_layout(env, layout_interner, layout) {

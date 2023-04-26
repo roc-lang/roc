@@ -194,11 +194,8 @@ pub fn refcount_reset_proc_body<'a>(
     layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let rc = root.create_symbol(ident_ids, "rc");
-    let refcount_1 = root.create_symbol(ident_ids, "refcount_1");
-    let is_unique = root.create_symbol(ident_ids, "is_unique");
     let addr = root.create_symbol(ident_ids, "addr");
+    let is_unique = root.create_symbol(ident_ids, "is_unique");
 
     let union_layout = match layout_interner.get(layout) {
         Layout::Union(u) => u,
@@ -208,7 +205,6 @@ pub fn refcount_reset_proc_body<'a>(
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
 
     // Reset structure is unique. Decrement its children and return a pointer to the allocation.
     let then_stmt = {
@@ -313,69 +309,26 @@ pub fn refcount_reset_proc_body<'a>(
         ))
     };
 
-    let if_stmt = Stmt::Switch {
+    let if_stmt = root.arena.alloc(Stmt::Switch {
         cond_symbol: is_unique,
         cond_layout: LAYOUT_BOOL,
         branches: root.arena.alloc([(1, BranchInfo::None, then_stmt)]),
         default_branch: (BranchInfo::None, root.arena.alloc(else_stmt)),
         ret_layout: layout,
-    };
+    });
 
-    // Uniqueness test
-    let is_unique_stmt = {
-        let_lowlevel(
-            root.arena,
-            LAYOUT_BOOL,
-            is_unique,
-            Eq,
-            &[rc, refcount_1],
-            root.arena.alloc(if_stmt),
-        )
-    };
-
-    // Constant for unique refcount
-    let refcount_1_encoded = match root.target_info.ptr_width() {
-        PtrWidth::Bytes4 => i32::MIN as i128,
-        PtrWidth::Bytes8 => i64::MIN as i128,
-    }
-    .to_ne_bytes();
-    let refcount_1_expr = Expr::Literal(Literal::Int(refcount_1_encoded));
-    let refcount_1_stmt = Stmt::Let(
-        refcount_1,
-        refcount_1_expr,
-        root.layout_isize,
-        root.arena.alloc(is_unique_stmt),
-    );
-
-    // Refcount value
-    let rc_expr = Expr::UnionAtIndex {
-        structure: rc_ptr,
-        tag_id: 0,
-        union_layout: root.union_refcount,
-        index: 0,
-    };
-    let rc_stmt = Stmt::Let(
-        rc,
-        rc_expr,
-        root.layout_isize,
-        root.arena.alloc(refcount_1_stmt),
-    );
-
-    // Refcount pointer
-    let rc_ptr_stmt = {
-        rc_ptr_from_data_ptr_help(
-            root,
-            ident_ids,
-            structure,
-            rc_ptr,
-            union_layout.stores_tag_id_in_pointer(root.target_info),
-            root.arena.alloc(rc_stmt),
-            addr,
-            recursion_ptr,
-        )
-    };
-
-    rc_ptr_stmt
+    Stmt::Let(
+        is_unique,
+        Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::RefCountIsUnique,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: root.arena.alloc([structure]),
+        }),
+        Layout::BOOL,
+        if_stmt,
+    )
 }
 
 pub fn refcount_resetref_proc_body<'a>(

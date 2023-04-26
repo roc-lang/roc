@@ -231,9 +231,9 @@ inline fn decref_ptr_to_refcount(
     }
 }
 
-pub export fn isUnique(
+pub fn isUnique(
     bytes_or_null: ?[*]u8,
-) bool {
+) callconv(.C) bool {
     var bytes = bytes_or_null orelse return true;
 
     const ptr = @ptrToInt(bytes);
