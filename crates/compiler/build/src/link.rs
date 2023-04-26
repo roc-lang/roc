@@ -1267,8 +1267,6 @@ fn link_wasm32(
     input_paths: &[&str],
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let wasi_libc_path = find_wasi_libc_path();
-
     let child = zig()
         // .env_clear()
         // .env("PATH", &env_path)
@@ -1276,8 +1274,9 @@ fn link_wasm32(
         .args(input_paths)
         .args([
             // include wasi libc
+            // TOOD: This now compiles fine with `-lc`. That said, the output file doesn't work.
             // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
-            wasi_libc_path.to_str().unwrap(),
+            find_wasi_libc_path().to_str().unwrap(),
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",

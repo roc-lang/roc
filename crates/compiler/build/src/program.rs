@@ -956,9 +956,17 @@ fn build_loaded_file<'a>(
             std::fs::write(&output_exe_path, &*roc_app_bytes).unwrap();
         }
         (LinkingStrategy::Legacy, _) => {
+            let extension = if matches!(operating_system, roc_target::OperatingSystem::Wasi) {
+                // Legacy linker is only by used llvm wasm backend, not dev.
+                // llvm wasm backend directly emits a bitcode file when targeting wasi, not a `.o` or `.wasm` file.
+                // If we set the extension wrong, zig will print a ton of warnings when linking.
+                "bc"
+            } else {
+                operating_system.object_file_ext()
+            };
             let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
-                .suffix(&format!(".{}", operating_system.object_file_ext()))
+                .suffix(&format!(".{}", extension))
                 .tempfile()
                 .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
             let app_o_file = app_o_file.path();
