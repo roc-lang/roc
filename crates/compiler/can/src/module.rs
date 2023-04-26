@@ -195,11 +195,11 @@ enum GeneratedInfo {
 }
 
 impl GeneratedInfo {
-    fn from_header_type<'a>(
+    fn from_header_type(
         env: &mut Env,
         scope: &mut Scope,
         var_store: &mut VarStore,
-        header_type: &HeaderType<'a>,
+        header_type: &HeaderType<'_>,
     ) -> Self {
         match header_type {
             HeaderType::Hosted {
@@ -338,7 +338,7 @@ pub fn canonicalize_module_defs<'a>(
                     can_exposed_imports.insert(symbol, region);
                 }
                 Err((_shadowed_symbol, _region)) => {
-                    panic!("TODO gracefully handle shadowing in imports.")
+                    internal_error!("TODO gracefully handle shadowing in imports.")
                 }
             }
         } else {
@@ -359,7 +359,7 @@ pub fn canonicalize_module_defs<'a>(
                     // here we do nothing special
                 }
                 Err((shadowed_symbol, _region)) => {
-                    panic!(
+                    internal_error!(
                         "TODO gracefully handle shadowing in imports, {:?} is shadowed.",
                         shadowed_symbol
                     )
@@ -523,7 +523,7 @@ pub fn canonicalize_module_defs<'a>(
                         GeneratedInfo::Builtin => {
                             match crate::builtins::builtin_defs_map(*symbol, var_store) {
                                 None => {
-                                    panic!("A builtin module contains a signature without implementation for {:?}", symbol)
+                                    internal_error!("A builtin module contains a signature without implementation for {:?}", symbol)
                                 }
                                 Some(replacement_def) => {
                                     declarations.update_builtin_def(index, replacement_def);
@@ -581,7 +581,7 @@ pub fn canonicalize_module_defs<'a>(
                         GeneratedInfo::Builtin => {
                             match crate::builtins::builtin_defs_map(*symbol, var_store) {
                                 None => {
-                                    panic!("A builtin module contains a signature without implementation for {:?}", symbol)
+                                    internal_error!("A builtin module contains a signature without implementation for {:?}", symbol)
                                 }
                                 Some(replacement_def) => {
                                     declarations.update_builtin_def(index, replacement_def);

@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Rose a : [Rose (Result (List (Rose a)) I64)]
+
+    x : Rose I64
+    x = Rose (Ok [])
+
+    x
+
+main = entry
+#      ^^^^^ Rose I64

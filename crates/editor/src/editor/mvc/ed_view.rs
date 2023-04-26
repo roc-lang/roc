@@ -67,8 +67,8 @@ impl RenderedWgpu {
 }
 
 // create text and rectangles based on EdModel's markup_root
-pub fn model_to_wgpu<'a>(
-    ed_model: &'a mut EdModel,
+pub fn model_to_wgpu(
+    ed_model: &mut EdModel,
     size: &PhysicalSize<u32>,
     txt_coords: Vector2<f32>,
     config: &Config,

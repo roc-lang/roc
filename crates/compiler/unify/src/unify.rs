@@ -1359,10 +1359,8 @@ fn separate_union_lambdas<M: MetaCollector>(
     //   F2 -> { left: [ [a] ],         right: [ [Str] ] }
     let mut buckets: VecMap<Symbol, Sides> = VecMap::with_capacity(fields1.len() + fields2.len());
 
-    let (mut fields_left, mut fields_right) = (
-        fields1.iter_all().into_iter().peekable(),
-        fields2.iter_all().into_iter().peekable(),
-    );
+    let (mut fields_left, mut fields_right) =
+        (fields1.iter_all().peekable(), fields2.iter_all().peekable());
 
     loop {
         use std::cmp::Ordering;

@@ -183,7 +183,7 @@ impl Pool {
         }
     }
 
-    pub fn get<'a, 'b, T>(&'a self, node_id: NodeId<T>) -> &'b T {
+    pub fn get<'b, T>(&self, node_id: NodeId<T>) -> &'b T {
         unsafe {
             let node_ptr = self.get_ptr(node_id) as *const T;
 

@@ -487,9 +487,9 @@ impl<'a> Env<'a> {
     }
 }
 
-fn apply_refcount_operation<'a>(
+fn apply_refcount_operation(
     builder: &mut FuncDefBuilder,
-    env: &mut Env<'a>,
+    env: &mut Env<'_>,
     block: BlockId,
     modify_rc: &ModifyRc,
 ) -> Result<()> {

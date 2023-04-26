@@ -25,9 +25,9 @@ use crate::{
 /**
 Insert the reference count operations for procedures.
 */
-pub fn insert_inc_dec_operations<'a, 'i>(
+pub fn insert_inc_dec_operations<'a>(
     arena: &'a Bump,
-    layout_interner: &'i STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
     // Create a SymbolRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
@@ -401,9 +401,9 @@ impl<'v> RefcountEnvironment<'v> {
 /**
  Insert the reference counting operations into a statement.
 */
-fn insert_inc_dec_operations_proc<'a, 'i>(
+fn insert_inc_dec_operations_proc<'a>(
     arena: &'a Bump,
-    mut symbol_rc_types_env: SymbolRcTypesEnv<'a, 'i>,
+    mut symbol_rc_types_env: SymbolRcTypesEnv<'a, '_>,
     proc: &mut Proc<'a>,
 ) {
     // Clone the symbol_rc_types_env and insert the symbols in the current procedure.

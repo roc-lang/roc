@@ -1956,6 +1956,8 @@ impl<'a> LowLevelCall<'a> {
                 backend.storage.load_symbols(code_builder, self.arguments);
             }
 
+            PtrWrite => todo!("{:?}", self.lowlevel),
+
             Hash => todo!("{:?}", self.lowlevel),
 
             Eq | NotEq => self.eq_or_neq(backend),

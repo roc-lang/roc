@@ -68,7 +68,7 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
             .next()
             .unwrap();
 
-        let address = sym.address() as u64;
+        let address = sym.address();
 
         // special exceptions for roc_ functions that map to libc symbols
         let direct_mapping = match name {
@@ -972,7 +972,7 @@ fn scan_elf_dynamic_deps(
 
         dyn_lib_index += 1;
     }
-    let dynamic_lib_count = dyn_lib_index as usize;
+    let dynamic_lib_count = dyn_lib_index;
 
     if shared_lib_index.is_none() {
         panic!("Shared lib not found as a dependency of the executable");
@@ -1374,8 +1374,8 @@ fn surgery_elf_help(
                     };
 
                     if let Some(target_offset) = target_offset {
-                        let virt_base = section_virtual_offset as usize + rel.0 as usize;
-                        let base = section_offset as usize + rel.0 as usize;
+                        let virt_base = section_virtual_offset + rel.0 as usize;
+                        let base = section_offset + rel.0 as usize;
                         let target: i64 = match rel.1.kind() {
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
@@ -1449,14 +1449,14 @@ fn surgery_elf_help(
     offset += new_section_count * sh_ent_size as usize;
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
         exec_mmap,
-        new_sh_offset as usize,
+        new_sh_offset,
         sh_num as usize + new_section_count,
     );
 
     let new_rodata_section_size = new_text_section_offset as u64 - new_rodata_section_offset as u64;
     let new_rodata_section_virtual_size =
         new_text_section_vaddr as u64 - new_rodata_section_vaddr as u64;
-    let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size as u64;
+    let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size;
     let new_text_section_size = new_sh_offset as u64 - new_text_section_offset as u64;
 
     // set the new rodata section header
@@ -1610,7 +1610,7 @@ fn surgery_elf_help(
                 dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
             );
             sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LE, func_virt_offset as u64);
+            sym.st_value = endian::U64::new(LE, func_virt_offset);
             sym.st_size = endian::U64::new(
                 LE,
                 match app_func_size_map.get(func_name) {
@@ -1627,7 +1627,7 @@ fn surgery_elf_help(
                 symtab_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
             );
             sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LE, func_virt_offset as u64);
+            sym.st_value = endian::U64::new(LE, func_virt_offset);
             sym.st_size = endian::U64::new(
                 LE,
                 match app_func_size_map.get(func_name) {
@@ -1812,7 +1812,7 @@ mod tests {
             false,
         );
 
-        std::fs::copy(&preprocessed_host_filename, &dir.join("final")).unwrap();
+        std::fs::copy(&preprocessed_host_filename, dir.join("final")).unwrap();
 
         surgery_elf(
             &roc_app,
@@ -1833,7 +1833,7 @@ mod tests {
 
         zig_host_app_help(dir, &Triple::from_str("x86_64-unknown-linux-musl").unwrap());
 
-        let output = std::process::Command::new(&dir.join("final"))
+        let output = std::process::Command::new(dir.join("final"))
             .current_dir(dir)
             .output()
             .unwrap();

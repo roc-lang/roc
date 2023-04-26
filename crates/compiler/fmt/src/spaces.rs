@@ -21,22 +21,14 @@ use crate::{Ast, Buf};
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
 
-pub fn fmt_default_spaces<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    indent: u16,
-) {
+pub fn fmt_default_spaces(buf: &mut Buf<'_>, spaces: &[CommentOrNewline<'_>], indent: u16) {
     if spaces.is_empty() {
         buf.spaces(1);
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
 }
-pub fn fmt_default_newline<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    indent: u16,
-) {
+pub fn fmt_default_newline(buf: &mut Buf<'_>, spaces: &[CommentOrNewline<'_>], indent: u16) {
     if spaces.is_empty() {
         buf.newline();
     } else {
@@ -153,7 +145,7 @@ pub fn fmt_comments_only<'a, 'buf, I>(
     }
 }
 
-fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
+fn fmt_comment(buf: &mut Buf<'_>, comment: &str) {
     // The '#' in a comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
@@ -192,7 +184,7 @@ where
     count
 }
 
-fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
+fn fmt_docs(buf: &mut Buf<'_>, docs: &str) {
     // The "##" in a doc comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {

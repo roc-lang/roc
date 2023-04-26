@@ -2347,8 +2347,8 @@ macro_rules! debug_check_ir {
 }
 
 /// Report modules that are imported, but from which nothing is used
-fn report_unused_imported_modules<'a>(
-    state: &mut State<'a>,
+fn report_unused_imported_modules(
+    state: &mut State<'_>,
     module_id: ModuleId,
     constrained_module: &ConstrainedModule,
 ) {

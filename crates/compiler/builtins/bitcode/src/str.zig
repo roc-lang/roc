@@ -1525,6 +1525,10 @@ pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
+pub fn isEmpty(string: RocStr) callconv(.C) bool {
+    return string.isEmpty();
+}
+
 pub fn getCapacity(string: RocStr) callconv(.C) usize {
     return string.getCapacity();
 }

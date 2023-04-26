@@ -65,15 +65,15 @@ impl Newlines {
 pub trait Formattable {
     fn is_multiline(&self) -> bool;
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
     );
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+    fn format(&self, buf: &mut Buf<'_>, indent: u16) {
         self.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
     }
 }
@@ -87,9 +87,9 @@ where
         (*self).is_multiline()
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -97,7 +97,7 @@ where
         (*self).format_with_options(buf, parens, newlines, indent)
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+    fn format(&self, buf: &mut Buf<'_>, indent: u16) {
         (*self).format(buf, indent)
     }
 }
@@ -120,9 +120,9 @@ where
         self.value.is_multiline()
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -131,7 +131,7 @@ where
             .format_with_options(buf, parens, newlines, indent)
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+    fn format(&self, buf: &mut Buf<'_>, indent: u16) {
         self.value.format(buf, indent)
     }
 }
@@ -141,9 +141,9 @@ impl<'a> Formattable for UppercaseIdent<'a> {
         false
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         _parens: Parens,
         _newlines: Newlines,
         _indent: u16,
@@ -206,9 +206,9 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -424,9 +424,9 @@ impl<'a> Formattable for AssignedField<'a, TypeAnnotation<'a>> {
         is_multiline_assigned_field_help(self)
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         _parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -441,9 +441,9 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
         is_multiline_assigned_field_help(self)
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         _parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -466,9 +466,9 @@ fn is_multiline_assigned_field_help<T: Formattable>(afield: &AssignedField<'_, T
     }
 }
 
-fn format_assigned_field_help<'a, 'buf, T>(
-    zelf: &AssignedField<'a, T>,
-    buf: &mut Buf<'buf>,
+fn format_assigned_field_help<T>(
+    zelf: &AssignedField<'_, T>,
+    buf: &mut Buf<'_>,
     indent: u16,
     separator_spaces: usize,
     is_multiline: bool,
@@ -545,9 +545,9 @@ impl<'a> Formattable for Tag<'a> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
@@ -592,9 +592,9 @@ impl<'a> Formattable for HasClause<'a> {
         false
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -623,9 +623,9 @@ impl<'a> Formattable for HasImpls<'a> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -662,9 +662,9 @@ impl<'a> Formattable for HasAbility<'a> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -703,9 +703,9 @@ impl<'a> Formattable for HasAbilities<'a> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,

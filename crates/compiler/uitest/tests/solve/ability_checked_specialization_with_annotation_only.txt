@@ -1,0 +1,9 @@
+app "test" provides [hash] to "./platform"
+
+MHash has
+    hash : a -> U64 | a has MHash
+
+Id := U64 has [MHash {hash}]
+
+hash : Id -> U64
+#^^^^{-1} Id#hash(3): Id -[[hash(3)]]-> U64

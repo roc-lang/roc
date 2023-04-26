@@ -2600,7 +2600,7 @@ pub fn constrain_decls(
                     cycle_mark,
                 );
 
-                index += length as usize;
+                index += length;
             }
         }
 

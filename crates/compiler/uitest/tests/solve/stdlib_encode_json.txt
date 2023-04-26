@@ -1,0 +1,18 @@
+app "test"
+    imports [Json]
+    provides [main] to "./platform"
+
+HelloWorld := {} has [Encoding {toEncoder}]
+
+toEncoder = \@HelloWorld {} ->
+    Encode.custom \bytes, fmt ->
+        bytes
+        |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+
+f =
+    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8) is
+        Ok s -> s
+        _ -> "<bad>"
+
+main = f
+#      ^ Str
