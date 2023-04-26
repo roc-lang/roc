@@ -54,11 +54,11 @@ pub fn eq_generic<'a>(
 
     Stmt::Let(
         Symbol::BOOL_TRUE,
-        Expr::Literal(Literal::Int(1i128.to_ne_bytes())),
+        Expr::Literal(Literal::Bool(true)),
         LAYOUT_BOOL,
         root.arena.alloc(Stmt::Let(
             Symbol::BOOL_FALSE,
-            Expr::Literal(Literal::Int(0i128.to_ne_bytes())),
+            Expr::Literal(Literal::Bool(false)),
             LAYOUT_BOOL,
             root.arena.alloc(main_body),
         )),
