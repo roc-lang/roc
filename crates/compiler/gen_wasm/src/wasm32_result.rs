@@ -8,7 +8,7 @@ use bumpalo::{collections::Vec, Bump};
 
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, UnionLayout};
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
+use roc_std::{RocBox, RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use roc_wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Signature,
     ValueType, WasmModule,
@@ -200,6 +200,13 @@ impl Wasm32Result for RocStr {
 impl<T: Wasm32Result> Wasm32Result for RocList<T> {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
+    }
+}
+
+impl<T: Wasm32Result> Wasm32Result for RocBox<T> {
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        // treat box as if it's just a isize value
+        <i32 as Wasm32Result>::build_wrapper_body(code_builder, main_function_index)
     }
 }
 

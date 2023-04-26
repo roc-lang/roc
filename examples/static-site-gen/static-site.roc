@@ -14,7 +14,7 @@ NavLink : {
 
 navLinks : List NavLink
 navLinks = [
-    { url: "apple.html", title: "Exempli Gratia Pagina Pomi", text: "Apple" },
+    { url: "subFolder/apple.html", title: "Exempli Gratia Pagina Pomi", text: "Apple" },
     { url: "banana.html", title: "Exempli Gratia Pagina Musa", text: "Banana" },
     { url: "cherry.html", title: "Exempli Pagina Cerasus", text: "Cherry" },
 ]

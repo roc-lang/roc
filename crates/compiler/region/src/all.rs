@@ -105,14 +105,14 @@ impl Position {
     #[must_use]
     pub const fn bump_column(self, count: u32) -> Self {
         Self {
-            offset: self.offset + count as u32,
+            offset: self.offset + count,
         }
     }
 
     #[must_use]
     pub fn bump_invisible(self, count: u32) -> Self {
         Self {
-            offset: self.offset + count as u32,
+            offset: self.offset + count,
         }
     }
 
@@ -126,8 +126,12 @@ impl Position {
     #[must_use]
     pub const fn sub(self, count: u32) -> Self {
         Self {
-            offset: self.offset - count as u32,
+            offset: self.offset - count,
         }
+    }
+
+    pub fn byte_offset(&self) -> usize {
+        self.offset as usize
     }
 }
 
@@ -193,6 +197,10 @@ impl LineColumnRegion {
                 Greater => true,
             },
         }
+    }
+
+    pub fn includes(&self, lc: LineColumn) -> bool {
+        self.contains(&Self::from_pos(lc))
     }
 
     pub const fn from_pos(pos: LineColumn) -> Self {
@@ -322,6 +330,10 @@ impl<T> Loc<T> {
             value: transform(self.value),
         }
     }
+
+    pub fn byte_range(&self) -> std::ops::Range<usize> {
+        self.region.start.byte_offset()..self.region.end.byte_offset()
+    }
 }
 
 impl<T> fmt::Debug for Loc<T>
@@ -364,7 +376,7 @@ impl LineInfo {
         let column = offset - self.line_offsets[line];
         LineColumn {
             line: line as u32,
-            column: column as u32,
+            column,
         }
     }
 

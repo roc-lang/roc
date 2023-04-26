@@ -150,3 +150,57 @@ impl From<target_lexicon::Architecture> for Architecture {
         }
     }
 }
+
+pub const WASM_TARGET_STR: &str = "wasm32";
+pub const LINUX_X86_64_TARGET_STR: &str = "linux-x86_64";
+pub const LINUX_ARM64_TARGET_STR: &str = "linux-arm64";
+pub const MACOS_ARM64_TARGET_STR: &str = "macos-arm64";
+pub const MACOS_X86_64_TARGET_STR: &str = "macos-x86_64";
+pub const WINDOWS_X86_64_TARGET_STR: &str = "windows-x86_64";
+pub const WINDOWS_X86_32_TARGET_STR: &str = "windows-x86_32";
+pub const WIDNOWS_ARM64_TARGET_STR: &str = "windows-arm64";
+
+pub fn get_target_triple_str(target: &target_lexicon::Triple) -> Option<&'static str> {
+    match target {
+        target_lexicon::Triple {
+            architecture: target_lexicon::Architecture::Wasm32,
+            ..
+        } => Some(WASM_TARGET_STR),
+        target_lexicon::Triple {
+            operating_system: target_lexicon::OperatingSystem::Linux,
+            architecture: target_lexicon::Architecture::X86_64,
+            ..
+        } => Some(LINUX_X86_64_TARGET_STR),
+        target_lexicon::Triple {
+            operating_system: target_lexicon::OperatingSystem::Linux,
+            architecture: target_lexicon::Architecture::Aarch64(_),
+            ..
+        } => Some(LINUX_ARM64_TARGET_STR),
+        target_lexicon::Triple {
+            operating_system: target_lexicon::OperatingSystem::Darwin,
+            architecture: target_lexicon::Architecture::Aarch64(_),
+            ..
+        } => Some(MACOS_ARM64_TARGET_STR),
+        target_lexicon::Triple {
+            operating_system: target_lexicon::OperatingSystem::Darwin,
+            architecture: target_lexicon::Architecture::X86_64,
+            ..
+        } => Some(MACOS_X86_64_TARGET_STR),
+        target_lexicon::Triple {
+            operating_system: target_lexicon::OperatingSystem::Windows,
+            architecture: target_lexicon::Architecture::X86_64,
+            ..
+        } => Some(WINDOWS_X86_64_TARGET_STR),
+        target_lexicon::Triple {
+            operating_system: target_lexicon::OperatingSystem::Windows,
+            architecture: target_lexicon::Architecture::X86_32(_),
+            ..
+        } => Some(WINDOWS_X86_32_TARGET_STR),
+        target_lexicon::Triple {
+            operating_system: target_lexicon::OperatingSystem::Windows,
+            architecture: target_lexicon::Architecture::Aarch64(_),
+            ..
+        } => Some(WIDNOWS_ARM64_TARGET_STR),
+        _ => None,
+    }
+}

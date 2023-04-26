@@ -1,874 +1,1195 @@
-//! This module inserts reset/reuse statements into the mono IR. These statements provide an
-//! opportunity to reduce memory pressure by reusing memory slots of non-shared values. From the
-//! introduction of the relevant paper:
-//!
-//! > [We] have added two additional instructions to our IR: `let y = reset x` and
-//! > `let z = (reuse y in ctor_i w)`. The two instructions are used together; if `x`
-//! > is a shared value, then `y` is set to a special reference, and the reuse instruction
-//! > just allocates a new constructor value `ctor_i w`. If `x` is not shared, then reset
-//! > decrements the reference counters of the components of `x`, and `y` is set to `x`.
-//! > Then, reuse reuses the memory cell used by `x` to store the constructor value `ctor_i w`.
-//!
-//! See also
-//! - [Counting Immutable Beans](https://arxiv.org/pdf/1908.05647.pdf) (Ullrich and Moura, 2020)
-//! - [The lean implementation](https://github.com/leanprover/lean4/blob/master/src/Lean/Compiler/IR/ResetReuse.lean)
+// This program was written by Jelle Teeuwissen within a final
+// thesis project of the Computing Science master program at Utrecht
+// University under supervision of Wouter Swierstra (w.s.swierstra@uu.nl).
 
-use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
+// Implementation based of Reference Counting with Frame Limited Reuse
+// https://www.microsoft.com/en-us/research/uploads/prod/2021/11/flreuse-tr.pdf
+
+use crate::borrow::Ownership;
 use crate::ir::{
-    BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeId, UpdateModeIds,
+    BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt, UpdateModeId,
+    UpdateModeIds,
 };
-use crate::layout::{Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout};
-use bumpalo::collections::Vec;
+use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
+
 use bumpalo::Bump;
-use roc_collections::all::MutSet;
+
+use bumpalo::collections::vec::Vec;
+use bumpalo::collections::CollectIn;
+use roc_collections::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
-pub fn insert_reset_reuse<'a, 'i>(
+/**
+ Insert reset and reuse operations into the IR.
+To allow for the reuse of memory allocation when said memory is no longer used.
+ */
+pub fn insert_reset_reuse_operations<'a, 'i>(
     arena: &'a Bump,
-    interner: &'i mut STLayoutInterner<'a>,
+    layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
+    procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+) {
+    let mut global_layouts = SymbolLayout::default();
+    for (symbol, _layout) in procs.keys() {
+        global_layouts.insert(*symbol, LayoutOption::GloballyDefined);
+    }
+
+    for proc in procs.values_mut() {
+        let new_proc = insert_reset_reuse_operations_proc(
+            arena,
+            layout_interner,
+            home,
+            ident_ids,
+            update_mode_ids,
+            global_layouts.clone(),
+            proc.clone(),
+        );
+        *proc = new_proc;
+    }
+}
+
+fn insert_reset_reuse_operations_proc<'a, 'i>(
+    arena: &'a Bump,
+    layout_interner: &'i STLayoutInterner<'a>,
+    home: ModuleId,
+    ident_ids: &'i mut IdentIds,
+    update_mode_ids: &'i mut UpdateModeIds,
+    mut symbol_layout: SymbolLayout<'a>,
     mut proc: Proc<'a>,
 ) -> Proc<'a> {
-    let mut env = Env {
+    for (layout, symbol) in proc.args {
+        symbol_layout.insert(*symbol, LayoutOption::Layout(layout));
+    }
+
+    let mut env = ReuseEnvironment {
+        layout_tags: MutMap::default(),
+        reuse_tokens: MutMap::default(),
+        symbol_layouts: symbol_layout,
+        joinpoint_reuse_tokens: MutMap::default(),
+        jump_reuse_tokens: MutMap::default(),
+    };
+
+    let new_body = insert_reset_reuse_operations_stmt(
         arena,
-        interner,
+        layout_interner,
         home,
         ident_ids,
         update_mode_ids,
-        jp_live_vars: Default::default(),
-    };
+        &mut env,
+        arena.alloc(proc.body),
+    );
 
-    let new_body = function_r(&mut env, arena.alloc(proc.body));
+    // All reuse tokens either have to be used by reuse or not be inserted at all at the reset (and removed from the environment).
+    debug_assert!(env.reuse_tokens.is_empty());
+
     proc.body = new_body.clone();
-
     proc
 }
 
-#[derive(Debug)]
-struct CtorInfo<'a> {
-    id: TagIdIntType,
-    layout: UnionLayout<'a>,
-}
-
-fn may_reuse(tag_layout: UnionLayout, tag_id: TagIdIntType, other: &CtorInfo) -> bool {
-    if tag_layout != other.layout {
-        return false;
-    }
-
-    // we should not get here if the tag we matched on is represented as NULL
-    debug_assert!(!tag_layout.tag_is_null(other.id as _));
-
-    // furthermore, we can only use the memory if the tag we're creating is non-NULL
-    !tag_layout.tag_is_null(tag_id)
-}
-
-#[derive(Debug)]
-struct Env<'a, 'i> {
+fn insert_reset_reuse_operations_stmt<'a, 'i>(
     arena: &'a Bump,
-    interner: &'i mut STLayoutInterner<'a>,
-
-    /// required for creating new `Symbol`s
+    layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
-
-    jp_live_vars: JPLiveVarMap,
-}
-
-impl<'a, 'i> Env<'a, 'i> {
-    fn unique_symbol(&mut self) -> Symbol {
-        let ident_id = self.ident_ids.gen_unique();
-
-        Symbol::new(self.home, ident_id)
-    }
-}
-
-fn function_s<'a, 'i>(
-    env: &mut Env<'a, 'i>,
-    w: Opportunity,
-    c: &CtorInfo<'a>,
+    environment: &mut ReuseEnvironment<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    use Stmt::*;
-
-    let arena = env.arena;
-
     match stmt {
-        Let(symbol, expr, layout, continuation) => match expr {
-            Expr::Tag {
-                tag_layout,
-                tag_id,
-                arguments,
-            } if may_reuse(*tag_layout, *tag_id, c) => {
-                // for now, always overwrite the tag ID just to be sure
-                let update_tag_id = true;
+        Stmt::Let(_, _, _, _) => {
+            // Collect all the subsequent let bindings (including the current one).
+            // To prevent the stack from overflowing when there are many let bindings.
+            let mut triples = vec![];
+            let mut current_stmt = stmt;
+            while let Stmt::Let(binding, expr, layout, next_stmt) = current_stmt {
+                triples.push((binding, expr, layout));
+                current_stmt = next_stmt
+            }
 
-                let new_expr = Expr::Reuse {
-                    symbol: w.symbol,
-                    update_mode: w.update_mode,
-                    update_tag_id,
-                    tag_layout: *tag_layout,
-                    tag_id: *tag_id,
-                    arguments,
+            debug_assert!(
+                !triples.is_empty(),
+                "Expected at least one let binding in the vector"
+            );
+            debug_assert!(
+                !matches!(current_stmt, Stmt::Let(_, _, _, _)),
+                "All let bindings should be in the vector"
+            );
+
+            // Update the triplets with reuse operations. Making sure to update the environment before the next let binding.
+            let mut new_triplets = vec![];
+            for (binding, expr, layout) in triples {
+                let new_expr = match expr {
+                    Expr::Tag {
+                        tag_layout,
+                        tag_id,
+                        arguments,
+                    } => {
+                        // The value of the tag is currently only used in the case of nullable recursive unions.
+                        // But for completeness we add every kind of union to the layout_tags.
+                        environment.add_layout_tag(layout, *tag_id);
+
+                        // Check if the tag id for this layout can be reused at all.
+                        match can_reuse_union_layout_tag(tag_layout, Option::Some(*tag_id)) {
+                            // The tag is reusable.
+                            Reuse::Reusable => {
+                                // See if we have a token.
+                                match environment.pop_reuse_token(layout) {
+                                    // We have a reuse token for this layout, use it.
+                                    Some(reuse_token) => {
+                                        Expr::Reuse {
+                                            symbol: reuse_token.symbol,
+                                            update_mode: reuse_token.update_mode_id,
+                                            // for now, always overwrite the tag ID just to be sure
+                                            update_tag_id: true,
+                                            tag_layout: *tag_layout,
+                                            tag_id: *tag_id,
+                                            arguments,
+                                        }
+                                    }
+
+                                    // We have no reuse token available, keep the old expression with a fresh allocation.
+                                    None => expr.clone(),
+                                }
+                            }
+                            // We cannot reuse this tag id because it's a null pointer.
+                            Reuse::Nonreusable => expr.clone(),
+                        }
+                    }
+                    _ => expr.clone(),
                 };
-                let new_stmt = Let(*symbol, new_expr, *layout, continuation);
 
-                arena.alloc(new_stmt)
+                environment.add_symbol_layout(*binding, layout);
+                new_triplets.push((binding, new_expr, layout))
             }
-            _ => {
-                let rest = function_s(env, w, c, continuation);
-                let new_stmt = Let(*symbol, expr.clone(), *layout, rest);
 
-                arena.alloc(new_stmt)
-            }
-        },
-        Join {
-            id,
-            parameters,
-            body,
-            remainder,
-        } => {
-            let id = *id;
-            let body: &Stmt = body;
-            let new_body = function_s(env, w, c, body);
+            let new_continuation = insert_reset_reuse_operations_stmt(
+                arena,
+                layout_interner,
+                home,
+                ident_ids,
+                update_mode_ids,
+                environment,
+                current_stmt,
+            );
 
-            let new_join = if std::ptr::eq(body, new_body) || body == new_body {
-                // the join point body will consume w
-                Join {
-                    id,
-                    parameters,
-                    body: new_body,
-                    remainder,
-                }
-            } else {
-                let new_remainder = function_s(env, w, c, remainder);
-
-                Join {
-                    id,
-                    parameters,
-                    body,
-                    remainder: new_remainder,
-                }
-            };
-
-            arena.alloc(new_join)
+            new_triplets.into_iter().rev().fold(
+                new_continuation,
+                |new_continuation, (binding, new_expr, layout)| {
+                    arena.alloc(Stmt::Let(*binding, new_expr, *layout, new_continuation))
+                },
+            )
         }
-        Switch {
+        Stmt::Switch {
             cond_symbol,
             cond_layout,
             branches,
             default_branch,
             ret_layout,
         } => {
-            let mut new_branches = Vec::with_capacity_in(branches.len(), arena);
-            new_branches.extend(branches.iter().map(|(tag, info, body)| {
-                let new_body = function_s(env, w, c, body);
+            let new_branches = branches
+                .iter()
+                .map(|(tag_id, info, branch)| {
+                    let mut branch_env = environment.clone();
+                    if let BranchInfo::Constructor {
+                        tag_id: tag,
+                        layout: branch_layout,
+                        ..
+                    } = info
+                    {
+                        branch_env.add_layout_tag(branch_layout, *tag);
+                    }
 
-                (*tag, info.clone(), new_body.clone())
-            }));
+                    let new_branch = insert_reset_reuse_operations_stmt(
+                        arena,
+                        layout_interner,
+                        home,
+                        ident_ids,
+                        update_mode_ids,
+                        &mut branch_env,
+                        branch,
+                    );
 
-            let new_default = function_s(env, w, c, default_branch.1);
+                    (*tag_id, info.clone(), new_branch, branch_env)
+                })
+                .collect_in::<Vec<_>>(arena);
 
-            let new_switch = Switch {
-                cond_symbol: *cond_symbol,
-                cond_layout: *cond_layout,
-                branches: new_branches.into_bump_slice(),
-                default_branch: (default_branch.0.clone(), new_default),
-                ret_layout: *ret_layout,
+            let new_default_branch = {
+                let (info, branch) = default_branch;
+
+                let mut branch_env = environment.clone();
+                if let BranchInfo::Constructor {
+                    tag_id: tag,
+                    layout: branch_layout,
+                    ..
+                } = info
+                {
+                    branch_env.add_layout_tag(branch_layout, *tag);
+                }
+
+                let new_branch = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    &mut branch_env,
+                    branch,
+                );
+
+                (info.clone(), new_branch, branch_env)
             };
 
-            arena.alloc(new_switch)
-        }
-        Refcounting(op, continuation) => {
-            let continuation: &Stmt = continuation;
-            let new_continuation = function_s(env, w, c, continuation);
+            // First we determine the minimum of reuse tokens available for each layout.
+            let layout_min_reuse_tokens = {
+                let branch_envs = {
+                    let mut branch_environments =
+                        Vec::with_capacity_in(new_branches.len() + 1, arena);
 
-            if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
-                stmt
-            } else {
-                let new_refcounting = Refcounting(*op, new_continuation);
+                    for (_, _, _, branch_env) in new_branches.iter() {
+                        branch_environments.push(branch_env);
+                    }
 
-                arena.alloc(new_refcounting)
-            }
-        }
+                    branch_environments.push(&new_default_branch.2);
 
-        Dbg {
-            symbol,
-            variable,
-            remainder,
-        } => {
-            let continuation: &Stmt = remainder;
-            let new_continuation = function_s(env, w, c, continuation);
-
-            if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
-                stmt
-            } else {
-                let new_refcounting = Dbg {
-                    symbol: *symbol,
-                    variable: *variable,
-                    remainder: new_continuation,
+                    branch_environments
                 };
 
-                arena.alloc(new_refcounting)
+                let layout_min_reuse_tokens =
+                    environment.reuse_tokens.keys().copied().map(|layout| {
+                        let min_reuse_tokens = branch_envs
+                            .iter()
+                            .map(|branch_environment| {
+                                branch_environment
+                                    .reuse_tokens
+                                    .get(&layout)
+                                    .map_or(0, |tokens| tokens.len())
+                            })
+                            .min()
+                            .expect("There should be at least one branch");
+                        (layout, min_reuse_tokens)
+                    });
+
+                layout_min_reuse_tokens.collect::<MutMap<_, _>>()
+            };
+
+            // Then we drop any unused reuse tokens in branches where the minimum is not reached.
+            let msg =
+                "All layouts in the environment should be in the layout_min_reuse_tokens map.";
+            let newer_branches =
+                Vec::from_iter_in(
+                    new_branches
+                        .iter()
+                        .map(|(label, info, branch, branch_env)| {
+                            let unused_tokens = branch_env.reuse_tokens.iter().flat_map(
+                                |(layout, reuse_tokens)| {
+                                    let min_reuse_tokens =
+                                        layout_min_reuse_tokens.get(layout).expect(msg);
+                                    &reuse_tokens[*min_reuse_tokens..]
+                                },
+                            );
+
+                            let newer_branch =
+                                drop_unused_reuse_tokens(arena, unused_tokens.copied(), branch);
+
+                            (*label, info.clone(), newer_branch.clone())
+                        }),
+                    arena,
+                )
+                .into_bump_slice();
+
+            let newer_default_branch = {
+                // let (info, branch, branch_env) = new_default_branch;
+                let unused_tokens=  new_default_branch.2.reuse_tokens.iter().flat_map(|(layout, reuse_tokens) |{
+                    let min_reuse_tokens = layout_min_reuse_tokens.get(layout).expect("All layouts in the environment should be in the layout_min_reuse_tokens map.");
+                    &reuse_tokens[*min_reuse_tokens..]
+                });
+
+                let newer_branch =
+                    drop_unused_reuse_tokens(arena, unused_tokens.copied(), new_default_branch.1);
+
+                (new_default_branch.0, newer_branch)
+            };
+
+            // And finally we update the current environment to reflect the correct number of reuse tokens.
+            for (layout, reuse_tokens) in environment.reuse_tokens.iter_mut() {
+                let min_reuse_tokens = layout_min_reuse_tokens.get(layout).expect(
+                    "All layouts in the environment should be in the layout_min_reuse_tokens map.",
+                );
+                reuse_tokens.truncate(*min_reuse_tokens)
             }
+
+            // And remove any layouts that are no longer used.
+            environment
+                .reuse_tokens
+                .retain(|_, reuse_tokens| !reuse_tokens.is_empty());
+
+            // Propagate jump reuse tokens upwards.
+            environment.propagate_jump_reuse_tokens(
+                new_branches
+                    .into_iter()
+                    .map(|(_, _, _, branch_env)| branch_env)
+                    .chain([new_default_branch.2]),
+            );
+
+            arena.alloc(Stmt::Switch {
+                cond_symbol: *cond_symbol,
+                cond_layout: *cond_layout,
+                branches: newer_branches,
+                default_branch: newer_default_branch,
+                ret_layout: *ret_layout,
+            })
         }
-
-        Expect {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let continuation: &Stmt = remainder;
-            let new_continuation = function_s(env, w, c, continuation);
-
-            if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
-                stmt
-            } else {
-                let new_refcounting = Expect {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    variables,
-                    remainder: new_continuation,
-                };
-
-                arena.alloc(new_refcounting)
-            }
-        }
-
-        ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let continuation: &Stmt = remainder;
-            let new_continuation = function_s(env, w, c, continuation);
-
-            if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
-                stmt
-            } else {
-                let new_refcounting = ExpectFx {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    variables,
-                    remainder: new_continuation,
-                };
-
-                arena.alloc(new_refcounting)
-            }
-        }
-
-        Ret(_) | Jump(_, _) | Crash(..) => stmt,
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Opportunity {
-    symbol: Symbol,
-    update_mode: UpdateModeId,
-}
-
-fn try_function_s<'a, 'i>(
-    env: &mut Env<'a, 'i>,
-    x: Symbol,
-    c: &CtorInfo<'a>,
-    stmt: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let w = Opportunity {
-        symbol: env.unique_symbol(),
-        update_mode: env.update_mode_ids.next_id(),
-    };
-
-    let new_stmt = function_s(env, w, c, stmt);
-
-    if std::ptr::eq(stmt, new_stmt) || stmt == new_stmt {
-        stmt
-    } else {
-        insert_reset(env, w, x, c.layout, new_stmt)
-    }
-}
-
-fn insert_reset<'a>(
-    env: &mut Env<'a, '_>,
-    w: Opportunity,
-    x: Symbol,
-    union_layout: UnionLayout<'a>,
-    mut stmt: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    use crate::ir::Expr::*;
-
-    let mut stack = vec![];
-
-    while let Stmt::Let(symbol, expr, expr_layout, rest) = stmt {
-        match &expr {
-            StructAtIndex { .. } | GetTagId { .. } | UnionAtIndex { .. } => {
-                stack.push((symbol, expr, expr_layout));
-                stmt = rest;
-            }
-
-            ExprBox { .. } | ExprUnbox { .. } => {
-                // TODO
-                break;
-            }
-
-            Literal(_)
-            | Call(_)
-            | Tag { .. }
-            | Struct(_)
-            | Array { .. }
-            | EmptyArray
-            | Reuse { .. }
-            | Reset { .. }
-            | RuntimeErrorFunction(_) => break,
-        }
-    }
-
-    let reset_expr = Expr::Reset {
-        symbol: x,
-        update_mode: w.update_mode,
-    };
-
-    let layout = env.interner.insert(Layout::Union(union_layout));
-
-    stmt = env
-        .arena
-        .alloc(Stmt::Let(w.symbol, reset_expr, layout, stmt));
-
-    for (symbol, expr, expr_layout) in stack.into_iter().rev() {
-        stmt = env
-            .arena
-            .alloc(Stmt::Let(*symbol, expr.clone(), *expr_layout, stmt));
-    }
-
-    stmt
-}
-
-fn function_d_finalize<'a, 'i>(
-    env: &mut Env<'a, 'i>,
-    x: Symbol,
-    c: &CtorInfo<'a>,
-    output: (&'a Stmt<'a>, bool),
-) -> &'a Stmt<'a> {
-    let (stmt, x_live_in_stmt) = output;
-    if x_live_in_stmt {
-        stmt
-    } else {
-        try_function_s(env, x, c, stmt)
-    }
-}
-
-fn function_d_main<'a, 'i>(
-    env: &mut Env<'a, 'i>,
-    x: Symbol,
-    c: &CtorInfo<'a>,
-    stmt: &'a Stmt<'a>,
-) -> (&'a Stmt<'a>, bool) {
-    use Stmt::*;
-
-    let arena = env.arena;
-
-    match stmt {
-        Let(symbol, expr, layout, continuation) => {
-            match expr {
-                Expr::Tag { arguments, .. } if arguments.iter().any(|s| *s == x) => {
-                    // If the scrutinee `x` (the one that is providing memory) is being
-                    // stored in a constructor, then reuse will probably not be able to reuse memory at runtime.
-                    // It may work only if the new cell is consumed, but we ignore this case.
-                    (stmt, true)
+        Stmt::Refcounting(rc, continuation) => {
+            let reuse_pair = match rc {
+                ModifyRc::Inc(_, _) => {
+                    // We don't need to do anything for an inc.
+                    None
                 }
-                _ => {
-                    let (b, found) = function_d_main(env, x, c, continuation);
+                ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol) => {
+                    // Get the layout of the symbol from where it is defined.
+                    let layout_option = environment.get_symbol_layout(*symbol);
 
-                    // NOTE the &b != continuation is not found in the Lean source, but is required
-                    // otherwise we observe the same symbol being reset twice
-                    let mut result = MutSet::default();
-                    if found
-                        || {
-                            occurring_variables_expr(expr, &mut result);
-                            !result.contains(&x)
+                    // If the symbol is defined in the current proc, we can use the layout from the environment.
+                    match layout_option.clone() {
+                        LayoutOption::Layout(layout)
+                            if matches!(
+                                can_reuse_layout(layout_interner, environment, layout),
+                                Reuse::Reusable
+                            ) =>
+                        {
+                            let reuse_token = ReuseToken {
+                                symbol: Symbol::new(home, ident_ids.gen_unique()),
+                                update_mode_id: update_mode_ids.next_id(),
+                            };
+
+                            let dec_ref = match rc {
+                                ModifyRc::Dec(_) => false,
+                                ModifyRc::DecRef(_) => true,
+                                _ => unreachable!(),
+                            };
+
+                            environment.push_reuse_token(arena, layout, reuse_token);
+                            Some((layout, *symbol, reuse_token, dec_ref))
                         }
-                        || &b != continuation
-                    {
-                        let let_stmt = Let(*symbol, expr.clone(), *layout, b);
+                        _ => None,
+                    }
+                }
+            };
 
-                        (arena.alloc(let_stmt), found)
-                    } else {
-                        let b = try_function_s(env, x, c, b);
-                        let let_stmt = Let(*symbol, expr.clone(), *layout, b);
+            let new_continuation = insert_reset_reuse_operations_stmt(
+                arena,
+                layout_interner,
+                home,
+                ident_ids,
+                update_mode_ids,
+                environment,
+                continuation,
+            );
 
-                        (arena.alloc(let_stmt), found)
+            // If we inserted a reuse token, we need to insert a reset reuse operation if the reuse token is consumed.
+            if let Some((layout, symbol, reuse_token, dec_ref)) = reuse_pair {
+                let stack_reuse_token = environment.peek_reuse_token(layout);
+
+                match stack_reuse_token {
+                    Some(reuse_symbol) if reuse_symbol == reuse_token => {
+                        // The token we inserted is still on the stack, so we don't need to insert a reset operation.
+                        // We do need to remove the token from the environment. To prevent errors higher in the tree.
+                        let _ = environment.pop_reuse_token(layout);
+                    }
+                    _ => {
+                        // The token we inserted is no longer on the stack, it must have been consumed.
+                        // So we need to insert a reset operation.
+                        let reset_expr = match dec_ref {
+                            // A decref will be replaced by a resetref.
+                            true => Expr::ResetRef {
+                                symbol,
+                                update_mode: reuse_token.update_mode_id,
+                            },
+                            // And a dec will be replaced by a reset.
+                            false => Expr::Reset {
+                                symbol,
+                                update_mode: reuse_token.update_mode_id,
+                            },
+                        };
+
+                        // If we generate a reuse token, we no longer want to use the drop statement anymore. So we just return the reset expression.
+                        // TODO verify if this works for both dec and decref.
+                        // TODO reset probably decrements it's children. So we probably need to create a resetref that only does the token.
+                        return arena.alloc(Stmt::Let(
+                            reuse_token.symbol,
+                            reset_expr,
+                            // TODO not sure what the layout should be for a reset token. Currently it is the layout of the symbol.
+                            *layout,
+                            new_continuation,
+                        ));
                     }
                 }
             }
+
+            // TODO update jump join points for the returned environment.
+
+            arena.alloc(Stmt::Refcounting(*rc, new_continuation))
         }
-        Switch {
-            cond_symbol,
-            cond_layout,
-            branches,
-            default_branch,
-            ret_layout,
-        } => {
-            if has_live_var(&env.jp_live_vars, stmt, x) {
-                // if `x` is live in `stmt`, we recursively process each branch
-                let mut new_branches = Vec::with_capacity_in(branches.len(), arena);
-
-                for (tag, info, body) in branches.iter() {
-                    let temp = function_d_main(env, x, c, body);
-                    let new_body = function_d_finalize(env, x, c, temp);
-
-                    new_branches.push((*tag, info.clone(), new_body.clone()));
-                }
-
-                let new_default = {
-                    let (info, body) = default_branch;
-                    let temp = function_d_main(env, x, c, body);
-                    let new_body = function_d_finalize(env, x, c, temp);
-
-                    (info.clone(), new_body)
-                };
-
-                let new_switch = Switch {
-                    cond_symbol: *cond_symbol,
-                    cond_layout: *cond_layout,
-                    branches: new_branches.into_bump_slice(),
-                    default_branch: new_default,
-                    ret_layout: *ret_layout,
-                };
-
-                (arena.alloc(new_switch), true)
-            } else {
-                (stmt, false)
-            }
-        }
-        Refcounting(modify_rc, continuation) => {
-            let (b, found) = function_d_main(env, x, c, continuation);
-
-            if found || modify_rc.get_symbol() != x {
-                let refcounting = Refcounting(*modify_rc, b);
-
-                (arena.alloc(refcounting), found)
-            } else {
-                let b = try_function_s(env, x, c, b);
-                let refcounting = Refcounting(*modify_rc, b);
-
-                (arena.alloc(refcounting), found)
-            }
-        }
-
-        Dbg {
-            symbol,
-            variable,
-            remainder,
-        } => {
-            let (b, found) = function_d_main(env, x, c, remainder);
-
-            if found || *symbol != x {
-                let refcounting = Dbg {
-                    symbol: *symbol,
-                    variable: *variable,
-                    remainder: b,
-                };
-
-                (arena.alloc(refcounting), found)
-            } else {
-                let b = try_function_s(env, x, c, b);
-
-                let refcounting = Dbg {
-                    symbol: *symbol,
-                    variable: *variable,
-                    remainder: b,
-                };
-
-                (arena.alloc(refcounting), found)
-            }
-        }
-
-        Expect {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let (b, found) = function_d_main(env, x, c, remainder);
-
-            if found || *condition != x {
-                let refcounting = Expect {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    variables,
-                    remainder: b,
-                };
-
-                (arena.alloc(refcounting), found)
-            } else {
-                let b = try_function_s(env, x, c, b);
-
-                let refcounting = Expect {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    variables,
-                    remainder: b,
-                };
-
-                (arena.alloc(refcounting), found)
-            }
-        }
-        ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let (b, found) = function_d_main(env, x, c, remainder);
-
-            if found || *condition != x {
-                let refcounting = ExpectFx {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    variables,
-                    remainder: b,
-                };
-
-                (arena.alloc(refcounting), found)
-            } else {
-                let b = try_function_s(env, x, c, b);
-
-                let refcounting = ExpectFx {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    variables,
-                    remainder: b,
-                };
-
-                (arena.alloc(refcounting), found)
-            }
-        }
-        Join {
-            id,
-            parameters,
-            body,
-            remainder,
-        } => {
-            env.jp_live_vars.insert(*id, LiveVarSet::default());
-
-            let body_live_vars = collect_stmt(body, &env.jp_live_vars, LiveVarSet::default());
-
-            env.jp_live_vars.insert(*id, body_live_vars);
-
-            let (b, found) = function_d_main(env, x, c, remainder);
-
-            let (v, _found) = function_d_main(env, x, c, body);
-
-            env.jp_live_vars.remove(id);
-
-            // If `found' == true`, then `Dmain b` must also have returned `(b, true)` since
-            // we assume the IR does not have dead join points. So, if `x` is live in `j` (i.e., `v`),
-            // then it must also live in `b` since `j` is reachable from `b` with a `jmp`.
-            // On the other hand, `x` may be live in `b` but dead in `j` (i.e., `v`). -/
-            let new_join = Join {
-                id: *id,
-                parameters,
-                body: v,
-                remainder: b,
-            };
-
-            (arena.alloc(new_join), found)
-        }
-        Ret(_) | Jump(_, _) | Crash(..) => (stmt, has_live_var(&env.jp_live_vars, stmt, x)),
-    }
-}
-
-fn function_d<'a, 'i>(
-    env: &mut Env<'a, 'i>,
-    x: Symbol,
-    c: &CtorInfo<'a>,
-    stmt: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let temp = function_d_main(env, x, c, stmt);
-
-    function_d_finalize(env, x, c, temp)
-}
-
-fn function_r_branch_body<'a, 'i>(
-    env: &mut Env<'a, 'i>,
-    info: &BranchInfo<'a>,
-    body: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let temp = function_r(env, body);
-
-    match info {
-        BranchInfo::None => temp,
-        BranchInfo::Constructor {
-            scrutinee,
-            layout,
-            tag_id,
-        } => match env.interner.chase_recursive(*layout) {
-            Layout::Union(UnionLayout::NonRecursive(_)) => temp,
-            Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
-                let ctor_info = CtorInfo {
-                    layout: union_layout,
-                    id: *tag_id,
-                };
-                function_d(env, *scrutinee, &ctor_info, temp)
-            }
-            _ => temp,
-        },
-    }
-}
-
-fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
-    use Stmt::*;
-
-    let arena = env.arena;
-
-    match stmt {
-        Switch {
-            cond_symbol,
-            cond_layout,
-            branches,
-            default_branch,
-            ret_layout,
-        } => {
-            let mut new_branches = Vec::with_capacity_in(branches.len(), arena);
-
-            for (tag, info, body) in branches.iter() {
-                let new_body = function_r_branch_body(env, info, body);
-
-                new_branches.push((*tag, info.clone(), new_body.clone()));
-            }
-
-            let new_default = {
-                let (info, body) = default_branch;
-
-                let new_body = function_r_branch_body(env, info, body);
-
-                (info.clone(), new_body)
-            };
-
-            let new_switch = Switch {
-                cond_symbol: *cond_symbol,
-                cond_layout: *cond_layout,
-                branches: new_branches.into_bump_slice(),
-                default_branch: new_default,
-                ret_layout: *ret_layout,
-            };
-
-            arena.alloc(new_switch)
-        }
-
-        Join {
-            id,
-            parameters,
-            body,
-            remainder,
-        } => {
-            env.jp_live_vars.insert(*id, LiveVarSet::default());
-
-            let body_live_vars = collect_stmt(body, &env.jp_live_vars, LiveVarSet::default());
-
-            env.jp_live_vars.insert(*id, body_live_vars);
-
-            let b = function_r(env, remainder);
-
-            let v = function_r(env, body);
-
-            env.jp_live_vars.remove(id);
-
-            let join = Join {
-                id: *id,
-                parameters,
-                body: v,
-                remainder: b,
-            };
-
-            arena.alloc(join)
-        }
-
-        Let(symbol, expr, layout, continuation) => {
-            let b = function_r(env, continuation);
-
-            arena.alloc(Let(*symbol, expr.clone(), *layout, b))
-        }
-        Refcounting(modify_rc, continuation) => {
-            let b = function_r(env, continuation);
-
-            arena.alloc(Refcounting(*modify_rc, b))
-        }
-
-        Dbg {
-            symbol,
-            variable,
-            remainder,
-        } => {
-            let b = function_r(env, remainder);
-
-            let expect = Dbg {
-                symbol: *symbol,
-                variable: *variable,
-                remainder: b,
-            };
-
-            arena.alloc(expect)
-        }
-
-        Expect {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let b = function_r(env, remainder);
-
-            let expect = Expect {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: b,
-            };
-
-            arena.alloc(expect)
-        }
-
-        ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let b = function_r(env, remainder);
-
-            let expect = ExpectFx {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: b,
-            };
-
-            arena.alloc(expect)
-        }
-
-        Ret(_) | Jump(_, _) | Crash(..) => {
-            // terminals
+        Stmt::Ret(_) => {
+            // The return statement just doesn't consume any tokens. Dropping these tokens will be handled before.
             stmt
         }
-    }
-}
-
-fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Symbol) -> bool {
-    use Stmt::*;
-
-    match stmt {
-        Let(s, e, _, c) => {
-            debug_assert_ne!(*s, needle);
-            has_live_var_expr(e, needle) || has_live_var(jp_live_vars, c, needle)
-        }
-        Switch { cond_symbol, .. } if *cond_symbol == needle => true,
-        Switch {
-            branches,
-            default_branch,
-            ..
+        Stmt::Expect {
+            condition,
+            region,
+            lookups,
+            variables,
+            remainder,
         } => {
-            has_live_var(jp_live_vars, default_branch.1, needle)
-                || branches
-                    .iter()
-                    .any(|(_, _, body)| has_live_var(jp_live_vars, body, needle))
+            let new_remainder = insert_reset_reuse_operations_stmt(
+                arena,
+                layout_interner,
+                home,
+                ident_ids,
+                update_mode_ids,
+                environment,
+                remainder,
+            );
+
+            arena.alloc(Stmt::Expect {
+                condition: *condition,
+                region: *region,
+                lookups,
+                variables,
+                remainder: new_remainder,
+            })
         }
-        Ret(s) => *s == needle,
-        Refcounting(modify_rc, cont) => {
-            modify_rc.get_symbol() == needle || has_live_var(jp_live_vars, cont, needle)
+        Stmt::ExpectFx {
+            condition,
+            region,
+            lookups,
+            variables,
+            remainder,
+        } => {
+            let new_remainder = insert_reset_reuse_operations_stmt(
+                arena,
+                layout_interner,
+                home,
+                ident_ids,
+                update_mode_ids,
+                environment,
+                remainder,
+            );
+
+            arena.alloc(Stmt::ExpectFx {
+                condition: *condition,
+                region: *region,
+                lookups,
+                variables,
+                remainder: new_remainder,
+            })
         }
-        Dbg {
-            symbol, remainder, ..
-        } => *symbol == needle || has_live_var(jp_live_vars, remainder, needle),
-        Expect {
-            condition,
+        Stmt::Dbg {
+            symbol,
+            variable,
             remainder,
-            ..
-        } => *condition == needle || has_live_var(jp_live_vars, remainder, needle),
-        ExpectFx {
-            condition,
-            remainder,
-            ..
-        } => *condition == needle || has_live_var(jp_live_vars, remainder, needle),
-        Join {
-            id,
+        } => {
+            let new_remainder = insert_reset_reuse_operations_stmt(
+                arena,
+                layout_interner,
+                home,
+                ident_ids,
+                update_mode_ids,
+                environment,
+                remainder,
+            );
+
+            arena.alloc(Stmt::Dbg {
+                symbol: *symbol,
+                variable: *variable,
+                remainder: new_remainder,
+            })
+        }
+        Stmt::Join {
+            id: joinpoint_id,
             parameters,
             body,
             remainder,
         } => {
-            debug_assert!(parameters.iter().all(|p| p.symbol != needle));
+            // First we evaluate the remainder, to see what reuse tokens are available at each jump. We generate code as if no reuse tokens are used.
+            // Then we evaluate the body, to see what reuse tokens are consumed by the body.
+            // - If no reuse tokens are consumed (or when there were no available in the previous step), we stop here and return the first pass symbols.
+            // Then we evaluate the body and remainder again, given the consumed reuse tokens. And we update the joinpoint parameters.
 
-            let mut jp_live_vars = jp_live_vars.clone();
+            let (first_pass_remainder_environment, first_pass_remainder) = {
+                let mut first_pass_environment = environment.clone();
 
-            jp_live_vars.insert(*id, LiveVarSet::default());
+                first_pass_environment.add_joinpoint_reuse_tokens(
+                    *joinpoint_id,
+                    JoinPointReuseTokens::RemainderFirst,
+                );
 
-            let body_live_vars = collect_stmt(body, &jp_live_vars, LiveVarSet::default());
+                let first_pass_remainder = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    &mut first_pass_environment,
+                    remainder,
+                );
 
-            if body_live_vars.contains(&needle) {
-                return true;
+                first_pass_environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
+
+                (first_pass_environment, first_pass_remainder)
+            };
+
+            let max_reuse_tokens =
+                match first_pass_remainder_environment.get_jump_reuse_tokens(*joinpoint_id) {
+                    Some(all_reuse_maps) => {
+                        let all_reuse_layouts = all_reuse_maps
+                            .iter()
+                            .flat_map(|reuse_map| reuse_map.keys())
+                            // PERF: replace this collect with an unique iterator. To make sure every layout is only used once.
+                            .collect::<MutSet<_>>()
+                            .into_iter();
+                        let reuse_layouts_max_tokens = all_reuse_layouts.map(|reuse_layout| {
+                            let max_token = all_reuse_maps
+                                .iter()
+                                .map(|reuse_map| {
+                                    reuse_map
+                                        .get(reuse_layout)
+                                        .map(|tokens| tokens.len())
+                                        .unwrap_or(0)
+                                })
+                                .max()
+                                .expect("all layouts should be in at least one of the reuse maps");
+                            (reuse_layout, max_token)
+                        });
+                        Vec::from_iter_in(reuse_layouts_max_tokens, arena)
+                    }
+                    // Normally the remainder should always have jumps and this would not be None,
+                    // But for testing this might not be the case, so default to no available reuse tokens.
+                    None => Vec::new_in(arena),
+                };
+
+            let (first_pass_body_environment, first_pass_body, used_reuse_tokens) = {
+                // For each possibly available reuse token, create a reuse token to add to the join point environment.
+                let max_reuse_token_symbols = max_reuse_tokens
+                    .iter()
+                    .map(|(layout, size)| {
+                        (
+                            **layout,
+                            Vec::from_iter_in(
+                                (0..*size).map(|_| ReuseToken {
+                                    symbol: Symbol::new(home, ident_ids.gen_unique()),
+                                    update_mode_id: update_mode_ids.next_id(),
+                                }),
+                                arena,
+                            ),
+                        )
+                    })
+                    .collect::<ReuseTokens>();
+
+                // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
+                let mut first_pass_body_environment = ReuseEnvironment {
+                    layout_tags: environment.layout_tags.clone(),
+                    reuse_tokens: max_reuse_token_symbols.clone(),
+                    symbol_layouts: environment.symbol_layouts.clone(),
+                    joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
+                    jump_reuse_tokens: environment.jump_reuse_tokens.clone(),
+                };
+
+                // Add the parameters to the body environment as well.
+                for param in parameters.iter() {
+                    first_pass_body_environment.add_symbol_layout(param.symbol, &param.layout);
+                }
+
+                // Add a entry so that the body knows any jumps to this join point is recursive.
+                first_pass_body_environment
+                    .add_joinpoint_reuse_tokens(*joinpoint_id, JoinPointReuseTokens::BodyFirst);
+
+                let first_pass_body = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    &mut first_pass_body_environment,
+                    body,
+                );
+
+                first_pass_body_environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
+
+                let used_reuse_tokens = {
+                    max_reuse_token_symbols
+                        .iter()
+                        .filter_map(|(layout, reuse_tokens)| {
+                            match first_pass_body_environment.reuse_tokens.get(layout) {
+                                Some(remaining_tokens) => {
+                                    // There are tokens left, remove those from the bottom of the stack and return the consumed ones.
+                                    let mut consumed_reuse_tokens = reuse_tokens
+                                        .iter()
+                                        .skip(remaining_tokens.len())
+                                        .copied()
+                                        .peekable();
+
+                                    #[allow(clippy::manual_map)]
+                                    match consumed_reuse_tokens.peek() {
+                                        // If there are no consumed tokens, remove the layout from the map.
+                                        None => None,
+                                        // Otherwise return the layout and the consumed tokens.
+                                        Some(_) => Some((
+                                            *layout,
+                                            Vec::from_iter_in(consumed_reuse_tokens, arena),
+                                        )),
+                                    }
+                                }
+                                None => {
+                                    // All tokens were consumed. Meaning all of them should be passed from the jump. Keep tokens as is.
+                                    Some((*layout, reuse_tokens.clone()))
+                                }
+                            }
+                        })
+                        .collect::<ReuseTokens>()
+                };
+
+                (
+                    first_pass_body_environment,
+                    first_pass_body,
+                    used_reuse_tokens,
+                )
+            };
+
+            // In the evaluation of the body and remainder we assumed no reuse tokens to be used.
+            // So if there indeed are no reuse tokens used, we can just return the body and remainder as is.
+            if used_reuse_tokens.is_empty() {
+                // We evaluated the first pass using a cloned environment to be able to do a second pass with the same environment.
+                // But if we don't need a second environment, we override the passed env with the first pass env.
+                *environment = first_pass_remainder_environment.clone();
+
+                // Propagate jump reuse tokens upwards.
+                environment
+                    .propagate_jump_reuse_tokens(std::iter::once(first_pass_body_environment));
+
+                return arena.alloc(Stmt::Join {
+                    id: *joinpoint_id,
+                    parameters,
+                    body: first_pass_body,
+                    remainder: first_pass_remainder,
+                });
             }
 
-            jp_live_vars.insert(*id, body_live_vars);
+            let layouts_for_reuse = {
+                let mut layouts = Vec::from_iter_in(
+                    used_reuse_tokens
+                        .iter()
+                        .flat_map(|(layout, tokens)| tokens.iter().map(|_| *layout)),
+                    arena,
+                );
+                // Make sure the layouts are sorted, so that we can provide them from the jump.
+                // In the same order as we consume them from the join point.
+                layouts.sort();
+                layouts
+            };
 
-            has_live_var(&jp_live_vars, remainder, needle)
-        }
-        Jump(id, arguments) => {
-            arguments.iter().any(|s| *s == needle) || jp_live_vars[id].contains(&needle)
-        }
-        Crash(m, _) => *m == needle,
-    }
-}
+            let second_pass_remainder = {
+                environment.add_joinpoint_reuse_tokens(
+                    *joinpoint_id,
+                    JoinPointReuseTokens::RemainderSecond(layouts_for_reuse.clone()),
+                );
 
-fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
-    match expr {
-        Expr::Literal(_) => false,
-        Expr::Call(call) => has_live_var_call(call, needle),
-        Expr::Array { elems: fields, .. } => {
-            for element in fields.iter() {
-                if let ListLiteralElement::Symbol(s) = element {
-                    if *s == needle {
-                        return true;
+                let second_pass_remainder = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    environment,
+                    remainder,
+                );
+
+                environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
+
+                second_pass_remainder
+            };
+
+            let extended_parameters = {
+                let layouts_for_reuse_with_token = {
+                    let mut layout_with_tokens = Vec::from_iter_in(
+                        used_reuse_tokens.iter().flat_map(|(layout, tokens)| {
+                            tokens.iter().map(|token| (*layout, *token))
+                        }),
+                        arena,
+                    );
+                    // Make sure the layouts are sorted, so that we can provide them from the jump.
+                    // In the same order as we consume them from the join point.
+                    layout_with_tokens.sort_by_key(|(layout, _)| *layout);
+                    layout_with_tokens
+                };
+
+                let token_params =
+                    layouts_for_reuse_with_token
+                        .into_iter()
+                        .map(|(layout, token)| Param {
+                            symbol: token.symbol,
+                            ownership: Ownership::Owned,
+                            layout,
+                        });
+
+                // Add the void tokens to the jump arguments to match the expected arguments of the join point.
+                let extended_parameters =
+                    Vec::from_iter_in(parameters.iter().copied().chain(token_params), arena)
+                        .into_bump_slice();
+
+                extended_parameters
+            };
+
+            if first_pass_body_environment
+                .get_jump_reuse_tokens(*joinpoint_id)
+                .is_none()
+            {
+                // The body has no jumps to this join point. So we can just return the body and remainder as is.
+                // As there are no jumps to update.
+
+                // Propagate jump reuse tokens upwards.
+                environment
+                    .propagate_jump_reuse_tokens(std::iter::once(first_pass_body_environment));
+
+                return arena.alloc(Stmt::Join {
+                    id: *joinpoint_id,
+                    parameters: extended_parameters,
+                    body: first_pass_body,
+                    remainder: second_pass_remainder,
+                });
+            }
+
+            let (second_pass_body_environment, second_pass_body) = {
+                // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
+                let mut body_environment = ReuseEnvironment {
+                    layout_tags: environment.layout_tags.clone(),
+                    reuse_tokens: used_reuse_tokens.clone(),
+                    symbol_layouts: environment.symbol_layouts.clone(),
+                    joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
+                    jump_reuse_tokens: environment.jump_reuse_tokens.clone(),
+                };
+
+                // Add the parameters to the body environment as well.
+                for param in parameters.iter() {
+                    body_environment.add_symbol_layout(param.symbol, &param.layout);
+                }
+
+                // Add a entry so that the body knows any jumps to this join point is recursive.
+                body_environment.add_joinpoint_reuse_tokens(
+                    *joinpoint_id,
+                    JoinPointReuseTokens::BodySecond(layouts_for_reuse),
+                );
+
+                let second_pass_body = insert_reset_reuse_operations_stmt(
+                    arena,
+                    layout_interner,
+                    home,
+                    ident_ids,
+                    update_mode_ids,
+                    &mut body_environment,
+                    body,
+                );
+
+                body_environment.remove_joinpoint_reuse_tokens(*joinpoint_id);
+
+                (body_environment, second_pass_body)
+            };
+
+            environment.propagate_jump_reuse_tokens(std::iter::once(second_pass_body_environment));
+
+            arena.alloc(Stmt::Join {
+                id: *joinpoint_id,
+                parameters: extended_parameters,
+                body: second_pass_body,
+                remainder: second_pass_remainder,
+            })
+        }
+        Stmt::Jump(id, arguments) => {
+            // TODO make sure that the reuse tokens that are provided by most jumps are the tokens that are used in most paths.
+            let joinpoint_tokens = environment.get_joinpoint_reuse_tokens(*id);
+
+            match joinpoint_tokens {
+                JoinPointReuseTokens::RemainderFirst | JoinPointReuseTokens::BodyFirst => {
+                    // For both the first pass of the continuation and the body, act as if there are no tokens to reuse.
+                    environment.add_jump_reuse_tokens(*id, environment.reuse_tokens.clone());
+                    arena.alloc(Stmt::Jump(*id, arguments))
+                }
+                JoinPointReuseTokens::RemainderSecond(token_layouts) => {
+                    // If there are no tokens to reuse, we can just jump.
+                    if token_layouts.is_empty() {
+                        return arena.alloc(Stmt::Jump(*id, arguments));
                     }
+
+                    let token_layouts_clone = token_layouts.clone();
+
+                    let mut void_pointer_layout_symbols = Vec::new_in(arena);
+
+                    // See what tokens we can get from the env, if none are available, use a void pointer.
+                    let tokens = token_layouts_clone.iter().map(|token_layout| {
+                        environment.pop_reuse_token(token_layout).map_or_else(
+                            || match void_pointer_layout_symbols
+                                .iter()
+                                .find(|(layout, _)| layout == token_layout)
+                            {
+                                Some(existing_symbol) => existing_symbol.1,
+                                None => {
+                                    let new_symbol = Symbol::new(home, ident_ids.gen_unique());
+                                    void_pointer_layout_symbols.push((*token_layout, new_symbol));
+                                    new_symbol
+                                }
+                            },
+                            |reuse_token| reuse_token.symbol,
+                        )
+                    });
+
+                    // Add the void tokens to the jump arguments to match the expected arguments of the join point.
+                    let extended_arguments =
+                        Vec::from_iter_in(arguments.iter().copied().chain(tokens), arena)
+                            .into_bump_slice();
+
+                    // Wrap the jump in a let statement for each void pointer token layout.
+                    void_pointer_layout_symbols.into_iter().fold(
+                        arena.alloc(Stmt::Jump(*id, extended_arguments)),
+                        |child, (layout, symbol)| {
+                            arena.alloc(Stmt::Let(symbol, Expr::NullPointer, layout, child))
+                        },
+                    )
+                }
+                JoinPointReuseTokens::BodySecond(token_layouts) => {
+                    // If there are no tokens to reuse, we can just jump.
+                    if token_layouts.is_empty() {
+                        return arena.alloc(Stmt::Jump(*id, arguments));
+                    }
+
+                    // We currently don't pass any reuse tokens to recursive jumps.
+                    // This is to avoid keeping reuse tokens alive for too long. But it could be changed.
+                    let mut void_pointer_layout_symbols: std::vec::Vec<(InLayout, Symbol)> = vec![];
+
+                    let void_tokens =
+                        token_layouts
+                            .iter()
+                            .map(|token_layout| {
+                                match void_pointer_layout_symbols
+                                    .iter()
+                                    .find(|(layout, _)| layout == token_layout)
+                                {
+                                    Some(existing_symbol) => existing_symbol.1,
+                                    None => {
+                                        let new_symbol = Symbol::new(home, ident_ids.gen_unique());
+                                        void_pointer_layout_symbols
+                                            .push((*token_layout, new_symbol));
+                                        new_symbol
+                                    }
+                                }
+                            });
+
+                    // Add the void tokens to the jump arguments to match the expected arguments of the join point.
+                    let extended_arguments =
+                        Vec::from_iter_in(arguments.iter().copied().chain(void_tokens), arena)
+                            .into_bump_slice();
+
+                    // Wrap the jump in a let statement for each void pointer token layout.
+                    void_pointer_layout_symbols.into_iter().fold(
+                        arena.alloc(Stmt::Jump(*id, extended_arguments)),
+                        |child, (layout, symbol)| {
+                            arena.alloc(Stmt::Let(symbol, Expr::NullPointer, layout, child))
+                        },
+                    )
                 }
             }
-
-            false
         }
-        Expr::Tag {
-            arguments: fields, ..
-        }
-        | Expr::Struct(fields) => fields.iter().any(|s| *s == needle),
-        Expr::StructAtIndex { structure, .. }
-        | Expr::GetTagId { structure, .. }
-        | Expr::UnionAtIndex { structure, .. } => *structure == needle,
-        Expr::EmptyArray => false,
-        Expr::Reuse {
-            symbol, arguments, ..
-        } => needle == *symbol || arguments.iter().any(|s| *s == needle),
-        Expr::Reset { symbol, .. } => needle == *symbol,
-        Expr::ExprBox { symbol, .. } => needle == *symbol,
-        Expr::ExprUnbox { symbol, .. } => needle == *symbol,
-        Expr::RuntimeErrorFunction(_) => false,
+        Stmt::Crash(_, _) => stmt,
     }
 }
 
-fn has_live_var_call<'a>(call: &'a Call<'a>, needle: Symbol) -> bool {
-    call.arguments.iter().any(|s| *s == needle)
+// TODO make sure all dup/drop operations are already inserted statically.
+// (e.g. not as a side effect of another operation) To make sure we can actually reuse.
+
+enum Reuse {
+    // Reuseable but the pointer *might* be null, which will cause a fresh allocation.
+    Reusable,
+    Nonreusable,
+}
+
+/**
+Map containing the curren't known tag of a layout.
+A layout with a tag will be inserted e.g. after pattern matching. where the tag is known.
+*/
+type LayoutTags<'a> = MutMap<&'a InLayout<'a>, Tag>;
+
+/**
+Map containing the reuse tokens of a layout.
+A vec is used as a stack as we want to use the latest reuse token available.
+*/
+type ReuseTokens<'a> = MutMap<InLayout<'a>, Vec<'a, ReuseToken>>;
+
+/**
+A reuse token is a symbol that is used to reset a layout.
+Matches symbols that are pointers.
+*/
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ReuseToken {
+    // The symbol of the reuse token.
+    symbol: Symbol,
+
+    // Index that can be used later to determine if in place mutation is possible.
+    update_mode_id: UpdateModeId,
+}
+
+type Tag = u16;
+
+/**
+Map containing the layout of a symbol.
+Used to determine whether the pointer of a symbol can be reused, if it is reference counted (heap allocated).
+*/
+type SymbolLayout<'a> = MutMap<Symbol, LayoutOption<'a>>;
+
+#[derive(Clone)]
+enum LayoutOption<'a> {
+    // A normal layout defined in the current function.
+    Layout(&'a InLayout<'a>),
+
+    // No layout as this symbol is defined in a global scope and should not be reused.
+    GloballyDefined,
+}
+
+#[derive(Clone)]
+enum JoinPointReuseTokens<'a> {
+    // The body indicates that we currently in the body of the join point.
+    // This means that (for now) don't pass any reuse tokens from the jump.
+    // As we only use reuse tokens from jumps outside the join point.
+    BodyFirst,
+
+    // Second body pass, to update any jump calls to pass void pointer parameters instead of no parameters.
+    BodySecond(Vec<'a, InLayout<'a>>),
+
+    // The first pass is used to determine the amount of reuse tokens a join point can expect.
+    // Therefore, we don't know the amount of reuse tokens yet.
+    RemainderFirst,
+
+    // In the second pass, we determined the amount of reuse tokens a join point can expect.
+    // Therefore, we know the amount of reuse tokens and can use.
+    RemainderSecond(Vec<'a, InLayout<'a>>),
+}
+
+#[derive(Default, Clone)]
+struct ReuseEnvironment<'a> {
+    layout_tags: LayoutTags<'a>,
+    reuse_tokens: ReuseTokens<'a>,
+    symbol_layouts: SymbolLayout<'a>,
+    // A map containing the amount of reuse tokens a join point expects for each layout.
+    joinpoint_reuse_tokens: MutMap<JoinPointId, JoinPointReuseTokens<'a>>,
+    // A map containing the reuse tokens for each jump.
+    jump_reuse_tokens: MutMap<JoinPointId, std::vec::Vec<ReuseTokens<'a>>>,
+}
+
+impl<'a> ReuseEnvironment<'a> {
+    /**
+     Add the known tag for a layout.
+     Used to optimize reuse of unions that are know to have a null pointer.
+    */
+    fn add_layout_tag(&mut self, layout: &'a InLayout<'a>, tag: Tag) {
+        self.layout_tags.insert(layout, tag);
+    }
+
+    /**
+    Retrieve the known tag for a layout.
+     */
+    fn get_layout_tag(&self, layout: &InLayout<'a>) -> Option<Tag> {
+        self.layout_tags.get(layout).copied()
+    }
+
+    /**
+    Retrieve a reuse token for a layout from the stack for said layout.
+    */
+    fn pop_reuse_token(&mut self, layout: &InLayout<'a>) -> Option<ReuseToken> {
+        let reuse_tokens = self.reuse_tokens.get_mut(layout)?;
+        // If the layout is in the map, pop the token from the stack.
+        let reuse_token = reuse_tokens.pop();
+        // If the stack is empty, remove the layout from the map.
+        if reuse_tokens.is_empty() {
+            self.reuse_tokens.remove(layout);
+        }
+        reuse_token
+    }
+
+    /**
+    Retrieve a reuse token for a layout from the stack for said layout.
+    Without consuming the token.
+    */
+    fn peek_reuse_token(&mut self, layout: &InLayout<'a>) -> Option<ReuseToken> {
+        let reuse_tokens = self.reuse_tokens.get(layout)?;
+        // If the layout is in the map, peek at the last element.
+        let reuse_token = reuse_tokens.last();
+        reuse_token.copied()
+    }
+
+    /**
+    Push a reuse token for a layout on the stack for said layout.
+    */
+    fn push_reuse_token(&mut self, arena: &'a Bump, layout: &InLayout<'a>, token: ReuseToken) {
+        match self.reuse_tokens.get_mut(layout) {
+            Some(reuse_tokens) => {
+                // If the layout is already in the map, push the token on the stack.
+                reuse_tokens.push(token);
+            }
+            None => {
+                // If the layout is not in the map, create a new stack with the token.
+                self.reuse_tokens
+                    .insert(*layout, Vec::from_iter_in([token], arena));
+            }
+        };
+    }
+
+    /**
+     Add the layout of a symbol.
+    */
+    fn add_symbol_layout(&mut self, symbol: Symbol, layout: &'a InLayout<'a>) {
+        self.symbol_layouts
+            .insert(symbol, LayoutOption::Layout(layout));
+    }
+
+    /**
+    Retrieve the layout of a symbol.
+     */
+    fn get_symbol_layout(&self, symbol: Symbol) -> &LayoutOption<'a> {
+        self.symbol_layouts.get(&symbol).expect("Expected symbol to have a layout. It should have been inserted in the environment already.")
+    }
+
+    /**
+     Add the reuse tokens of a jump to be used by a join point.
+    */
+    fn add_jump_reuse_tokens(&mut self, joinpoint_id: JoinPointId, reuse_tokens: ReuseTokens<'a>) {
+        match self.jump_reuse_tokens.get_mut(&joinpoint_id) {
+            Some(jump_reuse_tokens) => {
+                jump_reuse_tokens.push(reuse_tokens);
+            }
+            None => {
+                self.jump_reuse_tokens
+                    .insert(joinpoint_id, vec![reuse_tokens]);
+            }
+        };
+    }
+
+    /**
+    Propagate the reuse tokens of jumps from multiple environments to the current environment.
+    */
+    fn propagate_jump_reuse_tokens(&mut self, envs: impl Iterator<Item = ReuseEnvironment<'a>>) {
+        for (joinpoint_id, layout_reuse_tokens) in
+            envs.flat_map(|env| env.jump_reuse_tokens.into_iter())
+        {
+            for layout_reuse_token in layout_reuse_tokens.iter() {
+                self.add_jump_reuse_tokens(joinpoint_id, layout_reuse_token.clone());
+            }
+        }
+    }
+
+    /**
+    Get the all available reuse tokens from all jumps to a join point.
+    */
+    fn get_jump_reuse_tokens(
+        &self,
+        joinpoint_id: JoinPointId,
+    ) -> Option<&std::vec::Vec<ReuseTokens<'a>>> {
+        self.jump_reuse_tokens.get(&joinpoint_id)
+    }
+
+    /**
+    Insert join_point_reuse_tokens for a join point.
+    */
+    fn add_joinpoint_reuse_tokens(
+        &mut self,
+        joinpoint_id: JoinPointId,
+        join_point_reuse_tokens: JoinPointReuseTokens<'a>,
+    ) {
+        self.joinpoint_reuse_tokens
+            .insert(joinpoint_id, join_point_reuse_tokens);
+    }
+
+    /**
+    Retrieve the reuse tokens amount of a join point.
+    */
+    fn get_joinpoint_reuse_tokens(&self, joinpoint_id: JoinPointId) -> &JoinPointReuseTokens<'a> {
+        self.joinpoint_reuse_tokens
+            .get(&joinpoint_id)
+            .expect("Expected join point to have reuse tokens.")
+    }
+
+    /**
+     Remove the reuse tokens of a joinpoint for cleanup
+    */
+    fn remove_joinpoint_reuse_tokens(&mut self, joinpoint_id: JoinPointId) {
+        self.joinpoint_reuse_tokens.remove(&joinpoint_id);
+    }
+}
+
+/**
+Check if a layout can be reused. by verifying if the layout is a union and if the tag is not nullable.
+*/
+fn can_reuse_layout<'a>(
+    layout_interner: &STLayoutInterner<'a>,
+    environment: &ReuseEnvironment<'a>,
+    layout: &InLayout<'a>,
+) -> Reuse {
+    match layout_interner.get(*layout) {
+        Layout::Union(union_layout) => {
+            can_reuse_union_layout_tag(&union_layout, environment.get_layout_tag(layout))
+        }
+        // Strings literals are constants.
+        // Arrays are probably given to functions and reused there. Little use to reuse them here.
+        _ => Reuse::Nonreusable,
+    }
+}
+
+/**
+   Check if a union layout can be reused. by verifying if the tag is not nullable.
+*/
+fn can_reuse_union_layout_tag(union_layout: &UnionLayout<'_>, tag_id_option: Option<Tag>) -> Reuse {
+    match union_layout {
+        UnionLayout::NonRecursive(_) => Reuse::Nonreusable,
+        // Non nullable union layouts
+        UnionLayout::Recursive(_) | UnionLayout::NonNullableUnwrapped(_) => {
+            // Non nullable union layouts can always be reused.
+            Reuse::Reusable
+        }
+        // Nullable union layouts
+        UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => {
+            match tag_id_option {
+                Some(tag_id) => {
+                    if union_layout.tag_is_null(tag_id) {
+                        // Symbol of layout is always null, so it can't ever be reused.
+                        Reuse::Nonreusable
+                    } else {
+                        // Symbol of layout is not null, so it can be reused.
+                        Reuse::Reusable
+                    }
+                }
+                None => {
+                    // Symbol of layout might be null, so it might be reused.
+                    // If null will cause null pointer and fresh allocation.
+                    Reuse::Reusable
+                }
+            }
+        }
+    }
+}
+
+/**
+Drop the reuse tokens that are not used anymore.
+Useful when reuse tokens are used in a branch, and thus should be created.
+But not in all branches, and thus should be dropped in those branches.
+*/
+fn drop_unused_reuse_tokens<'a>(
+    arena: &'a Bump,
+    unused_tokens: impl Iterator<Item = ReuseToken>,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    unused_tokens.fold(continuation, |continuation, reuse_token| {
+        arena.alloc(Stmt::Refcounting(
+            ModifyRc::DecRef(reuse_token.symbol),
+            continuation,
+        ))
+    })
 }

@@ -188,23 +188,19 @@ would be unable to infer a type—and you'd have to write a type annotation. Thi
 situations where the editor would not be able to reliably tell you the type of part of your program, unlike today
 where it can accurately tell you the type of anything, even if you have no type annotations in your entire code base.
 
-### Arbitrary-rank types
+assuming that's right, here is a proposed new FAQ entry:
 
-Unlike arbitrary-rank (aka "Rank-N") types, both Rank-1 and Rank-2 type systems are compatible with principal
-type inference. Roc currently uses Rank-1 types, and the benefits of Rank-N over Rank-2 don't seem worth
-sacrificing principal type inference to attain, so let's focus on the trade-offs between Rank-1 and Rank-2.
+### Higher-rank types
 
-Supporting Rank-2 types in Roc has been discussed before, but it has several important downsides:
-
+Roc uses a Rank-1 type system. Other languages, like Haskell, support Rank-2 or even arbitrary-rank (aka "Rank-N") types. Supporting higher-rank types in Roc has been discussed before, but it has several important downsides:
+ 
+- It would remove principal decidable type inference. (Only Rank-1 types are compatible with principal decidable type inference; Rank-2 types are decidable but the inferred types are not principal, and Rank 3+ types are not even fully decidable.)
 - It would increase the complexity of the language.
 - It would make some compiler error messages more confusing (e.g. they might mention `forall` because that was the most general type that could be inferred, even if that wasn't helpful or related to the actual problem).
 - It would substantially increase the complexity of the type checker, which would necessarily slow it down.
+- Most significantly, it would make the runtime slower, because Roc compiles programs by fully specializing all function calls to their type instances (this is sometimes called monomorphization). It's unclear how we could fully specialize programs containing Rank-2 types, which means compiling programs that included Rank-2 types (or higher) would require losing specialization in general—which would substantially degrade runtime performance.
 
-No implementation of Rank-2 types can remove any of these downsides. Thus far, we've been able to come up
-with sufficiently nice APIs that only require Rank-1 types, and we haven't seen a really compelling use case
-where the gap between the Rank-2 and Rank-1 designs was big enough to justify switching to Rank-2.
-
-As such, the plan is for Roc to stick with Rank-1 types indefinitely. In Roc's case, the benefits of Rank-1's faster compilation with nicer error messages and a simpler type system outweigh Rank-2's benefits of expanded API options.
+As such, the plan is for Roc to stick with Rank-1 types indefinitely.
 
 ### Higher-kinded polymorphism
 
@@ -276,7 +272,7 @@ So why does Roc have the specific syntax changes it does? Here are some brief ex
 - No `<|` operator. In Elm, I almost exclusively found myself wanting to use this in conjunction with anonymous functions (e.g. `foo <| \bar -> ...`) or conditionals (e.g. `foo <| if bar then ...`). In Roc you can do both of these without the `<|`. That means the main remaining use for `<|` is to reduce parentheses, but I tend to think `|>` is better at that (or else the parens are fine), so after the other syntactic changes, I considered `<|` an unnecessary stylistic alternative to `|>` or parens.
 - The `|>` operator passes the expression before the `|>` as the _first_ argument to the function after the `|>` instead of as the last argument. See the section on currying for details on why this works this way.
 - `:` instead of `type alias` - I like to avoid reserved keywords for terms that are desirable in userspace, so that people don't have to name things `typ` because `type` is a reserved keyword, or `clazz` because `class` is reserved. (I couldn't think of satisfactory alternatives for `as`, `when`, `is`, or `if` other than different reserved keywords. I could see an argument for `then`—and maybe even `is`—being replaced with a `->` or `=>` or something, but I don't anticipate missing either of those words much in userspace. `then` is used in JavaScript promises, but I think there are several better names for that function.)
-- No underscores in variable names - I've seen Elm beginners reflexively use `snake_case` over `camelCase` and then need to un-learn the habit after the compiler accepted it. I'd rather have the compiler give feedback that this isn't the way to do it in Roc, and suggest a camelCase alternative. I've also seen underscores used for lazy naming, e.g. `foo` and then `foo_`. If lazy naming is the goal, `foo2` is just as concise as `foo_`, but `foo3` is more concise than `foo__`. So in a way, removing `_` is a forcing function for improved laziness. (Of course, more descriptive naming would be even better.)
+- No underscores in variable names - I've seen Elm beginners reflexively use `snake_case` over `camelCase` and then need to un-learn the habit after the compiler accepted it. I'd rather have the compiler give feedback that this isn't the way to do it in Roc, and suggest a camelCase alternative. I've also seen underscores used for lazy naming, e.g. `foo` and then `foo_`. If lazy naming is the goal, `foo2` is just as concise as `foo_`, but `foo3` is more concise than `foo__`. So in a way, removing `_` is a forcing function for improved laziness. (Of course, more descriptive naming would be even better.) Acronyms also use camelCase despite being capitalized in English, eg. `xmlHttpRequest` for a variable and `XmlHttpRequest` for a type. Each word starts with a capital letter, so if acronyms are only capitals it's harder to see where the words start. eg. `XMLHTTPRequest` is less clear than `XmlHttpRequest`, unless you already know the acronyms.
 - Trailing commas - I've seen people walk away (in some cases physically!) from Elm as soon as they saw the leading commas in collection literals. While I think they've made a mistake by not pushing past this aesthetic preference to give the language a chance, I also would prefer not put them in a position to make such a mistake in the first place. Secondarily, while I'm personally fine with either style, between the two I prefer the look of trailing commas.
 - The `!` unary prefix operator. I didn't want to have a `Basics` module (more on that in a moment), and without `Basics`, this would either need to be called fully-qualified (`Bool.not`) or else a module import of `Bool.{ not }` would be necessary. Both seemed less nice than supporting the `!` prefix that's common to so many widely-used languages, especially when we already have a unary prefix operator of `-` for negation (e.g. `-x`).
 - `!=` for the inequality operator (instead of Elm's `/=`) - this one pairs more naturally with the `!` prefix operator and is also very common in other languages.

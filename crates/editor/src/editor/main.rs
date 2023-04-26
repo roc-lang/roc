@@ -32,7 +32,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, metadata, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::{error::Error, io, path::Path};
@@ -54,13 +54,13 @@ use winit::{
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
-pub fn launch(project_dir_path_opt: Option<&Path>) -> io::Result<()> {
-    run_event_loop(project_dir_path_opt).expect("Error running event loop");
+pub fn launch(project_path_opt: Option<&Path>) -> io::Result<()> {
+    run_event_loop(project_path_opt).expect("Error running event loop");
 
     Ok(())
 }
 
-fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
+fn run_event_loop(project_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
 
@@ -124,10 +124,10 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     let env_arena = Bump::new();
     let code_arena = Bump::new();
 
-    let (file_path_str, code_str) = read_main_roc_file(project_dir_path_opt);
-    println!("Loading file {:?}...", file_path_str);
+    let (file_path_buf, code_str) = read_main_roc_file(project_path_opt);
+    println!("Loading file {:?}...", file_path_buf);
 
-    let file_path = Path::new(&file_path_str);
+    let file_path = Path::new(&file_path_buf);
     let loaded_module = load_module(
         file_path,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -487,13 +487,31 @@ fn begin_render_pass<'a>(
 const ROC_PROJECTS_FOLDER: &str = "roc-projects";
 const ROC_NEW_PROJECT_FOLDER: &str = "new-roc-project-1";
 
-fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) {
-    if let Some(project_dir_path) = project_dir_path_opt {
+fn read_main_roc_file(project_path_opt: Option<&Path>) -> (PathBuf, String) {
+    if let Some(project_path) = project_path_opt {
+        let path_metadata = metadata(project_path).unwrap_or_else(|err| panic!("You provided the path {:?}, but I could not read the metadata for the provided path; error: {:?}", &project_path, err));
+
+        if path_metadata.is_file() {
+            let file_content_as_str = std::fs::read_to_string(project_path).unwrap_or_else(|err| {
+                panic!(
+                    "You provided the file {:?}, but I could not read it; error: {}",
+                    &project_path, err
+                )
+            });
+
+            return (project_path.to_path_buf(), file_content_as_str);
+        }
+
         let mut ls_config = HashSet::new();
         ls_config.insert(DirEntryAttr::FullName);
 
-        let dir_items = ls(project_dir_path, &ls_config)
-            .unwrap_or_else(|err| panic!("Failed to list items in project directory: {:?}", err))
+        let dir_items = ls(project_path, &ls_config)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Failed to list items in project directory; error: {:?}",
+                    err
+                )
+            })
             .items;
 
         let file_names = dir_items.iter().flat_map(|info_hash_map| {
@@ -514,13 +532,13 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) 
             .collect();
 
         if let Some(&roc_file_name) = roc_file_names.first() {
-            let full_roc_file_path = project_dir_path.join(roc_file_name);
-            let file_as_str = std::fs::read_to_string(Path::new(&full_roc_file_path))
-                .unwrap_or_else(|err| panic!("In the provided project {:?}, I found the roc file {:?}, but I failed to read it: {}", &project_dir_path, full_roc_file_path, err));
+            let full_roc_file_path = project_path.join(roc_file_name);
+            let file_content_as_str = std::fs::read_to_string(Path::new(&full_roc_file_path))
+                .unwrap_or_else(|err| panic!("In the provided project {:?}, I found the roc file {:?}, but I failed to read it: {}", &project_path, full_roc_file_path, err));
 
-            (full_roc_file_path, file_as_str)
+            (full_roc_file_path, file_content_as_str)
         } else {
-            init_new_roc_project(project_dir_path)
+            init_new_roc_project(project_path)
         }
     } else {
         init_new_roc_project(&Path::new(ROC_PROJECTS_FOLDER).join(ROC_NEW_PROJECT_FOLDER))

@@ -52,7 +52,7 @@ impl DeriveKey {
     }
 }
 
-#[derive(Hash, PartialEq, Eq, Debug)]
+#[derive(Hash, Clone, PartialEq, Eq, Debug)]
 pub enum Derived {
     /// If a derived implementation name is well-known ahead-of-time, we can inline the symbol
     /// directly rather than associating a key for an implementation to be made later on.
@@ -109,6 +109,36 @@ impl Derived {
                 FlatDecodable::Key(repr) => Ok(Derived::Key(DeriveKey::Decoder(repr))),
             },
             DeriveBuiltin::Hash => match hash::FlatHash::from_var(subs, var)? {
+                FlatHash::SingleLambdaSetImmediate(imm) => {
+                    Ok(Derived::SingleLambdaSetImmediate(imm))
+                }
+                FlatHash::Key(repr) => Ok(Derived::Key(DeriveKey::Hash(repr))),
+            },
+            DeriveBuiltin::IsEq => {
+                // If obligation checking passes, we always lower derived implementations of `isEq`
+                // to the `Eq` low-level, to be fulfilled by the backends.
+                Ok(Derived::SingleLambdaSetImmediate(
+                    Symbol::BOOL_STRUCTURAL_EQ,
+                ))
+            }
+        }
+    }
+
+    pub fn builtin_with_builtin_symbol(
+        builtin: DeriveBuiltin,
+        symbol: Symbol,
+    ) -> Result<Self, DeriveError> {
+        match builtin {
+            DeriveBuiltin::ToEncoder => match encoding::FlatEncodable::from_builtin_symbol(symbol)?
+            {
+                FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
+            },
+            DeriveBuiltin::Decoder => match decoding::FlatDecodable::from_builtin_symbol(symbol)? {
+                FlatDecodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatDecodable::Key(repr) => Ok(Derived::Key(DeriveKey::Decoder(repr))),
+            },
+            DeriveBuiltin::Hash => match hash::FlatHash::from_builtin_symbol(symbol)? {
                 FlatHash::SingleLambdaSetImmediate(imm) => {
                     Ok(Derived::SingleLambdaSetImmediate(imm))
                 }

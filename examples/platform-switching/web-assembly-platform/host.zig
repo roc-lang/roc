@@ -1,4 +1,4 @@
-const str = @import("str");
+const str = @import("glue").str;
 const builtin = @import("builtin");
 const RocStr = str.RocStr;
 
@@ -51,7 +51,7 @@ pub fn main() u8 {
     // display the result using JavaScript
     js_display_roc_string(callresult.asU8ptr(), callresult.len());
 
-    callresult.deinit();
+    callresult.decref();
 
     return 0;
 }

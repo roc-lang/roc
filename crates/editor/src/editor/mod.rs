@@ -8,7 +8,5 @@ mod mvc;
 mod render_ast;
 mod render_debug;
 mod resources;
-#[cfg(feature = "with_sound")]
-mod sound;
 mod theme;
 mod util;

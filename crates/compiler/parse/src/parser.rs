@@ -232,6 +232,9 @@ pub enum EImports {
     IndentSetStart(Position),
     SetStart(Position),
     SetEnd(Position),
+    TypedIdent(Position),
+    AsKeyword(Position),
+    StrLiteral(Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -536,8 +539,7 @@ pub enum EPattern<'a> {
     IndentEnd(Position),
     AsIndentStart(Position),
 
-    RecordAccessorFunction(Position),
-    TupleAccessorFunction(Position),
+    AccessorFunction(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

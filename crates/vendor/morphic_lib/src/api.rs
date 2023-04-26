@@ -1,7 +1,6 @@
 // https://github.com/morphic-lang/morphic_lib/issues/19
 #![allow(clippy::result_large_err)]
 
-use sha2::{digest::Digest, Sha256};
 use smallvec::SmallVec;
 use std::collections::{btree_map::Entry, BTreeMap};
 use std::rc::Rc;
@@ -1655,16 +1654,16 @@ pub fn solve_trivial(api_program: Program) -> Result<Solutions> {
 
 // TODO: Remove this; it's only used in obsolete logic for populating const definitions with trivial
 // solutions
-fn hash_bstr(hasher: &mut Sha256, bstr: &[u8]) {
+fn hash_bstr(hasher: &mut blake3::Hasher, bstr: &[u8]) {
     let header = (bstr.len() as u64).to_le_bytes();
-    hasher.update(header);
+    hasher.update(&header);
     hasher.update(bstr);
 }
 
 // TODO: Remove this; it's only used in obsolete logic for populating const definitions with trivial
 // solutions
 fn hash_func_name(mod_: ModName, func: FuncName) -> FuncSpec {
-    let mut hasher = Sha256::new();
+    let mut hasher = blake3::Hasher::new();
     hash_bstr(&mut hasher, mod_.0);
     hash_bstr(&mut hasher, func.0);
     FuncSpec(hasher.finalize().into())

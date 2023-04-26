@@ -573,6 +573,34 @@ fn imported_dep_regression() {
 }
 
 #[test]
+fn ingested_file() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("interface_with_deps", "IngestedFile", subs_by_module);
+
+    expect_types(
+        loaded_module,
+        hashmap! {
+            "foo" => "Str",
+            "str" => "Str",
+        },
+    );
+}
+
+#[test]
+fn ingested_file_bytes() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("interface_with_deps", "IngestedFileBytes", subs_by_module);
+
+    expect_types(
+        loaded_module,
+        hashmap! {
+            "foo" => "List U8",
+            "str" => "Str",
+        },
+    );
+}
+
+#[test]
 fn parse_problem() {
     let modules = vec![(
         "Main",
@@ -630,6 +658,20 @@ fn file_not_found() {
 fn imported_file_not_found() {
     let subs_by_module = Default::default();
     let loaded_module = load_fixture("no_deps", "MissingDep", subs_by_module);
+
+    expect_types(
+        loaded_module,
+        hashmap! {
+            "str" => "Str",
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "FILE NOT FOUND")]
+fn ingested_file_not_found() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("no_deps", "MissingIngestedFile", subs_by_module);
 
     expect_types(
         loaded_module,

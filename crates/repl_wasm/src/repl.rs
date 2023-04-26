@@ -164,8 +164,13 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     }
 }
 
+#[cfg(not(windows))]
 const PRE_LINKED_BINARY: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.o")) as &[_];
+
+#[cfg(windows)]
+const PRE_LINKED_BINARY: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.obj")) as &[_];
 
 pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     #[cfg(feature = "console_error_panic_hook")]
@@ -212,8 +217,8 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         ..
     } = mono;
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
-    let (main_fn_symbol, main_fn_var) = exposed_to_host.values.iter().next().unwrap();
+    debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
+    let (main_fn_symbol, main_fn_var) = exposed_to_host.top_level_values.iter().next().unwrap();
     let main_fn_symbol = *main_fn_symbol;
     let main_fn_var = *main_fn_var;
 
@@ -237,7 +242,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             module_id,
             stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
             exposed_to_host: exposed_to_host
-                .values
+                .top_level_values
                 .keys()
                 .copied()
                 .collect::<MutSet<_>>(),

@@ -6,6 +6,7 @@ use roc_can::num::{
 use roc_can::operator::desugar_expr;
 use roc_collections::all::MutSet;
 use roc_module::symbol::Symbol;
+use roc_parse::ident::Accessor;
 use roc_parse::{ast::Expr, pattern::PatternType};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -295,7 +296,7 @@ pub fn expr_to_expr2<'a>(
             )
         }
 
-        RecordAccessorFunction(field) => (
+        AccessorFunction(Accessor::RecordField(field)) => (
             Expr2::Accessor {
                 function_var: env.var_store.fresh(),
                 record_var: env.var_store.fresh(),

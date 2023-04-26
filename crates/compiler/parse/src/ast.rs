@@ -1,6 +1,8 @@
 use std::fmt::Debug;
+use std::path::Path;
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
+use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -243,13 +245,12 @@ pub enum Expr<'a> {
 
     /// Look up exactly one field on a record, e.g. `x.foo`.
     RecordAccess(&'a Expr<'a>, &'a str),
-    /// e.g. `.foo`
-    RecordAccessorFunction(&'a str),
+
+    /// e.g. `.foo` or `.0`
+    AccessorFunction(Accessor<'a>),
 
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
-    /// e.g. `.1`
-    TupleAccessorFunction(&'a str),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -262,6 +263,9 @@ pub enum Expr<'a> {
     Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
+
+    // The name of a file to be ingested directly into a variable.
+    IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
 
     // Lookups
     Var {
@@ -612,7 +616,7 @@ pub enum TypeAnnotation<'a> {
     },
 
     Tuple {
-        fields: Collection<'a, Loc<TypeAnnotation<'a>>>,
+        elems: Collection<'a, Loc<TypeAnnotation<'a>>>,
         /// The row type variable in an open tuple, e.g. the `r` in `( Str, Str )r`.
         /// This is None if it's a closed tuple annotation like `( Str, Str )`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
@@ -1459,13 +1463,13 @@ impl<'a> Malformed for Expr<'a> {
             Float(_) |
             Num(_) |
             NonBase10Int { .. } |
-            TupleAccessorFunction(_) |
-            RecordAccessorFunction(_) |
+            AccessorFunction(_) |
             Var { .. } |
             Underscore(_) |
             Tag(_) |
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
+            IngestedFile(_, _) |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),
@@ -1729,7 +1733,7 @@ impl<'a> Malformed for TypeAnnotation<'a> {
                 fields.iter().any(|field| field.is_malformed())
                     || ext.map(|ext| ext.is_malformed()).unwrap_or_default()
             }
-            TypeAnnotation::Tuple { fields, ext } => {
+            TypeAnnotation::Tuple { elems: fields, ext } => {
                 fields.iter().any(|field| field.is_malformed())
                     || ext.map(|ext| ext.is_malformed()).unwrap_or_default()
             }

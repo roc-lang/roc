@@ -1,5 +1,5 @@
 pub use roc_ident::IdentStr;
-use std::fmt;
+use std::fmt::{self, Debug};
 
 use crate::symbol::PQModuleName;
 
@@ -74,7 +74,7 @@ pub type TagIdIntType = u16;
 /// If tags had a Symbol representation, then each module would have to
 /// deal with contention on a global mutex around translating tag strings
 /// into integers. (Record field labels work the same way, for the same reason.)
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TagName(pub Uppercase);
 
 roc_error_macros::assert_sizeof_non_wasm!(TagName, 16);
@@ -83,6 +83,12 @@ roc_error_macros::assert_sizeof_wasm!(TagName, 8);
 impl TagName {
     pub fn as_ident_str(&self) -> IdentStr {
         self.0.as_ident_str().clone()
+    }
+}
+
+impl Debug for TagName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&self.0, f)
     }
 }
 
@@ -161,7 +167,7 @@ impl From<ModuleName> for Box<str> {
 
 impl fmt::Display for ModuleName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -298,7 +304,7 @@ impl From<Ident> for Box<str> {
 
 impl fmt::Display for Ident {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -317,7 +323,7 @@ impl fmt::Debug for Lowercase {
 
 impl fmt::Display for Lowercase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -336,6 +342,6 @@ impl fmt::Debug for Uppercase {
 
 impl fmt::Display for Uppercase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
+        fmt::Display::fmt(&self.0, f)
     }
 }

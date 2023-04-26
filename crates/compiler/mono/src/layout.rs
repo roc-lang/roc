@@ -1,10 +1,11 @@
 use crate::ir::Parens;
+use crate::layout::intern::NeedsRecursionPointerFixup;
 use bitvec::vec::BitVec;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
-use roc_collections::VecSet;
+use roc_collections::{SmallVec, VecSet};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
@@ -13,9 +14,12 @@ use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, TagExt,
-    UnsortedUnionLabels, Variable, VariableSubsSlice,
+    TupleElems, UnsortedUnionLabels, Variable, VariableSubsSlice,
 };
-use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
+use roc_types::types::{
+    gather_fields_unsorted_iter, gather_tuple_elems_unsorted_iter, RecordField, RecordFieldsError,
+    TupleElemsError,
+};
 use std::cmp::Ordering;
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
@@ -48,22 +52,22 @@ roc_error_macros::assert_sizeof_default!(LambdaSet, 5 * 8);
 type LayoutResult<'a> = Result<InLayout<'a>, LayoutProblem>;
 type RawFunctionLayoutResult<'a> = Result<RawFunctionLayout<'a>, LayoutProblem>;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct CacheMeta {
     /// Does this cache entry include a recursive structure? If so, what's the recursion variable
     /// of that structure?
-    has_recursive_structure: OptVariable,
+    recursive_structures: SmallVec<Variable, 2>,
 }
 
 impl CacheMeta {
     #[inline(always)]
-    fn to_criteria(self) -> CacheCriteria {
+    fn into_criteria(self) -> CacheCriteria {
         let CacheMeta {
-            has_recursive_structure,
+            recursive_structures,
         } = self;
         CacheCriteria {
             has_naked_recursion_pointer: false,
-            has_recursive_structure,
+            recursive_structures,
         }
     }
 }
@@ -121,9 +125,9 @@ pub struct LayoutCache<'a> {
 impl<'a> LayoutCache<'a> {
     pub fn new(interner: TLLayoutInterner<'a>, target_info: TargetInfo) -> Self {
         let mut cache = std::vec::Vec::with_capacity(4);
-        cache.push(CacheLayer::default());
+        cache.push(Default::default());
         let mut raw_cache = std::vec::Vec::with_capacity(4);
-        raw_cache.push(CacheLayer::default());
+        raw_cache.push(Default::default());
         Self {
             target_info,
             cache,
@@ -204,7 +208,7 @@ impl<'a> LayoutCache<'a> {
             // TODO: it's possible that after unification, roots in earlier cache layers changed...
             // how often does that happen?
             if let Some(result) = layer.0.get(&root) {
-                return Some(*result);
+                return Some(result.clone());
             }
         }
         None
@@ -300,14 +304,20 @@ impl<'a> LayoutCache<'a> {
     /// Invalidates the list of given root variables.
     /// Usually called after unification, when merged variables with changed contents need to be
     /// invalidated.
-    pub fn invalidate(&mut self, vars: impl IntoIterator<Item = Variable>) {
+    pub fn invalidate(&mut self, subs: &Subs, vars: impl IntoIterator<Item = Variable>) {
+        // TODO(layout-cache): optimize me somehow
         for var in vars.into_iter() {
+            let var = subs.get_root_key_without_compacting(var);
             for layer in self.cache.iter_mut().rev() {
-                layer.0.remove(&var);
+                layer
+                    .0
+                    .retain(|k, _| !subs.equivalent_without_compacting(var, *k));
                 roc_tracing::debug!(?var, "invalidating cached layout");
             }
             for layer in self.raw_function_cache.iter_mut().rev() {
-                layer.0.remove(&var);
+                layer
+                    .0
+                    .retain(|k, _| !subs.equivalent_without_compacting(var, *k));
                 roc_tracing::debug!(?var, "invalidating cached layout");
             }
         }
@@ -332,24 +342,24 @@ pub struct CacheSnapshot {
     layer: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct CacheCriteria {
     /// Whether there is a naked recursion pointer in this layout, that doesn't pass through a
     /// recursive structure.
     has_naked_recursion_pointer: bool,
-    /// Whether this layout contains a recursive structure. If `Some`, contains the variable of the
-    /// recursion variable of that structure.
-    has_recursive_structure: OptVariable,
+    /// Recursive structures this layout contains, if any.
+    // Typically at most 1 recursive structure is contained, but there may be more.
+    recursive_structures: SmallVec<Variable, 2>,
 }
 
 const CACHEABLE: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: false,
-    has_recursive_structure: OptVariable::NONE,
+    recursive_structures: SmallVec::new(),
 };
 
 const NAKED_RECURSION_PTR: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: true,
-    has_recursive_structure: OptVariable::NONE,
+    recursive_structures: SmallVec::new(),
 };
 
 impl CacheCriteria {
@@ -361,25 +371,32 @@ impl CacheCriteria {
 
     /// Makes `self` cacheable iff self and other are cacheable.
     #[inline(always)]
-    fn and(&mut self, other: Self) {
+    fn and(&mut self, other: Self, subs: &Subs) {
         self.has_naked_recursion_pointer =
             self.has_naked_recursion_pointer || other.has_naked_recursion_pointer;
-        // TODO: can these ever conflict?
-        self.has_recursive_structure = self
-            .has_recursive_structure
-            .or(other.has_recursive_structure);
+
+        for &other_rec in other.recursive_structures.iter() {
+            if self
+                .recursive_structures
+                .iter()
+                .any(|rec| subs.equivalent_without_compacting(*rec, other_rec))
+            {
+                continue;
+            }
+            self.recursive_structures.push(other_rec);
+        }
     }
 
     #[inline(always)]
     fn pass_through_recursive_union(&mut self, recursion_var: Variable) {
         self.has_naked_recursion_pointer = false;
-        self.has_recursive_structure = OptVariable::some(recursion_var);
+        self.recursive_structures.push(recursion_var);
     }
 
     #[inline(always)]
     fn cache_metadata(&self) -> CacheMeta {
         CacheMeta {
-            has_recursive_structure: self.has_recursive_structure,
+            recursive_structures: self.recursive_structures.clone(),
         }
     }
 }
@@ -394,9 +411,9 @@ impl<T> Cacheable<T> {
     }
 
     #[inline(always)]
-    fn decompose(self, and_with: &mut CacheCriteria) -> T {
+    fn decompose(self, and_with: &mut CacheCriteria, subs: &Subs) -> T {
         let Self(value, criteria) = self;
-        and_with.and(criteria);
+        and_with.and(criteria, subs);
         value
     }
 
@@ -428,10 +445,10 @@ fn cacheable<T>(v: T) -> Cacheable<T> {
 /// If the layout is not an error, the cache policy is `and`ed with `total_criteria`, and the layout
 /// is passed back.
 macro_rules! cached {
-    ($expr:expr, $total_criteria:expr) => {
+    ($expr:expr, $total_criteria:expr, $subs:expr) => {
         match $expr {
             Cacheable(Ok(v), criteria) => {
-                $total_criteria.and(criteria);
+                $total_criteria.and(criteria, $subs);
                 v
             }
             Cacheable(Err(v), criteria) => return Cacheable(Err(v), criteria),
@@ -440,7 +457,7 @@ macro_rules! cached {
 }
 
 pub type TagIdIntType = u16;
-pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;
+pub const MAX_ENUM_SIZE: usize = std::mem::size_of::<TagIdIntType>() * 8;
 const GENERATE_NULLABLE: bool = true;
 
 #[derive(Debug, Clone, Copy)]
@@ -482,7 +499,9 @@ impl<'a> RawFunctionLayout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
-            LambdaSet(lset) => Self::layout_from_lambda_set(env, lset),
+            LambdaSet(_) => {
+                internal_error!("lambda set should only appear under a function, where it's handled independently.");
+            }
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
 
@@ -555,15 +574,6 @@ impl<'a> RawFunctionLayout<'a> {
         }
     }
 
-    fn layout_from_lambda_set(
-        _env: &mut Env<'a, '_>,
-        _lset: subs::LambdaSet,
-    ) -> Cacheable<RawFunctionLayoutResult<'a>> {
-        unreachable!()
-        // Lambda set is just a tag union from the layout's perspective.
-        // Self::layout_from_flat_type(env, lset.as_tag_union())
-    }
-
     fn layout_from_flat_type(
         env: &mut Env<'a, '_>,
         flat_type: FlatType,
@@ -580,17 +590,18 @@ impl<'a> RawFunctionLayout<'a> {
 
                 for index in args.into_iter() {
                     let arg_var = env.subs[index];
-                    let layout = cached!(Layout::from_var(env, arg_var), cache_criteria);
+                    let layout = cached!(Layout::from_var(env, arg_var), cache_criteria, env.subs);
                     fn_args.push(layout);
                 }
 
-                let ret = cached!(Layout::from_var(env, ret_var), cache_criteria);
+                let ret = cached!(Layout::from_var(env, ret_var), cache_criteria, env.subs);
 
                 let fn_args = fn_args.into_bump_slice();
 
                 let lambda_set = cached!(
                     LambdaSet::from_var(env, args, closure_var, ret_var),
-                    cache_criteria
+                    cache_criteria,
+                    env.subs
                 );
 
                 Cacheable(Ok(Self::Function(fn_args, lambda_set, ret)), cache_criteria)
@@ -614,7 +625,7 @@ impl<'a> RawFunctionLayout<'a> {
             }
             _ => {
                 let mut criteria = CACHEABLE;
-                let layout = cached!(layout_from_flat_type(env, flat_type), criteria);
+                let layout = cached!(layout_from_flat_type(env, flat_type), criteria, env.subs);
                 Cacheable(Ok(Self::ZeroArgumentThunk(layout)), criteria)
             }
         }
@@ -652,6 +663,17 @@ impl FieldOrderHash {
 
         let mut hasher = DefaultHasher::new();
         fields.iter().for_each(|field| field.hash(&mut hasher));
+        Self(hasher.finish())
+    }
+
+    pub fn from_ordered_tuple_elems(elems: &[usize]) -> Self {
+        if elems.is_empty() {
+            // HACK: we must make sure this is always equivalent to a `ZERO_FIELD_HASH`.
+            return Self::ZERO_FIELD_HASH;
+        }
+
+        let mut hasher = DefaultHasher::new();
+        elems.iter().for_each(|elem| elem.hash(&mut hasher));
         Self(hasher.finish())
     }
 }
@@ -876,7 +898,7 @@ impl<'a> UnionLayout<'a> {
             } => {
                 debug_assert_ne!(nullable_id, tag_id != 0);
 
-                other_fields[index as usize]
+                other_fields[index]
             }
         };
 
@@ -1299,6 +1321,14 @@ impl<'a> Niche<'a> {
             ]),
         }
     }
+
+    pub fn dbg_deep<'r, I: LayoutInterner<'a>>(
+        &'r self,
+        interner: &'r I,
+    ) -> crate::layout::intern::dbg::DbgFields<'a, 'r, I> {
+        let NichePriv::Captures(caps) = &self.0;
+        interner.dbg_deep_iter(caps)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1599,11 +1629,27 @@ impl<'a> LambdaSet<'a> {
                             union_layout: union,
                         }
                     }
-                    UnionLayout::NonNullableUnwrapped(_) => todo!("recursive closures"),
                     UnionLayout::NullableWrapped {
                         nullable_id: _,
                         other_tags: _,
-                    } => todo!("recursive closures"),
+                    } => {
+                        let (index, (name, fields)) = self
+                            .set
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (s, layouts))| comparator(*s, layouts))
+                            .unwrap();
+
+                        let closure_name = *name;
+
+                        ClosureRepresentation::Union {
+                            tag_id: index as TagIdIntType,
+                            alphabetic_order_fields: fields,
+                            closure_name,
+                            union_layout: union,
+                        }
+                    }
+                    UnionLayout::NonNullableUnwrapped(_) => internal_error!("I thought a non-nullable-unwrapped variant for a lambda set was impossible: how could such a lambda set be created without a base case?"),
                 }
             }
             Layout::Struct { .. } => {
@@ -1765,11 +1811,11 @@ impl<'a> LambdaSet<'a> {
 
         for index in args.into_iter() {
             let arg_var = env.subs[index];
-            let layout = cached!(Layout::from_var(env, arg_var), cache_criteria);
+            let layout = cached!(Layout::from_var(env, arg_var), cache_criteria, env.subs);
             fn_args.push(layout);
         }
 
-        let ret = cached!(Layout::from_var(env, ret_var), cache_criteria);
+        let ret = cached!(Layout::from_var(env, ret_var), cache_criteria, env.subs);
 
         let fn_args = env.arena.alloc(fn_args.into_bump_slice());
 
@@ -1799,7 +1845,7 @@ impl<'a> LambdaSet<'a> {
                         // We determine cacheability of the lambda set based on the runtime
                         // representation, so here the criteria doesn't matter.
                         let mut criteria = CACHEABLE;
-                        let arg = cached!(Layout::from_var(env, *var), criteria);
+                        let arg = cached!(Layout::from_var(env, *var), criteria, env.subs);
                         arguments.push(arg);
                         set_captures_have_naked_rec_ptr =
                             set_captures_have_naked_rec_ptr || criteria.has_naked_recursion_pointer;
@@ -1861,14 +1907,18 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables,
                     opt_recursion_var.into_variable(),
                 );
-                cache_criteria.and(criteria);
+                cache_criteria.and(criteria, env.subs);
+
+                let needs_recursive_fixup = NeedsRecursionPointerFixup(
+                    opt_recursion_var.is_some() && set_captures_have_naked_rec_ptr,
+                );
 
                 let lambda_set = env.cache.interner.insert_lambda_set(
                     env.arena,
                     fn_args,
                     ret,
                     env.arena.alloc(set.into_bump_slice()),
-                    set_captures_have_naked_rec_ptr,
+                    needs_recursive_fixup,
                     representation,
                 );
 
@@ -1882,7 +1932,7 @@ impl<'a> LambdaSet<'a> {
                     fn_args,
                     ret,
                     &(&[] as &[(Symbol, &[InLayout])]),
-                    false,
+                    NeedsRecursionPointerFixup(false),
                     Layout::UNIT,
                 );
                 Cacheable(Ok(lambda_set), cache_criteria)
@@ -2171,11 +2221,11 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 
     #[inline(always)]
-    fn can_reuse_cached(&self, var: Variable, cache_metadata: CacheMeta) -> bool {
+    fn can_reuse_cached(&self, var: Variable, cache_metadata: &CacheMeta) -> bool {
         let CacheMeta {
-            has_recursive_structure,
+            recursive_structures,
         } = cache_metadata;
-        if let Some(recursive_structure) = has_recursive_structure.into_variable() {
+        for &recursive_structure in recursive_structures.iter() {
             if self.is_seen(recursive_structure) {
                 // If the cached entry references a recursive structure that we're in the process
                 // of visiting currently, we can't use the cached entry, and instead must
@@ -2213,9 +2263,9 @@ macro_rules! cached_or_impl {
             // cache HIT
             inc_stat!($self.cache.$stats, hits);
 
-            if $self.can_reuse_cached($var, metadata) {
+            if $self.can_reuse_cached($var, &metadata) {
                 // Happy path - the cached layout can be reused, return it immediately.
-                return Cacheable(result, metadata.to_criteria());
+                return Cacheable(result, metadata.into_criteria());
             } else {
                 // Although we have a cached layout, we cannot readily reuse it at this time. We'll
                 // need to recompute the layout, as done below.
@@ -2348,7 +2398,9 @@ impl<'a> Layout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
-            LambdaSet(lset) => layout_from_lambda_set(env, lset),
+            LambdaSet(_) => {
+                internal_error!("lambda set should only appear under a function, where it's handled independently.");
+            }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
@@ -2609,9 +2661,10 @@ impl<'a> Layout<'a> {
             Layout::RecursivePointer(_) => {
                 unreachable!("should be looked up to get an actual layout")
             }
-            Layout::Boxed(inner) => interner
-                .get(*inner)
-                .allocation_alignment_bytes(interner, target_info),
+            Layout::Boxed(inner) => Ord::max(
+                ptr_width,
+                interner.get(*inner).alignment_bytes(interner, target_info),
+            ),
         }
     }
 
@@ -2697,6 +2750,60 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn has_varying_stack_size<I>(self, interner: &I, arena: &bumpalo::Bump) -> bool
+    where
+        I: LayoutInterner<'a>,
+    {
+        let mut stack: Vec<Layout> = bumpalo::collections::Vec::new_in(arena);
+
+        stack.push(self);
+
+        while let Some(layout) = stack.pop() {
+            match layout {
+                Layout::Builtin(builtin) => match builtin {
+                    Builtin::Int(_)
+                    | Builtin::Float(_)
+                    | Builtin::Bool
+                    | Builtin::Decimal
+                    | Builtin::Str
+                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                    | Builtin::List(_) => { /* do nothing */ }
+                },
+                // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                Layout::Struct { field_layouts, .. } => {
+                    stack.extend(field_layouts.iter().map(|interned| interner.get(*interned)))
+                }
+                Layout::Union(tag_union) => match tag_union {
+                    UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                        for tag in tags {
+                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                        }
+                    }
+                    UnionLayout::NonNullableUnwrapped(fields) => {
+                        stack.extend(fields.iter().map(|interned| interner.get(*interned)));
+                    }
+                    UnionLayout::NullableWrapped { other_tags, .. } => {
+                        for tag in other_tags {
+                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                        }
+                    }
+                    UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                        stack.extend(other_fields.iter().map(|interned| interner.get(*interned)));
+                    }
+                },
+                Layout::LambdaSet(_) => return true,
+                Layout::Boxed(_) => {
+                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                }
+                Layout::RecursivePointer(_) => {
+                    /* do nothing, we've already generated for this type through the Union(_) */
+                }
+            }
+        }
+
+        false
+    }
+
     /// Used to build a `Layout::Struct` where the field name order is irrelevant.
     pub fn struct_no_name_order(field_layouts: &'a [InLayout]) -> Self {
         if field_layouts.is_empty() {
@@ -2779,6 +2886,18 @@ impl<'a> Layout<'a> {
             // dec int literal bounded by i128, so fit it into an i128
             Dec => Layout::DEC,
         }
+    }
+
+    pub fn is_recursive_tag_union(self) -> bool {
+        matches!(
+            self,
+            Layout::Union(
+                UnionLayout::NullableUnwrapped { .. }
+                    | UnionLayout::Recursive(_)
+                    | UnionLayout::NullableWrapped { .. }
+                    | UnionLayout::NonNullableUnwrapped { .. },
+            )
+        )
     }
 }
 
@@ -2933,37 +3052,6 @@ impl<'a> Builtin<'a> {
     }
 }
 
-fn layout_from_lambda_set<'a>(
-    env: &mut Env<'a, '_>,
-    lset: subs::LambdaSet,
-) -> Cacheable<LayoutResult<'a>> {
-    // Lambda set is just a tag union from the layout's perspective.
-    let subs::LambdaSet {
-        solved,
-        recursion_var,
-        unspecialized,
-        ambient_function: _,
-    } = lset;
-
-    if !unspecialized.is_empty() {
-        internal_error!(
-            "unspecialized lambda sets remain during layout generation for {:?}",
-            roc_types::subs::SubsFmtContent(&Content::LambdaSet(lset), env.subs)
-        );
-    }
-
-    match recursion_var.into_variable() {
-        None => {
-            let labels = solved.unsorted_lambdas(env.subs);
-            layout_from_non_recursive_union(env, &labels).map(Ok)
-        }
-        Some(rec_var) => {
-            let labels = solved.unsorted_lambdas(env.subs);
-            layout_from_recursive_union(env, rec_var, &labels)
-        }
-    }
-}
-
 fn layout_from_flat_type<'a>(
     env: &mut Env<'a, '_>,
     flat_type: FlatType,
@@ -3060,7 +3148,8 @@ fn layout_from_flat_type<'a>(
                     let mut criteria = CACHEABLE;
 
                     let inner_var = args[0];
-                    let inner_layout = cached!(Layout::from_var(env, inner_var), criteria);
+                    let inner_layout =
+                        cached!(Layout::from_var(env, inner_var), criteria, env.subs);
                     let boxed_layout = env.cache.put_in(Layout::Boxed(inner_layout));
 
                     Cacheable(Ok(boxed_layout), criteria)
@@ -3084,7 +3173,8 @@ fn layout_from_flat_type<'a>(
 
                 let lambda_set = cached!(
                     LambdaSet::from_var(env, args, closure_var, ret_var),
-                    criteria
+                    criteria,
+                    env.subs
                 );
                 let lambda_set = lambda_set.full_layout;
 
@@ -3108,7 +3198,8 @@ fn layout_from_flat_type<'a>(
                     RecordField::Required(field_var)
                     | RecordField::Demanded(field_var)
                     | RecordField::RigidRequired(field_var) => {
-                        let field_layout = cached!(Layout::from_var(env, field_var), criteria);
+                        let field_layout =
+                            cached!(Layout::from_var(env, field_var), criteria, env.subs);
                         sortables.push((label, field_layout));
                     }
                     RecordField::Optional(_) | RecordField::RigidOptional(_) => {
@@ -3149,8 +3240,52 @@ fn layout_from_flat_type<'a>(
 
             Cacheable(result, criteria)
         }
-        Tuple(_elems, _ext_var) => {
-            todo!();
+        Tuple(elems, ext_var) => {
+            let mut criteria = CACHEABLE;
+
+            // extract any values from the ext_var
+            let mut sortables = Vec::with_capacity_in(elems.len(), arena);
+            let it = match elems.unsorted_iterator(subs, ext_var) {
+                Ok(it) => it,
+                Err(TupleElemsError) => return Cacheable(Err(LayoutProblem::Erroneous), criteria),
+            };
+
+            for (index, elem) in it {
+                let elem_layout = cached!(Layout::from_var(env, elem), criteria, env.subs);
+                sortables.push((index, elem_layout));
+            }
+
+            sortables.sort_by(|(index1, layout1), (index2, layout2)| {
+                cmp_fields(
+                    &env.cache.interner,
+                    index1,
+                    *layout1,
+                    index2,
+                    *layout2,
+                    target_info,
+                )
+            });
+
+            let ordered_field_names =
+                Vec::from_iter_in(sortables.iter().map(|(index, _)| *index), arena);
+            let field_order_hash =
+                FieldOrderHash::from_ordered_tuple_elems(ordered_field_names.as_slice());
+
+            let result = if sortables.len() == 1 {
+                // If the tuple has only one field that isn't zero-sized,
+                // unwrap it.
+                Ok(sortables.pop().unwrap().1)
+            } else {
+                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
+                let struct_layout = Layout::Struct {
+                    field_order_hash,
+                    field_layouts: layouts.into_bump_slice(),
+                };
+
+                Ok(env.cache.put_in(struct_layout))
+            };
+
+            Cacheable(result, criteria)
         }
         TagUnion(tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
@@ -3183,6 +3318,48 @@ fn layout_from_flat_type<'a>(
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
         EmptyTuple => cacheable(Ok(Layout::UNIT)),
     }
+}
+
+pub type SortedTupleElem<'a> = (usize, Variable, InLayout<'a>);
+
+pub fn sort_tuple_elems<'a>(
+    env: &mut Env<'a, '_>,
+    var: Variable,
+) -> Result<Vec<'a, SortedTupleElem<'a>>, LayoutProblem> {
+    let (it, _) = match gather_tuple_elems_unsorted_iter(env.subs, TupleElems::empty(), var) {
+        Ok(it) => it,
+        Err(_) => return Err(LayoutProblem::Erroneous),
+    };
+
+    sort_tuple_elems_help(env, it)
+}
+
+fn sort_tuple_elems_help<'a>(
+    env: &mut Env<'a, '_>,
+    elems_map: impl Iterator<Item = (usize, Variable)>,
+) -> Result<Vec<'a, SortedTupleElem<'a>>, LayoutProblem> {
+    let target_info = env.target_info;
+
+    let mut sorted_elems = Vec::with_capacity_in(elems_map.size_hint().0, env.arena);
+
+    for (index, elem) in elems_map {
+        let Cacheable(layout, _) = Layout::from_var(env, elem);
+        let layout = layout?;
+        sorted_elems.push((index, elem, layout));
+    }
+
+    sorted_elems.sort_by(|(index1, _, res_layout1), (index2, _, res_layout2)| {
+        cmp_fields(
+            &env.cache.interner,
+            index1,
+            *res_layout1,
+            index2,
+            *res_layout2,
+            target_info,
+        )
+    });
+
+    Ok(sorted_elems)
 }
 
 pub type SortedField<'a> = (Lowercase, Variable, Result<InLayout<'a>, InLayout<'a>>);
@@ -3460,18 +3637,6 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
-fn is_recursive_tag_union(layout: &Layout) -> bool {
-    matches!(
-        layout,
-        Layout::Union(
-            UnionLayout::NullableUnwrapped { .. }
-                | UnionLayout::Recursive(_)
-                | UnionLayout::NullableWrapped { .. }
-                | UnionLayout::NonNullableUnwrapped { .. },
-        )
-    )
-}
-
 fn union_sorted_non_recursive_tags_help<'a, L>(
     env: &mut Env<'a, '_>,
     tags_list: &[(&'_ L, &[Variable])],
@@ -3499,7 +3664,7 @@ where
 
             for &var in arguments {
                 let Cacheable(result, criteria) = Layout::from_var(env, var);
-                cache_criteria.and(criteria);
+                cache_criteria.and(criteria, env.subs);
                 match result {
                     Ok(layout) => {
                         layouts.push(layout);
@@ -3555,7 +3720,7 @@ where
 
                 for &var in arguments {
                     let Cacheable(result, criteria) = Layout::from_var(env, var);
-                    cache_criteria.and(criteria);
+                    cache_criteria.and(criteria, env.subs);
                     match result {
                         Ok(layout) => {
                             has_any_arguments = true;
@@ -3677,7 +3842,7 @@ where
 
             for var in arguments {
                 let Cacheable(result, criteria) = Layout::from_var(env, var);
-                cache_criteria.and(criteria);
+                cache_criteria.and(criteria, env.subs);
                 match result {
                     Ok(layout) => {
                         layouts.push(layout);
@@ -3751,7 +3916,7 @@ where
 
                 for var in arguments {
                     let Cacheable(result, criteria) = Layout::from_var(env, var);
-                    cache_criteria.and(criteria);
+                    cache_criteria.and(criteria, env.subs);
                     match result {
                         Ok(in_layout) => {
                             has_any_arguments = true;
@@ -3764,7 +3929,7 @@ where
                                     == env
                                         .subs
                                         .get_root_key_without_compacting(opt_rec_var.unwrap())
-                                && is_recursive_tag_union(&layout);
+                                && layout.is_recursive_tag_union();
 
                             let arg_layout = if self_recursion {
                                 Layout::NAKED_RECURSIVE_PTR
@@ -3924,7 +4089,8 @@ where
 
     let mut criteria = CACHEABLE;
 
-    let variant = union_sorted_non_recursive_tags_help(env, tags_vec).decompose(&mut criteria);
+    let variant =
+        union_sorted_non_recursive_tags_help(env, tags_vec).decompose(&mut criteria, env.subs);
 
     let result = match variant {
         Never => Layout::VOID,
@@ -4035,10 +4201,11 @@ where
                 // The naked pointer will get fixed-up to loopback to the union below when we
                 // intern the union.
                 tag_layout.push(Layout::NAKED_RECURSIVE_PTR);
+                criteria.and(NAKED_RECURSION_PTR, env.subs);
                 continue;
             }
 
-            let payload = cached!(Layout::from_var(env, var), criteria);
+            let payload = cached!(Layout::from_var(env, var), criteria, env.subs);
             tag_layout.push(payload);
         }
 
@@ -4075,12 +4242,17 @@ where
     } else {
         UnionLayout::Recursive(tag_layouts.into_bump_slice())
     };
-    criteria.pass_through_recursive_union(rec_var);
 
-    let union_layout = env
-        .cache
-        .interner
-        .insert_recursive(env.arena, Layout::Union(union_layout));
+    let union_layout = if criteria.has_naked_recursion_pointer {
+        env.cache
+            .interner
+            .insert_recursive(env.arena, Layout::Union(union_layout))
+    } else {
+        // There are no naked recursion pointers, so we can insert the layout as-is.
+        env.cache.interner.insert(Layout::Union(union_layout))
+    };
+
+    criteria.pass_through_recursive_union(rec_var);
 
     Cacheable(Ok(union_layout), criteria)
 }
@@ -4207,7 +4379,7 @@ pub(crate) fn list_layout_from_elem<'a>(
     } else {
         // NOTE: cannot re-use Content, because it may be recursive
         // then some state is not correctly kept, we have to go through from_var
-        cached!(Layout::from_var(env, element_var), criteria)
+        cached!(Layout::from_var(env, element_var), criteria, env.subs)
     };
 
     let list_layout = env
@@ -4414,5 +4586,11 @@ mod test {
         let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(Layout::VOID_NAKED.stack_size(&interner, target_info), 0);
+    }
+
+    #[test]
+    fn align_u128_in_tag_union() {
+        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        assert_eq!(interner.alignment_bytes(Layout::U128), 16);
     }
 }

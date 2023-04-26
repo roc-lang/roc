@@ -1,4 +1,5 @@
 use roc_collections::{VecMap, VecSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -463,15 +464,20 @@ pub fn create_alias(
         let mut hidden = type_variables;
 
         for var in (vars.iter().map(|lv| lv.value.var))
+            .chain(recursion_variables.iter().copied())
             .chain(infer_ext_in_output_variables.iter().copied())
         {
             hidden.remove(&var);
         }
 
         if !hidden.is_empty() {
-            panic!(
+            internal_error!(
                 "Found unbound type variables {:?} \n in type alias {:?} {:?} {:?} : {:?}",
-                hidden, name, &vars, &infer_ext_in_output_variables, &typ
+                hidden,
+                name,
+                &vars,
+                &infer_ext_in_output_variables,
+                &typ
             )
         }
 

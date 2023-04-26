@@ -44,7 +44,6 @@
             xorg.libXrandr
             xorg.libXi
             xorg.libxcb
-            alsa-lib
           ];
 
         darwinInputs = with pkgs;
@@ -106,6 +105,8 @@
           rust
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
+          wasm-pack # for repl_wasm
+          jq
         ]);
       in {
 

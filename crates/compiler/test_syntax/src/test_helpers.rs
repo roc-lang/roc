@@ -243,10 +243,11 @@ impl<'a> Input<'a> {
             let reformatted = reparsed_ast.format();
 
             if output != reformatted {
-                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\n",
+                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",
                     self.as_str(),
                     output.as_ref().as_str(),
-                    actual);
+                    actual,
+                    reparsed_ast);
                 eprintln!("Reformatting the formatted code changed it again, as follows:\n\n");
 
                 assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());

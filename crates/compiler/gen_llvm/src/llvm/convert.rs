@@ -18,7 +18,9 @@ fn basic_type_from_record<'a, 'ctx, 'env>(
     let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
 
     for field_layout in fields.iter() {
-        field_types.push(basic_type_from_layout(env, layout_interner, *field_layout));
+        let typ = basic_type_from_layout(env, layout_interner, *field_layout);
+
+        field_types.push(typ);
     }
 
     env.context
@@ -65,6 +67,7 @@ pub fn struct_type_from_union_layout<'a, 'ctx, 'env>(
     use UnionLayout::*;
 
     match union_layout {
+        NonRecursive([]) => env.context.struct_type(&[], false),
         NonRecursive(tags) => {
             RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info)
                 .struct_type()
@@ -300,7 +303,8 @@ impl<'ctx> RocUnion<'ctx> {
         target_info: TargetInfo,
     ) -> Self {
         let tag_type = match layouts.len() {
-            0..=255 => TagType::I8,
+            0 => unreachable!("zero-element tag union is not represented as a RocUnion"),
+            1..=255 => TagType::I8,
             _ => TagType::I16,
         };
 
@@ -320,6 +324,10 @@ impl<'ctx> RocUnion<'ctx> {
             Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
 
         Self::new(context, target_info, data_align, data_width, None)
+    }
+
+    pub fn data_width(&self) -> u32 {
+        self.data_width
     }
 
     pub fn tag_alignment(&self) -> u32 {

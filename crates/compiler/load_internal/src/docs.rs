@@ -403,7 +403,7 @@ fn contains_unexposed_type(
 
             false
         }
-        Tuple { fields, ext } => {
+        Tuple { elems: fields, ext } => {
             if let Some(loc_ext) = ext {
                 if contains_unexposed_type(&loc_ext.value, exposed_module_ids, module_ids) {
                     return true;

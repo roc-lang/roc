@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("str");
+const str = @import("glue").str;
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -130,7 +130,7 @@ pub fn main() u8 {
     // stdout the result
     stdout.print("{s}", .{callresult.asSlice()}) catch unreachable;
 
-    callresult.deinit();
+    callresult.decref();
 
     stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 

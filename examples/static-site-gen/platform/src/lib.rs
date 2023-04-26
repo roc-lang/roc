@@ -8,6 +8,12 @@ use std::fs;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
+use syntect::easy::HighlightLines;
+use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{ThemeSet, Style};
+use syntect::util::{LinesWithEndings};
+use syntect::html::{ClassedHTMLGenerator, ClassStyle};
+
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
     fn roc_transformFileContentForHost(relPath: &RocStr, content: &RocStr) -> RocStr;
@@ -116,7 +122,7 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
     let output_dir = {
         let dir = PathBuf::from(output_dirname);
         if !dir.exists() {
-            fs::create_dir(&dir).unwrap();
+            fs::create_dir_all(&dir).unwrap();
         }
         strip_windows_prefix(
             dir.canonicalize()
@@ -143,18 +149,23 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
     let mut num_errors = 0;
     let mut num_successes = 0;
     for input_file in input_files {
-        match process_file(&input_dir, &output_dir, &input_file) {
-            Ok(()) => {
-                num_successes += 1;
+        match input_file.extension() {
+            Some(s) if s.eq("md".into()) => {
+                match process_file(&input_dir, &output_dir, &input_file) {
+                    Ok(()) => {
+                        num_successes += 1;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to process file:\n\n  ({:?})with error:\n\n  {}",
+                            &input_file, e
+                        );
+                        num_errors += 1;
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!(
-                    "Failed to process file:\n\n  ({:?})with error:\n\n  {}",
-                    &input_file, e
-                );
-                num_errors += 1;
-            }
-        }
+            _ => {}
+        };
     }
 
     println!(
@@ -170,11 +181,6 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
 }
 
 fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Result<(), String> {
-    match input_file.extension() {
-        Some(s) if s.eq("md".into()) => {}
-        _ => return Err("Only .md files are supported".into()),
-    };
-
     let input_relpath = input_file
         .strip_prefix(input_dir)
         .map_err(|e| e.to_string())?
@@ -202,7 +208,95 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     options.remove(Options::ENABLE_SMART_PUNCTUATION);
 
     let parser = Parser::new_ext(&content_md, options);
-    html::push_html(&mut content_html, parser);
+
+    // We'll build a new vector of events since we can only consume the parser once
+    let mut parser_with_highlighting = Vec::new();
+    // As we go along, we'll want to highlight code in bundles, not lines
+    let mut code_to_highlight = String::new();
+    // And track a little bit of state
+    let mut in_code_block = false;
+    let mut is_roc_code = false;
+    let syntax_set : syntect::parsing::SyntaxSet = SyntaxSet::load_defaults_newlines();
+    let theme_set : syntect::highlighting::ThemeSet = ThemeSet::load_defaults();
+    
+    for event in parser {
+        match event {
+            pulldown_cmark::Event::Code(code_str) => {
+                if code_str.starts_with("roc!") {
+                    let stripped = code_str
+                        .strip_prefix("roc!")
+                        .expect("expected leading 'roc!'");
+
+                    let highlighted_html = roc_highlight::highlight_roc_code_inline(stripped.to_string().as_str());
+                    
+                    parser_with_highlighting.push(pulldown_cmark::Event::Html(
+                        pulldown_cmark::CowStr::from(highlighted_html),
+                    ));
+                } else {
+                    let inline_code = pulldown_cmark::CowStr::from(format!("<code>{}</code>", code_str));
+                    parser_with_highlighting.push(
+                        pulldown_cmark::Event::Html(inline_code)
+                    );
+                }
+            }
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(cbk)) => {
+                in_code_block = true;
+                is_roc_code = is_roc_code_block(&cbk);
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(extention_str))) => {
+                if in_code_block {
+                    match replace_code_with_static_file(&code_to_highlight, input_file) {
+                        None => {}
+                        // Check if the code block is actually just a relative
+                        // path to a static file, if so replace the code with
+                        // the contents of the file.
+                        // ```
+                        // file:myCodeFile.roc
+                        // ```
+                        Some(new_code_to_highlight) => {
+                            code_to_highlight = new_code_to_highlight;
+                        }
+                    }
+
+                    // Format the whole multi-line code block as HTML all at once
+                    let highlighted_html: String;
+                    if is_roc_code {
+                        highlighted_html = roc_highlight::highlight_roc_code(&code_to_highlight)
+                    } else if let Some(syntax) = syntax_set.find_syntax_by_token(&extention_str) {
+                        let mut h = HighlightLines::new(syntax, &theme_set.themes["base16-ocean.dark"]);
+
+                        let mut html_generator = ClassedHTMLGenerator::new_with_class_style(syntax, &syntax_set, ClassStyle::Spaced);
+                        for line in LinesWithEndings::from(&code_to_highlight) {
+                            html_generator.parse_html_for_line_which_includes_newline(line);
+                        }
+                        highlighted_html = format!("<pre><samp>{}</pre></samp>", html_generator.finalize())
+                    } else {
+                        highlighted_html = format!("<pre><samp>{}</pre></samp>", &code_to_highlight)
+                    }
+
+                    // And put it into the vector
+                    parser_with_highlighting.push(pulldown_cmark::Event::Html(
+                        pulldown_cmark::CowStr::from(highlighted_html),
+                    ));
+                    code_to_highlight = String::new();
+                    in_code_block = false;
+                }
+            }
+            pulldown_cmark::Event::Text(t) => {
+                if in_code_block {
+                    // If we're in a code block, build up the string of text
+                    code_to_highlight.push_str(&t);
+                } else {
+                    parser_with_highlighting.push(pulldown_cmark::Event::Text(t))
+                }
+            }
+            e => {
+                parser_with_highlighting.push(e);
+            }
+        }
+    }
+
+    html::push_html(&mut content_html, parser_with_highlighting.into_iter());
 
     let roc_relpath = RocStr::from(output_relpath.to_str().unwrap());
     let roc_content_html = RocStr::from(content_html.as_str());
@@ -213,6 +307,12 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     let rust_output_str: &str = &roc_output_str;
 
     println!("{} -> {}", input_file.display(), output_file.display());
+
+    // Create parent directory if it doesn't exist
+    let parent_dir = output_file.parent().unwrap();
+    if !parent_dir.exists() {
+        fs::create_dir_all(&parent_dir).unwrap();
+    }
 
     fs::write(output_file, rust_output_str).map_err(|e| format!("{}", e))
 }
@@ -234,9 +334,58 @@ fn find_files(dir: &Path, file_paths: &mut Vec<PathBuf>) -> std::io::Result<()> 
 /// and there seems to be no good way to strip it. So we resort to some string manipulation.
 pub fn strip_windows_prefix(path_buf: PathBuf) -> std::path::PathBuf {
     #[cfg(not(windows))]
-    return path_buf;
+    {
+        path_buf
+    }
 
-    let path_str = path_buf.display().to_string();
+    #[cfg(windows)]
+    {
+        let path_str = path_buf.display().to_string();
 
-    std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
+        std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
+    }
+}
+
+fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
+    match cbk {
+        pulldown_cmark::CodeBlockKind::Indented => false,
+        pulldown_cmark::CodeBlockKind::Fenced(cow_str) => {
+            if cow_str.contains("roc") {
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
+fn replace_code_with_static_file(code: &str, input_file: &Path) -> Option<String> {
+    let input_dir = input_file.parent()?;
+    let trimmed_code = code.trim();
+    
+    // Confirm the code block starts with a `file:` tag
+    match trimmed_code.strip_prefix("file:") {
+        None => None,
+        Some(path) => {
+
+            // File must be located in input folder or sub-directory
+            if path.contains("../") {
+                panic!("ERROR File must be located within the input diretory!");
+            }
+
+            let file_path = input_dir.join(path);
+
+            // Check file exists before opening
+            match file_path.try_exists() {
+                Err(_) | Ok(false) => {
+                    panic!("ERROR File does not exist: \"{}\"", file_path.to_str().unwrap());
+                }
+                Ok(true) => {
+                    let vec_u8 = fs::read(file_path).ok()?;
+
+                    String::from_utf8(vec_u8).ok()
+                }
+            }
+        }
+    }
 }

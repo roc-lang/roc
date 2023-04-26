@@ -1,0 +1,11 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    f : _ -> Str
+    f = \s -> g s
+    g = \s -> if Bool.true then s else f s
+
+    g
+
+main = entry
+#      ^^^^^ Str -[[g(3)]]-> Str

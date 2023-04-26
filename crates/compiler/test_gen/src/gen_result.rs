@@ -227,7 +227,7 @@ fn is_err() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn roc_result_ok() {
+fn roc_result_ok_i64() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -239,6 +239,26 @@ fn roc_result_ok() {
         ),
         RocResult::ok(42),
         RocResult<i64, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn roc_result_ok_f64() {
+    // NOTE: the dev backend does not currently use float registers when returning a more
+    // complex type, but the rust side does expect it to. Hence this test fails with gen-dev
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result F64 {}
+            result = Ok 42.0
+
+            result
+            "#
+        ),
+        RocResult::ok(42.0),
+        RocResult<f64, ()>
     );
 }
 

@@ -1,21 +1,10 @@
 mod test_glue;
 
-extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut test_glue::Outer);
-}
-
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
 
-    let outer = unsafe {
-        let mut ret: core::mem::MaybeUninit<test_glue::Outer> = core::mem::MaybeUninit::uninit();
-
-        roc_main(ret.as_mut_ptr());
-
-        ret.assume_init()
-    };
+    let outer = test_glue::mainForHost();
 
     // Verify that `inner` has all the expected traits.
     {

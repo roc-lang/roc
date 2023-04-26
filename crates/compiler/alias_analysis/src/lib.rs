@@ -188,20 +188,28 @@ where
             let func_name = FuncName(&bytes);
 
             if let HostExposedLayouts::HostExposed { aliases, .. } = &proc.host_exposed_layouts {
-                for (_, (symbol, top_level, layout)) in aliases {
-                    match layout {
+                for (_, hels) in aliases {
+                    match hels.raw_function_layout {
                         RawFunctionLayout::Function(_, _, _) => {
-                            let it = top_level.arguments.iter().copied();
-                            let bytes =
-                                func_name_bytes_help(*symbol, it, Niche::NONE, top_level.result);
+                            let it = hels.proc_layout.arguments.iter().copied();
+                            let bytes = func_name_bytes_help(
+                                hels.symbol,
+                                it,
+                                Niche::NONE,
+                                hels.proc_layout.result,
+                            );
 
-                            host_exposed_functions.push((bytes, top_level.arguments));
+                            host_exposed_functions.push((bytes, hels.proc_layout.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            let bytes =
-                                func_name_bytes_help(*symbol, [], Niche::NONE, top_level.result);
+                            let bytes = func_name_bytes_help(
+                                hels.symbol,
+                                [],
+                                Niche::NONE,
+                                hels.proc_layout.result,
+                            );
 
-                            host_exposed_functions.push((bytes, top_level.arguments));
+                            host_exposed_functions.push((bytes, hels.proc_layout.arguments));
                         }
                     }
                 }
@@ -297,8 +305,8 @@ where
                 debug_assert_eq!(variant_types.len(), 1);
                 variant_types[0]
             } else {
-                let data_type = builder.add_union_type(&variant_types)?;
                 let cell_type = builder.add_heap_cell_type();
+                let data_type = builder.add_union_type(&variant_types)?;
 
                 builder.add_tuple_type(&[cell_type, data_type])?
             };
@@ -479,9 +487,9 @@ impl<'a> Env<'a> {
     }
 }
 
-fn apply_refcount_operation<'a>(
+fn apply_refcount_operation(
     builder: &mut FuncDefBuilder,
-    env: &mut Env<'a>,
+    env: &mut Env<'_>,
     block: BlockId,
     modify_rc: &ModifyRc,
 ) -> Result<()> {
@@ -1149,6 +1157,11 @@ fn lowlevel_spec<'a>(
 
             list_clone(builder, block, update_mode_var, list)
         }
+        ListReleaseExcessCapacity => {
+            let list = env.symbols[&arguments[0]];
+
+            list_clone(builder, block, update_mode_var, list)
+        }
         ListAppendUnsafe => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];
@@ -1276,6 +1289,11 @@ fn expr_spec<'a>(
 
     match expr {
         Literal(literal) => literal_spec(builder, block, literal),
+        NullPointer => {
+            let pointer_type = layout_spec(env, builder, interner, layout)?;
+
+            builder.add_unknown_with(block, &[], pointer_type)
+        }
         Call(call) => call_spec(builder, interner, env, block, layout, call),
         Reuse {
             tag_layout,
@@ -1432,6 +1450,10 @@ fn expr_spec<'a>(
         Reset {
             symbol,
             update_mode,
+        }
+        | ResetRef {
+            symbol,
+            update_mode,
         } => {
             let tag_value_id = env.symbols[symbol];
 
@@ -1454,7 +1476,8 @@ fn expr_spec<'a>(
 
             let _unit = builder.add_update(block, update_mode_var, heap_cell)?;
 
-            with_new_heap_cell(builder, block, union_data)
+            let value = with_new_heap_cell(builder, block, union_data)?;
+            builder.add_make_named(block, MOD_APP, type_name, value)
         }
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(env, builder, interner, layout)?;

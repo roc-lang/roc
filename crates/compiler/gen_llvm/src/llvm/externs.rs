@@ -41,6 +41,8 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             // The type of this function (but not the implementation) should have
             // already been defined by the builtins, which rely on it.
             let fn_val = module.get_function("roc_alloc").unwrap();
+            fn_val.set_linkage(Linkage::Internal);
+
             let mut params = fn_val.get_param_iter();
             let size_arg = params.next().unwrap();
             let _alignment_arg = params.next().unwrap();
@@ -135,6 +137,8 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             // The type of this function (but not the implementation) should have
             // already been defined by the builtins, which rely on it.
             let fn_val = module.get_function("roc_dealloc").unwrap();
+            fn_val.set_linkage(Linkage::Internal);
+
             let mut params = fn_val.get_param_iter();
             let ptr_arg = params.next().unwrap();
             let _alignment_arg = params.next().unwrap();
@@ -196,6 +200,11 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
         let fn_val = module.get_function("roc_panic").unwrap();
         let mut params = fn_val.get_param_iter();
         let roc_str_arg = params.next().unwrap();
+
+        // normally, roc_panic is marked as external so it can be provided by the host. But when we
+        // define it here in LLVM IR, we never want it to be linked by the host (that would
+        // overwrite which implementation is used.
+        fn_val.set_linkage(Linkage::Internal);
 
         let tag_id_arg = params.next().unwrap();
 

@@ -202,9 +202,9 @@ mod test {
                 println!("{}", x);
             }
 
-            assert_eq!(x, expected);
+            assert_eq!(expected, x);
         } else {
-            assert_eq!(actual, expected);
+            assert_eq!(expected, actual);
         }
     }
 
@@ -666,10 +666,16 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : [Err Str, Ok Str]
+                a : [
+                    Err Str,
+                    Ok Str,
+                ]
                 a = Ok "Astra mortemque praestare gradatim"
 
-                b : [Err Str, Ok Str]
+                b : [
+                    Err Str,
+                    Ok Str,
+                ]
                 b = Err "Profundum et fundamentum"
                 "#
             ),
@@ -1095,6 +1101,151 @@ mod test {
                 expected : Request
                 expected = { fieldA: Get, fieldB: "/things?id=1" }
 
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn tag_payloads_of_different_size() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                actual : [Leftover (List U8), TooShort]
+                actual = Leftover [49, 93]
+
+                expect
+                    expected : [Leftover (List U8), TooShort]
+                    expected = TooShort
+
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      expected : [Leftover (List U8), TooShort]
+                 8│>      expected = TooShort
+                 9│>
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                expected : [
+                    Leftover (List U8),
+                    TooShort,
+                ]
+                expected = TooShort
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn extra_offset_in_tag_union() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                actual : Result Str U64
+                actual = Err 1
+
+                expect
+                    expected : Result Str U64
+                    expected = Ok "foobar"
+
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      expected : Result Str U64
+                 8│>      expected = Ok "foobar"
+                 9│>
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                expected : Result Str U64
+                expected = Ok "foobar"
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn tuple_access() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                expect
+                    t = ("One", "Two")
+                    t.1 == "One"
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                3│>  expect
+                4│>      t = ("One", "Two")
+                5│>      t.1 == "One"
+
+                When it failed, these variables had these values:
+
+                t : (
+                    Str,
+                    Str,
+                )a
+                t = ("One", "Two")
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn match_on_opaque_number_type() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                hexToByte : U8, U8 -> U8
+                hexToByte = \upper, lower ->
+                    Num.bitwiseOr (Num.shiftRightBy upper 4) lower
+
+                expect
+                    actual = hexToByte 7 4
+                    expected = 't'
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 7│>  expect
+                 8│>      actual = hexToByte 7 4
+                 9│>      expected = 't'
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                actual : U8
+                actual = 4
+
+                expected : Int Unsigned8
+                expected = 116
                 "#
             ),
         );

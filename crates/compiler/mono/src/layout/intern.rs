@@ -23,7 +23,7 @@ macro_rules! cache_interned_layouts {
             )*
         }
 
-        fn fill_reserved_layouts<'a>(interner: &mut STLayoutInterner<'a>) {
+        fn fill_reserved_layouts(interner: &mut STLayoutInterner<'_>) {
             assert!(interner.is_empty());
             $(
             interner.insert($layout);
@@ -121,6 +121,13 @@ impl<'a> Layout<'a> {
     }
 }
 
+/// Whether a recursive lambda set being inserted into an interner needs fixing-up of naked
+/// recursion pointers in the capture set.
+/// Applicable only if
+///   - the lambda set is indeed recursive, and
+///   - its capture set contain naked pointer references
+pub struct NeedsRecursionPointerFixup(pub bool);
+
 pub trait LayoutInterner<'a>: Sized {
     /// Interns a value, returning its interned representation.
     /// If the value has been interned before, the old interned representation will be re-used.
@@ -139,7 +146,7 @@ pub trait LayoutInterner<'a>: Sized {
         args: &'a &'a [InLayout<'a>],
         ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
-        set_may_have_naked_rec_ptr: bool,
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         representation: InLayout<'a>,
     ) -> LambdaSet<'a>;
 
@@ -324,10 +331,43 @@ pub trait LayoutInterner<'a>: Sized {
         )
     }
 
+    /// Pretty-print a representation of the layout.
     fn dbg(&self, layout: InLayout<'a>) -> String {
         let alloc: ven_pretty::Arena<()> = ven_pretty::Arena::new();
         let doc = self.to_doc_top(layout, &alloc);
         doc.1.pretty(80).to_string()
+    }
+
+    /// Yields a debug representation of a layout, traversing its entire nested structure and
+    /// debug-printing all intermediate interned layouts.
+    ///
+    /// By default, a [Layout] is composed inductively by [interned layout][InLayout]s.
+    /// This makes debugging a layout more than one level challenging, as you may run into further
+    /// opaque interned layouts that need unwrapping.
+    ///
+    /// [`dbg_deep`][LayoutInterner::dbg_deep] works around this by returning a value whose debug
+    /// representation chases through all nested interned layouts as you would otherwise have to do
+    /// manually.
+    ///
+    /// ## Example
+    ///
+    /// ```ignore(illustrative)
+    /// fn is_rec_ptr<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> bool {
+    ///     if matches!(interner.get(layout), Layout::RecursivePointer(..)) {
+    ///         return true;
+    ///     }
+    ///
+    ///     let deep_dbg = interner.dbg_deep(layout);
+    ///     roc_tracing::info!("not a recursive pointer, actually a {deep_dbg:?}");
+    ///     return false;
+    /// }
+    /// ```
+    fn dbg_deep<'r>(&'r self, layout: InLayout<'a>) -> dbg::Dbg<'a, 'r, Self> {
+        dbg::Dbg(self, layout)
+    }
+
+    fn dbg_deep_iter<'r>(&'r self, layouts: &'a [InLayout<'a>]) -> dbg::DbgFields<'a, 'r, Self> {
+        dbg::DbgFields(self, layouts)
     }
 }
 
@@ -347,7 +387,28 @@ impl<'a> Copy for InLayout<'a> {}
 
 impl std::fmt::Debug for InLayout<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("InLayout").field(&self.0).finish()
+        match *self {
+            Layout::VOID => f.write_str("InLayout(VOID)"),
+            Layout::UNIT => f.write_str("InLayout(UNIT)"),
+            Layout::BOOL => f.write_str("InLayout(BOOL)"),
+            Layout::U8 => f.write_str("InLayout(U8)"),
+            Layout::U16 => f.write_str("InLayout(U16)"),
+            Layout::U32 => f.write_str("InLayout(U32)"),
+            Layout::U64 => f.write_str("InLayout(U64)"),
+            Layout::U128 => f.write_str("InLayout(U128)"),
+            Layout::I8 => f.write_str("InLayout(I8)"),
+            Layout::I16 => f.write_str("InLayout(I16)"),
+            Layout::I32 => f.write_str("InLayout(I32)"),
+            Layout::I64 => f.write_str("InLayout(I64)"),
+            Layout::I128 => f.write_str("InLayout(I128)"),
+            Layout::F32 => f.write_str("InLayout(F32)"),
+            Layout::F64 => f.write_str("InLayout(F64)"),
+            Layout::DEC => f.write_str("InLayout(DEC)"),
+            Layout::STR => f.write_str("InLayout(STR)"),
+            Layout::OPAQUE_PTR => f.write_str("InLayout(OPAQUE_PTR)"),
+            Layout::NAKED_RECURSIVE_PTR => f.write_str("InLayout(NAKED_RECURSIVE_PTR)"),
+            _ => f.debug_tuple("InLayout").field(&self.0).finish(),
+        }
     }
 }
 
@@ -367,6 +428,26 @@ impl<'a> InLayout<'a> {
     /// ```
     pub(crate) const unsafe fn from_index(index: usize) -> Self {
         Self(index, PhantomData)
+    }
+
+    pub fn index(&self) -> usize {
+        self.0
+    }
+
+    pub fn try_int_width(self) -> Option<IntWidth> {
+        match self {
+            Layout::U8 => Some(IntWidth::U8),
+            Layout::U16 => Some(IntWidth::U16),
+            Layout::U32 => Some(IntWidth::U32),
+            Layout::U64 => Some(IntWidth::U64),
+            Layout::U128 => Some(IntWidth::U128),
+            Layout::I8 => Some(IntWidth::I8),
+            Layout::I16 => Some(IntWidth::I16),
+            Layout::I32 => Some(IntWidth::I32),
+            Layout::I64 => Some(IntWidth::I64),
+            Layout::I128 => Some(IntWidth::I128),
+            _ => None,
+        }
     }
 }
 
@@ -517,7 +598,7 @@ impl<'a> GlobalLayoutInterner<'a> {
         &self,
         arena: &'a Bump,
         normalized: LambdaSet<'a>,
-        set_may_have_naked_rec_ptr: bool,
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         normalized_hash: u64,
     ) -> WrittenGlobalLambdaSet<'a> {
         let mut normalized_lambda_set_map = self.0.normalized_lambda_set_map.lock();
@@ -541,7 +622,7 @@ impl<'a> GlobalLayoutInterner<'a> {
         let slot = unsafe { InLayout::from_index(vec.len()) };
         vec.push(Layout::VOID_NAKED);
 
-        let set = if set_may_have_naked_rec_ptr {
+        let set = if needs_recursive_fixup.0 {
             let mut interner = LockedGlobalInterner {
                 map: &mut map,
                 normalized_lambda_set_map: &mut normalized_lambda_set_map,
@@ -675,7 +756,7 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         args: &'a &'a [InLayout<'a>],
         ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
-        set_may_have_naked_rec_ptr: bool,
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         representation: InLayout<'a>,
     ) -> LambdaSet<'a> {
         // The tricky bit of inserting a lambda set is we need to fill in the `full_layout` only
@@ -704,7 +785,7 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
                 } = global.get_or_insert_hashed_normalized_lambda_set(
                     arena,
                     normalized,
-                    set_may_have_naked_rec_ptr,
+                    needs_recursive_fixup,
                     normalized_hash,
                 );
 
@@ -832,7 +913,7 @@ macro_rules! st_impl {
                 args: &'a &'a [InLayout<'a>],
                 ret: InLayout<'a>,
                 set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
-                set_may_have_naked_rec_ptr: bool,
+                needs_recursive_fixup: NeedsRecursionPointerFixup,
                 representation: InLayout<'a>,
             ) -> LambdaSet<'a> {
                 // IDEA:
@@ -851,7 +932,7 @@ macro_rules! st_impl {
                 let slot = unsafe { InLayout::from_index(self.vec.len()) };
                 self.vec.push(Layout::VOID_NAKED);
 
-                let set = if set_may_have_naked_rec_ptr {
+                let set = if needs_recursive_fixup.0 {
                     reify::reify_lambda_set_captures(arena, self, slot, set)
                 } else {
                     set
@@ -924,7 +1005,7 @@ mod reify {
 
     use crate::layout::{Builtin, LambdaSet, Layout, UnionLayout};
 
-    use super::{InLayout, LayoutInterner};
+    use super::{InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
     // TODO: if recursion becomes a problem we could make this iterative
     pub fn reify_recursive_layout<'a>(
@@ -1070,7 +1151,8 @@ mod reify {
             arena.alloc(args),
             ret,
             arena.alloc(set),
-            true,
+            // All nested recursive pointers should been fixed up, since we just did that above.
+            NeedsRecursionPointerFixup(false),
             representation,
         )
     }
@@ -1233,6 +1315,152 @@ mod equiv {
     }
 }
 
+pub mod dbg {
+    use roc_module::symbol::Symbol;
+
+    use crate::layout::{Builtin, LambdaSet, Layout, UnionLayout};
+
+    use super::{InLayout, LayoutInterner};
+
+    pub struct Dbg<'a, 'r, I: LayoutInterner<'a>>(pub &'r I, pub InLayout<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for Dbg<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0.get(self.1) {
+                Layout::Builtin(b) => f
+                    .debug_tuple("Builtin")
+                    .field(&DbgBuiltin(self.0, b))
+                    .finish(),
+                Layout::Struct {
+                    field_order_hash,
+                    field_layouts,
+                } => f
+                    .debug_struct("Struct")
+                    .field("hash", &field_order_hash)
+                    .field("fields", &DbgFields(self.0, field_layouts))
+                    .finish(),
+                Layout::Boxed(b) => f.debug_tuple("Boxed").field(&Dbg(self.0, b)).finish(),
+                Layout::Union(un) => f.debug_tuple("Union").field(&DbgUnion(self.0, un)).finish(),
+                Layout::LambdaSet(ls) => f
+                    .debug_tuple("LambdaSet")
+                    .field(&DbgLambdaSet(self.0, ls))
+                    .finish(),
+                Layout::RecursivePointer(rp) => {
+                    f.debug_tuple("RecursivePointer").field(&rp.0).finish()
+                }
+            }
+        }
+    }
+
+    pub struct DbgFields<'a, 'r, I: LayoutInterner<'a>>(pub &'r I, pub &'a [InLayout<'a>]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgFields<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(self.1.iter().map(|l| Dbg(self.0, *l)))
+                .finish()
+        }
+    }
+
+    struct DbgTags<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'a [&'a [InLayout<'a>]]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgTags<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(self.1.iter().map(|l| DbgFields(self.0, l)))
+                .finish()
+        }
+    }
+
+    struct DbgBuiltin<'a, 'r, I: LayoutInterner<'a>>(&'r I, Builtin<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgBuiltin<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.1 {
+                Builtin::Int(w) => f.debug_tuple("Int").field(&w).finish(),
+                Builtin::Float(w) => f.debug_tuple("Float").field(&w).finish(),
+                Builtin::Bool => f.debug_tuple("Bool").finish(),
+                Builtin::Decimal => f.debug_tuple("Decimal").finish(),
+                Builtin::Str => f.debug_tuple("Str").finish(),
+                Builtin::List(e) => f.debug_tuple("List").field(&Dbg(self.0, e)).finish(),
+            }
+        }
+    }
+
+    struct DbgUnion<'a, 'r, I: LayoutInterner<'a>>(&'r I, UnionLayout<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgUnion<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.1 {
+                UnionLayout::NonRecursive(payloads) => f
+                    .debug_tuple("NonRecursive")
+                    .field(&DbgTags(self.0, payloads))
+                    .finish(),
+                UnionLayout::Recursive(payloads) => f
+                    .debug_tuple("Recursive")
+                    .field(&DbgTags(self.0, payloads))
+                    .finish(),
+                UnionLayout::NonNullableUnwrapped(fields) => f
+                    .debug_tuple("NonNullableUnwrapped")
+                    .field(&DbgFields(self.0, fields))
+                    .finish(),
+                UnionLayout::NullableWrapped {
+                    nullable_id,
+                    other_tags,
+                } => f
+                    .debug_struct("NullableWrapped")
+                    .field("nullable_id", &nullable_id)
+                    .field("other_tags", &DbgTags(self.0, other_tags))
+                    .finish(),
+                UnionLayout::NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                } => f
+                    .debug_struct("NullableUnwrapped")
+                    .field("nullable_id", &nullable_id)
+                    .field("other_tags", &DbgFields(self.0, other_fields))
+                    .finish(),
+            }
+        }
+    }
+
+    struct DbgLambdaSet<'a, 'r, I: LayoutInterner<'a>>(&'r I, LambdaSet<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgLambdaSet<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let LambdaSet {
+                args,
+                ret,
+                set,
+                representation,
+                full_layout,
+            } = self.1;
+
+            f.debug_struct("LambdaSet")
+                .field("args", &DbgFields(self.0, args))
+                .field("ret", &Dbg(self.0, ret))
+                .field("set", &DbgCapturesSet(self.0, set))
+                .field("representation", &Dbg(self.0, representation))
+                .field("full_layout", &full_layout)
+                .finish()
+        }
+    }
+
+    struct DbgCapturesSet<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'a [(Symbol, &'a [InLayout<'a>])]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgCapturesSet<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(
+                    self.1
+                        .iter()
+                        .map(|(sym, captures)| (sym, DbgFields(self.0, captures))),
+                )
+                .finish()
+        }
+    }
+}
+
 #[cfg(test)]
 mod insert_lambda_set {
     use bumpalo::Bump;
@@ -1241,13 +1469,15 @@ mod insert_lambda_set {
 
     use crate::layout::{LambdaSet, Layout};
 
-    use super::{GlobalLayoutInterner, InLayout, LayoutInterner};
+    use super::{GlobalLayoutInterner, InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
     const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
     const TEST_SET: &&[(Symbol, &[InLayout])] =
         &(&[(Symbol::ATTR_ATTR, &[Layout::UNIT] as &[_])] as &[_]);
     const TEST_ARGS: &&[InLayout] = &(&[Layout::UNIT] as &[_]);
     const TEST_RET: InLayout = Layout::UNIT;
+
+    const FIXUP: NeedsRecursionPointerFixup = NeedsRecursionPointerFixup(true);
 
     #[test]
     fn two_threads_write() {
@@ -1261,7 +1491,7 @@ mod insert_lambda_set {
                 for arena in arenas.iter_mut() {
                     let mut interner = global.fork();
                     handles.push(s.spawn(move || {
-                        interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
+                        interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
                     }))
                 }
                 let ins: Vec<LambdaSet> = handles.into_iter().map(|t| t.join().unwrap()).collect();
@@ -1278,7 +1508,7 @@ mod insert_lambda_set {
         let mut interner = global.fork();
 
         let lambda_set =
-            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, TEST_SET, true, Layout::UNIT);
+            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, TEST_SET, FIXUP, Layout::UNIT);
         let lambda_set_layout_in = interner.insert(Layout::LambdaSet(lambda_set));
         assert_eq!(lambda_set.full_layout, lambda_set_layout_in);
     }
@@ -1292,12 +1522,12 @@ mod insert_lambda_set {
 
         let in1 = {
             let mut interner = global.fork();
-            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
+            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
         };
 
         let in2 = {
             let mut st_interner = global.unwrap().unwrap();
-            st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
+            st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
         };
 
         assert_eq!(in1, in2);
@@ -1312,12 +1542,12 @@ mod insert_lambda_set {
         let set = TEST_SET;
         let repr = Layout::UNIT;
 
-        let in1 = st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr);
+        let in1 = st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr);
 
         let global = st_interner.into_global();
         let mut interner = global.fork();
 
-        let in2 = interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr);
+        let in2 = interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr);
 
         assert_eq!(in1, in2);
     }

@@ -502,4 +502,3 @@ pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
-

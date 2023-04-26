@@ -27,10 +27,11 @@ impl<T> RocSet<T> {
     }
 }
 
-impl<T: Hash> RocSet<T> {
-    #[allow(unused)]
-    pub fn from_iter<I: Iterator<Item = T>>(src: I) -> Self {
-        Self(RocDict::from_iter(src.map(|elem| (elem, ()))))
+impl<T: Hash> FromIterator<T> for RocSet<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(into_iter: I) -> Self {
+        Self(RocDict::from_iter(
+            into_iter.into_iter().map(|elem| (elem, ())),
+        ))
     }
 }
 
