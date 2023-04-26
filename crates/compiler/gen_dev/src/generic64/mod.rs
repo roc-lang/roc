@@ -1513,7 +1513,7 @@ impl<
 
                 self.caller_procs.push(caller_proc);
 
-                let inc_n_data = Symbol::DEV_TMP5;
+                let inc_n_data = Symbol::DEV_TMP;
                 self.build_fn_pointer(&inc_n_data, inc_n_data_string);
 
                 self.build_fn_pointer(&caller, caller_string);
@@ -1539,7 +1539,7 @@ impl<
                 }
 
                 self.load_literal(
-                    &Symbol::DEV_TMP3,
+                    &Symbol::DEV_TMP2,
                     &Layout::BOOL,
                     &Literal::Bool(higher_order.passed_function.owns_captured_environment),
                 );
@@ -1558,7 +1558,7 @@ impl<
                     caller,
                     data,
                     inc_n_data,
-                    Symbol::DEV_TMP3,
+                    Symbol::DEV_TMP2,
                     alignment,
                     old_element_width,
                     new_element_width,
@@ -1584,15 +1584,15 @@ impl<
                     .claim_stack_area(dst, self.layout_interner.stack_size(ret_layout));
 
                 self.build_fn_call(
-                    &Symbol::DEV_TMP4,
+                    &Symbol::DEV_TMP3,
                     bitcode::LIST_MAP.to_string(),
                     &arguments,
                     &layouts,
                     &ret_layout,
                 );
 
-                self.free_symbol(&Symbol::DEV_TMP3);
-                self.free_symbol(&Symbol::DEV_TMP5);
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
 
                 // Return list value from fn call
                 self.storage_manager.copy_symbol_to_stack_offset(
@@ -1603,7 +1603,7 @@ impl<
                     &ret_layout,
                 );
 
-                self.free_symbol(&Symbol::DEV_TMP4);
+                self.free_symbol(&Symbol::DEV_TMP3);
             }
             HigherOrder::ListMap2 { .. } => todo!(),
             HigherOrder::ListMap3 { .. } => todo!(),
