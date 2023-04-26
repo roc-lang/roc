@@ -1260,7 +1260,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 "cast_to_i8_ptr",
             );
 
-            call_bitcode_fn(env, &[ptr.into()], &bitcode::UTILS_IS_UNIQUE)
+            call_bitcode_fn(env, &[ptr.into()], bitcode::UTILS_IS_UNIQUE)
         }
 
         Unreachable => match RocReturn::from_layout(env, layout_interner, layout) {

@@ -373,8 +373,8 @@ fn specialize_drops_stmt<'a, 'i>(
         } => arena.alloc(Stmt::Expect {
             condition: *condition,
             region: *region,
-            lookups: *lookups,
-            variables: *variables,
+            lookups: lookups,
+            variables: variables,
             remainder: specialize_drops_stmt(
                 arena,
                 layout_interner,
@@ -392,8 +392,8 @@ fn specialize_drops_stmt<'a, 'i>(
         } => arena.alloc(Stmt::ExpectFx {
             condition: *condition,
             region: *region,
-            lookups: *lookups,
-            variables: *variables,
+            lookups: lookups,
+            variables: variables,
             remainder: specialize_drops_stmt(
                 arena,
                 layout_interner,
@@ -439,7 +439,7 @@ fn specialize_drops_stmt<'a, 'i>(
 
             arena.alloc(Stmt::Join {
                 id: *id,
-                parameters: *parameters,
+                parameters: parameters,
                 body: new_body,
                 remainder: specialize_drops_stmt(
                     arena,
@@ -450,7 +450,7 @@ fn specialize_drops_stmt<'a, 'i>(
                 ),
             })
         }
-        Stmt::Jump(joinpoint_id, arguments) => arena.alloc(Stmt::Jump(*joinpoint_id, *arguments)),
+        Stmt::Jump(joinpoint_id, arguments) => arena.alloc(Stmt::Jump(*joinpoint_id, arguments)),
         Stmt::Crash(symbol, crash_tag) => arena.alloc(Stmt::Crash(*symbol, *crash_tag)),
     }
 }
@@ -478,7 +478,7 @@ fn specialize_struct<'a, 'i>(
 
             for (index, _layout) in struct_layout.iter().enumerate() {
                 for (child, _i) in children_clone.iter().filter(|(_, i)| *i == index as u64) {
-                    let removed = incremented_children.remove(&child);
+                    let removed = incremented_children.remove(child);
                     index_symbols.insert(index, (*child, removed));
 
                     if removed {
@@ -594,7 +594,7 @@ fn specialize_union<'a, 'i>(
                         {
                             debug_assert_eq!(tag, *t);
 
-                            let removed = incremented_children.remove(&child);
+                            let removed = incremented_children.remove(child);
                             index_symbols.insert(index, (*child, removed));
 
                             if removed {
@@ -905,7 +905,7 @@ where
         // We put the continuation in a joinpoint. To prevent duplicating the content.
         _ => {
             let join_id =
-                JoinPointId(environment.create_symbol(ident_ids, &format!("uniqueness_join")));
+                JoinPointId(environment.create_symbol(ident_ids, &"uniqueness_join".to_string()));
 
             let jump = arena.alloc(Stmt::Jump(join_id, arena.alloc([])));
 
@@ -1051,19 +1051,19 @@ impl<'a> DropSpecializationEnvironment<'a> {
     fn add_struct_child(&mut self, parent: Parent, child: Child, index: Index) {
         self.struct_children
             .entry(parent)
-            .or_insert(Vec::new_in(self.arena))
+            .or_insert_with(|| Vec::new_in(self.arena))
             .push((child, index));
     }
     fn add_union_child(&mut self, parent: Parent, child: Child, tag: u16, index: Index) {
         self.union_children
             .entry(parent)
-            .or_insert(Vec::new_in(self.arena))
+            .or_insert_with(|| Vec::new_in(self.arena))
             .push((child, tag, index));
     }
     fn add_box_child(&mut self, parent: Parent, child: Child) {
         self.box_children
             .entry(parent)
-            .or_insert(Vec::new_in(self.arena))
+            .or_insert_with(|| Vec::new_in(self.arena))
             .push(child);
     }
 
