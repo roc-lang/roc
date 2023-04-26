@@ -1635,7 +1635,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn eq_reg64_reg64_reg64(
+    fn eq_reg_reg_reg(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,
         dst: X86_64GeneralReg,

@@ -456,13 +456,22 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src2: GeneralReg,
     );
 
-    fn eq_reg64_reg64_reg64(
+    fn eq_reg_reg_reg(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
     );
+
+    fn eq_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    ) {
+        Self::eq_reg_reg_reg(buf, RegisterWidth::W64, dst, src1, src2)
+    }
 
     fn neq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
@@ -1393,7 +1402,7 @@ impl<
 
                 let width = RegisterWidth::W8; // we're comparing booleans
                 let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
-                ASM::eq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
+                ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
             }
             other => {
                 let ident_ids = self

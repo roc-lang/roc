@@ -1021,7 +1021,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn eq_reg64_reg64_reg64(
+    fn eq_reg_reg_reg(
         buf: &mut Vec<'_, u8>,
         _register_width: RegisterWidth,
         dst: AArch64GeneralReg,
