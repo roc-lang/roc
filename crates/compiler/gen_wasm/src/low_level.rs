@@ -1014,8 +1014,7 @@ impl<'a> LowLevelCall<'a> {
             NumMulWrap => match self.ret_layout_raw {
                 Layout::Builtin(Builtin::Int(width)) => match width {
                     IntWidth::I128 | IntWidth::U128 => {
-                        // TODO: don't panic
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_OR_PANIC_INT[width])
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_WRAP_INT[width])
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         self.load_args(backend);
