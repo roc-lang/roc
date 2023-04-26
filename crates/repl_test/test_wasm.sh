@@ -12,4 +12,4 @@ set -euxo pipefail
 RUSTFLAGS="" cargo build --locked --profile release-with-lto --target wasm32-wasi -p roc_repl_wasm --no-default-features --features wasi_test
 
 # Build & run the test code on *native* target, not WebAssembly
-# cargo test --locked --release -p repl_test --features wasm
+cargo test --locked --release -p repl_test --features wasm
