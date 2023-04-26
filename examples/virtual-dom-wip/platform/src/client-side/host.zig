@@ -1,5 +1,5 @@
 const std = @import("std");
-const str = @import("str");
+const str = @import("glue").str;
 const builtin = @import("builtin");
 const RocStr = str.RocStr;
 
