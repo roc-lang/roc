@@ -14,8 +14,8 @@ use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::{CallerProc, CodeGenHelp};
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement, Literal,
-    Param, Proc, ProcLayout, SelfRecursive, Stmt,
+    BranchInfo, CallType, CrashTag, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
+    Literal, Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
@@ -279,9 +279,33 @@ trait Backend<'a> {
                 self.build_jump(id, args, arg_layouts.into_bump_slice(), ret_layout);
                 self.free_symbols(stmt);
             }
+            Stmt::Crash(msg, crash_tag) => self.roc_panic(*msg, *crash_tag),
             x => todo!("the statement, {:?}", x),
         }
     }
+
+    fn roc_panic(&mut self, msg: Symbol, crash_tag: CrashTag) {
+        self.load_literal(
+            &Symbol::DEV_TMP,
+            &Layout::U32,
+            &Literal::Int((crash_tag as u128).to_ne_bytes()),
+        );
+
+        // Now that the arguments are needed, load them if they are literals.
+        let arguments = &[msg, Symbol::DEV_TMP];
+        self.load_literal_symbols(arguments);
+        self.build_fn_call(
+            &Symbol::DEV_TMP2,
+            String::from("roc_panic"),
+            arguments,
+            &[Layout::STR, Layout::U32],
+            &Layout::UNIT,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+    }
+
     // build_switch generates a instructions for a switch statement.
     fn build_switch(
         &mut self,
@@ -1758,7 +1782,9 @@ trait Backend<'a> {
             Stmt::Expect { .. } => todo!("expect is not implemented in the dev backend"),
             Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the dev backend"),
 
-            Stmt::Crash(..) => todo!("crash is not implemented in the dev backend"),
+            Stmt::Crash(msg, _crash_tag) => {
+                self.set_last_seen(*msg, stmt);
+            }
         }
     }
 
