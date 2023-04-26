@@ -1358,7 +1358,7 @@ fn small_branching_factor(branches: &[Branch], path: &[PathInstruction]) -> usiz
         branches.iter().any(|b| is_irrelevant_to(path, b))
     };
 
-    relevant_tests.len() + (if !fallbacks { 0 } else { 1 })
+    relevant_tests.len() + usize::from(fallbacks)
 }
 
 #[derive(Debug, PartialEq)]
