@@ -9,19 +9,16 @@
 
 use std::cmp::{self, Ord};
 use std::iter::Iterator;
-use std::num::NonZeroU32;
-use std::ops::Neg;
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
 
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Proc, ProcLayout, Stmt,
-    UpdateModeId,
+    BranchInfo, Call, CallType, Expr, JoinPointId, ModifyRc, Proc, ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
 
@@ -57,12 +54,6 @@ fn specialize_drops_proc<'a, 'i>(
 ) {
     for (layout, symbol) in proc.args.iter().copied() {
         environment.add_symbol_layout(symbol, layout);
-    }
-
-    if proc.name.name().ident_id() == IdentId(17)
-        && proc.name.name().module_id() == ModuleId(NonZeroU32::new(19).unwrap())
-    {
-        let a = "foo";
     }
 
     let new_body =
@@ -950,106 +941,6 @@ where
     ))
 }
 
-fn rc_ptr_from_data_ptr_help<'a, 'i>(
-    arena: &'a Bump,
-    ident_ids: &mut IdentIds,
-    layout_interner: &'i mut STLayoutInterner<'a>,
-    environment: &DropSpecializationEnvironment<'a>,
-    symbol: Symbol,
-    layout: InLayout<'a>,
-    rc_ptr_sym: Symbol,
-    mask_lower_bits: bool,
-    following: &'a Stmt<'a>,
-    addr_sym: Symbol,
-) -> &'a Stmt<'a> {
-    let refcount_layout = Layout::isize(environment.target_info);
-
-    // Typecast the structure pointer to an integer
-    // Backends expect a number Layout to choose the right "subtract" instruction
-    let as_int_sym = if mask_lower_bits {
-        environment.create_symbol(ident_ids, "as_int")
-    } else {
-        addr_sym
-    };
-    let as_int_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::PtrCast,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: arena.alloc([symbol]),
-    });
-    let as_int_stmt = |next| arena.alloc(Stmt::Let(as_int_sym, as_int_expr, refcount_layout, next));
-
-    // Pointer size constant
-    let ptr_size_sym = environment.create_symbol(ident_ids, "ptr_size");
-    let ptr_size_expr = Expr::Literal(Literal::Int(
-        (environment.target_info.ptr_width() as i128).to_ne_bytes(),
-    ));
-    let ptr_size_stmt = |next| {
-        arena.alloc(Stmt::Let(
-            ptr_size_sym,
-            ptr_size_expr,
-            refcount_layout,
-            next,
-        ))
-    };
-
-    // Refcount address
-    let rc_addr_sym = environment.create_symbol(ident_ids, "rc_addr");
-    let sub_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::NumSubSaturated,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: arena.alloc([addr_sym, ptr_size_sym]),
-    });
-    let sub_stmt = |next| {
-        arena.alloc(Stmt::Let(
-            rc_addr_sym,
-            sub_expr,
-            Layout::usize(environment.target_info),
-            next,
-        ))
-    };
-
-    // Typecast the refcount address from integer to pointer
-    let cast_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::PtrCast,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: arena.alloc([rc_addr_sym]),
-    });
-    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
-    let cast_stmt = |next| arena.alloc(Stmt::Let(rc_ptr_sym, cast_expr, recursion_ptr, next));
-
-    if mask_lower_bits {
-        // Mask for lower bits (for tag union id)
-        let mask_sym = environment.create_symbol(ident_ids, "mask");
-        let mask_expr = Expr::Literal(Literal::Int(
-            (environment.target_info.ptr_width() as i128)
-                .neg()
-                .to_ne_bytes(),
-        ));
-        let mask_stmt = |next| arena.alloc(Stmt::Let(mask_sym, mask_expr, refcount_layout, next));
-
-        let and_expr = Expr::Call(Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::And,
-                update_mode: UpdateModeId::BACKEND_DUMMY,
-            },
-            arguments: arena.alloc([as_int_sym, mask_sym]),
-        });
-        let and_stmt = |next| arena.alloc(Stmt::Let(addr_sym, and_expr, refcount_layout, next));
-
-        as_int_stmt(mask_stmt(and_stmt(ptr_size_stmt(sub_stmt(cast_stmt(
-            following,
-        ))))))
-    } else {
-        as_int_stmt(ptr_size_stmt(sub_stmt(cast_stmt(following))))
-    }
-}
-
 enum UnionFieldLayouts<'a> {
     Found {
         field_layouts: &'a [InLayout<'a>],
@@ -1213,5 +1104,3 @@ impl<'a> DropSpecializationEnvironment<'a> {
 
     // TODO assert that a parent is only inlined once / assert max single dec per parent.
 }
-
-// TODO Lowlevel is unqiue check
