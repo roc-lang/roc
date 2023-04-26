@@ -1763,7 +1763,7 @@ impl<
                     self.layout_interner,
                     &mut self.buf,
                     base_offset,
-                    &Symbol::DEV_TMP4,
+                    &Symbol::DEV_TMP3,
                     &ret_layout,
                 );
 
