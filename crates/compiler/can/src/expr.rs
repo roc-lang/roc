@@ -19,13 +19,18 @@ use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, Defs, StrLiteral};
+use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
+use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
+use std::fs::File;
+use std::io::Read;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::{char, u32};
 
 /// Derives that an opaque type has claimed, to checked and recorded after solving.
@@ -98,6 +103,9 @@ pub enum Expr {
         elem_var: Variable,
         loc_elems: Vec<Loc<Expr>>,
     },
+
+    // An ingested files, it's bytes, and the type variable.
+    IngestedFile(Box<PathBuf>, Arc<Vec<u8>>, Variable),
 
     // Lookups
     Var(Symbol, Variable),
@@ -186,8 +194,8 @@ pub enum Expr {
         field: Lowercase,
     },
 
-    /// field accessor as a function, e.g. (.foo) expr
-    RecordAccessor(RecordAccessorData),
+    /// tuple or field accessor as a function, e.g. (.foo) expr or (.1) expr
+    RecordAccessor(StructAccessorData),
 
     TupleAccess {
         tuple_var: Variable,
@@ -196,9 +204,6 @@ pub enum Expr {
         loc_expr: Box<Loc<Expr>>,
         index: usize,
     },
-
-    /// tuple accessor as a function, e.g. (.1) expr
-    TupleAccessor(TupleAccessorData),
 
     RecordUpdate {
         record_var: Variable,
@@ -299,6 +304,7 @@ impl Expr {
             Self::Int(..) => Category::Int,
             Self::Float(..) => Category::Frac,
             Self::Str(..) => Category::Str,
+            Self::IngestedFile(file_path, _, _) => Category::IngestedFile(file_path.clone()),
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
@@ -315,9 +321,8 @@ impl Expr {
             Self::Record { .. } => Category::Record,
             Self::EmptyRecord => Category::Record,
             Self::RecordAccess { field, .. } => Category::RecordAccess(field.clone()),
-            Self::RecordAccessor(data) => Category::RecordAccessor(data.field.clone()),
+            Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
-            Self::TupleAccessor(data) => Category::TupleAccessor(data.index),
             Self::RecordUpdate { .. } => Category::Record,
             Self::Tag {
                 name, arguments, ..
@@ -383,43 +388,30 @@ pub struct ClosureData {
     pub loc_body: Box<Loc<Expr>>,
 }
 
-/// A tuple accessor like `.2`, which is equivalent to `\x -> x.2`
-/// TupleAccessors are desugared to closures; they need to have a name
+/// A record or tuple accessor like `.foo` or `.0`, which is equivalent to `\r -> r.foo`
+/// Struct accessors are desugared to closures; they need to have a name
 /// so the closure can have a correct lambda set.
 ///
 /// We distinguish them from closures so we can have better error messages
 /// during constraint generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TupleAccessorData {
-    pub name: Symbol,
-    pub function_var: Variable,
-    pub tuple_var: Variable,
-    pub closure_var: Variable,
-    pub ext_var: Variable,
-    pub elem_var: Variable,
-    pub index: usize,
-}
-
-/// A record accessor like `.foo`, which is equivalent to `\r -> r.foo`
-/// RecordAccessors are desugared to closures; they need to have a name
-/// so the closure can have a correct lambda set.
-///
-/// We distinguish them from closures so we can have better error messages
-/// during constraint generation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordAccessorData {
+pub struct StructAccessorData {
     pub name: Symbol,
     pub function_var: Variable,
     pub record_var: Variable,
     pub closure_var: Variable,
     pub ext_var: Variable,
     pub field_var: Variable,
-    pub field: Lowercase,
+
+    /// Note that the `field` field is an `IndexOrField` in order to represent both
+    /// record and tuple accessors. This is different from `TupleAccess` and
+    /// `RecordAccess` (and RecordFields/TupleElems), which share less of their implementation.
+    pub field: IndexOrField,
 }
 
-impl RecordAccessorData {
+impl StructAccessorData {
     pub fn to_closure_data(self, record_symbol: Symbol) -> ClosureData {
-        let RecordAccessorData {
+        let StructAccessorData {
             name,
             function_var,
             record_var,
@@ -436,12 +428,21 @@ impl RecordAccessorData {
         // into
         //
         // (\r -> r.foo)
-        let body = Expr::RecordAccess {
-            record_var,
-            ext_var,
-            field_var,
-            loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol, record_var))),
-            field,
+        let body = match field {
+            IndexOrField::Index(index) => Expr::TupleAccess {
+                tuple_var: record_var,
+                ext_var,
+                elem_var: field_var,
+                loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol, record_var))),
+                index,
+            },
+            IndexOrField::Field(field) => Expr::RecordAccess {
+                record_var,
+                ext_var,
+                field_var,
+                loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol, record_var))),
+                field,
+            },
         };
 
         let loc_body = Loc::at_zero(body);
@@ -735,6 +736,48 @@ pub fn canonicalize_expr<'a>(
         }
 
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
+
+        ast::Expr::IngestedFile(file_path, _) => match File::open(file_path) {
+            Ok(mut file) => {
+                let mut bytes = vec![];
+                match file.read_to_end(&mut bytes) {
+                    Ok(_) => (
+                        Expr::IngestedFile(
+                            file_path.to_path_buf().into(),
+                            Arc::new(bytes),
+                            var_store.fresh(),
+                        ),
+                        Output::default(),
+                    ),
+                    Err(e) => {
+                        env.problems.push(Problem::FileProblem {
+                            filename: file_path.to_path_buf(),
+                            error: e.kind(),
+                        });
+
+                        // This will not manifest as a real runtime error and is just returned to have a value here.
+                        // The pushed FileProblem will be fatal to compilation.
+                        (
+                            Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
+                            Output::default(),
+                        )
+                    }
+                }
+            }
+            Err(e) => {
+                env.problems.push(Problem::FileProblem {
+                    filename: file_path.to_path_buf(),
+                    error: e.kind(),
+                });
+
+                // This will not manifest as a real runtime error and is just returned to have a value here.
+                // The pushed FileProblem will be fatal to compilation.
+                (
+                    Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
+                    Output::default(),
+                )
+            }
+        },
 
         ast::Expr::SingleQuote(string) => {
             let mut it = string.chars().peekable();
@@ -1080,15 +1123,18 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::RecordAccessorFunction(field) => (
-            RecordAccessor(RecordAccessorData {
+        ast::Expr::AccessorFunction(field) => (
+            RecordAccessor(StructAccessorData {
                 name: scope.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
                 closure_var: var_store.fresh(),
                 field_var: var_store.fresh(),
-                field: (*field).into(),
+                field: match field {
+                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
+                },
             }),
             Output::default(),
         ),
@@ -1106,18 +1152,6 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::TupleAccessorFunction(index) => (
-            TupleAccessor(TupleAccessorData {
-                name: scope.gen_unique_symbol(),
-                function_var: var_store.fresh(),
-                tuple_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                closure_var: var_store.fresh(),
-                elem_var: var_store.fresh(),
-                index: index.parse().unwrap(),
-            }),
-            Output::default(),
-        ),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1344,31 +1378,31 @@ pub fn canonicalize_expr<'a>(
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
         bad_expr @ ast::Expr::ParensAround(_) => {
-            panic!(
+            internal_error!(
                 "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::SpaceBefore(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::SpaceAfter(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::BinOps { .. } => {
-            panic!(
+            internal_error!(
                 "A binary operator chain did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::UnaryOp(_, _) => {
-            panic!(
+            internal_error!(
                 "A unary operator did not get desugared somehow: {:#?}",
                 bad_expr
             );
@@ -1780,7 +1814,7 @@ fn canonicalize_field<'a>(
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
-            panic!("Somehow a LabelOnly record field was not desugared!");
+            internal_error!("Somehow a LabelOnly record field was not desugared!");
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
@@ -1788,7 +1822,7 @@ fn canonicalize_field<'a>(
         }
 
         Malformed(_string) => {
-            panic!("TODO canonicalize malformed record field");
+            internal_error!("TODO canonicalize malformed record field");
         }
     }
 }
@@ -1870,11 +1904,11 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ Int(..)
         | other @ Float(..)
         | other @ Str { .. }
+        | other @ IngestedFile(..)
         | other @ SingleQuote(..)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ RecordAccessor { .. }
-        | other @ TupleAccessor { .. }
         | other @ RecordUpdate { .. }
         | other @ Var(..)
         | other @ AbilityMember(..)
@@ -3002,9 +3036,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::Float(_, _, _, _, _)
             | Expr::Int(_, _, _, _, _)
             | Expr::Str(_)
+            | Expr::IngestedFile(..)
             | Expr::ZeroArgumentTag { .. }
             | Expr::RecordAccessor(_)
-            | Expr::TupleAccessor(_)
             | Expr::SingleQuote(..)
             | Expr::EmptyRecord
             | Expr::TypedHole(_)

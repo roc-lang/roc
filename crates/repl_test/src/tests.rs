@@ -990,7 +990,7 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
                              ^
 
                 Since these variables have the same name, it's easy to use the wrong
-                one on accident. Give one of them a new name.
+                one by accident. Give one of them a new name.
                 "#
         ),
     );
@@ -1266,5 +1266,29 @@ fn enum_tag_union_in_list() {
             "#
         ),
         r#"[E, F, G, H] : List [E, F, G, H]"#,
+    );
+}
+
+#[test]
+fn str_to_dec() {
+    expect_success(
+        indoc!(
+            r#"
+            Str.toDec "1234.1234"
+            "#
+        ),
+        r#"Ok 1234.1234 : Result Dec [InvalidNumStr]"#,
+    );
+}
+
+#[test]
+fn tuple() {
+    expect_success(
+        indoc!(
+            r#"
+            ("a", 2u32)
+            "#
+        ),
+        r#"("a", 2) : ( Str, U32 )*"#,
     );
 }

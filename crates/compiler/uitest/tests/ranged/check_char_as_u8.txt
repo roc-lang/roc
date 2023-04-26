@@ -1,0 +1,5 @@
+app "test" provides [x] to "./platform"
+
+x : U8
+x = '.'
+#^{-1} U8

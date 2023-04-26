@@ -1,7 +1,7 @@
+#![allow(clippy::missing_safety_doc)]
+
 #[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
 extern crate quickcheck;
 extern crate roc_std;
 
@@ -295,6 +295,9 @@ mod test_roc_std {
 
         let example = RocDec::from_str("1234.5678").unwrap();
         assert_eq!(format!("{}", example), "1234.5678");
+
+        let example = RocDec::from_str("1_000.5678").unwrap();
+        assert_eq!(format!("{}", example), "1000.5678");
     }
 
     #[test]

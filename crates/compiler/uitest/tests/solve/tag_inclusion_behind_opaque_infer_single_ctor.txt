@@ -1,0 +1,11 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Outer := [A, B]
+
+    when (@Outer A) is
+        @Outer A -> @Outer A
+        @Outer B -> @Outer B
+
+main = entry
+#      ^^^^^ Outer

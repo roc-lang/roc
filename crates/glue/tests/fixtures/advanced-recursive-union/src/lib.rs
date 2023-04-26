@@ -1,29 +1,19 @@
 mod test_glue;
 
 use indoc::indoc;
-use test_glue::Rbt;
-
-extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut Rbt);
-}
+// use test_glue::Rbt;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<Rbt> = core::mem::MaybeUninit::uninit();
-
-        roc_main(ret.as_mut_ptr());
-
-        ret.assume_init()
-    };
+    let tag_union = test_glue::mainForHost(());
 
     // Verify that it has all the expected traits.
 
     assert!(tag_union == tag_union); // PartialEq
+
     assert!(tag_union.clone() == tag_union.clone()); // Clone
 
     assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
@@ -57,7 +47,7 @@ use std::os::raw::c_char;
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-    return libc::malloc(size);
+    libc::malloc(size)
 }
 
 #[no_mangle]

@@ -1,16 +1,17 @@
 [package]
 name = "roc_solve_problem"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Provides types to describe problems that can occur during solving."
 
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_region = { path = "../region" }
-roc_module = { path = "../module" }
-roc_types = { path = "../types" }
 roc_can = { path = "../can" }
-roc_problem = { path = "../problem" }
+roc_collections = { path = "../collections" }
 roc_exhaustive = { path = "../exhaustive" }
+roc_module = { path = "../module" }
+roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
+roc_types = { path = "../types" }

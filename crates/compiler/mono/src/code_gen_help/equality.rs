@@ -213,7 +213,7 @@ fn eq_tag_union<'a>(
             layout_interner,
             union_layout,
             tags,
-            None,
+            NullableId::None,
         ),
 
         Recursive(tags) => eq_tag_union_help(
@@ -223,7 +223,7 @@ fn eq_tag_union<'a>(
             layout_interner,
             union_layout,
             tags,
-            None,
+            NullableId::None,
         ),
 
         NonNullableUnwrapped(field_layouts) => {
@@ -235,7 +235,7 @@ fn eq_tag_union<'a>(
                 layout_interner,
                 union_layout,
                 tags,
-                None,
+                NullableId::None,
             )
         }
 
@@ -249,7 +249,7 @@ fn eq_tag_union<'a>(
             layout_interner,
             union_layout,
             other_tags,
-            Some(nullable_id),
+            NullableId::Wrapped(nullable_id),
         ),
 
         NullableUnwrapped {
@@ -262,13 +262,19 @@ fn eq_tag_union<'a>(
             layout_interner,
             union_layout,
             root.arena.alloc([other_fields]),
-            Some(nullable_id as TagIdIntType),
+            NullableId::Unwrapped(nullable_id),
         ),
     };
 
     ctx.recursive_union = parent_rec_ptr_layout;
 
     body
+}
+
+enum NullableId {
+    None,
+    Wrapped(TagIdIntType),
+    Unwrapped(bool),
 }
 
 fn eq_tag_union_help<'a>(
@@ -278,7 +284,7 @@ fn eq_tag_union_help<'a>(
     layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
     tag_layouts: &'a [&'a [InLayout<'a>]],
-    nullable_id: Option<TagIdIntType>,
+    nullable_id: NullableId,
 ) -> Stmt<'a> {
     let tailrec_loop = JoinPointId(root.create_symbol(ident_ids, "tailrec_loop"));
     let is_non_recursive = matches!(union_layout, UnionLayout::NonRecursive(_));
@@ -340,33 +346,48 @@ fn eq_tag_union_help<'a>(
     let mut tag_branches = Vec::with_capacity_in(tag_layouts.len(), root.arena);
 
     // If there's a null tag, check it first. We might not need to load any data from memory.
-    if let Some(id) = nullable_id {
-        tag_branches.push((id as u64, BranchInfo::None, Stmt::Ret(Symbol::BOOL_TRUE)))
+    match nullable_id {
+        NullableId::Wrapped(id) => {
+            tag_branches.push((id as u64, BranchInfo::None, Stmt::Ret(Symbol::BOOL_TRUE)))
+        }
+        NullableId::Unwrapped(id) => tag_branches.push((
+            id as TagIdIntType as u64,
+            BranchInfo::None,
+            Stmt::Ret(Symbol::BOOL_TRUE),
+        )),
+        _ => (),
     }
 
-    let mut tag_id: TagIdIntType = 0;
-    for field_layouts in tag_layouts.iter().take(tag_layouts.len() - 1) {
-        if let Some(null_id) = nullable_id {
-            if tag_id == null_id as TagIdIntType {
-                tag_id += 1;
+    let default_tag = if let NullableId::Unwrapped(tag_id) = nullable_id {
+        (!tag_id) as TagIdIntType
+    } else {
+        let mut tag_id: TagIdIntType = 0;
+
+        for field_layouts in tag_layouts.iter().take(tag_layouts.len() - 1) {
+            if let NullableId::Wrapped(null_id) = nullable_id {
+                if tag_id == null_id as TagIdIntType {
+                    tag_id += 1;
+                }
             }
+
+            let tag_stmt = eq_tag_fields(
+                root,
+                ident_ids,
+                ctx,
+                layout_interner,
+                tailrec_loop,
+                union_layout,
+                field_layouts,
+                operands,
+                tag_id,
+            );
+            tag_branches.push((tag_id as u64, BranchInfo::None, tag_stmt));
+
+            tag_id += 1;
         }
 
-        let tag_stmt = eq_tag_fields(
-            root,
-            ident_ids,
-            ctx,
-            layout_interner,
-            tailrec_loop,
-            union_layout,
-            field_layouts,
-            operands,
-            tag_id,
-        );
-        tag_branches.push((tag_id as u64, BranchInfo::None, tag_stmt));
-
-        tag_id += 1;
-    }
+        tag_id
+    };
 
     let tag_switch_stmt = Stmt::Switch {
         cond_symbol: tag_id_a,
@@ -383,7 +404,7 @@ fn eq_tag_union_help<'a>(
                 union_layout,
                 tag_layouts.last().unwrap(),
                 operands,
-                tag_id,
+                default_tag,
             )),
         ),
         ret_layout: LAYOUT_BOOL,

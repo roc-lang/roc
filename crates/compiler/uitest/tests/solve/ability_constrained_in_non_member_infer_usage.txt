@@ -1,0 +1,12 @@
+app "test" provides [result] to "./platform"
+
+MHash has
+    hash : a -> U64 | a has MHash
+
+hashEq = \x, y -> hash x == hash y
+
+Id := U64 has [MHash {hash}]
+hash = \@Id n -> n
+
+result = hashEq (@Id 100) (@Id 101)
+#^^^^^^{-1} Bool

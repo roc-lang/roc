@@ -251,6 +251,8 @@ mod test_snapshots {
         malformed/malformed_ident_due_to_underscore.expr,
         malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
         malformed/malformed_pattern_module_name.expr, // See https://github.com/roc-lang/roc/issues/399
+        malformed/module_dot_tuple.expr,
+        malformed/qualified_tag.expr,
         malformed/underscore_expr_in_def.expr,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
@@ -277,6 +279,8 @@ mod test_snapshots {
         pass/basic_var.expr,
         pass/bound_variable.expr,
         pass/call_with_newlines.expr,
+        pass/closure_in_binop.expr,
+        pass/closure_in_binop_with_spaces.expr,
         pass/closure_with_underscores.expr,
         pass/comment_after_annotation.expr,
         pass/comment_after_def.moduledefs,
@@ -300,12 +304,15 @@ mod test_snapshots {
         pass/empty_package_header.header,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
+        pass/empty_record_update.expr,
         pass/empty_string.expr,
         pass/equals.expr,
         pass/equals_with_spaces.expr,
         pass/expect.expr,
         pass/expect_fx.moduledefs,
+        pass/extra_newline_in_parens.expr,
         pass/float_with_underscores.expr,
+        pass/fn_with_record_arg.expr,
         pass/full_app_header.header,
         pass/full_app_header_trailing_commas.header,
         pass/function_effect_types.header,
@@ -321,6 +328,7 @@ mod test_snapshots {
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
+        pass/list_minus_newlines.expr,
         pass/list_pattern_weird_indent.expr,
         pass/list_patterns.expr,
         pass/lowest_float.expr,
@@ -342,6 +350,7 @@ mod test_snapshots {
         pass/multiple_operators.expr,
         pass/neg_inf_float.expr,
         pass/negate_multiline_string.expr,
+        pass/negate_multiline_string_with_quote.expr,
         pass/negative_float.expr,
         pass/negative_in_apply_def.expr,
         pass/negative_int.expr,
@@ -367,6 +376,7 @@ mod test_snapshots {
         pass/nonempty_package_header.header,
         pass/nonempty_platform_header.header,
         pass/not_docs.expr,
+        pass/not_multiline_string.expr,
         pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
         pass/one_char_string.expr,
@@ -381,6 +391,7 @@ mod test_snapshots {
         pass/opaque_reference_pattern.expr,
         pass/opaque_reference_pattern_with_arguments.expr,
         pass/opaque_simple.moduledefs,
+        pass/opaque_type_def_with_newline.expr,
         pass/opaque_with_type_arguments.moduledefs,
         pass/ops_with_newlines.expr,
         pass/outdented_app_with_record.expr,
@@ -388,6 +399,10 @@ mod test_snapshots {
         pass/outdented_list.expr,
         pass/outdented_record.expr,
         pass/packed_singleton_list.expr,
+        pass/parens_in_type_def_apply.expr,
+        pass/parens_in_value_def_annotation.expr,
+        pass/parenthesized_type_def.expr,
+        pass/parenthesized_type_def_space_before.expr,
         pass/parenthetical_apply.expr,
         pass/parenthetical_basic_field.expr,
         pass/parenthetical_field_qualified_var.expr,
@@ -405,7 +420,6 @@ mod test_snapshots {
         pass/positive_int.expr,
         pass/provides_type.header,
         pass/qualified_field.expr,
-        malformed/qualified_tag.expr,
         pass/qualified_var.expr,
         pass/record_access_after_tuple.expr,
         pass/record_destructure_def.expr,
@@ -420,12 +434,14 @@ mod test_snapshots {
         pass/spaced_singleton_list.expr,
         pass/spaces_inside_empty_list.expr,
         pass/standalone_module_defs.moduledefs,
+        pass/str_block_multiple_newlines.expr,
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
         pass/tag_pattern.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
+        pass/tuple_access_after_ident.expr,
         pass/tuple_access_after_record.expr,
         pass/tuple_accessor_function.expr,
         pass/tuple_type.expr,
@@ -551,6 +567,15 @@ mod test_snapshots {
             }
             Err(err) => Err(format!("{:?}", err)),
         };
+
+        if expect == TestExpectation::Pass {
+            let tokens = roc_parse::highlight::highlight(&source);
+            for token in tokens {
+                if token.value == roc_parse::highlight::Token::Error {
+                    panic!("Found an error highlight token in the input: {:?}", token);
+                }
+            }
+        }
 
         let actual_result =
             if expect == TestExpectation::Pass || expect == TestExpectation::Malformed {

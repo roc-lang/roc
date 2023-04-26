@@ -17,7 +17,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
     AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, ExpectLookup, Field,
-    FunctionDef, OpaqueWrapFunctionData, RecordAccessorData, TupleAccessorData, WhenBranch,
+    FunctionDef, OpaqueWrapFunctionData, StructAccessorData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -30,7 +30,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, OptAbleType, PReason, Reason, RecordField,
+    AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
     TypeExtension, TypeTag, Types,
 };
 
@@ -374,6 +374,20 @@ pub fn constrain_expr(
             let str_index = constraints.push_type(types, Types::STR);
             let expected_index = expected;
             constraints.equal_types(str_index, expected_index, Category::Str, region)
+        }
+        IngestedFile(file_path, bytes, var) => {
+            let index = constraints.push_variable(*var);
+            let eq_con = constraints.equal_types(
+                index,
+                expected,
+                Category::IngestedFile(file_path.clone()),
+                region,
+            );
+            let ingested_con = constraints.ingested_file(index, file_path.clone(), bytes.clone());
+
+            // First resolve the type variable with the eq_con then try to ingest a file into the correct type.
+            let and_constraint = constraints.and_constraint(vec![eq_con, ingested_con]);
+            constraints.exists([*var], and_constraint)
         }
         SingleQuote(num_var, precision_var, _, bound) => single_quote_literal(
             types,
@@ -1162,7 +1176,7 @@ pub fn constrain_expr(
                 [constraint, eq, record_con],
             )
         }
-        RecordAccessor(RecordAccessorData {
+        RecordAccessor(StructAccessorData {
             name: closure_name,
             function_var,
             field,
@@ -1176,19 +1190,32 @@ pub fn constrain_expr(
             let field_var = *field_var;
             let field_type = Variable(field_var);
 
-            let mut field_types = SendMap::default();
-            let label = field.clone();
-            field_types.insert(label, RecordField::Demanded(field_type.clone()));
-            let record_type = Type::Record(
-                field_types,
-                TypeExtension::from_non_annotation_type(ext_type),
-            );
+            let record_type = match field {
+                IndexOrField::Field(field) => {
+                    let mut field_types = SendMap::default();
+                    let label = field.clone();
+                    field_types.insert(label, RecordField::Demanded(field_type.clone()));
+                    Type::Record(
+                        field_types,
+                        TypeExtension::from_non_annotation_type(ext_type),
+                    )
+                }
+                IndexOrField::Index(index) => {
+                    let mut field_types = VecMap::with_capacity(1);
+                    field_types.insert(*index, field_type.clone());
+                    Type::Tuple(
+                        field_types,
+                        TypeExtension::from_non_annotation_type(ext_type),
+                    )
+                }
+            };
+
             let record_type_index = {
                 let typ = types.from_old_type(&record_type);
                 constraints.push_type(types, typ)
             };
 
-            let category = Category::RecordAccessor(field.clone());
+            let category = Category::Accessor(field.clone());
 
             let record_expected = constraints.push_expected_type(NoExpectation(record_type_index));
             let record_con =
@@ -1287,88 +1314,6 @@ pub fn constrain_expr(
 
             let eq = constraints.equal_types_var(elem_var, expected, category, region);
             constraints.exists_many([*tuple_var, elem_var, ext_var], [constraint, eq, tuple_con])
-        }
-        TupleAccessor(TupleAccessorData {
-            name: closure_name,
-            function_var,
-            tuple_var,
-            closure_var,
-            ext_var,
-            elem_var,
-            index,
-        }) => {
-            let ext_var = *ext_var;
-            let ext_type = Variable(ext_var);
-            let elem_var = *elem_var;
-            let elem_type = Variable(elem_var);
-
-            let mut elem_types = VecMap::with_capacity(1);
-            elem_types.insert(*index, elem_type.clone());
-
-            let record_type = Type::Tuple(
-                elem_types,
-                TypeExtension::from_non_annotation_type(ext_type),
-            );
-            let record_type_index = {
-                let typ = types.from_old_type(&record_type);
-                constraints.push_type(types, typ)
-            };
-
-            let category = Category::TupleAccessor(*index);
-
-            let record_expected = constraints.push_expected_type(NoExpectation(record_type_index));
-            let record_con =
-                constraints.equal_types_var(*tuple_var, record_expected, category.clone(), region);
-
-            let expected_lambda_set = {
-                let lambda_set_ty = {
-                    let typ = types.from_old_type(&Type::ClosureTag {
-                        name: *closure_name,
-                        captures: vec![],
-                        ambient_function: *function_var,
-                    });
-                    constraints.push_type(types, typ)
-                };
-                constraints.push_expected_type(NoExpectation(lambda_set_ty))
-            };
-
-            let closure_type = Type::Variable(*closure_var);
-
-            let function_type_index = {
-                let typ = types.from_old_type(&Type::Function(
-                    vec![record_type],
-                    Box::new(closure_type),
-                    Box::new(elem_type),
-                ));
-                constraints.push_type(types, typ)
-            };
-
-            let cons = [
-                constraints.equal_types_var(
-                    *closure_var,
-                    expected_lambda_set,
-                    category.clone(),
-                    region,
-                ),
-                constraints.equal_types(function_type_index, expected, category.clone(), region),
-                {
-                    let store_fn_var_index = constraints.push_variable(*function_var);
-                    let store_fn_var_expected =
-                        constraints.push_expected_type(NoExpectation(store_fn_var_index));
-                    constraints.equal_types(
-                        function_type_index,
-                        store_fn_var_expected,
-                        category,
-                        region,
-                    )
-                },
-                record_con,
-            ];
-
-            constraints.exists_many(
-                [*tuple_var, *function_var, *closure_var, elem_var, ext_var],
-                cons,
-            )
         }
         LetRec(defs, loc_ret, cycle_mark) => {
             let body_con = constrain_expr(
@@ -2152,6 +2097,7 @@ fn constrain_destructure_def(
                 loc_pattern,
                 &mut ftv,
                 &mut def_pattern_state.headers,
+                IsRecursiveDef::No,
             );
 
             let env = &mut Env {
@@ -2654,7 +2600,7 @@ pub fn constrain_decls(
                     cycle_mark,
                 );
 
-                index += length as usize;
+                index += length;
             }
         }
 
@@ -2729,6 +2675,7 @@ fn constrain_typed_def(
         &def.loc_pattern,
         &mut ftv,
         &mut def_pattern_state.headers,
+        IsRecursiveDef::No,
     );
 
     let env = &mut Env {
@@ -3378,6 +3325,12 @@ pub struct InstantiateRigids {
     pub new_infer_variables: Vec<Variable>,
 }
 
+#[derive(PartialEq, Eq)]
+enum IsRecursiveDef {
+    Yes,
+    No,
+}
+
 fn instantiate_rigids(
     types: &mut Types,
     constraints: &mut Constraints,
@@ -3386,65 +3339,82 @@ fn instantiate_rigids(
     loc_pattern: &Loc<Pattern>,
     ftv: &mut MutMap<Lowercase, Variable>, // rigids defined before the current annotation
     headers: &mut VecMap<Symbol, Loc<TypeOrVar>>,
+    is_recursive_def: IsRecursiveDef,
 ) -> InstantiateRigids {
-    let mut annotation = annotation.clone();
-    let mut new_rigid_variables: Vec<Variable> = Vec::new();
+    let mut new_rigid_variables = vec![];
+    let mut new_infer_variables = vec![];
 
-    let mut rigid_substitution: MutMap<Variable, Variable> = MutMap::default();
-    for named in introduced_vars.iter_named() {
-        use std::collections::hash_map::Entry::*;
+    let mut generate_fresh_ann = |types: &mut Types| {
+        let mut annotation = annotation.clone();
 
-        match ftv.entry(named.name().clone()) {
-            Occupied(occupied) => {
-                let existing_rigid = occupied.get();
-                rigid_substitution.insert(named.variable(), *existing_rigid);
+        let mut rigid_substitution: MutMap<Variable, Variable> = MutMap::default();
+        for named in introduced_vars.iter_named() {
+            use std::collections::hash_map::Entry::*;
+
+            match ftv.entry(named.name().clone()) {
+                Occupied(occupied) => {
+                    let existing_rigid = occupied.get();
+                    rigid_substitution.insert(named.variable(), *existing_rigid);
+                }
+                Vacant(vacant) => {
+                    // It's possible to use this rigid in nested defs
+                    vacant.insert(named.variable());
+                    new_rigid_variables.push(named.variable());
+                }
             }
-            Vacant(vacant) => {
-                // It's possible to use this rigid in nested defs
-                vacant.insert(named.variable());
-                new_rigid_variables.push(named.variable());
-            }
+        }
+
+        // wildcards are always freshly introduced in this annotation
+        new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
+
+        // lambda set vars are always freshly introduced in this annotation
+        new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
+
+        // ext-infer vars are always freshly introduced in this annotation
+        new_rigid_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
+
+        new_infer_variables.extend(introduced_vars.inferred.iter().map(|v| v.value));
+
+        // Instantiate rigid variables
+        if !rigid_substitution.is_empty() {
+            annotation.substitute_variables(&rigid_substitution);
+        }
+
+        types.from_old_type(&annotation)
+    };
+
+    let signature = generate_fresh_ann(types);
+    {
+        // If this is a recursive def, we must also generate a fresh annotation to be used as the
+        // type annotation that will be used in the first def headers introduced during the solving
+        // of the recursive definition.
+        //
+        // That is, this annotation serves as step (1) of XREF(rec-def-strategy). We don't want to
+        // link to the final annotation, since it may be incomplete (or incorrect, see step (1)).
+        // So, we generate a fresh annotation here, and return a separate fresh annotation below;
+        // the latter annotation is the one used to construct the finalized type.
+        let annotation_index = if is_recursive_def == IsRecursiveDef::Yes {
+            generate_fresh_ann(types)
+        } else {
+            signature
+        };
+
+        let loc_annotation_ref = Loc::at(loc_pattern.region, annotation_index);
+        if let Pattern::Identifier(symbol) = loc_pattern.value {
+            let annotation_index = constraints.push_type(types, annotation_index);
+            headers.insert(symbol, Loc::at(loc_pattern.region, annotation_index));
+        } else if let Some(new_headers) = crate::pattern::headers_from_annotation(
+            types,
+            constraints,
+            &loc_pattern.value,
+            &loc_annotation_ref,
+        ) {
+            headers.extend(new_headers)
         }
     }
 
-    // wildcards are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.wildcards.iter().map(|v| v.value));
-
-    // lambda set vars are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.lambda_sets.iter().copied());
-
-    // ext-infer vars are always freshly introduced in this annotation
-    new_rigid_variables.extend(introduced_vars.infer_ext_in_output.iter().copied());
-
-    let new_infer_variables: Vec<Variable> =
-        introduced_vars.inferred.iter().map(|v| v.value).collect();
-
-    // Instantiate rigid variables
-    if !rigid_substitution.is_empty() {
-        annotation.substitute_variables(&rigid_substitution);
-    }
-    let annotation_index = types.from_old_type(&annotation);
-
-    // TODO investigate when we can skip this. It seems to only be required for correctness
-    // for recursive functions. For non-recursive functions the final type is correct, but
-    // alias information is sometimes lost
-    //
-    // Skipping all of this cloning here would be neat!
-    let loc_annotation_ref = Loc::at(loc_pattern.region, &annotation);
-    if let Pattern::Identifier(symbol) = loc_pattern.value {
-        let annotation_index = constraints.push_type(types, annotation_index);
-        headers.insert(symbol, Loc::at(loc_pattern.region, annotation_index));
-    } else if let Some(new_headers) = crate::pattern::headers_from_annotation(
-        types,
-        constraints,
-        &loc_pattern.value,
-        &loc_annotation_ref,
-    ) {
-        headers.extend(new_headers)
-    }
-
     InstantiateRigids {
-        signature: annotation_index,
+        signature,
         new_rigid_variables,
         new_infer_variables,
     }
@@ -3922,7 +3892,7 @@ pub fn rec_defs_help_simple(
         }
     }
 
-    // Strategy for recursive defs:
+    // NB(rec-def-strategy) Strategy for recursive defs:
     //
     // 1. Let-generalize all rigid annotations. These are the source of truth we'll solve
     //    everything else with. If there are circular type errors here, they will be caught
@@ -4001,10 +3971,6 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
                 // RecordAccessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
                 return true;
             }
-            TupleAccessor(_) => {
-                // TupleAccessor functions `.0` are equivalent to closures `\r -> r.0`, no need to weaken them.
-                return true;
-            }
             OpaqueWrapFunction(_) => {
                 // Opaque wrapper functions `@Q` are equivalent to closures `\x -> @Q x`, no need to weaken them.
                 return true;
@@ -4016,6 +3982,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
             Str(_)
+            | IngestedFile(..)
             | List { .. }
             | SingleQuote(_, _, _, _)
             | When { .. }
@@ -4126,11 +4093,12 @@ fn rec_defs_help(
                     &def.loc_pattern,
                     &mut ftv,
                     &mut def_pattern_state.headers,
+                    IsRecursiveDef::Yes,
                 );
 
                 let is_hybrid = !new_infer_variables.is_empty();
 
-                hybrid_and_flex_info.vars.extend(new_infer_variables);
+                hybrid_and_flex_info.vars.extend(&new_infer_variables);
 
                 let signature_index = constraints.push_type(types, signature);
 
@@ -4171,13 +4139,14 @@ fn rec_defs_help(
                         let region = def.loc_expr.region;
 
                         let loc_body_expr = &**loc_body;
-                        let mut state = PatternState {
+                        let mut argument_pattern_state = PatternState {
                             headers: VecMap::default(),
                             vars: Vec::with_capacity(arguments.len()),
                             constraints: Vec::with_capacity(1),
                             delayed_is_open_constraints: vec![],
                         };
-                        let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
+                        let mut vars =
+                            Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
                         let ret_type_index = constraints.push_type(types, ret_type);
@@ -4191,7 +4160,7 @@ fn rec_defs_help(
                             env,
                             def,
                             &mut def_pattern_state,
-                            &mut state,
+                            &mut argument_pattern_state,
                             arguments,
                             arg_types,
                         );
@@ -4215,27 +4184,31 @@ fn rec_defs_help(
                             let typ = types.function(pattern_types, lambda_set, ret_type);
                             constraints.push_type(types, typ)
                         };
-                        let body_type =
-                            constraints.push_expected_type(NoExpectation(ret_type_index));
-                        let expr_con = constrain_expr(
-                            types,
-                            constraints,
-                            env,
-                            loc_body_expr.region,
-                            &loc_body_expr.value,
-                            body_type,
-                        );
+                        let expr_con = {
+                            let body_type =
+                                constraints.push_expected_type(NoExpectation(ret_type_index));
+
+                            constrain_expr(
+                                types,
+                                constraints,
+                                env,
+                                loc_body_expr.region,
+                                &loc_body_expr.value,
+                                body_type,
+                            )
+                        };
                         let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
                         vars.push(*fn_var);
 
-                        let state_constraints = constraints.and_constraint(state.constraints);
+                        let state_constraints =
+                            constraints.and_constraint(argument_pattern_state.constraints);
                         let expected_index = constraints.push_expected_type(expected);
                         let cons = [
                             constraints.let_constraint(
                                 [],
-                                state.vars,
-                                state.headers,
+                                argument_pattern_state.vars,
+                                argument_pattern_state.headers,
                                 state_constraints,
                                 expr_con,
                                 generalizable,
@@ -4274,9 +4247,15 @@ fn rec_defs_help(
                         } else {
                             rigid_info.vars.extend(&new_rigid_variables);
 
+                            let rigids = new_rigid_variables;
+                            let flex = def_pattern_state
+                                .vars
+                                .into_iter()
+                                .chain(new_infer_variables);
+
                             rigid_info.constraints.push(constraints.let_constraint(
-                                new_rigid_variables,
-                                def_pattern_state.vars,
+                                rigids,
+                                flex,
                                 [], // no headers introduced (at this level)
                                 def_con,
                                 Constraint::True,
@@ -4336,7 +4315,7 @@ fn rec_defs_help(
         }
     }
 
-    // Strategy for recursive defs:
+    // NB(rec-def-strategy) Strategy for recursive defs:
     //
     // 1. Let-generalize all rigid annotations. These are the source of truth we'll solve
     //    everything else with. If there are circular type errors here, they will be caught

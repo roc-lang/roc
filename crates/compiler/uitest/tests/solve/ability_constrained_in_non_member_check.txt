@@ -1,0 +1,8 @@
+app "test" provides [hashEq] to "./platform"
+
+MHash has
+    hash : a -> U64 | a has MHash
+
+hashEq : a, a -> Bool | a has MHash
+hashEq = \x, y -> hash x == hash y
+#^^^^^^{-1} a, a -[[hashEq(0)]]-> Bool | a has MHash

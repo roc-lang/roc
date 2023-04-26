@@ -21,8 +21,6 @@ use crate::editor::mvc::string_update::start_new_string;
 use crate::editor::mvc::string_update::update_small_string;
 use crate::editor::mvc::string_update::update_string;
 use crate::editor::mvc::tld_value_update::{start_new_tld_value, update_tld_val_name};
-#[cfg(feature = "with_sound")]
-use crate::editor::sound::play_sound;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
 use crate::ui::text::selection::validate_raw_sel;
@@ -55,6 +53,7 @@ use roc_code_markup::markup::nodes::EQUALS;
 use roc_code_markup::slow_pool::MarkNodeId;
 use roc_code_markup::slow_pool::SlowPool;
 use roc_collections::all::MutMap;
+use roc_command_utils::cargo;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
@@ -62,7 +61,6 @@ use roc_solve::module::Solved;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_utils::cargo;
 use snafu::OptionExt;
 use threadpool::ThreadPool;
 use winit::event::VirtualKeyCode;
@@ -545,12 +543,6 @@ impl<'a> EdModel<'a> {
             F11 => {
                 self.show_debug_view = !self.show_debug_view;
                 self.dirty = true;
-            }
-            F12 => {
-                #[cfg(feature = "with_sound")]
-                _sound_thread_pool.execute(move || {
-                    play_sound("./editor/src/editor/resources/sounds/bell_sound.mp3");
-                });
             }
             _ => (),
         }

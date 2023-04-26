@@ -1,4 +1,4 @@
-use roc_utils::zig;
+use roc_command_utils::zig;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -39,7 +39,7 @@ fn main() {
         .unwrap();
 
     // Copy libc to where Cargo expects the output of this crate
-    fs::copy(&libc_path, &out_file).unwrap();
+    fs::copy(libc_path, &out_file).unwrap();
 
     println!(
         "cargo:rustc-env=WASI_LIBC_PATH={}",

@@ -1,0 +1,37 @@
+[package]
+name = "uitest"
+description = "Integration tests for the solver."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[test]]
+name = "uitest"
+path = "src/uitest.rs"
+harness = false
+
+[dev-dependencies]
+roc_builtins = { path = "../builtins" }
+roc_collections = { path = "../collections" }
+roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
+roc_load = { path = "../load" }
+roc_packaging = { path = "../../packaging" }
+roc_module = { path = "../module", features = ["debug-symbols"] }
+roc_mono = { path = "../mono" }
+roc_parse = { path = "../parse" }
+roc_problem = { path = "../problem" }
+roc_reporting = { path = "../../reporting" }
+roc_solve = { path = "../solve" }
+roc_target = { path = "../roc_target" }
+test_solve_helpers = { path = "../test_solve_helpers" }
+
+bumpalo.workspace = true
+indoc.workspace = true
+insta.workspace = true
+lazy_static.workspace = true
+pretty_assertions.workspace = true
+regex.workspace = true
+tempfile.workspace = true
+libtest-mimic.workspace = true

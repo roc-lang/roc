@@ -1,7 +1,7 @@
 use roc_error_macros::internal_error;
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
 use roc_mono::layout::Builtin;
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
+use roc_std::{RocBox, RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use roc_wasm_module::round_up_to_alignment;
 use std::convert::TryInto;
 
@@ -60,7 +60,10 @@ impl FromWasm32Memory for RocStr {
         let str_words: &[u32; 3] = unsafe { std::mem::transmute(&str_bytes) };
 
         let big_elem_ptr = str_words[Builtin::WRAPPER_PTR as usize] as usize;
-        let big_length = str_words[Builtin::WRAPPER_LEN as usize] as usize;
+        // If the str is a seamless slice, it's highest bit will be set to 1.
+        // We need to remove that bit or we will get an incorrect negative length.
+        // Since wasm length is 32bits, and with i32::MAX (0 followed by all 1s in 32 bit).
+        let big_length = str_words[Builtin::WRAPPER_LEN as usize] as usize & (i32::MAX as usize);
         let big_capacity = str_words[Builtin::WRAPPER_CAPACITY as usize] as usize;
 
         let last_byte = str_bytes[11];
@@ -101,6 +104,17 @@ impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
         let mut list = RocList::with_capacity(capacity as usize);
         list.extend_from_slice(&items);
         list
+    }
+}
+
+impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocBox<T> {
+    fn decode(memory: &[u8], offset: u32) -> Self {
+        let ptr = <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_PTR);
+        debug_assert_ne!(ptr, 0);
+
+        let value = <T as FromWasm32Memory>::decode(memory, ptr);
+
+        RocBox::new(value)
     }
 }
 

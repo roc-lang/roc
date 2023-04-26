@@ -13,8 +13,8 @@ use crate::{
     slow_pool::{MarkNodeId, SlowPool},
 };
 
-pub fn ast_to_mark_nodes<'a>(
-    env: &mut Env<'a>,
+pub fn ast_to_mark_nodes(
+    env: &mut Env<'_>,
     ast: &AST,
     mark_node_pool: &mut SlowPool,
     interns: &Interns,

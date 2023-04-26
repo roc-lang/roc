@@ -448,7 +448,7 @@ pub fn find_type_def_symbols(
             As(actual, _, _) => {
                 stack.push(&actual.value);
             }
-            Tuple { fields: _, ext: _ } => {
+            Tuple { elems: _, ext: _ } => {
                 todo!("find_type_def_symbols: Tuple");
             }
             Record { fields, ext } => {
@@ -872,8 +872,41 @@ fn can_annotation_help(
             }
         }
 
-        Tuple { fields: _, ext: _ } => {
-            todo!("tuple");
+        Tuple { elems, ext } => {
+            let (ext_type, is_implicit_openness) = can_extension_type(
+                env,
+                pol,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+                ext,
+                roc_problem::can::ExtensionTypeKind::Record,
+            );
+
+            debug_assert!(
+                matches!(is_implicit_openness, ExtImplicitOpenness::No),
+                "tuples should never be implicitly inferred open"
+            );
+
+            debug_assert!(!elems.is_empty()); // We don't allow empty tuples
+
+            let elem_types = can_assigned_tuple_elems(
+                env,
+                pol,
+                &elems.items,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+            );
+
+            Type::Tuple(
+                elem_types,
+                TypeExtension::from_type(ext_type, is_implicit_openness),
+            )
         }
         Record { fields, ext } => {
             let (ext_type, is_implicit_openness) = can_extension_type(
@@ -1101,7 +1134,7 @@ fn canonicalize_has_clause(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn can_extension_type<'a>(
+fn can_extension_type(
     env: &mut Env,
     pol: CanPolarity,
     scope: &mut Scope,
@@ -1109,7 +1142,7 @@ fn can_extension_type<'a>(
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
-    opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
+    opt_ext: &Option<&Loc<TypeAnnotation<'_>>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
 ) -> (Type, ExtImplicitOpenness) {
     fn valid_record_ext_type(typ: &Type) -> bool {
@@ -1225,51 +1258,6 @@ fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Ty
     result
 }
 
-pub fn instantiate_and_freshen_alias_type(
-    var_store: &mut VarStore,
-    introduced_variables: &mut IntroducedVariables,
-    type_variables: &[Loc<AliasVar>],
-    type_arguments: Vec<Type>,
-    lambda_set_variables: &[LambdaSet],
-    mut actual_type: Type,
-) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
-    let mut substitutions = ImMap::default();
-    let mut type_var_to_arg = Vec::new();
-
-    for (loc_var, arg_ann) in type_variables.iter().zip(type_arguments.into_iter()) {
-        let name = loc_var.value.name.clone();
-        let var = loc_var.value.var;
-
-        substitutions.insert(var, arg_ann.clone());
-        type_var_to_arg.push((name.clone(), arg_ann));
-    }
-
-    // make sure the recursion variable is freshly instantiated
-    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual_type {
-        let new = var_store.fresh();
-        substitutions.insert(*rvar, Type::Variable(new));
-        *rvar = new;
-    }
-
-    // make sure hidden variables are freshly instantiated
-    let mut new_lambda_set_variables = Vec::with_capacity(lambda_set_variables.len());
-    for typ in lambda_set_variables.iter() {
-        if let Type::Variable(var) = typ.0 {
-            let fresh = var_store.fresh();
-            substitutions.insert(var, Type::Variable(fresh));
-            introduced_variables.insert_lambda_set(fresh);
-            new_lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
-        } else {
-            unreachable!("at this point there should be only vars in there");
-        }
-    }
-
-    // instantiate variables
-    actual_type.substitute(&substitutions);
-
-    (type_var_to_arg, new_lambda_set_variables, actual_type)
-}
-
 pub fn freshen_opaque_def(
     var_store: &mut VarStore,
     opaque: &Alias,
@@ -1285,25 +1273,46 @@ pub fn freshen_opaque_def(
         })
         .collect();
 
-    let fresh_type_arguments = fresh_variables
-        .iter()
-        .map(|av| Type::Variable(av.var))
-        .collect();
-
     // NB: We don't introduce the fresh variables here, we introduce them during constraint gen.
     // NB: If there are bugs, check whether this is a problem!
     let mut introduced_variables = IntroducedVariables::default();
 
-    let (_fresh_type_arguments, fresh_lambda_set, fresh_type) = instantiate_and_freshen_alias_type(
-        var_store,
-        &mut introduced_variables,
-        &opaque.type_variables,
-        fresh_type_arguments,
-        &opaque.lambda_set_variables,
-        opaque.typ.clone(),
-    );
+    let mut substitutions = ImMap::default();
 
-    (fresh_variables, fresh_lambda_set, fresh_type)
+    // Freshen all type variables used in the opaque.
+    for (loc_var, fresh_var) in opaque.type_variables.iter().zip(fresh_variables.iter()) {
+        let old_var = loc_var.value.var;
+        substitutions.insert(old_var, Type::Variable(fresh_var.var));
+        // NB: fresh var not introduced in this pass; see above.
+    }
+
+    // Freshen all nested recursion variables.
+    for &rec_var in opaque.recursion_variables.iter() {
+        let new = var_store.fresh();
+        substitutions.insert(rec_var, Type::Variable(new));
+    }
+
+    // Freshen all nested lambda sets.
+    let mut new_lambda_set_variables = Vec::with_capacity(opaque.lambda_set_variables.len());
+    for typ in opaque.lambda_set_variables.iter() {
+        if let Type::Variable(var) = typ.0 {
+            let fresh = var_store.fresh();
+            substitutions.insert(var, Type::Variable(fresh));
+            introduced_variables.insert_lambda_set(fresh);
+            new_lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+        } else {
+            unreachable!("at this point there should be only vars in there");
+        }
+    }
+
+    // Fresh the real type with our new variables.
+    let actual_type = {
+        let mut typ = opaque.typ.clone();
+        typ.substitute(&substitutions);
+        typ
+    };
+
+    (fresh_variables, new_lambda_set_variables, actual_type)
 }
 
 fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)
@@ -1438,6 +1447,39 @@ fn can_assigned_fields<'a>(
     }
 
     field_types
+}
+
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
+fn can_assigned_tuple_elems(
+    env: &mut Env,
+    pol: CanPolarity,
+    elems: &&[Loc<TypeAnnotation<'_>>],
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+    local_aliases: &mut VecMap<Symbol, Alias>,
+    references: &mut VecSet<Symbol>,
+) -> VecMap<usize, Type> {
+    let mut elem_types = VecMap::with_capacity(elems.len());
+
+    for (index, loc_elem) in elems.iter().enumerate() {
+        let elem_type = can_annotation_help(
+            env,
+            pol,
+            &loc_elem.value,
+            loc_elem.region,
+            scope,
+            var_store,
+            introduced_variables,
+            local_aliases,
+            references,
+        );
+
+        elem_types.insert(index, elem_type);
+    }
+
+    elem_types
 }
 
 // TODO trim down these arguments!

@@ -7,4 +7,6 @@ tui
 http-get
 file-io
 env
+ingested-file
+ingested-file-bytes
 out.txt

@@ -2,7 +2,7 @@
 libhost.a
 libapp.so
 dynhost
-*.rm1
-*.rh1
+*.rm
+*.rh
 
 helloWorld

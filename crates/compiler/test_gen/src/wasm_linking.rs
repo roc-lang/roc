@@ -116,7 +116,6 @@ fn build_app_mono<'a>(
         closure_data_layout: None,
         ret_layout: int_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        must_own_arguments: false,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
     };
 

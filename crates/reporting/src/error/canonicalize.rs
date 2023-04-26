@@ -12,7 +12,7 @@ use roc_types::types::AliasKind;
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
+use crate::report::{to_file_problem_report, Annotation, Report, RocDocAllocator, RocDocBuilder};
 use ven_pretty::DocAllocator;
 
 const SYNTAX_PROBLEM: &str = "SYNTAX PROBLEM";
@@ -1093,6 +1093,11 @@ pub fn can_problem<'b>(
             ]);
             title = "OVERAPPLIED CRASH".to_string();
         }
+        Problem::FileProblem { filename, error } => {
+            let report = to_file_problem_report(alloc, &filename, error);
+            doc = report.doc;
+            title = report.title;
+        }
     };
 
     Report {
@@ -1213,6 +1218,21 @@ fn to_bad_ident_expr_report<'b>(
                     alloc.reflow("I was expecting to see an identifier next, like "),
                     alloc.parser_suggestion("height"),
                     alloc.reflow(". A complete qualified name looks something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("."),
+                ]),
+            ])
+        }
+        QualifiedTupleAccessor(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("This looks like a tuple accessor on a module or tag name,"),
+                    alloc.reflow(r"but neither modules nor tags can have tuple elements! "),
+                    alloc.reflow(r"Maybe you wanted a qualified name, something like "),
                     alloc.parser_suggestion("Json.Decode.string"),
                     alloc.text("."),
                 ]),
@@ -1358,7 +1378,7 @@ fn to_bad_ident_pattern_report<'b>(
             ]),
         ]),
 
-        WeirdDotQualified(pos) => {
+        QualifiedTupleAccessor(pos) | WeirdDotQualified(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack([
@@ -1524,7 +1544,7 @@ fn report_shadowing<'b>(
             alloc.concat([
                 alloc.reflow("Since these "),
                 alloc.reflow(what_plural),
-                alloc.reflow(" have the same name, it's easy to use the wrong one on accident. Give one of them a new name."),
+                alloc.reflow(" have the same name, it's easy to use the wrong one by accident. Give one of them a new name."),
             ]),
         ])
     };

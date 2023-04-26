@@ -9,6 +9,7 @@ interface Hash
         addU32,
         addU64,
         addU128,
+        hashBool,
         hashI8,
         hashI16,
         hashI32,
@@ -20,7 +21,7 @@ interface Hash
         hashList,
         hashUnordered,
     ] imports [
-        Bool.{ isEq },
+        Bool.{ Bool, isEq },
         List,
         Str,
         Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, Nat },
@@ -69,6 +70,12 @@ hashStrBytes = \hasher, s ->
 hashList = \hasher, lst ->
     List.walk lst hasher \accumHasher, elem ->
         hash accumHasher elem
+
+## Adds a single [Bool] to a hasher.
+hashBool : a, Bool -> a | a has Hasher
+hashBool = \hasher, b ->
+    asU8 = if b then 1 else 0
+    addU8 hasher asU8
 
 ## Adds a single I8 to a hasher.
 hashI8 : a, I8 -> a | a has Hasher

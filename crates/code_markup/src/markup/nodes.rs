@@ -16,7 +16,7 @@ use roc_ast::{
     lang::{core::ast::ASTNodeId, env::Env},
     mem_pool::pool_str::PoolStr,
 };
-use roc_utils::{index_of, slice_get};
+use roc_error_utils::{index_of, slice_get};
 use std::fmt;
 use std::fmt::Write;
 
@@ -258,7 +258,7 @@ pub fn make_nested_mn(children_ids: Vec<MarkNodeId>, newlines_at_end: usize) -> 
     }
 }
 
-pub fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
+pub fn get_string(env: &Env<'_>, pool_str: &PoolStr) -> String {
     pool_str.as_str(env.pool).to_owned()
 }
 

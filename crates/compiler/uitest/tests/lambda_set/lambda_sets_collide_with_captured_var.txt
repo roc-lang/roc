@@ -1,0 +1,21 @@
+app "test" provides [main] to "./platform"
+
+main =
+    capture : a -> ({} -> Str)
+    capture = \val ->
+        thunk =
+            \{} ->
+                when val is
+                    _ -> ""
+        thunk
+
+    x : [True, False]
+
+    fun =
+        when x is
+            True -> capture ""
+            #       ^^^^^^^ Str -[[capture(1)]]-> ({} -[[thunk(5) {}, thunk(5) Str]]-> Str)
+            False -> capture {}
+            #        ^^^^^^^ {} -[[capture(1)]]-> ({} -[[thunk(5) {}, thunk(5) Str]]-> Str)
+    fun
+#   ^^^ {} -[[thunk(5) {}, thunk(5) Str]]-> Str

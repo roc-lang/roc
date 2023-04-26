@@ -1718,14 +1718,12 @@ fn solve(
                 member,
                 specialization_id,
             }) => {
-                if let Some(Resolved::Specialization(specialization)) =
-                    resolve_ability_specialization(
-                        subs,
-                        abilities_store,
-                        member,
-                        specialization_variable,
-                    )
-                {
+                if let Ok(Resolved::Specialization(specialization)) = resolve_ability_specialization(
+                    subs,
+                    abilities_store,
+                    member,
+                    specialization_variable,
+                ) {
                     abilities_store.insert_resolved(specialization_id, specialization);
                 }
 
@@ -1772,6 +1770,87 @@ fn solve(
                 }
 
                 state
+            }
+            IngestedFile(type_index, file_path, bytes) => {
+                let actual = either_type_index_to_var(
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *type_index,
+                );
+
+                let snapshot = subs.snapshot();
+                if let Success {
+                    vars,
+                    must_implement_ability,
+                    lambda_sets_to_specialize,
+                    extra_metadata: _,
+                } = unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    Variable::LIST_U8,
+                    Mode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
+                    // List U8 always valid.
+                    introduce(subs, rank, pools, &vars);
+
+                    debug_assert!(
+                        must_implement_ability.is_empty() && lambda_sets_to_specialize.is_empty(),
+                        "List U8 will never need to implement abilities or specialize lambda sets"
+                    );
+
+                    state
+                } else {
+                    subs.rollback_to(snapshot);
+
+                    // We explicitly match on the last unify to get the type in the case it errors.
+                    match unify(
+                        &mut UEnv::new(subs),
+                        actual,
+                        Variable::STR,
+                        Mode::EQ,
+                        Polarity::OF_VALUE,
+                    ) {
+                        Success {
+                            vars,
+                            must_implement_ability,
+                            lambda_sets_to_specialize,
+                            extra_metadata: _,
+                        } => {
+                            introduce(subs, rank, pools, &vars);
+
+                            debug_assert!(
+                                must_implement_ability.is_empty() && lambda_sets_to_specialize.is_empty(),
+                                "Str will never need to implement abilities or specialize lambda sets"
+                            );
+
+                            // Str only valid if valid utf8.
+                            if let Err(err) = std::str::from_utf8(bytes) {
+                                let problem =
+                                    TypeError::IngestedFileBadUtf8(file_path.clone(), err);
+                                problems.push(problem);
+                            }
+
+                            state
+                        }
+                        Failure(vars, actual_type, _, _) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            let problem = TypeError::IngestedFileUnsupportedType(
+                                file_path.clone(),
+                                actual_type,
+                            );
+                            problems.push(problem);
+                            state
+                        }
+                    }
+                }
             }
         };
     }
@@ -1845,6 +1924,11 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
             Structure(Record(fields, _)) => {
                 // Open up all nested tag unions.
                 stack.extend(subs.get_subs_slice(fields.variables()));
+            }
+
+            Structure(Tuple(elems, _)) => {
+                // Open up all nested tag unions.
+                stack.extend(subs.get_subs_slice(elems.variables()));
             }
 
             Structure(Apply(Symbol::LIST_LIST, args)) => {
@@ -2453,14 +2537,14 @@ enum TypeToVar {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn type_to_variable<'a>(
+fn type_to_variable(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<TypeError>,
     abilities_store: &AbilitiesStore,
     obligation_cache: &mut ObligationCache,
-    arena: &'a bumpalo::Bump,
+    arena: &bumpalo::Bump,
     aliases: &mut Aliases,
     types: &mut Types,
     typ: Index<TypeTag>,
@@ -3525,7 +3609,7 @@ fn check_for_infinite_type(
                 }
                 Content::LambdaSet(subs::LambdaSet {
                     solved,
-                    recursion_var: _,
+                    recursion_var: OptVariable::NONE,
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {
@@ -3918,7 +4002,23 @@ fn adjust_rank_content(
         Alias(_, args, real_var, _) => {
             let mut rank = Rank::toplevel();
 
-            for var_index in args.all_variables() {
+            // Avoid visiting lambda set variables stored in the type variables of the alias
+            // independently.
+            //
+            // Why? Lambda set variables on the alias are not truly type arguments to the alias,
+            // and instead are links to the lambda sets that appear in functions under the real
+            // type of the alias. If their ranks are adjusted independently, we end up looking at
+            // function types "inside-out" - when the whole point of rank-adjustment is to look
+            // from the outside-in to determine at what rank a type lies!
+            //
+            // So, just wait to adjust their ranks until we visit the function types that contain
+            // them. If they should be generalized (or pulled to a lower rank) that will happen
+            // then; otherwise, we risk generalizing a lambda set too early, when its enclosing
+            // function type should not be.
+            let adjustable_variables =
+                (args.type_variables().into_iter()).chain(args.infer_ext_in_output_variables());
+
+            for var_index in adjustable_variables {
                 let var = subs[var_index];
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }

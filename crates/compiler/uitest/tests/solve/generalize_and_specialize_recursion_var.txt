@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Job a : [Job (List (Job a)) a]
+
+    job : Job Str
+
+    when job is
+        Job lst s -> P lst s
+
+main = entry
+#      ^^^^^ [P (List ([Job (List a) Str] as a)) Str]w_b

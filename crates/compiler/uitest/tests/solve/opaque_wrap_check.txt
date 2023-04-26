@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Age := U32
+
+    a : Age
+    a = @Age 21
+
+    a
+
+main = entry
+#      ^^^^^ Age

@@ -1,10 +1,9 @@
 use crate::{
     def::Def,
     expr::{
-        ClosureData, Expr, Field, OpaqueWrapFunctionData, RecordAccessorData, TupleAccessorData,
-        WhenBranchPattern,
+        ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, WhenBranchPattern,
     },
-    pattern::{DestructType, ListPatterns, Pattern, RecordDestruct},
+    pattern::{DestructType, ListPatterns, Pattern, RecordDestruct, TupleDestruct},
 };
 use roc_module::{
     ident::{Lowercase, TagName},
@@ -278,6 +277,9 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         Float(v1, v2, str, val, bound) => Float(sub!(*v1), sub!(*v2), str.clone(), *val, *bound),
         Str(str) => Str(str.clone()),
         SingleQuote(v1, v2, char, bound) => SingleQuote(sub!(*v1), sub!(*v2), *char, *bound),
+        IngestedFile(file_path, bytes, var) => {
+            IngestedFile(file_path.clone(), bytes.clone(), sub!(*var))
+        }
         List {
             elem_var,
             loc_elems,
@@ -513,7 +515,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             field: field.clone(),
         },
 
-        RecordAccessor(RecordAccessorData {
+        RecordAccessor(StructAccessorData {
             name,
             function_var,
             record_var,
@@ -521,7 +523,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             ext_var,
             field_var,
             field,
-        }) => RecordAccessor(RecordAccessorData {
+        }) => RecordAccessor(StructAccessorData {
             name: *name,
             function_var: sub!(*function_var),
             record_var: sub!(*record_var),
@@ -544,24 +546,6 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             loc_expr: Box::new(loc_expr.map(|e| go_help!(e))),
             index: *index,
         },
-
-        TupleAccessor(TupleAccessorData {
-            name,
-            function_var,
-            tuple_var: record_var,
-            closure_var,
-            ext_var,
-            elem_var: field_var,
-            index,
-        }) => TupleAccessor(TupleAccessorData {
-            name: *name,
-            function_var: sub!(*function_var),
-            tuple_var: sub!(*record_var),
-            closure_var: sub!(*closure_var),
-            ext_var: sub!(*ext_var),
-            elem_var: sub!(*field_var),
-            index: *index,
-        }),
 
         RecordUpdate {
             record_var,
@@ -789,6 +773,30 @@ fn deep_copy_pattern_help<C: CopyEnv>(
                                     DestructType::Guard(sub!(*var), pat.map(|p| go_help!(p)))
                                 }
                             },
+                        },
+                    )
+                })
+                .collect(),
+        },
+        TupleDestructure {
+            whole_var,
+            ext_var,
+            destructs,
+        } => TupleDestructure {
+            whole_var: sub!(*whole_var),
+            ext_var: sub!(*ext_var),
+            destructs: destructs
+                .iter()
+                .map(|lrd| {
+                    lrd.map(
+                        |TupleDestruct {
+                             destruct_index: index,
+                             var,
+                             typ: (tyvar, pat),
+                         }: &crate::pattern::TupleDestruct| TupleDestruct {
+                            destruct_index: *index,
+                            var: sub!(*var),
+                            typ: (sub!(*tyvar), pat.map(|p| go_help!(p))),
                         },
                     )
                 })

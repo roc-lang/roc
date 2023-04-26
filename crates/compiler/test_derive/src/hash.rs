@@ -28,6 +28,11 @@ test_key_eq! {
     explicit_empty_record_and_implicit_empty_record:
         v!(EMPTY_RECORD), v!({})
 
+    same_tuple:
+        v!((v!(U8), v!(U16),)), v!((v!(U8), v!(U16),))
+    same_tuple_fields_diff_types:
+        v!((v!(U8), v!(U16),)), v!((v!(U32), v!(U64),))
+
     same_tag_union:
         v!([ A v!(U8) v!(STR), B v!(STR) ]), v!([ A v!(U8) v!(STR), B v!(STR) ])
     same_tag_union_tags_diff_types:
@@ -50,6 +55,9 @@ test_key_neq! {
         v!({ a: v!(U8), }), v!({ b: v!(U8), })
     record_empty_vs_nonempty:
         v!(EMPTY_RECORD), v!({ a: v!(U8), })
+
+    different_tuple_arities:
+        v!((v!(U8), v!(U16),)), v!((v!(U8), v!(U16), v!(U32),))
 
     different_tag_union_tags:
         v!([ A v!(U8) ]), v!([ B v!(U8) ])
@@ -196,6 +204,23 @@ fn two_field_record() {
         #Derived.hash_{a,b} =
           \#Derived.hasher, #Derived.rcd ->
             hash (hash #Derived.hasher #Derived.rcd.a) #Derived.rcd.b
+        "###
+        )
+    })
+}
+
+#[test]
+fn two_element_tuple() {
+    derive_test(Hash, v!((v!(U8), v!(STR),)), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for ( U8, Str )*
+        # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # Specialization lambda sets:
+        #   @<1>: [[hash_(arity:2)(0)]]
+        #Derived.hash_(arity:2) =
+          \#Derived.hasher, #Derived.tup ->
+            hash (hash #Derived.hasher #Derived.tup.0) #Derived.tup.1
         "###
         )
     })

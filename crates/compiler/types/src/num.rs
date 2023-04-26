@@ -146,6 +146,11 @@ impl NumericRange {
             .expect("if number doesn't fit, should have been a type error"),
         }
     }
+
+    /// Chooses the type variable to compile this ranged number as.
+    pub fn default_compilation_variable(&self) -> Variable {
+        int_lit_width_to_variable(self.default_compilation_width())
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

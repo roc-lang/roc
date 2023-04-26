@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use bumpalo::Bump;
 use roc_module::symbol::ModuleId;
-use roc_packaging::cache::RocCacheDir;
 
 const SKIP_SUBS_CACHE: bool = {
     match option_env!("ROC_SKIP_SUBS_CACHE") {
@@ -70,6 +69,7 @@ fn write_types_for_module_dummy(output_path: &Path) {
 fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path: &Path) {
     use roc_can::module::TypeState;
     use roc_load_internal::file::{LoadingProblem, Threading};
+    use roc_packaging::cache::RocCacheDir;
     use roc_reporting::cli::report_problems;
 
     let arena = Bump::new();

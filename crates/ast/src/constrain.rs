@@ -9,7 +9,7 @@ use roc_module::{
 use roc_region::all::Region;
 use roc_types::{
     subs::Variable,
-    types::{self, AnnotationSource, PReason, PatternCategory},
+    types::{self, AnnotationSource, IndexOrField, PReason, PatternCategory},
     types::{Category, Reason},
 };
 
@@ -375,7 +375,7 @@ pub fn constrain_expr<'a>(
                 env.pool.add(ext_type),
             );
 
-            let category = Category::RecordAccessor(field.as_str(env.pool).into());
+            let category = Category::Accessor(IndexOrField::Field(field.as_str(env.pool).into()));
 
             let record_expected = Expected::NoExpectation(record_type.shallow_clone());
             let record_con = Eq(
@@ -1959,8 +1959,8 @@ pub mod test_constrain {
     };
     use indoc::indoc;
 
-    fn run_solve<'a>(
-        arena: &'a Bump,
+    fn run_solve(
+        arena: &Bump,
         mempool: &mut Pool,
         aliases: MutMap<Symbol, roc_types::types::Alias>,
         rigid_variables: MutMap<Variable, Lowercase>,

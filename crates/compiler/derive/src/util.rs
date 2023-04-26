@@ -18,19 +18,20 @@ pub(crate) struct Env<'a> {
 }
 
 impl Env<'_> {
-    pub fn new_symbol(&mut self, name_hint: &str) -> Symbol {
+    pub fn new_symbol(&mut self, name_hint: impl std::string::ToString) -> Symbol {
         if cfg!(any(
             debug_assertions,
             test,
             feature = "debug-derived-symbols"
         )) {
             let mut i = 0;
+            let hint = name_hint.to_string();
             let debug_name = loop {
                 i += 1;
                 let name = if i == 1 {
-                    name_hint.to_owned()
+                    hint.clone()
                 } else {
-                    format!("{}{}", name_hint, i)
+                    format!("{}{}", hint, i)
                 };
                 if self.derived_ident_ids.get_id(&name).is_none() {
                     break name;

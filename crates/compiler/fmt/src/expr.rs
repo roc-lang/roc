@@ -1,4 +1,4 @@
-use crate::annotation::{except_last, Formattable, Newlines, Parens};
+use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::def::fmt_defs;
 use crate::pattern::fmt_pattern;
@@ -12,6 +12,7 @@ use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
+use roc_parse::ident::Accessor;
 use roc_region::all::Loc;
 
 impl<'a> Formattable for Expr<'a> {
@@ -35,41 +36,23 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | RecordAccess(_, _)
-            | RecordAccessorFunction(_)
+            | AccessorFunction(_)
             | TupleAccess(_, _)
-            | TupleAccessorFunction(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
+            | IngestedFile(_, _)
             | Crash => false,
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
 
-            List(items) => items.iter().any(|loc_expr| loc_expr.is_multiline()),
+            List(items) => is_collection_multiline(items),
 
-            Str(literal) => {
-                use roc_parse::ast::StrLiteral::*;
-
-                match literal {
-                    PlainLine(string) => {
-                        // When a PlainLine contains '\n' or '"', format as a block string
-                        string.contains('"') || string.contains('\n')
-                    }
-                    Line(_) => {
-                        // If this had any newlines, it'd have parsed as Block.
-                        false
-                    }
-                    Block(_) => {
-                        // Block strings are always formatted on multiple lines,
-                        // even if the string is only a single line.
-                        true
-                    }
-                }
-            }
+            Str(literal) => is_str_multiline(literal),
             Apply(loc_expr, args, _) => {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
             }
@@ -114,15 +97,15 @@ impl<'a> Formattable for Expr<'a> {
                         .any(|loc_pattern| loc_pattern.is_multiline())
             }
 
-            Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
-            Tuple(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
-            RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Record(fields) => is_collection_multiline(fields),
+            Tuple(fields) => is_collection_multiline(fields),
+            RecordUpdate { fields, .. } => is_collection_multiline(fields),
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -271,7 +254,20 @@ impl<'a> Formattable for Expr<'a> {
                     indent
                 };
 
+                let expr_needs_parens =
+                    matches!(loc_expr.value.extract_spaces().item, Expr::Closure(..))
+                        && !loc_args.is_empty();
+
+                if expr_needs_parens {
+                    buf.push('(');
+                }
+
                 loc_expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+
+                if expr_needs_parens {
+                    buf.indent(indent);
+                    buf.push(')');
+                }
 
                 for loc_arg in loc_args.iter() {
                     if should_reflow_outdentable {
@@ -432,20 +428,42 @@ impl<'a> Formattable for Expr<'a> {
                     }
                 }
 
-                sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
+                let needs_newline = match &sub_expr.value {
+                    SpaceBefore(..) => true,
+                    Str(text) => is_str_multiline(text),
+                    _ => false,
+                };
+                let needs_parens =
+                    needs_newline && matches!(unary_op.value, called_via::UnaryOp::Negate);
+
+                if needs_parens {
+                    // Unary negation can't be followed by whitespace (which is what a newline is) - so
+                    // we need to wrap the negated value in parens.
+                    buf.push('(');
+                }
+
+                let inner_indent = if needs_parens {
+                    indent + INDENT
+                } else {
+                    indent
+                };
+
+                sub_expr.format_with_options(buf, Parens::InApply, newlines, inner_indent);
+
+                if needs_parens {
+                    buf.push(')');
+                }
             }
-            RecordAccessorFunction(key) => {
+            AccessorFunction(key) => {
                 buf.indent(indent);
                 buf.push('.');
-                buf.push_str(key);
+                match key {
+                    Accessor::RecordField(key) => buf.push_str(key),
+                    Accessor::TupleIndex(key) => buf.push_str(key),
+                }
             }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('.');
-                buf.push_str(key);
-            }
-            TupleAccessorFunction(key) => {
-                buf.indent(indent);
                 buf.push('.');
                 buf.push_str(key);
             }
@@ -460,6 +478,27 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
+            IngestedFile(_, _) => {}
+        }
+    }
+}
+
+fn is_str_multiline(literal: &StrLiteral) -> bool {
+    use roc_parse::ast::StrLiteral::*;
+
+    match literal {
+        PlainLine(string) => {
+            // When a PlainLine contains '\n' or '"', format as a block string
+            string.contains('"') || string.contains('\n')
+        }
+        Line(_) => {
+            // If this had any newlines, it'd have parsed as Block.
+            false
+        }
+        Block(_) => {
+            // Block strings are always formatted on multiple lines,
+            // even if the string is only a single line.
+            true
         }
     }
 }
@@ -512,7 +551,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
     }
 }
 
-fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, indent: u16) {
+fn format_str_segment(seg: &StrSegment<'_>, buf: &mut Buf<'_>, indent: u16) {
     use StrSegment::*;
 
     match seg {
@@ -575,7 +614,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
     }
 }
 
-pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u16) {
+pub fn fmt_str_literal(buf: &mut Buf<'_>, literal: StrLiteral, indent: u16) {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -585,11 +624,11 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                 buf.ensure_ends_with_newline();
                 buf.indent(indent);
                 buf.push_str("\"\"\"");
-                buf.newline();
+                buf.push_newline_literal();
                 for line in string.split('\n') {
                     buf.indent(indent);
                     buf.push_str_allow_spaces(line);
-                    buf.newline();
+                    buf.push_newline_literal();
                 }
                 buf.indent(indent);
                 buf.push_str("\"\"\"");
@@ -613,7 +652,7 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
             buf.ensure_ends_with_newline();
             buf.indent(indent);
             buf.push_str("\"\"\"");
-            buf.newline();
+            buf.push_newline_literal();
 
             for segments in lines.iter() {
                 for seg in segments.iter() {
@@ -622,11 +661,11 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                         buf.indent(indent);
                         format_str_segment(seg, buf, indent);
                     } else {
-                        buf.newline();
+                        buf.push_newline_literal();
                     }
                 }
 
-                buf.newline();
+                buf.push_newline_literal();
             }
             buf.indent(indent);
             buf.push_str("\"\"\"");
@@ -634,8 +673,8 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     }
 }
 
-fn fmt_binops<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_binops<'a>(
+    buf: &mut Buf<'_>,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
     loc_right_side: &'a Loc<Expr<'a>>,
     part_of_multi_line_binops: bool,
@@ -665,9 +704,9 @@ fn fmt_binops<'a, 'buf>(
     loc_right_side.format_with_options(buf, Parens::InOperator, Newlines::Yes, indent);
 }
 
-fn format_spaces<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
+fn format_spaces(
+    buf: &mut Buf<'_>,
+    spaces: &[CommentOrNewline<'_>],
     newlines: Newlines,
     indent: u16,
 ) {
@@ -699,8 +738,8 @@ fn is_when_patterns_multiline(when_branch: &WhenBranch) -> bool {
     is_multiline_patterns
 }
 
-fn fmt_when<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_when<'a>(
+    buf: &mut Buf<'_>,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
     indent: u16,
@@ -881,8 +920,8 @@ fn fmt_when<'a, 'buf>(
     }
 }
 
-fn fmt_dbg<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_dbg<'a>(
+    buf: &mut Buf<'_>,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -908,8 +947,8 @@ fn fmt_dbg<'a, 'buf>(
     continuation.format(buf, indent);
 }
 
-fn fmt_expect<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_expect<'a>(
+    buf: &mut Buf<'_>,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -935,8 +974,8 @@ fn fmt_expect<'a, 'buf>(
     continuation.format(buf, indent);
 }
 
-fn fmt_if<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_if<'a>(
+    buf: &mut Buf<'_>,
     branches: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
     final_else: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -1084,8 +1123,8 @@ fn fmt_if<'a, 'buf>(
     final_else.format(buf, return_indent);
 }
 
-fn fmt_closure<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_closure<'a>(
+    buf: &mut Buf<'_>,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_ret: &'a Loc<Expr<'a>>,
     indent: u16,
@@ -1185,8 +1224,8 @@ fn fmt_closure<'a, 'buf>(
     }
 }
 
-fn fmt_backpassing<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_backpassing<'a>(
+    buf: &mut Buf<'_>,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_body: &'a Loc<Expr<'a>>,
     loc_ret: &'a Loc<Expr<'a>>,
@@ -1273,8 +1312,8 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
     }
 }
 
-fn fmt_record<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_record<'a>(
+    buf: &mut Buf<'_>,
     update: Option<&'a Loc<Expr<'a>>>,
     fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
@@ -1282,7 +1321,7 @@ fn fmt_record<'a, 'buf>(
     let loc_fields = fields.items;
     let final_comments = fields.final_comments();
     buf.indent(indent);
-    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
+    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) && update.is_none() {
         buf.push_str("{}");
     } else {
         buf.push('{');
@@ -1365,9 +1404,9 @@ fn fmt_record<'a, 'buf>(
     }
 }
 
-fn format_field_multiline<'a, 'buf, T>(
-    buf: &mut Buf<'buf>,
-    field: &AssignedField<'a, T>,
+fn format_field_multiline<T>(
+    buf: &mut Buf<'_>,
+    field: &AssignedField<'_, T>,
     indent: u16,
     separator_prefix: &str,
 ) where

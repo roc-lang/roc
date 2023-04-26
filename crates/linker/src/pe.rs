@@ -305,10 +305,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     let executable = &mut open_mmap_mut(executable_path, md.dynhost_file_size + app_sections_size);
 
     let app_code_section_va = md.last_host_section_address
-        + next_multiple_of(
-            md.last_host_section_size as usize,
-            section_alignment as usize,
-        ) as u64;
+        + next_multiple_of(md.last_host_section_size as usize, section_alignment) as u64;
 
     let mut section_file_offset = md.dynhost_file_size;
     let mut section_virtual_address = (app_code_section_va - image_base) as u32;
@@ -470,9 +467,9 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
     update_optional_header(
         executable,
         md.optional_header_offset,
-        code_bytes_added as u32,
-        file_bytes_added as u32,
-        data_bytes_added as u32,
+        code_bytes_added,
+        file_bytes_added,
+        data_bytes_added,
     );
 
     let symbols: Vec<_> = symbols
@@ -707,7 +704,7 @@ impl Preprocessor {
 
         Self {
             extra_sections_start: section_table_offset as usize
-                + sections.len() as usize * Self::SECTION_HEADER_WIDTH,
+                + sections.len() * Self::SECTION_HEADER_WIDTH,
             extra_sections_width,
             additional_header_space,
             additional_reloc_space,
@@ -1357,8 +1354,9 @@ mod test {
     use object::read::pe::PeFile64;
     use object::{pe, LittleEndian as LE, Object};
 
+    use crate::preprocessed_host_filename;
     use indoc::indoc;
-    use roc_build::link::preprocessed_host_filename;
+    use serial_test::serial;
     use target_lexicon::Triple;
 
     use super::*;
@@ -1723,7 +1721,7 @@ mod test {
         )
         .unwrap();
 
-        std::fs::copy(&preprocessed_host_filename, &dir.join("app.exe")).unwrap();
+        std::fs::copy(&preprocessed_host_filename, dir.join("app.exe")).unwrap();
 
         surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &roc_app);
     }
@@ -1738,7 +1736,7 @@ mod test {
 
         runner(dir);
 
-        let output = std::process::Command::new(&dir.join("app.exe"))
+        let output = std::process::Command::new(dir.join("app.exe"))
             .current_dir(dir)
             .output()
             .unwrap();
@@ -1834,12 +1832,14 @@ mod test {
     }
 
     #[cfg(windows)]
+    #[serial(zig_build)]
     #[test]
     fn basics_windows() {
         assert_eq!("Hello, 234567 32 1 3!\n", windows_test(test_basics))
     }
 
     #[test]
+    #[serial(zig_build)]
     #[ignore]
     fn basics_wine() {
         assert_eq!("Hello, 234567 32 1 3!\n", wine_test(test_basics))
@@ -1876,13 +1876,15 @@ mod test {
     }
 
     #[cfg(windows)]
+    #[serial(zig_build)]
     #[test]
     fn app_internal_relocations_windows() {
         assert_eq!("Hello foo\n", windows_test(test_internal_relocations))
     }
 
-    #[ignore]
     #[test]
+    #[serial(zig_build)]
+    #[ignore]
     fn app_internal_relocations_wine() {
         assert_eq!("Hello foo\n", wine_test(test_internal_relocations))
     }
@@ -1903,7 +1905,7 @@ mod test {
 
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
 
-        let mut command = std::process::Command::new(&zig);
+        let mut command = std::process::Command::new(zig);
         command.current_dir(dir).args([
             "build-exe",
             "host.zig",

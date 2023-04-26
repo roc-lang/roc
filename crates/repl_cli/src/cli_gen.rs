@@ -42,8 +42,13 @@ pub fn gen_and_eval_llvm<'a, I: Iterator<Item = &'a str>>(
         }
     };
 
-    debug_assert_eq!(loaded.exposed_to_host.values.len(), 1);
-    let (main_fn_symbol, main_fn_var) = loaded.exposed_to_host.values.iter().next().unwrap();
+    debug_assert_eq!(loaded.exposed_to_host.top_level_values.len(), 1);
+    let (main_fn_symbol, main_fn_var) = loaded
+        .exposed_to_host
+        .top_level_values
+        .iter()
+        .next()
+        .unwrap();
     let main_fn_symbol = *main_fn_symbol;
     let main_fn_var = *main_fn_var;
 

@@ -49,9 +49,6 @@ comptime {
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
         @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
-        @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
-        @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
-        @export(testing_roc_geppid, .{ .name = "roc_getppid", .linkage = .Strong });
 
         if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
             @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });

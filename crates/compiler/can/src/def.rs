@@ -15,7 +15,7 @@ use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
-use crate::expr::RecordAccessorData;
+use crate::expr::StructAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
@@ -36,6 +36,7 @@ use roc_parse::ast::AssignedField;
 use roc_parse::ast::Defs;
 use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
+use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::ShadowKind;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
@@ -45,6 +46,7 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
+use roc_types::types::IndexOrField;
 use roc_types::types::LambdaSet;
 use roc_types::types::MemberImpl;
 use roc_types::types::OptAbleType;
@@ -1048,9 +1050,7 @@ fn canonicalize_value_defs<'a>(
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern())
-            .into_iter()
-            .peekable();
+        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern()).peekable();
 
         if new_bindings.peek().is_none() {
             env.problem(Problem::NoIdentifiersIntroduced(
@@ -1337,8 +1337,8 @@ fn canonicalize_type_defs<'a>(
 
 /// Resolve all pending abilities, to add them to scope.
 #[allow(clippy::too_many_arguments)]
-fn resolve_abilities<'a>(
-    env: &mut Env<'a>,
+fn resolve_abilities(
+    env: &mut Env<'_>,
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
@@ -1995,6 +1995,16 @@ fn pattern_to_vars_by_symbol(
             vars_by_symbol.insert(*opaque, expr_var);
         }
 
+        TupleDestructure { destructs, .. } => {
+            for destruct in destructs {
+                pattern_to_vars_by_symbol(
+                    vars_by_symbol,
+                    &destruct.value.typ.1.value,
+                    destruct.value.typ.0,
+                );
+            }
+        }
+
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
                 vars_by_symbol.insert(destruct.value.symbol, destruct.value.var);
@@ -2316,19 +2326,23 @@ fn canonicalize_pending_body<'a>(
                     ident: defined_symbol,
                     ..
                 },
-                ast::Expr::RecordAccessorFunction(field),
+                ast::Expr::AccessorFunction(field),
             ) => {
+                let field = match field {
+                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
+                };
                 let (loc_can_expr, can_output) = (
                     Loc::at(
                         loc_expr.region,
-                        RecordAccessor(RecordAccessorData {
+                        RecordAccessor(StructAccessorData {
                             name: *defined_symbol,
                             function_var: var_store.fresh(),
                             record_var: var_store.fresh(),
                             ext_var: var_store.fresh(),
                             closure_var: var_store.fresh(),
                             field_var: var_store.fresh(),
-                            field: (*field).into(),
+                            field,
                         }),
                     ),
                     Output::default(),
@@ -2797,8 +2811,8 @@ fn to_pending_value_def<'a>(
 }
 
 /// Make aliases recursive
-fn correct_mutual_recursive_type_alias<'a>(
-    env: &mut Env<'a>,
+fn correct_mutual_recursive_type_alias(
+    env: &mut Env<'_>,
     original_aliases: VecMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) -> VecMap<Symbol, Alias> {
@@ -2909,12 +2923,14 @@ fn correct_mutual_recursive_type_alias<'a>(
             };
 
             let mut new_lambda_sets = ImSet::default();
+            let mut new_recursion_variables = ImSet::default();
             let mut new_infer_ext_vars = ImSet::default();
             alias_type.instantiate_aliases(
                 alias_region,
                 &can_instantiate_symbol,
                 var_store,
                 &mut new_lambda_sets,
+                &mut new_recursion_variables,
                 &mut new_infer_ext_vars,
             );
 
@@ -2936,6 +2952,9 @@ fn correct_mutual_recursive_type_alias<'a>(
                     .iter()
                     .map(|var| LambdaSet(Type::Variable(*var))),
             );
+
+            // add any new recursion variables
+            alias.recursion_variables.extend(new_recursion_variables);
 
             // add any new infer-in-output extension variables that the instantiation created to the current alias
             alias
@@ -3001,8 +3020,8 @@ fn correct_mutual_recursive_type_alias<'a>(
     unsafe { VecMap::zip(symbols_introduced, aliases) }
 }
 
-fn make_tag_union_of_alias_recursive<'a>(
-    env: &mut Env<'a>,
+fn make_tag_union_of_alias_recursive(
+    env: &mut Env<'_>,
     alias_name: Symbol,
     alias: &mut Alias,
     others: Vec<Symbol>,
@@ -3194,8 +3213,8 @@ fn make_tag_union_recursive_help<'a, 'b>(
     }
 }
 
-fn mark_cyclic_alias<'a>(
-    env: &mut Env<'a>,
+fn mark_cyclic_alias(
+    env: &mut Env<'_>,
     typ: &mut Type,
     symbol: Symbol,
     alias_kind: AliasKind,
