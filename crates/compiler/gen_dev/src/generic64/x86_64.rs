@@ -458,8 +458,32 @@ impl X64_64SystemVStoreArgs {
         match in_layout {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
+            Layout::I128 | Layout::U128 => {
+                let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+                if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                    let reg1 = Self::GENERAL_PARAM_REGS[self.general_i + 0];
+                    let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
+
+                    X86_64Assembler::mov_reg64_base32(buf, reg1, offset + 0);
+                    X86_64Assembler::mov_reg64_base32(buf, reg2, offset + 8);
+
+                    self.general_i += 2;
+                } else {
+                    // Copy to stack using return reg as buffer.
+                    let reg = Self::GENERAL_RETURN_REGS[0];
+
+                    X86_64Assembler::mov_reg64_base32(buf, reg, offset + 0);
+                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset + 0, reg);
+
+                    X86_64Assembler::mov_reg64_base32(buf, reg, offset + 8);
+                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+
+                    self.tmp_stack_offset += 16;
+                }
+            }
             x if layout_interner.stack_size(x) == 0 => {}
-            x if layout_interner.stack_size(x) > 16 => {
+            x if layout_interner.stack_size(x) == 16 => {
                 // TODO: Double check this.
                 // Just copy onto the stack.
                 // Use return reg as buffer because it will be empty right now.

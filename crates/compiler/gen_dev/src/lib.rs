@@ -546,22 +546,8 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::NumMul => {
-                debug_assert_eq!(
-                    2,
-                    args.len(),
-                    "NumMul: expected to have exactly two argument"
-                );
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
-                    "NumMul: expected all arguments of to have the same layout"
-                );
-                debug_assert_eq!(
-                    arg_layouts[0], *ret_layout,
-                    "NumMul: expected to have the same argument and return layout"
-                );
-                self.build_num_mul(sym, &args[0], &args[1], ret_layout)
-            }
+            LowLevel::NumMul => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
+            LowLevel::NumMulWrap => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
                 debug_assert_eq!(
                     2,

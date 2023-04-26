@@ -848,6 +848,13 @@ impl<
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
             }
+            Layout::I128 | Layout::U128 => {
+                let offset = self.storage_manager.claim_stack_area(dst, 16);
+
+                ASM::mov_base32_reg64(&mut self.buf, offset + 0, CC::GENERAL_RETURN_REGS[0]);
+                ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
+            }
+
             other => {
                 //
                 match self.layout_interner.get(other) {

@@ -1970,17 +1970,15 @@ fn float_negative_mul_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn int_mul_wrap() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.mulWrap Num.maxI64 2
-                "#
-        ),
-        -2,
-        i64
-    );
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn int_mul_wrap_i64() {
+    assert_evals_to!("Num.mulWrap Num.maxI64 2", -2, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn int_mul_wrap_i128() {
+    assert_evals_to!("Num.mulWrap Num.maxI128 2", -2, i128);
 }
 
 #[test]
