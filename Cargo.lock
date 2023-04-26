@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "criterion"
 version = "0.3.5"
-source = "git+https://github.com/Anton-4/criterion.rs#3e46ad2b234e36928fb5234d36cf53b5837cbb87"
+source = "git+https://github.com/Anton-4/criterion.rs?rev=30ea0c5#30ea0c592d7423ed79772234fab13108d1f8de77"
 dependencies = [
  "atty",
  "cast",
@@ -789,7 +789,7 @@ dependencies = [
 [[package]]
 name = "criterion-plot"
 version = "0.4.3"
-source = "git+https://github.com/Anton-4/criterion.rs#3e46ad2b234e36928fb5234d36cf53b5837cbb87"
+source = "git+https://github.com/Anton-4/criterion.rs?rev=30ea0c5#30ea0c592d7423ed79772234fab13108d1f8de77"
 dependencies = [
  "cast",
  "itertools 0.9.0",
