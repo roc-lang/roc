@@ -4,10 +4,10 @@ use crate::{
     single_register_layouts, Relocation,
 };
 use bumpalo::collections::Vec;
-use roc_builtins::bitcode::FloatWidth;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
 
 use super::{CompareOperation, RegisterWidth};
 
@@ -1425,8 +1425,13 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         movsd_freg64_freg64(buf, dst, src);
     }
     #[inline(always)]
-    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-        mov_reg64_reg64(buf, dst, src);
+    fn mov_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+    ) {
+        mov_reg_reg(buf, register_width, dst, src);
     }
 
     #[inline(always)]

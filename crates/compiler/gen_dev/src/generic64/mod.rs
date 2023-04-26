@@ -37,6 +37,18 @@ pub enum RegisterWidth {
     W64,
 }
 
+impl RegisterWidth {
+    fn try_from_layout(layout: InLayout) -> Option<Self> {
+        match layout {
+            Layout::BOOL | Layout::I8 | Layout::U8 => Some(RegisterWidth::W8),
+            Layout::I16 | Layout::U16 => Some(RegisterWidth::W16),
+            Layout::U32 | Layout::I32 => Some(RegisterWidth::W32),
+            Layout::I64 | Layout::U64 => Some(RegisterWidth::W64),
+            _ => None,
+        }
+    }
+}
+
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
     Sized + Copy
 {
@@ -256,7 +268,25 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: GeneralReg, imm: i64);
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
-    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+
+    fn mov_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        src: GeneralReg,
+    );
+    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg) {
+        Self::mov_reg_reg(buf, RegisterWidth::W64, dst, src);
+    }
+    fn mov_reg32_reg32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg) {
+        Self::mov_reg_reg(buf, RegisterWidth::W32, dst, src);
+    }
+    fn mov_reg16_reg16(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg) {
+        Self::mov_reg_reg(buf, RegisterWidth::W16, dst, src);
+    }
+    fn mov_reg8_reg8(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg) {
+        Self::mov_reg_reg(buf, RegisterWidth::W8, dst, src);
+    }
 
     // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
@@ -800,8 +830,10 @@ impl<
         // move return value to dst.
         match *ret_layout {
             single_register_integers!() => {
+                let width = RegisterWidth::try_from_layout(*ret_layout).unwrap();
+
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
+                ASM::mov_reg_reg(&mut self.buf, width, dst_reg, CC::GENERAL_RETURN_REGS[0]);
             }
             single_register_floats!() => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);

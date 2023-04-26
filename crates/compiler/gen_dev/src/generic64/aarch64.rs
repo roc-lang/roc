@@ -751,8 +751,18 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         fmov_freg_freg(buf, FloatWidth::F64, dst, src);
     }
     #[inline(always)]
-    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
-        mov_reg64_reg64(buf, dst, src);
+    fn mov_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
+    ) {
+        match register_width {
+            RegisterWidth::W8 => todo!(),
+            RegisterWidth::W16 => todo!(),
+            RegisterWidth::W32 => todo!(),
+            RegisterWidth::W64 => mov_reg64_reg64(buf, dst, src),
+        }
     }
 
     #[inline(always)]
