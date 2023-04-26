@@ -2133,31 +2133,15 @@ fn shift_right_cast_i8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn min_i128() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.minI128
-                "#
-        ),
-        i128::MIN,
-        i128
-    );
+    assert_evals_to!("Num.minI128", i128::MIN, i128);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn max_i128() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Num.maxI128
-                "#
-        ),
-        i128::MAX,
-        i128
-    );
+    assert_evals_to!("Num.maxI128", i128::MAX, i128);
 }
 
 #[test]
