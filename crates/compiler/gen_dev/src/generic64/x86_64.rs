@@ -657,6 +657,10 @@ impl X64_64SystemVLoadArgs {
                     storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                     self.argument_offset += stack_size as i32;
                 }
+                Layout::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
+                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                    self.argument_offset += stack_size as i32;
+                }
                 Layout::Union(UnionLayout::NonRecursive(_)) => {
                     // for now, just also store this on the stack
                     storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
