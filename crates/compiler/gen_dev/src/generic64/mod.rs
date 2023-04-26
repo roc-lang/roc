@@ -2900,7 +2900,39 @@ impl<
         source: IntWidth,
         target: IntWidth,
     ) {
+        use IntWidth::*;
+
         let buf = &mut self.buf;
+
+        match (source, target) {
+            (U128, U64) => {
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+
+                let (offset, _size) = self.storage_manager.stack_offset_and_size(src);
+
+                ASM::mov_reg64_base32(buf, dst_reg, offset + 8);
+
+                return;
+            }
+            (U64, U128) => {
+                let src_reg = self.storage_manager.load_to_general_reg(buf, src);
+
+                let base_offset = self.storage_manager.claim_stack_area(&dst, 16);
+
+                let tmp = Symbol::DEV_TMP;
+                let tmp_reg = self.storage_manager.claim_general_reg(buf, &tmp);
+
+                // move a zero into the lower 8 bytes
+                ASM::mov_reg64_imm64(buf, tmp_reg, 0x0);
+                ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+                ASM::mov_base32_reg64(buf, base_offset + 8, src_reg);
+
+                return;
+            }
+
+            _ => {}
+        }
 
         let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
         let src_reg = self.storage_manager.load_to_general_reg(buf, src);
@@ -2911,7 +2943,44 @@ impl<
                 _ => todo!("int cast from {source:?} to {target:?}"),
             }
         } else {
-            todo!("int cast from {source:?} to {target:?}");
+            match (source, target) {
+                (U8, U16 | U32 | U64) => {
+                    // zero  out the register
+                    ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
+
+                    // move the 8-bit integer
+                    ASM::mov_reg_reg(buf, RegisterWidth::W8, dst_reg, src_reg);
+                }
+                (U16, U32 | U64) => {
+                    // zero  out the register
+                    ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
+
+                    // move the 16-bit integer
+                    ASM::mov_reg_reg(buf, RegisterWidth::W16, dst_reg, src_reg);
+                }
+                (U32, U64) => {
+                    // zero  out the register
+                    ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
+
+                    // move the 32-bit integer
+                    ASM::mov_reg_reg(buf, RegisterWidth::W32, dst_reg, src_reg);
+                }
+                (U64, U32) => {
+                    // move as a 32-bit integer (leaving any other bits behind)
+                    ASM::mov_reg_reg(buf, RegisterWidth::W32, dst_reg, src_reg);
+                }
+                (U64, U16) => {
+                    // move as a 16-bit integer (leaving any other bits behind)
+                    ASM::mov_reg_reg(buf, RegisterWidth::W16, dst_reg, src_reg);
+                }
+                (U64, I8) => {
+                    //
+                    ASM::mov_reg_reg(buf, RegisterWidth::W8, dst_reg, src_reg);
+
+                    // TODO extension?
+                }
+                _ => todo!("int cast from {source:?} to {target:?}"),
+            }
         }
     }
 }
