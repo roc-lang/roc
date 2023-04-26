@@ -373,8 +373,8 @@ fn specialize_drops_stmt<'a, 'i>(
         } => arena.alloc(Stmt::Expect {
             condition: *condition,
             region: *region,
-            lookups: lookups,
-            variables: variables,
+            lookups,
+            variables,
             remainder: specialize_drops_stmt(
                 arena,
                 layout_interner,
@@ -392,8 +392,8 @@ fn specialize_drops_stmt<'a, 'i>(
         } => arena.alloc(Stmt::ExpectFx {
             condition: *condition,
             region: *region,
-            lookups: lookups,
-            variables: variables,
+            lookups,
+            variables,
             remainder: specialize_drops_stmt(
                 arena,
                 layout_interner,
@@ -439,7 +439,7 @@ fn specialize_drops_stmt<'a, 'i>(
 
             arena.alloc(Stmt::Join {
                 id: *id,
-                parameters: parameters,
+                parameters,
                 body: new_body,
                 remainder: specialize_drops_stmt(
                     arena,
@@ -904,8 +904,7 @@ where
         }
         // We put the continuation in a joinpoint. To prevent duplicating the content.
         _ => {
-            let join_id =
-                JoinPointId(environment.create_symbol(ident_ids, &"uniqueness_join".to_string()));
+            let join_id = JoinPointId(environment.create_symbol(ident_ids, "uniqueness_join"));
 
             let jump = arena.alloc(Stmt::Jump(join_id, arena.alloc([])));
 
