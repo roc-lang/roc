@@ -224,8 +224,6 @@ procedure Test.0 ():
     let Test.7 : Int1 = lowlevel Eq Test.5 Test.6;
     if Test.7 then
         let Test.2 : Str = UnionAtIndex (Id 1) (Index 0) Test.1;
-        inc Test.2;
-        dec Test.1;
         ret Test.2;
     else
         dec Test.1;

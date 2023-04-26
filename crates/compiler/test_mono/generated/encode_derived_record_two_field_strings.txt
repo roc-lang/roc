@@ -10,8 +10,7 @@ procedure #Derived.2 (#Derived.3, #Derived.4, #Derived.1):
     let #Derived_gen.6 : {Str, Str} = Struct {#Derived_gen.11, #Derived_gen.12};
     let #Derived_gen.8 : Str = "b";
     let #Derived_gen.10 : Str = StructAtIndex 1 #Derived.1;
-    inc #Derived_gen.10;
-    dec #Derived.1;
+    dec #Derived_gen.13;
     let #Derived_gen.9 : Str = CallByName Json.18 #Derived_gen.10;
     let #Derived_gen.7 : {Str, Str} = Struct {#Derived_gen.8, #Derived_gen.9};
     let #Derived_gen.5 : List {Str, Str} = Array [#Derived_gen.6, #Derived_gen.7];
@@ -234,8 +233,6 @@ procedure Test.0 ():
     let Test.7 : Int1 = lowlevel Eq Test.5 Test.6;
     if Test.7 then
         let Test.2 : Str = UnionAtIndex (Id 1) (Index 0) Test.1;
-        inc Test.2;
-        dec Test.1;
         ret Test.2;
     else
         dec Test.1;

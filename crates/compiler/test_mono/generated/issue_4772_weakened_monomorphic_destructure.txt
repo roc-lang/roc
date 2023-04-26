@@ -187,8 +187,6 @@ procedure Json.42 (Json.298):
         let Json.502 : Int1 = lowlevel Eq Json.500 Json.501;
         if Json.502 then
             let Json.307 : Str = UnionAtIndex (Id 1) (Index 0) Json.492;
-            inc Json.307;
-            dec Json.492;
             let Json.496 : U64 = 1i64;
             let Json.495 : {List U8, List U8} = CallByName List.52 Json.304 Json.496;
             let Json.309 : List U8 = StructAtIndex 1 Json.495;
@@ -365,8 +363,6 @@ procedure Test.0 ():
     let Test.33 : Int1 = lowlevel Eq Test.31 Test.32;
     if Test.33 then
         let Test.3 : Str = UnionAtIndex (Id 1) (Index 0) Test.1;
-        inc Test.3;
-        dec Test.1;
         let Test.19 : [C {}, C I64] = CallByName Str.27 Test.3;
         let Test.25 : U8 = 1i64;
         let Test.26 : U8 = GetTagId Test.19;

@@ -884,33 +884,54 @@ where
     F1: FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
     F2: FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
 {
-    let join_id = JoinPointId(environment.create_symbol(ident_ids, &format!("uniqueness_join")));
+    match continutation {
+        // The continuation is a single stmt. So we can insert it inline and skip creating a joinpoint.
+        Stmt::Ret(_) | Stmt::Jump(_, _) => {
+            let u = unique(layout_interner, ident_ids, continutation);
+            let n = not_unique(layout_interner, ident_ids, continutation);
 
-    let jump = arena.alloc(Stmt::Jump(join_id, arena.alloc([])));
+            let switch = |unique_symbol| {
+                arena.alloc(Stmt::Switch {
+                    cond_symbol: unique_symbol,
+                    cond_layout: Layout::BOOL,
+                    branches: &*arena.alloc([(1, BranchInfo::None, u.clone())]),
+                    default_branch: (BranchInfo::None, n),
+                    ret_layout: environment.layout,
+                })
+            };
 
-    let u = unique(layout_interner, ident_ids, jump);
-    let n = not_unique(layout_interner, ident_ids, jump);
+            unique_symbol(arena, ident_ids, environment, symbol, switch)
+        }
+        // We put the continuation in a joinpoint. To prevent duplicating the content.
+        _ => {
+            let join_id =
+                JoinPointId(environment.create_symbol(ident_ids, &format!("uniqueness_join")));
 
-    let join = |unique_symbol| {
-        let switch = arena.alloc(Stmt::Switch {
-            cond_symbol: unique_symbol,
-            cond_layout: Layout::BOOL,
-            branches: &*arena.alloc([(1, BranchInfo::None, u.clone())]),
-            default_branch: (BranchInfo::None, n),
-            ret_layout: environment.layout,
-        });
+            let jump = arena.alloc(Stmt::Jump(join_id, arena.alloc([])));
 
-        let join = arena.alloc(Stmt::Join {
-            id: join_id,
-            parameters: arena.alloc([]),
-            body: continutation,
-            remainder: switch,
-        });
+            let u = unique(layout_interner, ident_ids, jump);
+            let n = not_unique(layout_interner, ident_ids, jump);
 
-        join
-    };
+            let switch = |unique_symbol| {
+                arena.alloc(Stmt::Switch {
+                    cond_symbol: unique_symbol,
+                    cond_layout: Layout::BOOL,
+                    branches: &*arena.alloc([(1, BranchInfo::None, u.clone())]),
+                    default_branch: (BranchInfo::None, n),
+                    ret_layout: environment.layout,
+                })
+            };
 
-    unique_symbol(arena, ident_ids, environment, symbol, join)
+            let unique = unique_symbol(arena, ident_ids, environment, symbol, switch);
+
+            arena.alloc(Stmt::Join {
+                id: join_id,
+                parameters: arena.alloc([]),
+                body: continutation,
+                remainder: unique,
+            })
+        }
+    }
 }
 
 fn unique_symbol<'a, 'i, F>(

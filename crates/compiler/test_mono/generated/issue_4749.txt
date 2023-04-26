@@ -51,8 +51,6 @@ procedure Decode.27 (Decode.107, Decode.108):
         let Decode.131 : Int1 = lowlevel Eq Decode.129 Decode.130;
         if Decode.131 then
             let Decode.111 : Str = UnionAtIndex (Id 1) (Index 0) Decode.109;
-            inc Decode.111;
-            dec Decode.109;
             let Decode.126 : [C [C List U8, C ], C Str] = TagId(1) Decode.111;
             ret Decode.126;
         else
@@ -211,8 +209,6 @@ procedure Json.42 (Json.298):
         let Json.502 : Int1 = lowlevel Eq Json.500 Json.501;
         if Json.502 then
             let Json.307 : Str = UnionAtIndex (Id 1) (Index 0) Json.492;
-            inc Json.307;
-            dec Json.492;
             let Json.496 : U64 = 1i64;
             let Json.495 : {List U8, List U8} = CallByName List.52 Json.304 Json.496;
             let Json.309 : List U8 = StructAtIndex 1 Json.495;

@@ -70,8 +70,8 @@ Implemented as two sets for efficiency.
 */
 #[derive(Clone, Default)]
 struct SymbolRcTypes {
-    owned: MutSet<Symbol>,
-    borrowed: MutSet<Symbol>,
+    reference_counted: MutSet<Symbol>,
+    not_reference_counted: MutSet<Symbol>,
 }
 
 impl SymbolRcTypes {
@@ -81,10 +81,10 @@ impl SymbolRcTypes {
     fn insert(&mut self, symbol: Symbol, var_rc_type: VarRcType) {
         match var_rc_type {
             VarRcType::ReferenceCounted => {
-                self.owned.insert(symbol);
+                self.reference_counted.insert(symbol);
             }
             VarRcType::NotReferenceCounted => {
-                self.borrowed.insert(symbol);
+                self.not_reference_counted.insert(symbol);
             }
         }
     }
@@ -93,10 +93,10 @@ impl SymbolRcTypes {
     Get the reference count type of a symbol.
      */
     fn get(&self, symbol: &Symbol) -> Option<VarRcType> {
-        if self.owned.contains(symbol) {
-            debug_assert!(!self.borrowed.contains(symbol));
+        if self.reference_counted.contains(symbol) {
+            debug_assert!(!self.not_reference_counted.contains(symbol));
             Some(VarRcType::ReferenceCounted)
-        } else if self.borrowed.contains(symbol) {
+        } else if self.not_reference_counted.contains(symbol) {
             Some(VarRcType::NotReferenceCounted)
         } else {
             None

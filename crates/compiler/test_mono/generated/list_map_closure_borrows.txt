@@ -66,8 +66,6 @@ procedure Test.0 ():
     let Test.11 : Int1 = lowlevel Eq Test.9 Test.10;
     if Test.11 then
         let Test.5 : Str = UnionAtIndex (Id 1) (Index 0) Test.6;
-        inc Test.5;
-        dec Test.6;
         ret Test.5;
     else
         dec Test.6;
