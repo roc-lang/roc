@@ -1334,7 +1334,43 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::eq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
+                ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::U128 | Layout::I128 => {
+                let buf = &mut self.buf;
+
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+
+                // put the arguments on the stack
+                let (src1_offset, _) = self.storage_manager.stack_offset_and_size(src1);
+                let (src2_offset, _) = self.storage_manager.stack_offset_and_size(src2);
+
+                let tmp1 = self
+                    .storage_manager
+                    .claim_general_reg(buf, &Symbol::DEV_TMP);
+                let tmp2 = self
+                    .storage_manager
+                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
+
+                // move the upper 8 bytes of both arguments into a register
+                ASM::mov_reg64_base32(buf, tmp1, src1_offset);
+                ASM::mov_reg64_base32(buf, tmp2, src2_offset);
+
+                // store the result in our destination
+                ASM::eq_reg64_reg64_reg64(buf, dst_reg, tmp1, tmp2);
+
+                // move the lower 8 bytes of both arguments into a register
+                ASM::mov_reg64_base32(buf, tmp1, src1_offset + 8);
+                ASM::mov_reg64_base32(buf, tmp2, src2_offset + 8);
+
+                // store the result in tmp1
+                ASM::eq_reg64_reg64_reg64(buf, tmp1, tmp1, tmp2);
+
+                // now and dst and tmp1, storing the result in dst
+                ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, tmp1);
+
+                self.storage_manager.free_symbol(&Symbol::DEV_TMP);
+                self.storage_manager.free_symbol(&Symbol::DEV_TMP2);
             }
             Layout::F32 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F32)),
             Layout::F64 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F64)),

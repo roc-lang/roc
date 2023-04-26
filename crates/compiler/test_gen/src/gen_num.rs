@@ -3898,7 +3898,7 @@ fn when_on_decimals() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_i128() {
     assert_evals_to!(
         indoc!(
