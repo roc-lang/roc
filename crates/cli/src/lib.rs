@@ -359,6 +359,20 @@ pub enum FormatMode {
     CheckOnly,
 }
 
+fn opt_level_from_flags(matches: &ArgMatches) -> OptLevel {
+    match (
+        matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_OPT_SIZE),
+        matches.is_present(FLAG_DEV),
+    ) {
+        (true, false, false) => OptLevel::Optimize,
+        (false, true, false) => OptLevel::Size,
+        (false, false, true) => OptLevel::Development,
+        (false, false, false) => OptLevel::Normal,
+        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
+    }
+}
+
 #[cfg(windows)]
 pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
     todo!("running tests does not work on windows right now")
@@ -374,17 +388,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let start_time = Instant::now();
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
-    let opt_level = match (
-        matches.is_present(FLAG_OPTIMIZE),
-        matches.is_present(FLAG_OPT_SIZE),
-        matches.is_present(FLAG_DEV),
-    ) {
-        (true, false, false) => OptLevel::Optimize,
-        (false, true, false) => OptLevel::Size,
-        (false, false, true) => OptLevel::Development,
-        (false, false, false) => OptLevel::Normal,
-        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
-    };
+    let opt_level = opt_level_from_flags(matches);
 
     let threading = match matches
         .value_of(FLAG_MAX_THREADS)
@@ -603,17 +607,7 @@ pub fn build(
     let opt_level = if let BuildConfig::BuildAndRunIfNoErrors = config {
         OptLevel::Development
     } else {
-        match (
-            matches.is_present(FLAG_OPTIMIZE),
-            matches.is_present(FLAG_OPT_SIZE),
-        ) {
-            (true, false) => OptLevel::Optimize,
-            (false, true) => OptLevel::Size,
-            (false, false) => OptLevel::Normal,
-            (true, true) => {
-                user_error!("build can be only one of `--optimize` and `--opt-size`")
-            }
-        }
+        opt_level_from_flags(matches)
     };
 
     let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
