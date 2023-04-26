@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=7a32a141db568abde9bc389845949dc2a454dfd3";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=bf2e058449f536faa4c67b5cad12476755db689c";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
