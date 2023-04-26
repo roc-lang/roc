@@ -464,6 +464,31 @@ pub fn exportMulSaturatedInt(comptime T: type, comptime W: type, comptime name: 
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
+pub fn exportMulWrappedInt(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) T {
+            return self *% other;
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub export fn shiftRightZeroFillI128(self: i128, other: u8) i128 {
+    if (other & 0b1000_0000 > 0) {
+        return 0;
+    } else {
+        return self >> @intCast(u7, other);
+    }
+}
+
+pub export fn shiftRightZeroFillU128(self: u128, other: u8) u128 {
+    if (other & 0b1000_0000 > 0) {
+        return 0;
+    } else {
+        return self >> @intCast(u7, other);
+    }
+}
+
 pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) T {

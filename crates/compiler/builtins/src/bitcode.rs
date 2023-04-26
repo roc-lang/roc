@@ -285,9 +285,13 @@ pub const NUM_SUB_CHECKED_FLOAT: IntrinsicName =
 
 pub const NUM_MUL_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_or_panic");
 pub const NUM_MUL_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_saturated");
+pub const NUM_MUL_WRAP_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_wrapped");
 pub const NUM_MUL_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_with_overflow");
 pub const NUM_MUL_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.mul_with_overflow");
+
+pub const NUM_SHIFT_RIGHT_ZERO_FILL: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.shift_right_zero_fill");
 
 pub const NUM_COUNT_LEADING_ZERO_BITS: IntrinsicName =
     int_intrinsic!("roc_builtins.num.count_leading_zero_bits");
