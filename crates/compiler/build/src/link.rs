@@ -1,4 +1,4 @@
-use crate::target::{arch_str, target_zig_str};
+use crate::target::{target_zig_str};
 use libloading::{Error, Library};
 use roc_command_utils::{cargo, clang, rustup, zig};
 use roc_error_macros::internal_error;
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{self, Child, Command};
+use std::process::{Child, Command};
 use std::{env, fs};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
@@ -907,57 +907,12 @@ fn get_target_str(target: &Triple) -> &str {
     }
 }
 
-fn nix_path_opt() -> Option<String> {
-    env::var_os("NIX_GLIBC_PATH").map(|path| path.into_string().unwrap())
-}
-
-fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
-    let mut guess_path = PathBuf::new();
-    for s in segments {
-        guess_path.push(s);
-    }
-    if guess_path.exists() {
-        Some(guess_path)
-    } else {
-        None
-    }
-}
-
-/// Given a list of library directories and the name of a library, find the 1st match
-///
-/// The provided list of library directories should be in the form of a list of
-/// directories, where each directory is represented by a series of path segments, like
-///
-/// ["/usr", "lib"]
-///
-/// Each directory will be checked for a file with the provided filename, and the first
-/// match will be returned.
-///
-/// If there are no matches, [`None`] will be returned.
-fn look_for_library(lib_dirs: &[&[&str]], lib_filename: &str) -> Option<PathBuf> {
-    lib_dirs
-        .iter()
-        .map(|lib_dir| {
-            lib_dir.iter().fold(PathBuf::new(), |mut path, segment| {
-                path.push(segment);
-                path
-            })
-        })
-        .map(|mut path| {
-            path.push(lib_filename);
-            path
-        })
-        .find(|path| path.exists())
-}
-
 fn link_linux(
     target: &Triple,
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let architecture = format!("{}-linux-gnu", target.architecture);
-
     //    Command::new("cp")
     //        .args(&[input_paths[0], "/home/folkertdev/roc/wasm/host.o"])
     //        .output()
@@ -984,101 +939,10 @@ fn link_linux(
         ));
     }
 
-    // Some things we'll need to build a list of dirs to check for libraries
-    let maybe_nix_path = nix_path_opt();
-    let usr_lib_arch = ["/usr", "lib", &architecture];
-    let lib_arch = ["/lib", &architecture];
-    let nix_path_segments;
-    let lib_dirs_if_nix: [&[&str]; 5];
-    let lib_dirs_if_nonix: [&[&str]; 4];
 
-    // Build the aformentioned list
-    let lib_dirs: &[&[&str]] =
-        // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = &maybe_nix_path {
-            nix_path_segments = [nix_path.as_str()];
-            lib_dirs_if_nix = [
-                &nix_path_segments,
-                &usr_lib_arch,
-                &lib_arch,
-                &["/usr", "lib"],
-                &["/usr", "lib64"],
-            ];
-            &lib_dirs_if_nix
-        } else {
-            lib_dirs_if_nonix = [
-                &usr_lib_arch,
-                &lib_arch,
-                &["/usr", "lib"],
-                &["/usr", "lib64"],
-            ];
-            &lib_dirs_if_nonix
-        };
-
-    // Look for the libraries we'll need
-
-    let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path = look_for_library(lib_dirs, libgcc_name);
-
-    let crti_name = "crti.o";
-    let crti_path = look_for_library(lib_dirs, crti_name);
-
-    let crtn_name = "crtn.o";
-    let crtn_path = look_for_library(lib_dirs, crtn_name);
-
-    let scrt1_name = "Scrt1.o";
-    let scrt1_path = look_for_library(lib_dirs, scrt1_name);
-
-    // Unwrap all the paths at once so we can inform the user of all missing libs at once
-    let (libgcc_path, crti_path, crtn_path, scrt1_path) =
-        match (libgcc_path, crti_path, crtn_path, scrt1_path) {
-            (Some(libgcc), Some(crti), Some(crtn), Some(scrt1)) => (libgcc, crti, crtn, scrt1),
-            (maybe_gcc, maybe_crti, maybe_crtn, maybe_scrt1) => {
-                if maybe_gcc.is_none() {
-                    eprintln!("Couldn't find libgcc_s.so.1!");
-                    eprintln!("You may need to install libgcc\n");
-                }
-                if maybe_crti.is_none() | maybe_crtn.is_none() | maybe_scrt1.is_none() {
-                    eprintln!("Couldn't find the glibc development files!");
-                    eprintln!("We need the objects crti.o, crtn.o, and Scrt1.o");
-                    eprintln!("You may need to install the glibc development package");
-                    eprintln!("(probably called glibc-dev or glibc-devel)\n");
-                }
-
-                let dirs = lib_dirs
-                    .iter()
-                    .map(|segments| segments.join("/"))
-                    .collect::<Vec<String>>()
-                    .join("\n");
-                eprintln!("We looked in the following directories:\n{}", dirs);
-                process::exit(1);
-            }
-        };
-
-    let ld_linux = match target.architecture {
-        Architecture::X86_64 => {
-            // give preference to nix_path if it's defined, this prevents bugs
-            if let Some(nix_path) = nix_path_opt() {
-                library_path([&nix_path, "ld-linux-x86-64.so.2"])
-            } else {
-                library_path(["/lib64", "ld-linux-x86-64.so.2"])
-            }
-        }
-        Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
-        _ => internal_error!(
-            "TODO gracefully handle unsupported linux architecture: {:?}",
-            target.architecture
-        ),
-    };
-    let ld_linux = ld_linux.unwrap();
-    let ld_linux = ld_linux.to_str().unwrap();
-
-    let mut soname;
     let (base_args, output_path) = match link_type {
         LinkType::Executable => (
-            // Presumably this S stands for Static, since if we include Scrt1.o
-            // in the linking for dynamic builds, linking fails.
-            vec![scrt1_path.to_string_lossy().into_owned()],
+            vec![],
             output_path,
         ),
         LinkType::Dylib => {
@@ -1086,25 +950,15 @@ fn link_linux(
             // Do we even need the "-soname" argument?
             //
             // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
-
-            soname = output_path.clone();
-            soname.set_extension("so.1");
-
-            let mut output_path = output_path;
-
-	    let soname_arg = format!("-Wl,-soname={}", soname.display());
-
-            output_path.set_extension("so.1.0");
-
             (
                 // TODO: find a way to avoid using a vec! here - should theoretically be
                 // able to do this somehow using &[] but the borrow checker isn't having it.
                 // Also find a way to have these be string slices instead of Strings.
                 vec![
                     "-shared".to_string(),
-                    soname_arg.to_string()
+		    format!("-Wl,-soname={}.so.1", output_path.display())
                 ],
-                output_path,
+		output_path.with_extension(".so.1.0"),
             )
         }
         LinkType::None => internal_error!("link_linux should not be called with link type of none"),
@@ -1137,7 +991,6 @@ fn link_linux(
             // &*crtn_path.to_string_lossy(),
         ])
         .args(&base_args)
-        // .args(["-dynamic-linker", ld_linux])
         .args(input_paths)
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
