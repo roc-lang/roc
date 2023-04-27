@@ -1494,11 +1494,10 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn movsx_reg_reg(
         buf: &mut Vec<'_, u8>,
         input_width: RegisterWidth,
-        output_width: RegisterWidth,
         dst: X86_64GeneralReg,
         src: X86_64GeneralReg,
     ) {
-        raw_movsx_reg_reg(buf, input_width, output_width, dst, src);
+        raw_movsx_reg_reg(buf, input_width, dst, src);
     }
 
     #[inline(always)]
@@ -2564,46 +2563,31 @@ fn raw_mov_reg_reg(
 fn raw_movsx_reg_reg(
     buf: &mut Vec<u8>,
     input_width: RegisterWidth,
-    output_width: RegisterWidth,
     dst: X86_64GeneralReg,
     src: X86_64GeneralReg,
 ) {
-    match (input_width, output_width) {
-        (RegisterWidth::W8, RegisterWidth::W16) => {
-            buf.push(0x0F);
-            buf.push(0xBE);
-            binop_reg8_reg8(0x89, buf, dst, src);
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    // NOTE src and dst seem to be flipped here. It works this way though
+    let mod_rm = 0xC0 | (dst_mod << 3) | src_mod;
+
+    let rex = add_rm_extension(src, REX_W);
+    let rex = add_reg_extension(dst, rex);
+
+    match input_width {
+        RegisterWidth::W8 => {
+            buf.extend([rex, 0x0f, 0xbe, mod_rm]);
         }
-        (RegisterWidth::W8, RegisterWidth::W32) => {
-            buf.push(0x0F);
-            buf.push(0xBF);
-            binop_reg8_reg8(0x89, buf, dst, src);
+        RegisterWidth::W16 => {
+            buf.extend([rex, 0x0f, 0xbf, mod_rm]);
         }
-        (RegisterWidth::W8, RegisterWidth::W64) => {
-            buf.push(0x48);
-            buf.push(0x0F);
-            buf.push(0xBE);
-            binop_reg8_reg8(0x89, buf, dst, src);
+        RegisterWidth::W32 => {
+            buf.extend([rex, 0x63, mod_rm]);
         }
-        (RegisterWidth::W16, RegisterWidth::W32) => {
-            buf.push(0x66);
-            buf.push(0x0F);
-            buf.push(0xBF);
-            binop_reg16_reg16(0x89, buf, dst, src);
-        }
-        (RegisterWidth::W16, RegisterWidth::W64) => {
-            buf.push(0x48);
-            buf.push(0x0F);
-            buf.push(0xBF);
-            binop_reg16_reg16(0x89, buf, dst, src);
-        }
-        (RegisterWidth::W32, RegisterWidth::W64) => {
-            buf.push(0x48);
-            buf.push(0x0F);
-            buf.push(0xBF);
-            binop_reg32_reg32(0x89, buf, dst, src);
-        }
-        _ => panic!("Invalid input/output register width combination"),
+        RegisterWidth::W64 => { /* do nothing */ }
     }
 }
 
@@ -3686,6 +3670,36 @@ mod tests {
                         X86_64GeneralReg::low_32bits_string(&reg2)
                     ),
                     RegisterWidth::W64 => format!("mov {}, {}", reg1, reg2),
+                }
+            },
+            ALL_REGISTER_WIDTHS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_movsx_reg64_reg64() {
+        disassembler_test!(
+            raw_movsx_reg_reg,
+            |w, reg1, reg2| {
+                match w {
+                    RegisterWidth::W8 => format!(
+                        "movsx {}, {}",
+                        reg1,
+                        X86_64GeneralReg::low_8bits_string(&reg2)
+                    ),
+                    RegisterWidth::W16 => format!(
+                        "movsx {}, {}",
+                        reg1,
+                        X86_64GeneralReg::low_16bits_string(&reg2)
+                    ),
+                    RegisterWidth::W32 => format!(
+                        "movsxd {}, {}",
+                        reg1,
+                        X86_64GeneralReg::low_32bits_string(&reg2)
+                    ),
+                    RegisterWidth::W64 => String::new(),
                 }
             },
             ALL_REGISTER_WIDTHS,

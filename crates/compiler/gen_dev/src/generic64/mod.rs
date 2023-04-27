@@ -292,7 +292,6 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn movsx_reg_reg(
         buf: &mut Vec<'_, u8>,
         input_width: RegisterWidth,
-        output_width: RegisterWidth,
         dst: GeneralReg,
         src: GeneralReg,
     );
@@ -2998,18 +2997,10 @@ impl<
                     ASM::mov_reg_reg(buf, RegisterWidth::W32, dst_reg, src_reg);
                 }
                 (I8, I16 | I32 | I64) => {
-                    // zero  out the register
-                    ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
-
-                    // move the 8-bit integer
-                    ASM::movsx_reg_reg(
-                        buf,
-                        RegisterWidth::W8,
-                        RegisterWidth::W16,
-                        dst_reg,
-                        src_reg,
-                    );
+                    ASM::movsx_reg_reg(buf, RegisterWidth::W8, dst_reg, src_reg)
                 }
+                (I16, I32 | I64) => ASM::movsx_reg_reg(buf, RegisterWidth::W16, dst_reg, src_reg),
+                (I32, I64) => ASM::movsx_reg_reg(buf, RegisterWidth::W32, dst_reg, src_reg),
                 // -- CASTING DOWN --
                 (U64 | I64, I32 | U32) => {
                     // move as a 32-bit integer (leaving any other bits behind)

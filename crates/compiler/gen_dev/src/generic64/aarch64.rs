@@ -769,7 +769,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     fn movsx_reg_reg(
         _buf: &mut Vec<'_, u8>,
         _input_width: RegisterWidth,
-        _output_width: RegisterWidth,
         _dst: AArch64GeneralReg,
         _src: AArch64GeneralReg,
     ) {
