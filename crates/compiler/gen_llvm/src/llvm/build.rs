@@ -93,7 +93,6 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         name: &str,
     ) -> Result<PointerValue<'ctx>, ()> {
         // debug_assert_eq!( ptr.get_type().get_element_type().into_struct_type(), struct_type);
-        // self.build_struct_gep(ptr, index, name)
         self.build_struct_gep(struct_type, ptr, index, name)
     }
 
@@ -104,7 +103,6 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         name: &str,
     ) -> BasicValueEnum<'ctx> {
         // debug_assert_eq!( ptr.get_type().get_element_type(), element_type.as_any_type_enum());
-        // self.build_load(ptr, name)
         self.build_load(element_type, ptr, name)
     }
 
@@ -116,7 +114,6 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         name: &str,
     ) -> PointerValue<'ctx> {
         // debug_assert_eq!( ptr.get_type().get_element_type(), element_type.as_any_type_enum());
-        // self.build_in_bounds_gep(ptr, ordered_indexes, name)
         self.build_in_bounds_gep(element_type, ptr, ordered_indexes, name)
     }
 }
