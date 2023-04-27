@@ -1165,6 +1165,11 @@ trait Backend<'a> {
 
                 self.build_num_int_cast(sym, &args[0], source_width, target_width)
             }
+            LowLevel::NumIsMultipleOf => {
+                let int_width = arg_layouts[0].try_int_width().unwrap();
+                let intrinsic = bitcode::NUM_IS_MULTIPLE_OF[int_width].to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
             x => todo!("low level, {:?}", x),
         }
     }

@@ -254,6 +254,30 @@ fn bytesToU128(arg: RocList, position: usize) u128 {
     return @bitCast(u128, [_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3], bytes[position + 4], bytes[position + 5], bytes[position + 6], bytes[position + 7], bytes[position + 8], bytes[position + 9], bytes[position + 10], bytes[position + 11], bytes[position + 12], bytes[position + 13], bytes[position + 14], bytes[position + 15] });
 }
 
+fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
+    if (rhs == 0 or rhs == -1) {
+        // lhs is a multiple of rhs iff
+        //
+        // - rhs == -1
+        // - both rhs and lhs are 0
+        //
+        // the -1 case is important for overflow reasons `isize::MIN % -1` crashes in rust
+        return (rhs == -1) or (lhs == 0);
+    } else {
+        const rem = @mod(lhs, rhs);
+        return rem == 0;
+    }
+}
+
+pub fn exportIsMultipleOf(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) bool {
+            return @call(.{ .modifier = always_inline }, isMultipleOf, .{ T, self, other });
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
 fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .Int => {

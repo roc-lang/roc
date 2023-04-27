@@ -290,6 +290,8 @@ pub const NUM_MUL_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.
 pub const NUM_MUL_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.mul_with_overflow");
 
+pub const NUM_IS_MULTIPLE_OF: IntrinsicName = int_intrinsic!("roc_builtins.num.is_multiple_of");
+
 pub const NUM_SHIFT_RIGHT_ZERO_FILL: IntrinsicName =
     int_intrinsic!("roc_builtins.num.shift_right_zero_fill");
 

@@ -96,6 +96,8 @@ comptime {
         num.exportMulSaturatedInt(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_saturated.");
         num.exportMulWrappedInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".mul_wrapped.");
 
+        num.exportIsMultipleOf(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_multiple_of.");
+
         num.exportCountLeadingZeroBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_leading_zero_bits.");
         num.exportCountTrailingZeroBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_trailing_zero_bits.");
         num.exportCountOneBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_one_bits.");

@@ -2521,7 +2521,7 @@ to_int_checked_tests! {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn is_multiple_of_signed() {
     // true
     assert_evals_to!("Num.isMultipleOf 5 1", true, bool);
