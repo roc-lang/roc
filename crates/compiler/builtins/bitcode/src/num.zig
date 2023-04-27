@@ -473,7 +473,7 @@ pub fn exportMulWrappedInt(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
-pub export fn shiftRightZeroFillI128(self: i128, other: u8) i128 {
+pub fn shiftRightZeroFillI128(self: i128, other: u8) callconv(.C) i128 {
     if (other & 0b1000_0000 > 0) {
         return 0;
     } else {
@@ -481,7 +481,7 @@ pub export fn shiftRightZeroFillI128(self: i128, other: u8) i128 {
     }
 }
 
-pub export fn shiftRightZeroFillU128(self: u128, other: u8) u128 {
+pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.C) u128 {
     if (other & 0b1000_0000 > 0) {
         return 0;
     } else {
