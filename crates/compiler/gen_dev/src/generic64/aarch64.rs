@@ -766,6 +766,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn movsx_reg_reg(
+        _buf: &mut Vec<'_, u8>,
+        _input_width: RegisterWidth,
+        _output_width: RegisterWidth,
+        _dst: AArch64GeneralReg,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!("move with sign extension");
+    }
+
+    #[inline(always)]
     fn mov_freg64_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
         todo!("loading floating point reg from base offset for AArch64");
     }

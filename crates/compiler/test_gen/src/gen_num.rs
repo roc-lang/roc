@@ -2289,18 +2289,21 @@ num_conversion_tests! {
     "Num.toI16", i16, (
         to_i16_same_width, "15u16", 15, ["gen-wasm", "gen-dev"]
         to_i16_extend, "15i8", 15, ["gen-wasm", "gen-dev"]
+        to_i16_sign_extend, "-15i8", -15, ["gen-wasm", "gen-dev"]
         to_i16_truncate, "115i32", 115, ["gen-wasm", "gen-dev"]
         to_i16_truncate_wraps, "60000i32", -5536, ["gen-wasm", "gen-dev"]
     )
     "Num.toI32", i32, (
         to_i32_same_width, "15u32", 15, ["gen-wasm", "gen-dev"]
         to_i32_extend, "15i8", 15, ["gen-wasm", "gen-dev"]
+        to_i32_sign_extend, "-15i8", -15, ["gen-wasm", "gen-dev"]
         to_i32_truncate, "115i64", 115, ["gen-wasm", "gen-dev"]
         to_i32_truncate_wraps, "5000000000i64", 705032704, ["gen-wasm", "gen-dev"]
     )
     "Num.toI64", i64, (
         to_i64_same_width, "15u64", 15, ["gen-wasm", "gen-dev"]
         to_i64_extend, "15i8", 15, ["gen-wasm", "gen-dev"]
+        to_i64_sign_extend, "-15i8", -15, ["gen-wasm", "gen-dev"]
         to_i64_truncate, "115i128", 115
         to_i64_truncate_wraps, "10_000_000_000_000_000_000i128", -8446744073709551616
     )

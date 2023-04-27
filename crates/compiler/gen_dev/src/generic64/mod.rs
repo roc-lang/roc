@@ -288,6 +288,15 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         Self::mov_reg_reg(buf, RegisterWidth::W8, dst, src);
     }
 
+    // move with sign extension
+    fn movsx_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        output_width: RegisterWidth,
+        dst: GeneralReg,
+        src: GeneralReg,
+    );
+
     // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
 
@@ -2993,7 +3002,13 @@ impl<
                     ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
 
                     // move the 8-bit integer
-                    ASM::mov_reg_reg(buf, RegisterWidth::W8, dst_reg, src_reg);
+                    ASM::movsx_reg_reg(
+                        buf,
+                        RegisterWidth::W8,
+                        RegisterWidth::W16,
+                        dst_reg,
+                        src_reg,
+                    );
                 }
                 // -- CASTING DOWN --
                 (U64 | I64, I32 | U32) => {

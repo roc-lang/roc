@@ -1490,6 +1490,16 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     ) {
         mov_reg_reg(buf, register_width, dst, src);
     }
+    #[inline(always)]
+    fn movsx_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        output_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+    ) {
+        raw_movsx_reg_reg(buf, input_width, output_width, dst, src);
+    }
 
     #[inline(always)]
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
