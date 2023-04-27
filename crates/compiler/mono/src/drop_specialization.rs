@@ -521,7 +521,7 @@ fn specialize_struct<'a, 'i>(
                             arena.alloc(Stmt::Let(
                                 field_symbol,
                                 field_val_expr,
-                                *field_layout,
+                                layout_interner.chase_recursive_in(*field_layout),
                                 arena.alloc(Stmt::Refcounting(
                                     ModifyRc::Dec(field_symbol),
                                     new_continuation,
@@ -663,7 +663,7 @@ fn specialize_union<'a, 'i>(
                                             arena.alloc(Stmt::Let(
                                                 field_symbol,
                                                 field_val_expr,
-                                                *field_layout,
+                                                layout_interner.chase_recursive_in(*field_layout),
                                                 rc(arena, field_symbol, new_continuation),
                                             ))
                                         }
