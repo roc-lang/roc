@@ -1972,10 +1972,6 @@ fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: U
     unreachable;
 }
 
-// pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
-//     const bytes: []u8 = ptr[0..len];
-//     return @call(.always_inline, unicode.utf8ValidateSlice, .{bytes});
-// }
 pub fn isValidUnicode(buf: []const u8) bool {
     const size = @sizeOf(u64);
     // TODO: we should test changing the step on other platforms.
