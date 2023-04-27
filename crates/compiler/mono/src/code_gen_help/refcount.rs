@@ -186,6 +186,56 @@ pub fn refcount_generic<'a>(
     }
 }
 
+fn if_unique<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    value: Symbol,
+    when_unique: impl FnOnce(JoinPointId) -> Stmt<'a>,
+    when_done: Stmt<'a>,
+) -> Stmt<'a> {
+    //  joinpoint f =
+    //      <when_done>
+    //  in
+    //      if is_unique <value> then
+    //          <when_unique>(f)
+    //      else
+    //          jump f
+
+    let joinpoint = root.create_symbol(ident_ids, "is_unique_joinpoint");
+    let joinpoint = JoinPointId(joinpoint);
+
+    let is_unique = root.create_symbol(ident_ids, "is_unique");
+
+    let mut stmt = Stmt::Switch {
+        cond_symbol: is_unique,
+        cond_layout: Layout::BOOL,
+        branches: root
+            .arena
+            .alloc([(true as _, BranchInfo::None, when_unique(joinpoint))]),
+        default_branch: (
+            BranchInfo::None,
+            root.arena.alloc(Stmt::Jump(joinpoint, &[])),
+        ),
+        ret_layout: Layout::UNIT,
+    };
+
+    stmt = Stmt::Join {
+        id: joinpoint,
+        parameters: &[],
+        body: root.arena.alloc(when_done),
+        remainder: root.arena.alloc(stmt),
+    };
+
+    let_lowlevel(
+        root.arena,
+        root.layout_isize,
+        is_unique,
+        LowLevel::RefCountIsUnique,
+        &[value],
+        root.arena.alloc(stmt),
+    )
+}
+
 pub fn refcount_reset_proc_body<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -348,18 +398,17 @@ pub fn refcount_reset_proc_body<'a>(
     );
 
     // Refcount value
-    let rc_expr = Expr::UnionAtIndex {
-        structure: rc_ptr,
-        tag_id: 0,
-        union_layout: root.union_refcount,
-        index: 0,
-    };
+    let rc_expr = Expr::ExprUnbox { symbol: rc_ptr };
+
     let rc_stmt = Stmt::Let(
         rc,
         rc_expr,
         root.layout_isize,
         root.arena.alloc(refcount_1_stmt),
     );
+
+    // a Box never masks bits
+    let mask_lower_bits = false;
 
     // Refcount pointer
     let rc_ptr_stmt = {
@@ -368,7 +417,7 @@ pub fn refcount_reset_proc_body<'a>(
             ident_ids,
             structure,
             rc_ptr,
-            union_layout.stores_tag_id_in_pointer(root.target_info),
+            mask_lower_bits,
             root.arena.alloc(rc_stmt),
             addr,
             recursion_ptr,
@@ -508,18 +557,17 @@ pub fn refcount_resetref_proc_body<'a>(
     );
 
     // Refcount value
-    let rc_expr = Expr::UnionAtIndex {
-        structure: rc_ptr,
-        tag_id: 0,
-        union_layout: root.union_refcount,
-        index: 0,
-    };
+    let rc_expr = Expr::ExprUnbox { symbol: rc_ptr };
+
     let rc_stmt = Stmt::Let(
         rc,
         rc_expr,
         root.layout_isize,
         root.arena.alloc(refcount_1_stmt),
     );
+
+    // a Box never masks bits
+    let mask_lower_bits = false;
 
     // Refcount pointer
     let rc_ptr_stmt = {
@@ -528,7 +576,7 @@ pub fn refcount_resetref_proc_body<'a>(
             ident_ids,
             structure,
             rc_ptr,
-            union_layout.stores_tag_id_in_pointer(root.target_info),
+            mask_lower_bits,
             root.arena.alloc(rc_stmt),
             addr,
             recursion_ptr,
@@ -1813,7 +1861,8 @@ fn refcount_boxed<'a>(
         Layout::OPAQUE_PTR,
     );
 
-    if layout_interner.is_refcounted(inner_layout) && !ctx.op.is_decref() {
+    // decrement the inner value if the operation is a decrement and the box itself is unique
+    if layout_interner.is_refcounted(inner_layout) && ctx.op.is_dec() {
         let inner = root.create_symbol(ident_ids, "inner");
         let inner_expr = Expr::ExprUnbox { symbol: outer };
 
@@ -1829,16 +1878,24 @@ fn refcount_boxed<'a>(
             )
             .unwrap();
 
-        Stmt::Let(
-            inner,
-            inner_expr,
-            inner_layout,
-            arena.alloc(Stmt::Let(
-                mod_inner_unit,
-                mod_inner_expr,
-                LAYOUT_UNIT,
-                arena.alloc(get_rc_and_modify_outer),
-            )),
+        if_unique(
+            root,
+            ident_ids,
+            outer,
+            |id| {
+                Stmt::Let(
+                    inner,
+                    inner_expr,
+                    inner_layout,
+                    arena.alloc(Stmt::Let(
+                        mod_inner_unit,
+                        mod_inner_expr,
+                        LAYOUT_UNIT,
+                        arena.alloc(Stmt::Jump(id, &[])),
+                    )),
+                )
+            },
+            get_rc_and_modify_outer,
         )
     } else {
         get_rc_and_modify_outer
