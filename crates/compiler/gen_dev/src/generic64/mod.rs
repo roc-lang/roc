@@ -2544,7 +2544,7 @@ impl<
                 ASM::mov_reg64_imm64(&mut self.buf, reg, i128::from_ne_bytes(val) as i64);
             }
             (
-                Literal::Int(bytes),
+                Literal::Int(bytes) | Literal::U128(bytes),
                 Layout::Builtin(Builtin::Int(IntWidth::I128 | IntWidth::U128)),
             ) => {
                 self.storage_manager.with_tmp_general_reg(
@@ -2643,7 +2643,7 @@ impl<
                     self.create_array(sym, &Layout::U8, elements.into_bump_slice())
                 }
             }
-            x => todo!("loading literal, {:?}", x),
+            _ => todo!("loading literal {:?} with layout {:?}", lit, layout),
         }
     }
 
@@ -2959,6 +2959,9 @@ impl<
         if source.stack_size() == target.stack_size() {
             match source.stack_size() {
                 8 => ASM::mov_reg64_reg64(buf, dst_reg, src_reg),
+                4 => ASM::mov_reg32_reg32(buf, dst_reg, src_reg),
+                2 => ASM::mov_reg16_reg16(buf, dst_reg, src_reg),
+                1 => ASM::mov_reg8_reg8(buf, dst_reg, src_reg),
                 _ => todo!("int cast from {source:?} to {target:?}"),
             }
         } else {

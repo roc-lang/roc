@@ -2097,7 +2097,7 @@ fn shift_right_zf_by() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn shift_right_cast_i8() {
     // FIXME (Brian) Something funny happening with 8-bit binary literals in tests
 
