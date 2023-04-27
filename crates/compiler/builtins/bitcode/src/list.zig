@@ -15,18 +15,6 @@ const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
 const Dec = *const fn (?[*]u8) callconv(.C) void;
 const HasTagId = *const fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
-// const EqFn = *fn (?[*]u8, ?[*]u8) callconv(.C) bool;
-// const CompareFn = *fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
-// const Opaque = ?[*]u8;
-
-// const Inc = *fn (?[*]u8) callconv(.C) void;
-// const IncN = *fn (?[*]u8, usize) callconv(.C) void;
-// const Dec = *fn (?[*]u8) callconv(.C) void;
-// const HasTagId = *fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
-
-// const SEAMLESS_SLICE_BIT: usize =
-//     @bitCast(usize, @as(isize, std.math.minInt(isize)));
-
 const SEAMLESS_SLICE_BIT: usize =
     @bitCast(usize, @as(isize, std.math.minInt(isize)));
 
@@ -273,11 +261,6 @@ const Caller1 = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller2 = *const fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = *const fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller4 = *const fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-// const Caller0 = *fn (?[*]u8, ?[*]u8) callconv(.C) void;
-// const Caller1 = *fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-// const Caller2 = *fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-// const Caller3 = *fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-// const Caller4 = *fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
 pub fn listMap(
     list: RocList,
