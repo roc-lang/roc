@@ -1550,8 +1550,8 @@ fn surgery_macho_help(
         //         exec_mmap,
         //         dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE >>(),
         //     );
-        //     sym.st_value = endian::U64::new(LE , func_virt_offset as u64);
-        //     sym.st_size = endian::U64::new(
+        //     sym.st_value.set(LE , func_virt_offset as u64);
+        //     sym.st_size.set(
         //         LE ,
         //         match app_func_size_map.get(func_name) {
         //             Some(size) => *size,
