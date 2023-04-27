@@ -2966,7 +2966,8 @@ impl<
             }
         } else {
             match (source, target) {
-                (U8, U16 | U32 | U64) => {
+                // -- CASTING UP --
+                (I8 | U8, U16 | U32 | U64) => {
                     // zero  out the register
                     ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
 
@@ -2987,19 +2988,25 @@ impl<
                     // move the 32-bit integer
                     ASM::mov_reg_reg(buf, RegisterWidth::W32, dst_reg, src_reg);
                 }
-                (U64, U32) => {
+                (I8, I16 | I32 | I64) => {
+                    // zero  out the register
+                    ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
+
+                    // move the 8-bit integer
+                    ASM::mov_reg_reg(buf, RegisterWidth::W8, dst_reg, src_reg);
+                }
+                // -- CASTING DOWN --
+                (U64 | I64, I32 | U32) => {
                     // move as a 32-bit integer (leaving any other bits behind)
                     ASM::mov_reg_reg(buf, RegisterWidth::W32, dst_reg, src_reg);
                 }
-                (U64, U16) => {
+                (U64 | I64 | U32 | I32, I16 | U16) => {
                     // move as a 16-bit integer (leaving any other bits behind)
                     ASM::mov_reg_reg(buf, RegisterWidth::W16, dst_reg, src_reg);
                 }
-                (U64, I8) => {
-                    //
+                (U64 | I64 | U32 | I32 | U16 | I16, I8 | U8) => {
+                    // move as an 8-bit integer (leaving any other bits behind)
                     ASM::mov_reg_reg(buf, RegisterWidth::W8, dst_reg, src_reg);
-
-                    // TODO extension?
                 }
                 _ => todo!("int cast from {source:?} to {target:?}"),
             }
