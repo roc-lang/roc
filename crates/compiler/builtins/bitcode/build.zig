@@ -99,9 +99,6 @@ fn generateObjectFile(
     obj.link_function_sections = true;
     const obj_step = b.step(step_name, "Build object file for linking");
     obj_step.dependOn(&obj.step);
-    //    _ = b.step(step_name, "Build object file for linking");
-
-    //    obj_step.dependOn(&obj.step);
 }
 
 fn makeLinux32Target() CrossTarget {
