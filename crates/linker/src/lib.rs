@@ -21,7 +21,6 @@ mod macho;
 mod pe;
 
 mod generate_dylib;
-mod metadata;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
@@ -409,7 +408,7 @@ pub fn preprocess_host(
     )
 }
 
-/// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
+/// Constructs a `Metadata` from a host executable binary, and writes it to disk
 #[allow(clippy::too_many_arguments)]
 fn preprocess(
     target: &Triple,
