@@ -9543,18 +9543,13 @@ fn find_lambda_sets<'a>(
         bumpalo::collections::Vec::with_capacity_in(lambda_set_variables.len(), env.arena);
 
     for (variable, lambda_set_id) in lambda_set_variables {
-        match env.subs.get_content_without_compacting(variable) {
-            Content::LambdaSet(lambda_set) => {
-                let raw_function_layout =
-                    RawFunctionLayout::from_var(env, lambda_set.ambient_function)
-                        .value()
-                        .unwrap();
+        let lambda_set = env.subs.get_lambda_set(variable);
+        let raw_function_layout = RawFunctionLayout::from_var(env, lambda_set.ambient_function)
+            .value()
+            .unwrap();
 
-                let key = (lambda_set_id, raw_function_layout);
-                answer.push(key);
-            }
-            _ => unreachable!(),
-        }
+        let key = (lambda_set_id, raw_function_layout);
+        answer.push(key);
     }
 
     answer
