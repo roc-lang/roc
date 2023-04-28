@@ -2083,11 +2083,10 @@ impl<
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
+        let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
         let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        self.storage_manager
-            .ensure_symbol_on_stack(&mut self.buf, src);
-        let (offset, _) = self.storage_manager.stack_offset_and_size(src);
-        ASM::add_reg64_reg64_imm32(&mut self.buf, dst_reg, CC::BASE_PTR_REG, offset);
+
+        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg)
     }
 
     fn create_empty_array(&mut self, sym: &Symbol) {
