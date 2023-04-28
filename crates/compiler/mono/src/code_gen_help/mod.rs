@@ -538,42 +538,37 @@ impl<'a> CodeGenHelp<'a> {
 
     fn union_tail_recursion_fields(
         &self,
-        layout_interner: &STLayoutInterner<'a>,
+        union_in_layout: InLayout<'a>,
         union: UnionLayout<'a>,
     ) -> Option<Vec<'a, Option<usize>>> {
         use UnionLayout::*;
         match union {
             NonRecursive(_) => None,
 
-            Recursive(tags) => self.union_tail_recursion_fields_help(layout_interner, tags),
+            Recursive(tags) => self.union_tail_recursion_fields_help(union_in_layout, tags),
 
             NonNullableUnwrapped(field_layouts) => {
-                self.union_tail_recursion_fields_help(layout_interner, &[field_layouts])
+                self.union_tail_recursion_fields_help(union_in_layout, &[field_layouts])
             }
 
             NullableWrapped {
                 other_tags: tags, ..
-            } => self.union_tail_recursion_fields_help(layout_interner, tags),
+            } => self.union_tail_recursion_fields_help(union_in_layout, tags),
 
             NullableUnwrapped { other_fields, .. } => {
-                self.union_tail_recursion_fields_help(layout_interner, &[other_fields])
+                self.union_tail_recursion_fields_help(union_in_layout, &[other_fields])
             }
         }
     }
 
     fn union_tail_recursion_fields_help(
         &self,
-        layout_interner: &STLayoutInterner<'a>,
+        in_layout: InLayout<'a>,
         tags: &[&'a [InLayout<'a>]],
     ) -> Option<Vec<'a, Option<usize>>> {
         let tailrec_indices = tags
             .iter()
-            .map(|fields| {
-                let found_index = fields
-                    .iter()
-                    .position(|f| matches!(layout_interner.get(*f), Layout::RecursivePointer(_)));
-                found_index
-            })
+            .map(|fields| fields.iter().position(|f| *f == in_layout))
             .collect_in::<Vec<_>>(self.arena);
 
         if tailrec_indices.iter().any(|i| i.is_some()) {
