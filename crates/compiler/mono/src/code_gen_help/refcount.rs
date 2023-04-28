@@ -864,7 +864,7 @@ fn refcount_list<'a>(
     );
 
     let modify_elems_and_list =
-        if layout_interner.get(elem_layout).is_refcounted() && !ctx.op.is_decref() {
+        if layout_interner.get(elem_layout).is_refcounted() && ctx.op.is_dec() {
             refcount_list_elems(
                 root,
                 ident_ids,
@@ -1366,30 +1366,39 @@ fn refcount_union_contents<'a>(
         ret_layout: LAYOUT_UNIT,
     };
 
-    let is_unique = root.create_symbol(ident_ids, "is_unique");
+    if let UnionLayout::NonRecursive(_) = union_layout {
+        Stmt::Join {
+            id: jp_contents_modified,
+            parameters: &[],
+            body: root.arena.alloc(next_stmt),
+            remainder: root.arena.alloc(tag_id_switch),
+        }
+    } else {
+        let is_unique = root.create_symbol(ident_ids, "is_unique");
 
-    let switch_with_unique_check = Stmt::if_then_else(
-        root.arena,
-        is_unique,
-        Layout::UNIT,
-        tag_id_switch,
-        root.arena.alloc(Stmt::Jump(jp_contents_modified, &[])),
-    );
+        let switch_with_unique_check = Stmt::if_then_else(
+            root.arena,
+            is_unique,
+            Layout::UNIT,
+            tag_id_switch,
+            root.arena.alloc(Stmt::Jump(jp_contents_modified, &[])),
+        );
 
-    let switch_with_unique_check_and_let = let_lowlevel(
-        root.arena,
-        Layout::BOOL,
-        is_unique,
-        LowLevel::RefCountIsUnique,
-        &[structure],
-        root.arena.alloc(switch_with_unique_check),
-    );
+        let switch_with_unique_check_and_let = let_lowlevel(
+            root.arena,
+            Layout::BOOL,
+            is_unique,
+            LowLevel::RefCountIsUnique,
+            &[structure],
+            root.arena.alloc(switch_with_unique_check),
+        );
 
-    Stmt::Join {
-        id: jp_contents_modified,
-        parameters: &[],
-        body: root.arena.alloc(next_stmt),
-        remainder: root.arena.alloc(switch_with_unique_check_and_let),
+        Stmt::Join {
+            id: jp_contents_modified,
+            parameters: &[],
+            body: root.arena.alloc(next_stmt),
+            remainder: root.arena.alloc(switch_with_unique_check_and_let),
+        }
     }
 }
 
