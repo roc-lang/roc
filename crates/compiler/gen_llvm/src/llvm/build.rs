@@ -1,4 +1,4 @@
-use crate::llvm::bitcode::call_bitcode_fn;
+use crate::llvm::bitcode::{call_bitcode_fn, always_inline};
 use crate::llvm::build_list::{self, allocate_list, empty_polymorphic_list};
 use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
@@ -4986,10 +4986,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     }
 
     if false {
-        let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-        debug_assert!(kind_id > 0);
-        let enum_attr = env.context.create_enum_attribute(kind_id, 1);
-        fn_val.add_attribute(AttributeLoc::Function, enum_attr);
+        fn_val.add_attribute(AttributeLoc::Function, always_inline(env.context));
     }
 
     if false {

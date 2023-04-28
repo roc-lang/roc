@@ -15,6 +15,7 @@ use inkwell::values::{
     StructValue,
 };
 use inkwell::AddressSpace;
+use inkwell::context::Context;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
@@ -23,6 +24,14 @@ use roc_mono::layout::{
 
 use super::build::{create_entry_block_alloca, BuilderExt};
 use super::convert::zig_list_type;
+
+pub fn always_inline(ctx : &Context) -> Attribute {
+    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+    debug_assert!(kind_id > 0);
+    let attr = ctx.create_enum_attribute(kind_id, 0);
+    debug_assert!(attr.is_enum());
+    attr
+}
 
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -218,10 +227,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     // called from zig, must use C calling convention
     function_value.set_call_conventions(C_CALL_CONV);
 
-    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-    debug_assert!(kind_id > 0);
-    let attr = env.context.create_enum_attribute(kind_id, 1);
-    function_value.add_attribute(AttributeLoc::Function, attr);
+    function_value.add_attribute(AttributeLoc::Function, always_inline(env.context));
 
     let entry = env.context.append_basic_block(function_value, "entry");
     env.builder.position_at_end(entry);
@@ -394,10 +400,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             // called from zig, must use C calling convention
             function_value.set_call_conventions(C_CALL_CONV);
 
-            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
-            function_value.add_attribute(AttributeLoc::Function, attr);
+            function_value.add_attribute(AttributeLoc::Function, always_inline(env.context));
 
             let entry = env.context.append_basic_block(function_value, "entry");
             env.builder.position_at_end(entry);
@@ -482,10 +485,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
             // called from zig, must use C calling convention
             function_value.set_call_conventions(C_CALL_CONV);
 
-            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
-            function_value.add_attribute(AttributeLoc::Function, attr);
+            function_value.add_attribute(AttributeLoc::Function, always_inline(env.context));
 
             let entry = env.context.append_basic_block(function_value, "entry");
             env.builder.position_at_end(entry);
@@ -567,14 +567,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             // called from zig, must use C calling convention
             function_value.set_call_conventions(C_CALL_CONV);
 
-            // we expose this function to zig; must use c calling convention
-            function_value.set_call_conventions(C_CALL_CONV);
-
-            // TODO figure out why this does not work any more
-            // let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            // debug_assert!(kind_id > 0);
-            // let attr = env.context.create_enum_attribute(kind_id, 1);
-            // function_value.add_attribute(AttributeLoc::Function, attr);
+            function_value.add_attribute(AttributeLoc::Function, always_inline(env.context));
 
             let entry = env.context.append_basic_block(function_value, "entry");
             env.builder.position_at_end(entry);

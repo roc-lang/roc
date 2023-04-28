@@ -139,10 +139,11 @@ fn gen_from_mono_module_llvm<'a>(
     emit_debug_info: bool,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
-    use inkwell::attributes::{Attribute, AttributeLoc};
+    use inkwell::attributes::{AttributeLoc};
     use inkwell::context::Context;
     use inkwell::module::Linkage;
     use inkwell::targets::{FileType, RelocMode};
+    use roc_gen_llvm::llvm::bitcode::always_inline;
 
     let code_gen_start = Instant::now();
 
@@ -162,9 +163,7 @@ fn gen_from_mono_module_llvm<'a>(
         temp
     };
 
-    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-    debug_assert!(kind_id > 0);
-    let enum_attr = context.create_enum_attribute(kind_id, 1);
+    let always_inline_attr = always_inline(&context);
 
     for function in module.get_functions() {
         let name = function.get_name().to_str().unwrap();
@@ -182,7 +181,7 @@ fn gen_from_mono_module_llvm<'a>(
             || name.contains("incref")
             || name.contains("decref")
         {
-            function.add_attribute(AttributeLoc::Function, enum_attr);
+            function.add_attribute(AttributeLoc::Function, always_inline_attr);
         }
     }
 

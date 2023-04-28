@@ -771,10 +771,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
                 &[seed_type.into(), arg_type.into()],
             );
 
-            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
-            function_value.add_attribute(AttributeLoc::Function, attr);
+            function_value.add_attribute(AttributeLoc::Function, always_inline(env.context));
 
             let entry = env.context.append_basic_block(function_value, "entry");
             env.builder.position_at_end(entry);
