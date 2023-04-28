@@ -48,6 +48,16 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
         },
         object::write::elf::ProgramHeader {
             p_type: object::elf::PT_LOAD,
+            p_flags: object::elf::PF_R,
+            p_offset: 0x40,
+            p_vaddr: 0x40,
+            p_paddr: 0x40,
+            p_filesz: 0x188,
+            p_memsz: 0x188,
+            p_align: 1 << 12,
+        },
+        object::write::elf::ProgramHeader {
+            p_type: object::elf::PT_LOAD,
             p_flags: object::elf::PF_R | object::elf::PF_W,
             p_offset: PLACEHOLDER,
             p_vaddr: PLACEHOLDER,
@@ -118,9 +128,10 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
     for program_header in program_headers.iter_mut() {
         match program_header.p_type {
             elf::PT_LOAD | elf::PT_DYNAMIC | elf::PT_GNU_RELRO => {
-                program_header.p_offset = dynamic_address as u64;
-                program_header.p_vaddr = dynamic_address as u64 + 0x1000;
-                program_header.p_paddr = dynamic_address as u64 + 0x1000;
+		if program_header.p_offset == PLACEHOLDER {
+                    program_header.p_offset = dynamic_address as u64;
+                    program_header.p_vaddr = dynamic_address as u64 + 0x1000;
+                    program_header.p_paddr = dynamic_address as u64 + 0x1000;
 
                 // this puts the dynamic section inside of the segments, so
                 //
@@ -131,8 +142,9 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
                 //    02     .dynamic
                 //    03     .dynamic
                 //    04
-                program_header.p_filesz = dyn_size as u64;
-                program_header.p_memsz = dyn_size as u64;
+                    program_header.p_filesz = dyn_size as u64;
+                    program_header.p_memsz = dyn_size as u64;
+		}
             }
             _ => {}
         }
