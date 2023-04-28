@@ -156,7 +156,6 @@ pub fn refcount_generic<'a>(
             ident_ids,
             ctx,
             layout_interner,
-            layout,
             union_layout,
             structure,
         ),
@@ -206,18 +205,13 @@ fn if_unique<'a>(
 
     let is_unique = root.create_symbol(ident_ids, "is_unique");
 
-    let mut stmt = Stmt::Switch {
-        cond_symbol: is_unique,
-        cond_layout: Layout::BOOL,
-        branches: root
-            .arena
-            .alloc([(true as _, BranchInfo::None, when_unique(joinpoint))]),
-        default_branch: (
-            BranchInfo::None,
-            root.arena.alloc(Stmt::Jump(joinpoint, &[])),
-        ),
-        ret_layout: Layout::UNIT,
-    };
+    let mut stmt = Stmt::if_then_else(
+        root.arena,
+        is_unique,
+        Layout::UNIT,
+        when_unique(joinpoint),
+        root.arena.alloc(Stmt::Jump(joinpoint, &[])),
+    );
 
     stmt = Stmt::Join {
         id: joinpoint,
@@ -1175,7 +1169,6 @@ fn refcount_union<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout<'a>,
     union: UnionLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
@@ -1421,11 +1414,30 @@ fn refcount_union_contents<'a>(
         ret_layout: LAYOUT_UNIT,
     };
 
+    let is_unique = root.create_symbol(ident_ids, "is_unique");
+
+    let switch_with_unique_check = Stmt::if_then_else(
+        root.arena,
+        is_unique,
+        Layout::UNIT,
+        tag_id_switch,
+        root.arena.alloc(Stmt::Jump(jp_contents_modified, &[])),
+    );
+
+    let switch_with_unique_check_and_let = let_lowlevel(
+        root.arena,
+        Layout::BOOL,
+        is_unique,
+        LowLevel::RefCountIsUnique,
+        &[structure],
+        root.arena.alloc(switch_with_unique_check),
+    );
+
     Stmt::Join {
         id: jp_contents_modified,
         parameters: &[],
         body: root.arena.alloc(next_stmt),
-        remainder: root.arena.alloc(tag_id_switch),
+        remainder: root.arena.alloc(switch_with_unique_check_and_let),
     }
 }
 
@@ -1469,9 +1481,7 @@ fn refcount_union_rec<'a>(
         )
     };
 
-    let rc_contents_then_structure = if ctx.op.is_decref() {
-        rc_structure_stmt
-    } else {
+    let rc_contents_then_structure = if ctx.op.is_dec() {
         refcount_union_contents(
             root,
             ident_ids,
@@ -1485,6 +1495,8 @@ fn refcount_union_rec<'a>(
             tag_id_layout,
             rc_structure_stmt,
         )
+    } else {
+        rc_structure_stmt
     };
 
     if ctx.op.is_decref() && null_id.is_none() {
