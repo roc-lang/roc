@@ -438,39 +438,7 @@ pub fn refcount_resetref_proc_body<'a>(
     let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
 
     // Reset structure is unique. Return a pointer to the allocation.
-    let then_stmt = {
-        let alignment = root.create_symbol(ident_ids, "alignment");
-        let alignment_int = layout_interner
-            .get(layout)
-            .allocation_alignment_bytes(layout_interner, root.target_info);
-        let alignment_expr = Expr::Literal(Literal::Int((alignment_int as i128).to_ne_bytes()));
-        let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
-        let alloc_addr_expr = Expr::Call(Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::NumSubWrap,
-                update_mode: UpdateModeId::BACKEND_DUMMY,
-            },
-            arguments: root.arena.alloc([addr, alignment]),
-        });
-
-        Stmt::Let(
-            alignment,
-            alignment_expr,
-            root.layout_isize,
-            root.arena.alloc(
-                //
-                Stmt::Let(
-                    alloc_addr,
-                    alloc_addr_expr,
-                    root.layout_isize,
-                    root.arena.alloc(
-                        //
-                        Stmt::Ret(alloc_addr),
-                    ),
-                ),
-            ),
-        )
-    };
+    let then_stmt = Stmt::Ret(addr);
 
     // Reset structure is not unique. Decrement it and return a NULL pointer.
     let else_stmt = {
@@ -486,34 +454,26 @@ pub fn refcount_resetref_proc_body<'a>(
             .unwrap();
         let decrement_stmt = |next| Stmt::Let(decrement_unit, decrement_expr, LAYOUT_UNIT, next);
 
-        // Zero
-        let zero = root.create_symbol(ident_ids, "zero");
-        let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
-        let zero_stmt = |next| Stmt::Let(zero, zero_expr, root.layout_isize, next);
-
         // Null pointer with union layout
         let null = root.create_symbol(ident_ids, "null");
         let null_stmt = |next| Stmt::Let(null, Expr::NullPointer, layout, next);
 
         decrement_stmt(root.arena.alloc(
             //
-            zero_stmt(root.arena.alloc(
+            null_stmt(root.arena.alloc(
                 //
-                null_stmt(root.arena.alloc(
-                    //
-                    Stmt::Ret(null),
-                )),
+                Stmt::Ret(null),
             )),
         ))
     };
 
-    let if_stmt = Stmt::Switch {
-        cond_symbol: is_unique,
-        cond_layout: LAYOUT_BOOL,
-        branches: root.arena.alloc([(1, BranchInfo::None, then_stmt)]),
-        default_branch: (BranchInfo::None, root.arena.alloc(else_stmt)),
-        ret_layout: layout,
-    };
+    let if_stmt = Stmt::if_then_else(
+        root.arena,
+        is_unique,
+        layout,
+        then_stmt,
+        root.arena.alloc(else_stmt),
+    );
 
     // Uniqueness test
     let is_unique_stmt = {
