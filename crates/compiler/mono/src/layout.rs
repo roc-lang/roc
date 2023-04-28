@@ -2177,11 +2177,11 @@ macro_rules! list_element_layout {
 }
 
 pub struct Env<'a, 'b> {
-    pub(crate) target_info: TargetInfo,
+    target_info: TargetInfo,
     pub(crate) arena: &'a Bump,
-    pub(crate) seen: Vec<'a, Variable>,
+    seen: Vec<'a, Variable>,
     pub(crate) subs: &'b Subs,
-    pub(crate) cache: &'b mut LayoutCache<'a>,
+    cache: &'b mut LayoutCache<'a>,
 }
 
 impl<'a, 'b> Env<'a, 'b> {
