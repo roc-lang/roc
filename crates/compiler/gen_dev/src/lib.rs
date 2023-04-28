@@ -1111,16 +1111,30 @@ trait Backend<'a> {
 
                 self.build_ptr_write(*sym, args[0], args[1], element_layout);
             }
-            LowLevel::RefCountDec => self.build_fn_call(
+            LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,
-                bitcode::UTILS_DECREF.to_string(),
+                bitcode::UTILS_DECREF_RC_PTR.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::RefCountInc => self.build_fn_call(
+            LowLevel::RefCountIncRcPtr => self.build_fn_call(
                 sym,
-                bitcode::UTILS_INCREF.to_string(),
+                bitcode::UTILS_INCREF_RC_PTR.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::RefCountDecDataPtr => self.build_fn_call(
+                sym,
+                bitcode::UTILS_DECREF_DATA_PTR.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::RefCountIncDataPtr => self.build_fn_call(
+                sym,
+                bitcode::UTILS_INCREF_DATA_PTR.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,

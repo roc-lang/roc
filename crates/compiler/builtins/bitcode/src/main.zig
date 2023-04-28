@@ -173,8 +173,10 @@ comptime {
 // Utils
 comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
-    exportUtilsFn(utils.increfC, "incref");
-    exportUtilsFn(utils.decrefC, "decref");
+    exportUtilsFn(utils.increfRcPtrC, "incref_rc_ptr");
+    exportUtilsFn(utils.decrefRcPtrC, "decref_rc_ptr");
+    exportUtilsFn(utils.increfDataPtrC, "incref_data_ptr");
+    exportUtilsFn(utils.decrefDataPtrC, "decref_data_ptr");
     exportUtilsFn(utils.isUnique, "is_unique");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");

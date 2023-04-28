@@ -212,7 +212,7 @@ fn incref_pointer<'a, 'ctx, 'env>(
                 .into(),
             amount.into(),
         ],
-        roc_builtins::bitcode::UTILS_INCREF,
+        roc_builtins::bitcode::UTILS_INCREF_RC_PTR,
     );
 }
 
@@ -234,7 +234,7 @@ fn decref_pointer<'a, 'ctx, 'env>(
                 .into(),
             alignment.into(),
         ],
-        roc_builtins::bitcode::UTILS_DECREF,
+        roc_builtins::bitcode::UTILS_DECREF_RC_PTR,
     );
 }
 

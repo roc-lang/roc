@@ -758,7 +758,7 @@ fn modify_refcount<'a>(
         HelperOp::Inc => {
             let zig_call_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
-                    op: LowLevel::RefCountInc,
+                    op: LowLevel::RefCountIncRcPtr,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
                 arguments: root.arena.alloc([rc_ptr, Symbol::ARG_2]),
@@ -774,7 +774,7 @@ fn modify_refcount<'a>(
 
             let zig_call_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
-                    op: LowLevel::RefCountDec,
+                    op: LowLevel::RefCountDecRcPtr,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
                 arguments: root.arena.alloc([rc_ptr, alignment_sym]),

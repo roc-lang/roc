@@ -147,7 +147,7 @@ const Refcount = enum {
 
 const RC_TYPE = Refcount.normal;
 
-pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
+pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == Refcount.none) return;
     // Ensure that the refcount is not whole program lifetime.
     if (ptr_to_refcount.* != REFCOUNT_MAX_ISIZE) {
@@ -165,7 +165,7 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     }
 }
 
-pub fn decrefC(
+pub fn decrefRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
 ) callconv(.C) void {
@@ -186,6 +186,36 @@ pub fn decrefCheckNullC(
         const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
         return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, alignment });
     }
+}
+
+pub fn decrefDataPtrC(
+    bytes_or_null: ?[*]isize,
+    alignment: u32,
+) callconv(.C) void {
+    var bytes = bytes_or_null orelse return;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+
+    return decrefRcPtrC(isizes - 1, alignment);
+}
+
+pub fn increfDataPtrC(
+    bytes_or_null: ?[*]isize,
+    inc_amount: isize,
+) callconv(.C) void {
+    var bytes = bytes_or_null orelse return;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: *isize = @intToPtr(*isize, masked_ptr - @sizeOf(usize));
+
+    return increfRcPtrC(isizes, inc_amount);
 }
 
 pub fn decref(
@@ -363,13 +393,13 @@ pub const UpdateMode = enum(u8) {
 test "increfC, refcounted data" {
     var mock_rc: isize = REFCOUNT_ONE_ISIZE + 17;
     var ptr_to_refcount: *isize = &mock_rc;
-    increfC(ptr_to_refcount, 2);
+    increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_ONE_ISIZE + 19);
 }
 
 test "increfC, static data" {
     var mock_rc: isize = REFCOUNT_MAX_ISIZE;
     var ptr_to_refcount: *isize = &mock_rc;
-    increfC(ptr_to_refcount, 2);
+    increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
 }
