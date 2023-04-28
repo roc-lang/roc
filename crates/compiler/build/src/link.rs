@@ -925,7 +925,7 @@ fn link_linux(
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
 
-    let mut command = Command::new("gcc");
+    let mut command = Command::new(env::var("CC").unwrap_or_else(|_|"gcc".to_string()));
 
     command
         // Don't allow LD_ env vars to affect this
@@ -947,6 +947,15 @@ fn link_linux(
             // &*crtn_path.to_string_lossy(),
         ])
         .args(&base_args)
+        .args(["-dynamic-linker", PathBuf::new()
+	       .join(&(env::var("NIX_GLIBC_PATH").unwrap_or_else(|_|"/lib64".to_string())))
+	       .join(match target.architecture {
+		   Architecture::X86_64 => "ld-linux-x86-64.so.2",
+		   Architecture::Aarch64(_) => "ld-linux-aarch64.so.1",
+		   _ => internal_error!("unknown arch"),
+	       })
+	       .to_str().unwrap()
+	])
         .args(input_paths)
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
