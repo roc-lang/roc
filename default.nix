@@ -52,7 +52,7 @@ rustPlatform.buildRustPackage {
     python3
     llvmPkgs.clang
     llvmPkgs.llvm.dev
-    zig_0_9
+    zig
   ]);
 
   buildInputs = (with pkgs;
