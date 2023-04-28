@@ -180,7 +180,7 @@ fn union_nonrecursive_inc() {
             "#
         ),
         (TwoStr, TwoStr, i64),
-        &[Live(2)]
+        &[Live(4)]
     );
 }
 
