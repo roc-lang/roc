@@ -468,7 +468,7 @@ fn boxed_str_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(2), // s
+            Live(1), // s
             Live(2), // b
         ]
     );

@@ -609,33 +609,7 @@ fn refcount_args<'a>(root: &CodeGenHelp<'a>, ctx: &Context<'a>, structure: Symbo
     }
 }
 
-// Subtract a constant from a pointer to find the refcount
-// Also does some type casting, so that we have different Symbols and Layouts
-// for the 'pointer' and 'integer' versions of the address.
-// This helps to avoid issues with the backends Symbol->Layout mapping.
-pub fn rc_ptr_from_data_ptr<'a>(
-    root: &CodeGenHelp<'a>,
-    ident_ids: &mut IdentIds,
-    structure: Symbol,
-    rc_ptr_sym: Symbol,
-    mask_lower_bits: bool,
-    following: &'a Stmt<'a>,
-    recursive_layout: InLayout<'a>,
-) -> Stmt<'a> {
-    let addr_sym = root.create_symbol(ident_ids, "addr");
-    rc_ptr_from_data_ptr_help(
-        root,
-        ident_ids,
-        structure,
-        rc_ptr_sym,
-        mask_lower_bits,
-        following,
-        addr_sym,
-        recursive_layout,
-    )
-}
-
-pub fn rc_ptr_from_data_ptr_help<'a>(
+fn rc_ptr_from_data_ptr_help<'a>(
     root: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     structure: Symbol,
@@ -748,7 +722,7 @@ fn modify_refcount<'a>(
     root: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    rc_ptr: Symbol,
+    data_ptr: Symbol,
     alignment: u32,
     following: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -758,10 +732,10 @@ fn modify_refcount<'a>(
         HelperOp::Inc => {
             let zig_call_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
-                    op: LowLevel::RefCountIncRcPtr,
+                    op: LowLevel::RefCountIncDataPtr,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([rc_ptr, Symbol::ARG_2]),
+                arguments: root.arena.alloc([data_ptr, Symbol::ARG_2]),
             });
             Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following)
         }
@@ -774,10 +748,10 @@ fn modify_refcount<'a>(
 
             let zig_call_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
-                    op: LowLevel::RefCountDecRcPtr,
+                    op: LowLevel::RefCountDecDataPtr,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([rc_ptr, alignment_sym]),
+                arguments: root.arena.alloc([data_ptr, alignment_sym]),
             });
             let zig_call_stmt = Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following);
 
@@ -839,7 +813,6 @@ fn refcount_str<'a>(
     let elements_stmt = |next| Stmt::Let(elements, elements_expr, layout_isize, next);
 
     // A pointer to the refcount value itself
-    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
     let alignment = root.target_info.ptr_width() as u32;
 
     let ret_unit_stmt = rc_return_stmt(root, ident_ids, ctx);
@@ -847,27 +820,13 @@ fn refcount_str<'a>(
         root,
         ident_ids,
         ctx,
-        rc_ptr,
+        elements,
         alignment,
         root.arena.alloc(ret_unit_stmt),
     );
 
     // Generate an `if` to skip small strings but modify big strings
-    let then_branch = elements_stmt(root.arena.alloc(
-        //
-        rc_ptr_from_data_ptr(
-            root,
-            ident_ids,
-            elements,
-            rc_ptr,
-            false,
-            root.arena.alloc(
-                //
-                mod_rc_stmt,
-            ),
-            Layout::OPAQUE_PTR,
-        ),
-    ));
+    let then_branch = elements_stmt(root.arena.alloc(mod_rc_stmt));
 
     let if_stmt = Stmt::Switch {
         cond_symbol: is_big_str,
@@ -944,7 +903,6 @@ fn refcount_list<'a>(
     // (elements first, to avoid use-after-free for Dec)
     //
 
-    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
     let alignment = Ord::max(
         root.target_info.ptr_width() as u32,
         layout_interner.alignment_bytes(elem_layout),
@@ -955,19 +913,9 @@ fn refcount_list<'a>(
         root,
         ident_ids,
         ctx,
-        rc_ptr,
+        elements,
         alignment,
         arena.alloc(ret_stmt),
-    );
-
-    let get_rc_and_modify_list = rc_ptr_from_data_ptr(
-        root,
-        ident_ids,
-        elements,
-        rc_ptr,
-        false,
-        arena.alloc(modify_list),
-        Layout::OPAQUE_PTR,
     );
 
     let modify_elems_and_list =
@@ -982,10 +930,10 @@ fn refcount_list<'a>(
                 box_layout,
                 len,
                 elements,
-                get_rc_and_modify_list,
+                modify_list,
             )
         } else {
-            get_rc_and_modify_list
+            modify_list
         };
 
     //
@@ -1264,7 +1212,6 @@ fn refcount_union<'a>(
                     structure,
                 )
             } else {
-                let recursive_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
                 refcount_union_rec(
                     root,
                     ident_ids,
@@ -1273,7 +1220,6 @@ fn refcount_union<'a>(
                     union,
                     tags,
                     None,
-                    recursive_ptr,
                     structure,
                 )
             }
@@ -1285,7 +1231,6 @@ fn refcount_union<'a>(
             // a direct RecursionPointer is only possible if there's at least one non-recursive variant.
             // This nesting makes it harder to do tail recursion, so we just don't.
             let tags = root.arena.alloc([field_layouts]);
-            let recursive_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
             refcount_union_rec(
                 root,
                 ident_ids,
@@ -1294,7 +1239,6 @@ fn refcount_union<'a>(
                 union,
                 tags,
                 None,
-                recursive_ptr,
                 structure,
             )
         }
@@ -1318,7 +1262,6 @@ fn refcount_union<'a>(
                     structure,
                 )
             } else {
-                let recursive_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
                 refcount_union_rec(
                     root,
                     ident_ids,
@@ -1327,7 +1270,6 @@ fn refcount_union<'a>(
                     union,
                     tags,
                     null_id,
-                    recursive_ptr,
                     structure,
                 )
             }
@@ -1353,7 +1295,6 @@ fn refcount_union<'a>(
                     structure,
                 )
             } else {
-                let recursive_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
                 refcount_union_rec(
                     root,
                     ident_ids,
@@ -1362,7 +1303,6 @@ fn refcount_union<'a>(
                     union,
                     tags,
                     null_id,
-                    recursive_ptr,
                     structure,
                 )
             }
@@ -1497,7 +1437,6 @@ fn refcount_union_rec<'a>(
     union_layout: UnionLayout<'a>,
     tag_layouts: &'a [&'a [InLayout<'a>]],
     null_id: Option<TagIdIntType>,
-    recursion_ptr: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
     let tag_id_layout = union_layout.tag_id_layout();
@@ -1516,28 +1455,17 @@ fn refcount_union_rec<'a>(
     };
 
     let rc_structure_stmt = {
-        let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-
         let alignment = Layout::Union(union_layout)
             .allocation_alignment_bytes(layout_interner, root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
-        let modify_structure_stmt = modify_refcount(
+
+        modify_refcount(
             root,
             ident_ids,
             ctx,
-            rc_ptr,
+            structure,
             alignment,
             root.arena.alloc(ret_stmt),
-        );
-
-        rc_ptr_from_data_ptr(
-            root,
-            ident_ids,
-            structure,
-            rc_ptr,
-            union_layout.stores_tag_id_in_pointer(root.target_info),
-            root.arena.alloc(modify_structure_stmt),
-            recursion_ptr,
         )
     };
 
@@ -1585,7 +1513,6 @@ fn refcount_union_tailrec<'a>(
     let current = root.create_symbol(ident_ids, "current");
     let next_ptr = root.create_symbol(ident_ids, "next_ptr");
     let layout = layout_interner.insert(Layout::Union(union_layout));
-    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
 
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1606,7 +1533,6 @@ fn refcount_union_tailrec<'a>(
     // In the control flow, this comes *after* refcounting the fields
     // It receives a `next` parameter to pass through to the outer joinpoint
     let rc_structure_stmt = {
-        let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
         let next_addr = root.create_symbol(ident_ids, "next_addr");
 
         let exit_stmt = rc_return_stmt(root, ident_ids, ctx);
@@ -1631,23 +1557,13 @@ fn refcount_union_tailrec<'a>(
         };
 
         let alignment = layout_interner.allocation_alignment_bytes(layout);
-        let modify_structure_stmt = modify_refcount(
+        modify_refcount(
             root,
             ident_ids,
             ctx,
-            rc_ptr,
+            current,
             alignment,
             root.arena.alloc(loop_or_exit_based_on_next_addr),
-        );
-
-        rc_ptr_from_data_ptr(
-            root,
-            ident_ids,
-            current,
-            rc_ptr,
-            union_layout.stores_tag_id_in_pointer(root.target_info),
-            root.arena.alloc(modify_structure_stmt),
-            recursion_ptr,
         )
     };
 
@@ -1839,26 +1755,15 @@ fn refcount_boxed<'a>(
     // We're defining statements in reverse, so define outer first
     //
 
-    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
     let alignment = layout_interner.allocation_alignment_bytes(layout);
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_outer = modify_refcount(
         root,
         ident_ids,
         ctx,
-        rc_ptr,
+        outer,
         alignment,
         arena.alloc(ret_stmt),
-    );
-
-    let get_rc_and_modify_outer = rc_ptr_from_data_ptr(
-        root,
-        ident_ids,
-        outer,
-        rc_ptr,
-        false,
-        arena.alloc(modify_outer),
-        Layout::OPAQUE_PTR,
     );
 
     // decrement the inner value if the operation is a decrement and the box itself is unique
@@ -1895,9 +1800,9 @@ fn refcount_boxed<'a>(
                     )),
                 )
             },
-            get_rc_and_modify_outer,
+            modify_outer,
         )
     } else {
-        get_rc_and_modify_outer
+        modify_outer
     }
 }
