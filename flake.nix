@@ -25,7 +25,7 @@
         overlays = [ (import rust-overlay) ]
           ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
-        llvmPkgs = pkgs.llvmPackages_13;
+        llvmPkgs = pkgs.llvmPackages_15;
 
         # get current working directory
         cwd = builtins.toString ./.;
@@ -58,28 +58,29 @@
             Security
           ]);
 
+        # TODO: Update debugir to llvm 15 then re-enable.
         # For debugging LLVM IR
-        debugir = pkgs.stdenv.mkDerivation {
-          name = "debugir";
-          src = pkgs.fetchFromGitHub {
-            owner = "vaivaswatha";
-            repo = "debugir";
-            rev = "b981e0b74872d9896ba447dd6391dfeb63332b80";
-            sha256 = "Gzey0SF0NZkpiObk5e29nbc41dn4Olv1dx+6YixaZH0=";
-          };
-          buildInputs = with pkgs; [ cmake libxml2 llvmPackages_13.llvm.dev ];
-          buildPhase = ''
-            mkdir build
-            cd build
-            cmake -DLLVM_DIR=${pkgs.llvmPackages_13.llvm.dev} -DCMAKE_BUILD_TYPE=Release ../
-            cmake --build ../
-            cp ../debugir .
-          '';
-          installPhase = ''
-            mkdir -p $out/bin
-            cp debugir $out/bin
-          '';
-        };
+        # debugir = pkgs.stdenv.mkDerivation {
+        #   name = "debugir";
+        #   src = pkgs.fetchFromGitHub {
+        #     owner = "bhansconnect";
+        #     repo = "debugir";
+        #     rev = "b981e0b74872d9896ba447dd6391dfeb63332b80";
+        #     sha256 = "Gzey0SF0NZkpiObk5e29nbc41dn4Olv1dx+6YixaZH0=";
+        #   };
+        #   buildInputs = with pkgs; [ cmake libxml2 llvmPackages_15.llvm.dev ];
+        #   buildPhase = ''
+        #     mkdir build
+        #     cd build
+        #     cmake -DLLVM_DIR=${pkgs.llvmPackages_15.llvm.dev} -DCMAKE_BUILD_TYPE=Release ../
+        #     cmake --build ../
+        #     cp ../debugir .
+        #   '';
+        #   installPhase = ''
+        #     mkdir -p $out/bin
+        #     cp debugir $out/bin
+        #   '';
+        # };
 
         sharedInputs = (with pkgs; [
           # build libraries
@@ -101,7 +102,7 @@
 
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
-          debugir
+          # debugir
           rust
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
@@ -117,7 +118,7 @@
             else
               [ ]);
 
-          LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+          LLVM_SYS_150_PREFIX = "${llvmPkgs.llvm.dev}";
           # nix does not store libs in /usr/lib or /lib
           NIX_GLIBC_PATH =
             if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";

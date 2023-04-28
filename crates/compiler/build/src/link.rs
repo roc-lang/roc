@@ -280,46 +280,6 @@ pub fn build_zig_host_native(
     builtins_host_path: &Path,
     // For compatibility with the non-macOS def above. Keep these in sync.
 ) -> Command {
-    use serde_json::Value;
-
-    // Run `zig env` to find the location of zig's std/ directory
-    let zig_env_output = zig().args(["env"]).output().unwrap();
-
-    let zig_env_json = if zig_env_output.status.success() {
-        std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
-            internal_error!(
-                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
-                utf8_err
-            );
-        })
-    } else {
-        match std::str::from_utf8(&zig_env_output.stderr) {
-            Ok(stderr) => internal_error!("`zig env` failed - stderr output was: {:?}", stderr),
-            Err(utf8_err) => internal_error!(
-                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
-                utf8_err
-            ),
-        }
-    };
-
-    let mut zig_compiler_rt_path = match serde_json::from_str(zig_env_json) {
-        Ok(Value::Object(map)) => match map.get("std_dir") {
-            Some(Value::String(std_dir)) => PathBuf::from(Path::new(std_dir)),
-            _ => {
-                internal_error!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
-            }
-        },
-        _ => {
-            internal_error!(
-                "Expected JSON containing a `std_dir` field from `zig env`, but got: {:?}",
-                zig_env_json
-            );
-        }
-    };
-
-    zig_compiler_rt_path.push("special");
-    zig_compiler_rt_path.push("compiler_rt.zig");
-
     let mut zig_cmd = zig();
     zig_cmd
         .env_clear()
@@ -348,11 +308,7 @@ pub fn build_zig_host_native(
         "glue",
         find_zig_glue_path().to_str().unwrap(),
         "--pkg-end",
-        // include the zig runtime
-        "--pkg-begin",
-        "compiler_rt",
-        zig_compiler_rt_path.to_str().unwrap(),
-        "--pkg-end",
+        "-fcompiler-rt",
         // include libc
         "--library",
         "c",
@@ -1139,7 +1095,7 @@ fn get_macos_version() -> String {
     full_version_string
         .trim_end()
         .split('.')
-        .take(2)
+        .take(3)
         .collect::<Vec<&str>>()
         .join(".")
 }
