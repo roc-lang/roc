@@ -749,7 +749,7 @@ fn refcount_str<'a>(
     let is_big_str_stmt = |next| Stmt::Let(is_big_str, is_big_str_expr, LAYOUT_BOOL, next);
 
     // Get the pointer to the string elements
-    let elements = root.create_symbol(ident_ids, "elements");
+    let elements = root.create_symbol(ident_ids, "characters");
     let elements_expr = Expr::StructAtIndex {
         index: 0,
         field_layouts,
@@ -773,16 +773,13 @@ fn refcount_str<'a>(
     // Generate an `if` to skip small strings but modify big strings
     let then_branch = elements_stmt(root.arena.alloc(mod_rc_stmt));
 
-    let if_stmt = Stmt::Switch {
-        cond_symbol: is_big_str,
-        cond_layout: LAYOUT_BOOL,
-        branches: root.arena.alloc([(1, BranchInfo::None, then_branch)]),
-        default_branch: (
-            BranchInfo::None,
-            root.arena.alloc(rc_return_stmt(root, ident_ids, ctx)),
-        ),
-        ret_layout: LAYOUT_UNIT,
-    };
+    let if_stmt = Stmt::if_then_else(
+        root.arena,
+        is_big_str,
+        Layout::UNIT,
+        then_branch,
+        root.arena.alloc(rc_return_stmt(root, ident_ids, ctx)),
+    );
 
     // Combine the statements in sequence
     last_word_stmt(root.arena.alloc(
@@ -893,15 +890,13 @@ fn refcount_list<'a>(
         )),
     );
 
-    let if_stmt = Stmt::Switch {
-        cond_symbol: is_empty,
-        cond_layout: LAYOUT_BOOL,
-        branches: root
-            .arena
-            .alloc([(1, BranchInfo::None, rc_return_stmt(root, ident_ids, ctx))]),
-        default_branch: (BranchInfo::None, non_empty_branch),
-        ret_layout: LAYOUT_UNIT,
-    };
+    let if_stmt = Stmt::if_then_else(
+        root.arena,
+        is_empty,
+        Layout::UNIT,
+        rc_return_stmt(root, ident_ids, ctx),
+        non_empty_branch,
+    );
 
     len_stmt(arena.alloc(
         //
