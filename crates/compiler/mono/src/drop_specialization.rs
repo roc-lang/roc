@@ -692,81 +692,59 @@ fn specialize_union<'a, 'i>(
                         | UnionLayout::NonNullableUnwrapped(_)
                         | UnionLayout::NullableWrapped { .. }
                         | UnionLayout::NullableUnwrapped { .. } => {
-                            if cfg!(feature = "gen-wasm") {
-                                // Wasm doesn't have change it's decrement behaviour when decrementing a uniquely referenced union vs otherwise.
-                                // It always behaves as if it is unique and always (recursively) decrements the children.
-                                refcount_fields(
-                                    layout_interner,
-                                    ident_ids,
-                                    // Do nothing for the children that were incremented before, as the decrement will cancel out.
-                                    None,
-                                    // Decrement the children that were not incremented before. And thus don't cancel out.
-                                    Some(|arena, symbol, continuation| {
+                            branch_uniqueness(
+                                arena,
+                                ident_ids,
+                                layout_interner,
+                                environment,
+                                *symbol,
+                                // If the symbol is unique:
+                                // - drop the children that were not incremented before
+                                // - don't do anything for the children that were incremented before
+                                // - free the parent
+                                |layout_interner, ident_ids, continuation| {
+                                    refcount_fields(
+                                        layout_interner,
+                                        ident_ids,
+                                        // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                                        None,
+                                        // Decrement the children that were not incremented before. And thus don't cancel out.
+                                        Some(|arena, symbol, continuation| {
+                                            arena.alloc(Stmt::Refcounting(
+                                                ModifyRc::Dec(symbol),
+                                                continuation,
+                                            ))
+                                        }),
                                         arena.alloc(Stmt::Refcounting(
-                                            ModifyRc::Dec(symbol),
+                                            // TODO this could be replaced by a free if ever added to the IR.
+                                            ModifyRc::DecRef(*symbol),
                                             continuation,
-                                        ))
-                                    }),
-                                    arena.alloc(Stmt::Refcounting(
-                                        ModifyRc::DecRef(*symbol),
-                                        continuation,
-                                    )),
-                                )
-                            } else {
-                                branch_uniqueness(
-                                    arena,
-                                    ident_ids,
-                                    layout_interner,
-                                    environment,
-                                    *symbol,
-                                    // If the symbol is unique:
-                                    // - drop the children that were not incremented before
-                                    // - don't do anything for the children that were incremented before
-                                    // - free the parent
-                                    |layout_interner, ident_ids, continuation| {
-                                        refcount_fields(
-                                            layout_interner,
-                                            ident_ids,
-                                            // Do nothing for the children that were incremented before, as the decrement will cancel out.
-                                            None,
-                                            // Decrement the children that were not incremented before. And thus don't cancel out.
-                                            Some(|arena, symbol, continuation| {
-                                                arena.alloc(Stmt::Refcounting(
-                                                    ModifyRc::Dec(symbol),
-                                                    continuation,
-                                                ))
-                                            }),
+                                        )),
+                                    )
+                                },
+                                // If the symbol is not unique:
+                                // - increment the children that were incremented before
+                                // - don't do anything for the children that were not incremented before
+                                // - decref the parent
+                                |layout_interner, ident_ids, continuation| {
+                                    refcount_fields(
+                                        layout_interner,
+                                        ident_ids,
+                                        Some(|arena, symbol, continuation| {
                                             arena.alloc(Stmt::Refcounting(
-                                                // TODO this could be replaced by a free if ever added to the IR.
-                                                ModifyRc::DecRef(*symbol),
+                                                ModifyRc::Inc(symbol, 1),
                                                 continuation,
-                                            )),
-                                        )
-                                    },
-                                    // If the symbol is not unique:
-                                    // - increment the children that were incremented before
-                                    // - don't do anything for the children that were not incremented before
-                                    // - decref the parent
-                                    |layout_interner, ident_ids, continuation| {
-                                        refcount_fields(
-                                            layout_interner,
-                                            ident_ids,
-                                            Some(|arena, symbol, continuation| {
-                                                arena.alloc(Stmt::Refcounting(
-                                                    ModifyRc::Inc(symbol, 1),
-                                                    continuation,
-                                                ))
-                                            }),
-                                            None,
-                                            arena.alloc(Stmt::Refcounting(
-                                                ModifyRc::DecRef(*symbol),
-                                                continuation,
-                                            )),
-                                        )
-                                    },
-                                    new_continuation,
-                                )
-                            }
+                                            ))
+                                        }),
+                                        None,
+                                        arena.alloc(Stmt::Refcounting(
+                                            ModifyRc::DecRef(*symbol),
+                                            continuation,
+                                        )),
+                                    )
+                                },
+                                new_continuation,
+                            )
                         }
                     }
                 }
