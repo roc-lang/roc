@@ -47,6 +47,11 @@ procedure Encode.23 (Encode.98):
     ret Encode.98;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    dec Encode.99;
+    let Encode.138 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Crash Encode.138
+
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.111 : List U8 = CallByName Test.5 Encode.99 Encode.101 Encode.107;
     ret Encode.111;
 
@@ -69,10 +74,6 @@ procedure Encode.24 (Encode.99, Encode.107, Encode.101):
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     let Encode.134 : List U8 = CallByName Json.144 Encode.99 Encode.101 Encode.107;
     ret Encode.134;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.138 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
-    Crash Encode.138
 
 procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
@@ -111,7 +112,6 @@ procedure Json.144 (Json.145, Json.486, #Attr.12):
     let Json.496 : {List U8, U64} = Struct {Json.147, Json.508};
     let Json.497 : {} = Struct {};
     let Json.495 : {List U8, U64} = CallByName List.18 Json.143 Json.496 Json.497;
-    dec Json.143;
     let Json.149 : List U8 = StructAtIndex 0 Json.495;
     inc Json.149;
     dec Json.495;
@@ -150,7 +150,6 @@ procedure Json.144 (Json.145, Json.486, #Attr.12):
     let Json.546 : {List U8, U64} = Struct {Json.147, Json.558};
     let Json.547 : {} = Struct {};
     let Json.545 : {List U8, U64} = CallByName List.18 Json.143 Json.546 Json.547;
-    dec Json.143;
     let Json.149 : List U8 = StructAtIndex 0 Json.545;
     inc Json.149;
     dec Json.545;
@@ -192,7 +191,6 @@ procedure Json.146 (Json.488, Json.152):
     dec Json.488;
     let Json.557 : {} = Struct {};
     let Json.153 : List U8 = CallByName Encode.24 Json.150 Json.152 Json.557;
-    dec Json.150;
     joinpoint Json.552 Json.154:
         let Json.550 : U64 = 1i64;
         let Json.549 : U64 = CallByName Num.20 Json.151 Json.550;
@@ -279,6 +277,7 @@ procedure List.80 (List.551, List.552, List.553, List.554, List.555):
             let List.531 : U64 = CallByName Num.19 List.436 List.532;
             jump List.526 List.433 List.529 List.435 List.531 List.437;
         else
+            dec List.433;
             ret List.434;
     in
     jump List.526 List.551 List.552 List.553 List.554 List.555;
@@ -293,6 +292,7 @@ procedure List.80 (List.624, List.625, List.626, List.627, List.628):
             let List.604 : U64 = CallByName Num.19 List.436 List.605;
             jump List.599 List.433 List.602 List.435 List.604 List.437;
         else
+            dec List.433;
             ret List.434;
     in
     jump List.599 List.624 List.625 List.626 List.627 List.628;
@@ -310,28 +310,28 @@ procedure List.92 (List.430, List.431, List.432):
     ret List.596;
 
 procedure Num.127 (#Attr.2):
-    let Num.303 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.303;
-
-procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.306 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    let Num.306 : U8 = lowlevel NumIntCast #Attr.2;
     ret Num.306;
 
-procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.304 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.304;
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.309 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.309;
 
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.307 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.307 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
     ret Num.307;
 
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.310 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.310;
+
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.305 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.305;
+    let Num.308 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.308;
 
 procedure Str.12 (#Attr.2):
-    let Str.268 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.268;
+    let Str.300 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.300;
 
 procedure Test.2 (Test.11):
     let Test.18 : {{}, {}} = CallByName Encode.23 Test.11;

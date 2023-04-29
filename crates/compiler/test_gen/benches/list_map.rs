@@ -10,11 +10,16 @@ use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc
 use roc_mono::ir::OptLevel;
 use roc_std::RocList;
 
-// results July 6th, 2022
+// results July 6, 2022
 //
 //    roc sum map             time:   [612.73 ns 614.24 ns 615.98 ns]
 //    roc sum map_with_index  time:   [5.3177 us 5.3218 us 5.3255 us]
 //    rust (debug)            time:   [24.081 us 24.163 us 24.268 us]
+//
+// results April 9, 2023
+//
+//    roc sum map             time:   [510.77 ns 517.47 ns 524.47 ns]
+//    roc sum map_with_index  time:   [573.49 ns 578.17 ns 583.76 ns]
 
 type Input = RocList<i64>;
 type Output = i64;
@@ -83,6 +88,9 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| unsafe {
             let mut main_result = RocCallResult::default();
 
+            // the roc code will dec this list, so inc it first so it is not free'd
+            std::mem::forget(input.clone());
+
             list_map_main(black_box(input), &mut main_result);
         })
     });
@@ -90,6 +98,9 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("roc sum map_with_index", |b| {
         b.iter(|| unsafe {
             let mut main_result = RocCallResult::default();
+
+            // the roc code will dec this list, so inc it first so it is not free'd
+            std::mem::forget(input.clone());
 
             list_map_with_index_main(black_box(input), &mut main_result);
         })

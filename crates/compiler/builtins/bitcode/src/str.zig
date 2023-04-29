@@ -1525,6 +1525,10 @@ pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
+pub fn isEmpty(string: RocStr) callconv(.C) bool {
+    return string.isEmpty();
+}
+
 pub fn getCapacity(string: RocStr) callconv(.C) usize {
     return string.getCapacity();
 }
@@ -1921,7 +1925,7 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     }
-    const bytes = @ptrCast([*]const u8, arg.bytes)[start..count];
+    const bytes = @ptrCast([*]const u8, arg.bytes)[start .. start + count];
 
     if (isValidUnicode(bytes)) {
         // Make a seamless slice of the input.

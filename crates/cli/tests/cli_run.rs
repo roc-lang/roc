@@ -474,7 +474,7 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(basic_cli_url)]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn hello_world() {
         test_roc_app_slim(
@@ -533,8 +533,9 @@ mod cli_run {
         )
     }
 
+    // zig_platform_parser_package_basic_cli_url use to be split up but then things could get stuck
     #[test]
-    #[serial(zig_platform)]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
@@ -865,8 +866,57 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(parser_package)]
-    #[serial(zig_platform)]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file() {
+        test_roc_app(
+            "examples/cli",
+            "ingested-file.roc",
+            "ingested-file",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This roc file can print it's own source code. The source is:
+
+                app "ingested-file"
+                    packages { pf: "cli-platform/main.roc" }
+                    imports [
+                        pf.Stdout,
+                        "ingested-file.roc" as ownCode : Str,
+                    ]
+                    provides [main] to pf
+
+                main =
+                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
+
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file_bytes() {
+        test_roc_app(
+            "examples/cli",
+            "ingested-file-bytes.roc",
+            "ingested-file-bytes",
+            &[],
+            &[],
+            &[],
+            "22424\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
@@ -879,8 +929,7 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(parser_package)]
-    #[serial(basic_cli_url)]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(

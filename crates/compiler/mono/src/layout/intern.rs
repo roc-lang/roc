@@ -23,7 +23,7 @@ macro_rules! cache_interned_layouts {
             )*
         }
 
-        fn fill_reserved_layouts<'a>(interner: &mut STLayoutInterner<'a>) {
+        fn fill_reserved_layouts(interner: &mut STLayoutInterner<'_>) {
             assert!(interner.is_empty());
             $(
             interner.insert($layout);
@@ -387,7 +387,28 @@ impl<'a> Copy for InLayout<'a> {}
 
 impl std::fmt::Debug for InLayout<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("InLayout").field(&self.0).finish()
+        match *self {
+            Layout::VOID => f.write_str("InLayout(VOID)"),
+            Layout::UNIT => f.write_str("InLayout(UNIT)"),
+            Layout::BOOL => f.write_str("InLayout(BOOL)"),
+            Layout::U8 => f.write_str("InLayout(U8)"),
+            Layout::U16 => f.write_str("InLayout(U16)"),
+            Layout::U32 => f.write_str("InLayout(U32)"),
+            Layout::U64 => f.write_str("InLayout(U64)"),
+            Layout::U128 => f.write_str("InLayout(U128)"),
+            Layout::I8 => f.write_str("InLayout(I8)"),
+            Layout::I16 => f.write_str("InLayout(I16)"),
+            Layout::I32 => f.write_str("InLayout(I32)"),
+            Layout::I64 => f.write_str("InLayout(I64)"),
+            Layout::I128 => f.write_str("InLayout(I128)"),
+            Layout::F32 => f.write_str("InLayout(F32)"),
+            Layout::F64 => f.write_str("InLayout(F64)"),
+            Layout::DEC => f.write_str("InLayout(DEC)"),
+            Layout::STR => f.write_str("InLayout(STR)"),
+            Layout::OPAQUE_PTR => f.write_str("InLayout(OPAQUE_PTR)"),
+            Layout::NAKED_RECURSIVE_PTR => f.write_str("InLayout(NAKED_RECURSIVE_PTR)"),
+            _ => f.debug_tuple("InLayout").field(&self.0).finish(),
+        }
     }
 }
 
@@ -411,6 +432,22 @@ impl<'a> InLayout<'a> {
 
     pub fn index(&self) -> usize {
         self.0
+    }
+
+    pub fn try_int_width(self) -> Option<IntWidth> {
+        match self {
+            Layout::U8 => Some(IntWidth::U8),
+            Layout::U16 => Some(IntWidth::U16),
+            Layout::U32 => Some(IntWidth::U32),
+            Layout::U64 => Some(IntWidth::U64),
+            Layout::U128 => Some(IntWidth::U128),
+            Layout::I8 => Some(IntWidth::I8),
+            Layout::I16 => Some(IntWidth::I16),
+            Layout::I32 => Some(IntWidth::I32),
+            Layout::I64 => Some(IntWidth::I64),
+            Layout::I128 => Some(IntWidth::I128),
+            _ => None,
+        }
     }
 }
 

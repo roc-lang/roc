@@ -188,23 +188,19 @@ would be unable to infer a type—and you'd have to write a type annotation. Thi
 situations where the editor would not be able to reliably tell you the type of part of your program, unlike today
 where it can accurately tell you the type of anything, even if you have no type annotations in your entire code base.
 
-### Arbitrary-rank types
+assuming that's right, here is a proposed new FAQ entry:
 
-Unlike arbitrary-rank (aka "Rank-N") types, both Rank-1 and Rank-2 type systems are compatible with principal
-type inference. Roc currently uses Rank-1 types, and the benefits of Rank-N over Rank-2 don't seem worth
-sacrificing principal type inference to attain, so let's focus on the trade-offs between Rank-1 and Rank-2.
+### Higher-rank types
 
-Supporting Rank-2 types in Roc has been discussed before, but it has several important downsides:
-
+Roc uses a Rank-1 type system. Other languages, like Haskell, support Rank-2 or even arbitrary-rank (aka "Rank-N") types. Supporting higher-rank types in Roc has been discussed before, but it has several important downsides:
+ 
+- It would remove principal decidable type inference. (Only Rank-1 types are compatible with principal decidable type inference; Rank-2 types are decidable but the inferred types are not principal, and Rank 3+ types are not even fully decidable.)
 - It would increase the complexity of the language.
 - It would make some compiler error messages more confusing (e.g. they might mention `forall` because that was the most general type that could be inferred, even if that wasn't helpful or related to the actual problem).
 - It would substantially increase the complexity of the type checker, which would necessarily slow it down.
+- Most significantly, it would make the runtime slower, because Roc compiles programs by fully specializing all function calls to their type instances (this is sometimes called monomorphization). It's unclear how we could fully specialize programs containing Rank-2 types, which means compiling programs that included Rank-2 types (or higher) would require losing specialization in general—which would substantially degrade runtime performance.
 
-No implementation of Rank-2 types can remove any of these downsides. Thus far, we've been able to come up
-with sufficiently nice APIs that only require Rank-1 types, and we haven't seen a really compelling use case
-where the gap between the Rank-2 and Rank-1 designs was big enough to justify switching to Rank-2.
-
-As such, the plan is for Roc to stick with Rank-1 types indefinitely. In Roc's case, the benefits of Rank-1's faster compilation with nicer error messages and a simpler type system outweigh Rank-2's benefits of expanded API options.
+As such, the plan is for Roc to stick with Rank-1 types indefinitely.
 
 ### Higher-kinded polymorphism
 

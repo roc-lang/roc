@@ -7,6 +7,7 @@ use roc_solve_problem::TypeError;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Problems {
+    pub fatally_errored: bool,
     pub errors: usize,
     pub warnings: usize,
 }
@@ -65,6 +66,7 @@ pub fn report_problems(
     // never need to re-allocate either the warnings or the errors vec!
     let mut warnings = Vec::with_capacity(total_problems);
     let mut errors = Vec::with_capacity(total_problems);
+    let mut fatally_errored = false;
 
     for (home, (module_path, src)) in sources.iter() {
         let mut src_lines: Vec<&str> = Vec::new();
@@ -92,6 +94,10 @@ pub fn report_problems(
                 RuntimeError => {
                     errors.push(buf);
                 }
+                Fatal => {
+                    fatally_errored = true;
+                    errors.push(buf);
+                }
             }
         }
 
@@ -109,6 +115,10 @@ pub fn report_problems(
                         warnings.push(buf);
                     }
                     RuntimeError => {
+                        errors.push(buf);
+                    }
+                    Fatal => {
+                        fatally_errored = true;
                         errors.push(buf);
                     }
                 }
@@ -144,6 +154,7 @@ pub fn report_problems(
     }
 
     Problems {
+        fatally_errored,
         errors: errors.len(),
         warnings: warnings.len(),
     }

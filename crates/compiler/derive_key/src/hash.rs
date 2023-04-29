@@ -160,6 +160,7 @@ impl FlatHash {
 const fn builtin_symbol_to_hash_lambda(symbol: Symbol) -> Option<FlatHash> {
     use FlatHash::*;
     match symbol {
+        Symbol::BOOL_BOOL => Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_BOOL)),
         Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => {
             Some(SingleLambdaSetImmediate(Symbol::HASH_ADD_U8))
         }

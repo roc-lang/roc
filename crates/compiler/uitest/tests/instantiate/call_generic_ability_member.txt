@@ -1,0 +1,30 @@
+app "test" provides [main] to "./platform"
+
+X has
+  consume : a -> {} | a has X
+
+O := {} has [X {consume: consumeO}]
+
+consumeO = \@O {} -> {}
+
+P := {} has [X {consume: consumeP}]
+
+consumeP = \@P {} -> {}
+
+caller = \x -> consume x
+#                      ^ a | a has X
+#              ^^^^^^^ X#consume(2): a -[[] + a:consume(2):1]-> {} | a has X
+
+main = {
+  a: caller (@O {}),
+  #  ^^^^^^{inst} O -[[caller(7)]]-> {}
+  #  │ caller = \x -> consume x
+  #  │                        ^ O
+  #  │                ^^^^^^^ X#consume(2): O -[[consumeO(5)]]-> {}
+
+  b: caller (@P {}),
+  #  ^^^^^^{inst} P -[[caller(7)]]-> {}
+  #  │ caller = \x -> consume x
+  #  │                        ^ P
+  #  │                ^^^^^^^ X#consume(2): P -[[consumeP(6)]]-> {}
+}

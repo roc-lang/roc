@@ -12,13 +12,13 @@ use roc_error_macros::internal_error;
 use roc_module::ident::ModuleName;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::code_gen_help::CodeGenHelp;
+use roc_mono::code_gen_help::{CallerProc, CodeGenHelp};
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
-    SelfRecursive, Stmt,
+    BranchInfo, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement, Literal,
+    Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutId, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
     UnionLayout,
 };
 use roc_mono::list_element_layout;
@@ -65,7 +65,20 @@ pub enum Relocation {
 trait Backend<'a> {
     fn env(&self) -> &Env<'a>;
     fn interns(&self) -> &Interns;
+    fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
+
+    fn debug_symbol(&mut self, name: &str) -> Symbol {
+        let module_id = self.env().module_id;
+        let ident_ids = self
+            .interns_mut()
+            .all_ident_ids
+            .get_mut(&module_id)
+            .unwrap();
+
+        let ident_id = ident_ids.add_str(name);
+        Symbol::new(self.env().module_id, ident_id)
+    }
 
     // This method is suboptimal, but it seems to be the only way to make rust understand
     // that all of these values can be mutable at the same time. By returning them together,
@@ -77,10 +90,43 @@ trait Backend<'a> {
         &mut STLayoutInterner<'a>,
         &mut Interns,
         &mut CodeGenHelp<'a>,
+        &mut Vec<'a, CallerProc<'a>>,
     );
 
-    fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
-        layout_id.to_symbol_string(symbol, self.interns())
+    fn function_symbol_to_string<'b, I>(
+        &self,
+        symbol: Symbol,
+        arguments: I,
+        _lambda_set: Option<InLayout>,
+        result: InLayout,
+    ) -> String
+    where
+        I: Iterator<Item = InLayout<'b>>,
+    {
+        use std::hash::{BuildHasher, Hash, Hasher};
+
+        // NOTE: due to randomness, this will not be consistent between runs
+        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
+        for a in arguments {
+            a.hash(&mut state);
+        }
+
+        // lambda set should not matter; it should already be added as an argument
+        // lambda_set.hash(&mut state);
+
+        result.hash(&mut state);
+
+        let interns = self.interns();
+        let ident_string = symbol.as_str(interns);
+        let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
+
+        // the functions from the generates #help module (refcounting, equality) is always suffixed
+        // with 1. That is fine, they are always unique anyway.
+        if ident_string.contains("#help") {
+            format!("{}_{}_1", module_string, ident_string)
+        } else {
+            format!("{}_{}_{}", module_string, ident_string, state.finish())
+        }
     }
 
     fn defined_in_app_module(&self, symbol: Symbol) -> bool {
@@ -119,8 +165,13 @@ trait Backend<'a> {
         proc: Proc<'a>,
         layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
-        let layout_id = layout_ids.get(proc.name.name(), &proc.ret_layout);
-        let proc_name = self.symbol_to_string(proc.name.name(), layout_id);
+        let proc_name = self.function_symbol_to_string(
+            proc.name.name(),
+            proc.args.iter().map(|t| t.0),
+            proc.closure_data_layout,
+            proc.ret_layout,
+        );
+
         self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
@@ -164,7 +215,7 @@ trait Backend<'a> {
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
                 let (rc_stmt, new_specializations) = {
-                    let (module_id, layout_interner, interns, rc_proc_gen) =
+                    let (module_id, layout_interner, interns, rc_proc_gen, _) =
                         self.module_interns_helpers_mut();
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
@@ -213,6 +264,7 @@ trait Backend<'a> {
                 self.free_symbols(stmt);
             }
             Stmt::Jump(id, args) => {
+                self.load_literal_symbols(args);
                 let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
                     bumpalo::vec![in self.env().arena];
                 arg_layouts.reserve(args.len());
@@ -291,7 +343,7 @@ trait Backend<'a> {
                                 arg_layouts,
                                 ret_layout,
                             );
-                        } else if sym.is_builtin() {
+                        } else if func_sym.name().is_builtin() {
                             // These builtins can be built through `build_fn_call` as well, but the
                             // implementation in `build_builtin` inlines some of the symbols.
                             return self.build_builtin(
@@ -303,8 +355,12 @@ trait Backend<'a> {
                             );
                         }
 
-                        let layout_id = LayoutIds::default().get(func_sym.name(), layout);
-                        let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
+                        let fn_name = self.function_symbol_to_string(
+                            func_sym.name(),
+                            arg_layouts.iter().copied(),
+                            None,
+                            *ret_layout,
+                        );
 
                         // Now that the arguments are needed, load them if they are literals.
                         self.load_literal_symbols(arguments);
@@ -330,6 +386,9 @@ trait Backend<'a> {
                             arg_layouts.into_bump_slice(),
                             layout,
                         )
+                    }
+                    CallType::HigherOrder(higher_order) => {
+                        self.build_higher_order_lowlevel(sym, higher_order, *layout)
                     }
                     x => todo!("the call type, {:?}", x),
                 }
@@ -429,6 +488,22 @@ trait Backend<'a> {
                 self.build_num_abs(sym, &args[0], ret_layout)
             }
             LowLevel::NumAdd => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumAdd: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumAdd: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumAdd: expected to have the same argument and return layout"
+                );
+                self.build_num_add(sym, &args[0], &args[1], ret_layout)
+            }
+            LowLevel::NumAddWrap => {
                 debug_assert_eq!(
                     2,
                     args.len(),
@@ -1028,6 +1103,14 @@ trait Backend<'a> {
                 );
                 self.build_ptr_cast(sym, &args[0])
             }
+            LowLevel::PtrWrite => {
+                let element_layout = match self.interner().get(*ret_layout) {
+                    Layout::Boxed(boxed) => boxed,
+                    _ => unreachable!(),
+                };
+
+                self.build_ptr_write(*sym, args[0], args[1], element_layout);
+            }
             LowLevel::RefCountDec => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DECREF.to_string(),
@@ -1042,6 +1125,34 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::NumToStr => {
+                let arg_layout = arg_layouts[0];
+                let intrinsic = match self.interner().get(arg_layout) {
+                    Layout::Builtin(Builtin::Int(width)) => &bitcode::STR_FROM_INT[width],
+                    Layout::Builtin(Builtin::Float(width)) => &bitcode::STR_FROM_FLOAT[width],
+                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_TO_STR,
+                    x => internal_error!("NumToStr is not defined for {:?}", x),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+            LowLevel::StrIsEmpty => {
+                let intrinsic = bitcode::STR_IS_EMPTY.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+            LowLevel::NumIntCast => {
+                let source_width = match self.interner().get(arg_layouts[0]) {
+                    Layout::Builtin(Builtin::Int(width)) => width,
+                    _ => unreachable!(),
+                };
+
+                let target_width = match self.interner().get(*ret_layout) {
+                    Layout::Builtin(Builtin::Int(width)) => width,
+                    _ => unreachable!(),
+                };
+
+                self.build_num_int_cast(sym, &args[0], source_width, target_width)
+            }
             x => todo!("low level, {:?}", x),
         }
     }
@@ -1080,28 +1191,44 @@ trait Backend<'a> {
             }
             Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
                 // TODO: This is probably simple enough to be worth inlining.
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                let fn_name = self.function_symbol_to_string(
+                    func_sym,
+                    arg_layouts.iter().copied(),
+                    None,
+                    *ret_layout,
+                );
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             Symbol::BOOL_TRUE => {
-                let bool_layout = Layout::BOOL;
-                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
-                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
-                self.free_symbol(&Symbol::DEV_TMP)
+                const LITERAL: &Literal<'static> = &Literal::Bool(true);
+                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL;
+
+                if self.env().lazy_literals {
+                    self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));
+                } else {
+                    self.load_literal(sym, BOOL_LAYOUT, LITERAL);
+                }
             }
             Symbol::BOOL_FALSE => {
-                let bool_layout = Layout::BOOL;
-                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
-                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
-                self.free_symbol(&Symbol::DEV_TMP)
+                const LITERAL: &Literal<'static> = &Literal::Bool(false);
+                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL;
+
+                if self.env().lazy_literals {
+                    self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));
+                } else {
+                    self.load_literal(sym, BOOL_LAYOUT, LITERAL);
+                }
             }
             Symbol::STR_IS_VALID_SCALAR => {
                 // just call the function
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                let fn_name = self.function_symbol_to_string(
+                    func_sym,
+                    arg_layouts.iter().copied(),
+                    None,
+                    *ret_layout,
+                );
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
@@ -1110,8 +1237,12 @@ trait Backend<'a> {
                 eprintln!("maybe {other:?} should have a custom implementation?");
 
                 // just call the function
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                let fn_name = self.function_symbol_to_string(
+                    func_sym,
+                    arg_layouts.iter().copied(),
+                    None,
+                    *ret_layout,
+                );
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
@@ -1128,6 +1259,20 @@ trait Backend<'a> {
         args: &[Symbol],
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
+    );
+
+    fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String);
+
+    /// Move a returned value into `dst`
+    fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
+
+    /// build_num_abs stores the absolute value of src into dst.
+    fn build_num_int_cast(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        source: IntWidth,
+        target: IntWidth,
     );
 
     /// build_num_abs stores the absolute value of src into dst.
@@ -1291,6 +1436,14 @@ trait Backend<'a> {
     /// build_list_len returns the length of a list.
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
 
+    /// generate a call to a higher-order lowlevel
+    fn build_higher_order_lowlevel(
+        &mut self,
+        dst: &Symbol,
+        holl: &HigherOrderLowLevel<'a>,
+        ret_layout: InLayout<'a>,
+    );
+
     /// build_list_with_capacity creates and returns a list with the given capacity.
     fn build_list_with_capacity(
         &mut self,
@@ -1358,6 +1511,14 @@ trait Backend<'a> {
 
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
+
+    fn build_ptr_write(
+        &mut self,
+        sym: Symbol,
+        ptr: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+    );
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;
@@ -1501,6 +1662,7 @@ trait Backend<'a> {
                 self.set_last_seen(*sym, stmt);
                 match expr {
                     Expr::Literal(_) => {}
+                    Expr::NullPointer => {}
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 
@@ -1544,7 +1706,7 @@ trait Backend<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::Reset { symbol, .. } => {
+                    Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
                         self.set_last_seen(*symbol, stmt);
                     }
                     Expr::EmptyArray => {}

@@ -1,7 +1,6 @@
 procedure List.5 (#Attr.2, #Attr.3):
     let List.495 : U8 = GetTagId #Attr.3;
     joinpoint List.496 List.494:
-        inc List.494;
         ret List.494;
     in
     switch List.495:
@@ -22,8 +21,8 @@ procedure List.5 (#Attr.2, #Attr.3):
     
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.277 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.277;
+    let Num.280 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.280;
 
 procedure Test.4 (Test.5, #Attr.12):
     let Test.1 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
@@ -58,8 +57,8 @@ procedure Test.0 ():
     else
         let Test.20 : Str = "B";
         let Test.21 : Int1 = lowlevel Eq Test.20 Test.12;
-        dec Test.12;
         dec Test.20;
+        dec Test.12;
         if Test.21 then
             let Test.16 : [C U8, C U8, C ] = TagId(1) Test.2;
             jump Test.13 Test.16;

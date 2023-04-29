@@ -2,6 +2,7 @@
 
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_error_macros::internal_error;
 use roc_module::called_via::BinOp::Pizza;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
@@ -138,6 +139,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | PrecedenceConflict { .. }
         | Tag(_)
         | OpaqueRef(_)
+        | IngestedFile(_, _)
         | Crash => loc_expr,
 
         TupleAccess(sub_expr, paths) => {
@@ -591,7 +593,7 @@ fn binop_step<'a>(
                             //
                             // By design, Roc neither allows custom operators nor has any built-in operators with
                             // the same precedence and different associativity, so this should never happen!
-                            panic!("BinOps had the same associativity, but different precedence. This should never happen!");
+                            internal_error!("BinOps had the same associativity, but different precedence. This should never happen!");
                         }
                     }
                 }

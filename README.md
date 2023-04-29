@@ -8,15 +8,15 @@ Roc is not ready for a 0.1 release yet, but we do have:
 - [frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
 - [Zulip chat](https://roc.zulipchat.com) for help, questions and discussions
 
-If you'd like to get involved in contributing to the language, the Zulip chat is also the best place to get help with [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
+If you'd like to contribute, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22). Don't hesitate to ask for help on our [Zulip chat](https://roc.zulipchat.com), we're friendly!
 
 ## Sponsors
 
-We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [rwx](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en).
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en).
 
 [<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://www.rwx.com/rwx_banner.svg" height="60" alt="rwx logo"/>](https://www.rwx.com)
+[<img src="https://www.rwx.com/rwx_banner.svg" height="60" alt="RWX logo"/>](https://www.rwx.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
 
@@ -24,6 +24,7 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
+* [Jonas Schell](https://github.com/Ocupe)
 * [Christopher Dolan](https://github.com/cdolan)
 * [Nick Gravgaard](https://github.com/nickgravgaard)
 * [Aaron White](https://github.com/aaronwhite)

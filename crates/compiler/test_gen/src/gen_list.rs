@@ -1200,7 +1200,7 @@ fn list_count_if_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_on_empty_list_with_int_layout() {
     assert_evals_to!(
         indoc!(
@@ -1218,7 +1218,7 @@ fn list_map_on_empty_list_with_int_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_on_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1236,7 +1236,7 @@ fn list_map_on_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_changes_input() {
     assert_evals_to!(
         indoc!(
@@ -1254,7 +1254,7 @@ fn list_map_changes_input() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_on_big_list() {
     assert_evals_to!(
         indoc!(
@@ -1274,7 +1274,7 @@ fn list_map_on_big_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_with_type_change() {
     assert_evals_to!(
         indoc!(
@@ -1293,7 +1293,7 @@ fn list_map_with_type_change() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_using_defined_function() {
     assert_evals_to!(
         indoc!(
@@ -1315,7 +1315,7 @@ fn list_map_using_defined_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_all_inline() {
     assert_evals_to!(
         indoc!(
@@ -1329,8 +1329,29 @@ fn list_map_all_inline() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_map_closure_int() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            int : I64
+            int = 123
+
+            single : List I64
+            single =
+                [0]
+
+            List.map single (\x -> x + int)
+            "#
+        ),
+        RocList::from_slice(&[123]),
+        RocList<i64>
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_map_closure() {
+fn list_map_closure_float() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -2257,7 +2278,7 @@ fn gen_wrap_len() {
             "#
         ),
         RocList::from_slice(&[3]),
-        RocList<i64>
+        RocList<usize>
     );
 }
 
@@ -2926,7 +2947,7 @@ fn list_any_empty_with_unknown_element_type() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_all() {
     assert_evals_to!("List.all [] (\\e -> e > 3)", true, bool);
     assert_evals_to!("List.all [1, 2, 3] (\\e -> e > 3)", false, bool);

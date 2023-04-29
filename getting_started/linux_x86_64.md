@@ -3,7 +3,7 @@
 ## How to install Roc
 
 In order to develop in Roc, you need to install the Roc CLI,
-which includes the Roc compiler and various helpful utilities.
+which includes the Roc compiler and some helpful utilities.
 
 1. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
 

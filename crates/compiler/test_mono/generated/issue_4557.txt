@@ -16,8 +16,8 @@ procedure Test.1 (Test.2, Test.3):
         let Test.23 : {} = Struct {};
         joinpoint Test.24 Test.22:
             let Test.20 : Int1 = CallByName Bool.11 Test.21 Test.22;
-            dec Test.22;
             dec Test.21;
+            dec Test.22;
             let Test.18 : Int1 = CallByName Bool.4 Test.19 Test.20;
             ret Test.18;
         in

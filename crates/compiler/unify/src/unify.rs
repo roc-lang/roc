@@ -1359,10 +1359,8 @@ fn separate_union_lambdas<M: MetaCollector>(
     //   F2 -> { left: [ [a] ],         right: [ [Str] ] }
     let mut buckets: VecMap<Symbol, Sides> = VecMap::with_capacity(fields1.len() + fields2.len());
 
-    let (mut fields_left, mut fields_right) = (
-        fields1.iter_all().into_iter().peekable(),
-        fields2.iter_all().into_iter().peekable(),
-    );
+    let (mut fields_left, mut fields_right) =
+        (fields1.iter_all().peekable(), fields2.iter_all().peekable());
 
     loop {
         use std::cmp::Ordering;
@@ -3778,30 +3776,38 @@ fn unify_recursion<M: MetaCollector>(
     structure: Variable,
     other: &Content,
 ) -> Outcome<M> {
-    if !matches!(other, RecursionVar { .. }) {
-        if env.seen_recursion_pair(ctx.first, ctx.second) {
-            return Default::default();
-        }
-
-        env.add_recursion_pair(ctx.first, ctx.second);
+    if env.seen_recursion_pair(ctx.first, ctx.second) {
+        return Default::default();
     }
+
+    env.add_recursion_pair(ctx.first, ctx.second);
 
     let outcome = match other {
         RecursionVar {
             opt_name: other_opt_name,
-            structure: _other_structure,
+            structure: other_structure,
         } => {
-            // NOTE: structure and other_structure may not be unified yet, but will be
-            // we should not do that here, it would create an infinite loop!
+            // We haven't seen these two recursion vars yet, so go and unify their structures.
+            // We need to do this before we merge the two recursion vars, since the unification of
+            // the structures may be material.
+
+            let mut outcome = unify_pool(env, pool, structure, *other_structure, ctx.mode);
+            if !outcome.mismatches.is_empty() {
+                return outcome;
+            }
+
             let name = (*opt_name).or(*other_opt_name);
-            merge(
+            let merge_outcome = merge(
                 env,
                 ctx,
                 RecursionVar {
                     opt_name: name,
                     structure,
                 },
-            )
+            );
+
+            outcome.union(merge_outcome);
+            outcome
         }
 
         Structure(_) => {
@@ -3863,9 +3869,7 @@ fn unify_recursion<M: MetaCollector>(
         Error => merge(env, ctx, Error),
     };
 
-    if !matches!(other, RecursionVar { .. }) {
-        env.remove_recursion_pair(ctx.first, ctx.second);
-    }
+    env.remove_recursion_pair(ctx.first, ctx.second);
 
     outcome
 }

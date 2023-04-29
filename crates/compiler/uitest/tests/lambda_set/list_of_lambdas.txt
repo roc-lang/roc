@@ -1,0 +1,4 @@
+app "test" provides [main] to "./platform"
+
+main = [\{} -> {}, \{} -> {}]
+#      ^^^^^^^^^^^^^^^^^^^^^^ List ({}w_a -[[1, 2]]-> {})

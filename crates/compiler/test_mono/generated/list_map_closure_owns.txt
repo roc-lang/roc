@@ -3,9 +3,11 @@ procedure List.2 (List.96, List.97):
     let List.496 : Int1 = CallByName Num.22 List.97 List.500;
     if List.496 then
         let List.498 : Str = CallByName List.66 List.96 List.97;
+        dec List.96;
         let List.497 : [C {}, C Str] = TagId(1) List.498;
         ret List.497;
     else
+        dec List.96;
         let List.495 : {} = Struct {};
         let List.494 : [C {}, C Str] = TagId(0) List.495;
         ret List.494;
@@ -24,12 +26,12 @@ procedure List.66 (#Attr.2, #Attr.3):
     ret List.499;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.275 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.275;
+    let Num.278 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.278;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.267 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.267;
+    let Str.299 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.299;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";
@@ -55,7 +57,6 @@ procedure Test.0 ():
     let Test.12 : List Str = CallByName Test.2;
     let Test.13 : U64 = 0i64;
     let Test.6 : [C {}, C Str] = CallByName List.2 Test.12 Test.13;
-    dec Test.12;
     let Test.9 : U8 = 1i64;
     let Test.10 : U8 = GetTagId Test.6;
     let Test.11 : Int1 = lowlevel Eq Test.9 Test.10;

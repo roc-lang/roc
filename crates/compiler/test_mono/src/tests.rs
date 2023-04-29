@@ -2550,7 +2550,6 @@ fn recursively_build_effect() {
 }
 
 #[mono_test]
-#[ignore = "roc glue code generation cannot handle a type that this test generates"]
 fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
     indoc!(
         r#"
@@ -2801,6 +2800,91 @@ fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
                 _ -> 3
 
         main = go '.'
+        "#
+    )
+}
+
+#[mono_test]
+fn recursive_lambda_set_resolved_only_upon_specialization() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        factCPS = \n, cont ->
+            if n == 0u8 then
+                cont 1u8
+            else
+                factCPS (n - 1) \value -> cont (n * value)
+
+        main =
+            factCPS 5 \x -> x
+        "#
+    )
+}
+
+#[mono_test]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    indoc!(
+        r#"
+         app "test" provides [main] to "./platform"
+
+         compose = \forward -> \f, g ->
+            if forward
+            then \x -> g (f x)
+            else \x -> f (g x)
+
+         identity = \x -> x
+         exclame = \s -> "\(s)!"
+         whisper = \s -> "(\(s))"
+
+         main =
+             res: Str -> Str
+             res = List.walk [ exclame, whisper ] identity (compose Bool.true)
+             res "hello"
+         "#
+    )
+}
+
+#[mono_test]
+fn issue_4759() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            update { a : { x : "x", y: "y" } }
+
+        update = \state -> { state & a : { x : "ux", y: "uy" } }
+        "#
+    )
+}
+
+#[mono_test]
+fn layout_cache_structure_with_multiple_recursive_structures() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Chain : [
+            End,
+            Link Chain,
+        ]
+
+        LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
+
+        main =
+            base : LinkedList 
+            base = Nil
+
+            walker : LinkedList, Chain -> LinkedList
+            walker = \rest, first -> Cons { first, rest } 
+
+            list : List Chain
+            list = []
+
+            r = List.walk list base walker
+
+            r
         "#
     )
 }

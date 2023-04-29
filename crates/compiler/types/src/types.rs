@@ -15,6 +15,7 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::{Loc, Region};
 use std::fmt;
 use std::fmt::Write;
+use std::path::PathBuf;
 
 pub const TYPE_NUM: &str = "Num";
 pub const TYPE_INTEGER: &str = "Integer";
@@ -170,23 +171,15 @@ impl RecordField<Type> {
         }
     }
 
-    pub fn instantiate_aliases<'a, F>(
+    fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &'a F,
-        var_store: &mut VarStore,
-        new_lambda_sets: &mut ImSet<Variable>,
-        new_infer_ext_vars: &mut ImSet<Variable>,
+        aliases: &F,
+        ctx: &mut InstantiateAliasesCtx<'_>,
     ) where
         F: Fn(Symbol) -> Option<&'a Alias>,
     {
-        self.as_inner_mut().instantiate_aliases(
-            region,
-            aliases,
-            var_store,
-            new_lambda_sets,
-            new_infer_ext_vars,
-        )
+        instantiate_aliases(self.as_inner_mut(), region, aliases, ctx)
     }
 
     pub fn contains_symbol(&self, rep_symbol: Symbol) -> bool {
@@ -228,20 +221,12 @@ impl LambdaSet {
     fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &'a F,
-        var_store: &mut VarStore,
-        new_lambda_sets: &mut ImSet<Variable>,
-        new_infer_ext_vars: &mut ImSet<Variable>,
+        aliases: &F,
+        ctx: &mut InstantiateAliasesCtx<'_>,
     ) where
         F: Fn(Symbol) -> Option<&'a Alias>,
     {
-        self.0.instantiate_aliases(
-            region,
-            aliases,
-            var_store,
-            new_lambda_sets,
-            new_infer_ext_vars,
-        )
+        instantiate_aliases(&mut self.0, region, aliases, ctx)
     }
 }
 
@@ -1334,6 +1319,16 @@ impl Types {
 
         cloned
     }
+
+    pub fn shallow_dealias(&self, value: Index<TypeTag>) -> Index<TypeTag> {
+        let mut result = value;
+        while let TypeTag::StructuralAlias { actual, .. } | TypeTag::OpaqueAlias { actual, .. } =
+            self[result]
+        {
+            result = actual;
+        }
+        result
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -1698,6 +1693,8 @@ impl_types_index! {
 
 impl_types_index_slice! {
     tag_names, TagName
+    field_names, Lowercase
+    tags, TypeTag
 }
 
 impl std::ops::Index<Index<AsideTypeSlice>> for Types {
@@ -2316,7 +2313,16 @@ impl Type {
                         stack.push(ext);
                     }
                 }
-                RecursiveTagUnion(_, tags, ext) => {
+                RecursiveTagUnion(rec, tags, ext) => {
+                    if let Some(replacement) = substitutions.get(rec) {
+                        let new_rec_var = match replacement {
+                            Type::Variable(v) => *v,
+                            _ => panic!("Recursion var substitution must be a variable"),
+                        };
+
+                        *rec = new_rec_var;
+                    }
+
                     for (_, args) in tags {
                         stack.extend(args.iter_mut());
                     }
@@ -2805,7 +2811,7 @@ impl Type {
     }
 
     /// a shallow dealias, continue until the first constructor is not an alias.
-    pub fn shallow_dealias(&self) -> &Self {
+    fn shallow_dealias(&self) -> &Self {
         let mut result = self;
         while let Type::Alias { actual, .. } = result {
             result = actual;
@@ -2829,370 +2835,21 @@ impl Type {
     pub fn instantiate_aliases<'a, F>(
         &mut self,
         region: Region,
-        aliases: &'a F,
+        aliases: &F,
         var_store: &mut VarStore,
         new_lambda_set_variables: &mut ImSet<Variable>,
+        new_recursion_variables: &mut ImSet<Variable>,
         new_infer_ext_vars: &mut ImSet<Variable>,
     ) where
         F: Fn(Symbol) -> Option<&'a Alias>,
     {
-        use Type::*;
-
-        match self {
-            Function(args, closure, ret) => {
-                for arg in args {
-                    arg.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-                closure.instantiate_aliases(
-                    region,
-                    aliases,
-                    var_store,
-                    new_lambda_set_variables,
-                    new_infer_ext_vars,
-                );
-                ret.instantiate_aliases(
-                    region,
-                    aliases,
-                    var_store,
-                    new_lambda_set_variables,
-                    new_infer_ext_vars,
-                );
-            }
-            FunctionOrTagUnion(_, _, ext) => {
-                if let TypeExtension::Open(ext, _) = ext {
-                    ext.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-            }
-            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
-                for (_, args) in tags {
-                    for x in args {
-                        x.instantiate_aliases(
-                            region,
-                            aliases,
-                            var_store,
-                            new_lambda_set_variables,
-                            new_infer_ext_vars,
-                        );
-                    }
-                }
-
-                if let TypeExtension::Open(ext, _) = ext {
-                    ext.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-            }
-            Record(fields, ext) => {
-                for (_, x) in fields.iter_mut() {
-                    x.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-
-                if let TypeExtension::Open(ext, _) = ext {
-                    ext.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-            }
-            Tuple(elems, ext) => {
-                for (_, x) in elems.iter_mut() {
-                    x.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-
-                if let TypeExtension::Open(ext, _) = ext {
-                    ext.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-            }
-            DelayedAlias(AliasCommon {
-                type_arguments,
-                lambda_set_variables,
-                infer_ext_in_output_types,
-                symbol: _,
-            }) => {
-                debug_assert!(lambda_set_variables
-                    .iter()
-                    .all(|lambda_set| matches!(lambda_set.0, Type::Variable(..))));
-                debug_assert!(infer_ext_in_output_types
-                    .iter()
-                    .all(|t| matches!(t, Type::Variable(..) | Type::EmptyTagUnion)));
-                type_arguments.iter_mut().for_each(|t| {
-                    t.value.typ.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    )
-                });
-            }
-            HostExposedAlias {
-                type_arguments: type_args,
-                lambda_set_variables,
-                actual: actual_type,
-                ..
-            } => {
-                for arg in type_args {
-                    arg.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-
-                for arg in lambda_set_variables {
-                    arg.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-
-                actual_type.instantiate_aliases(
-                    region,
-                    aliases,
-                    var_store,
-                    new_lambda_set_variables,
-                    new_infer_ext_vars,
-                );
-            }
-            Alias {
-                type_arguments: type_args,
-                lambda_set_variables,
-                actual: actual_type,
-                ..
-            } => {
-                for arg in type_args {
-                    arg.typ.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-
-                for arg in lambda_set_variables {
-                    arg.instantiate_aliases(
-                        region,
-                        aliases,
-                        var_store,
-                        new_lambda_set_variables,
-                        new_infer_ext_vars,
-                    );
-                }
-
-                actual_type.instantiate_aliases(
-                    region,
-                    aliases,
-                    var_store,
-                    new_lambda_set_variables,
-                    new_infer_ext_vars,
-                );
-            }
-            Apply(symbol, args, _) => {
-                if let Some(alias) = aliases(*symbol) {
-                    // TODO switch to this, but we still need to check for recursion with the
-                    // `else` branch.
-                    // We would also need to determine polarity correct.
-                    if false {
-                        let mut type_var_to_arg = Vec::new();
-
-                        for (alias_var, arg_ann) in alias.type_variables.iter().zip(args) {
-                            type_var_to_arg.push(Loc::at(
-                                arg_ann.region,
-                                OptAbleType {
-                                    typ: arg_ann.value.clone(),
-                                    opt_abilities: alias_var.value.opt_bound_abilities.clone(),
-                                },
-                            ));
-                        }
-
-                        let mut lambda_set_variables =
-                            Vec::with_capacity(alias.lambda_set_variables.len());
-
-                        for _ in 0..alias.lambda_set_variables.len() {
-                            let lvar = var_store.fresh();
-
-                            new_lambda_set_variables.insert(lvar);
-
-                            lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
-                        }
-
-                        let mut infer_ext_in_output_types =
-                            Vec::with_capacity(alias.infer_ext_in_output_variables.len());
-
-                        for _ in 0..alias.infer_ext_in_output_variables.len() {
-                            let var = var_store.fresh();
-                            new_infer_ext_vars.insert(var);
-                            infer_ext_in_output_types.push(Type::Variable(var));
-                        }
-
-                        let alias = Type::DelayedAlias(AliasCommon {
-                            symbol: *symbol,
-                            type_arguments: type_var_to_arg,
-                            lambda_set_variables,
-                            infer_ext_in_output_types,
-                        });
-
-                        *self = alias;
-                    } else {
-                        if args.len() != alias.type_variables.len() {
-                            // We will have already reported an error during canonicalization.
-                            *self = Type::Error;
-                            return;
-                        }
-
-                        let mut actual = alias.typ.clone();
-
-                        let mut named_args = Vec::with_capacity(args.len());
-                        let mut substitution = ImMap::default();
-
-                        // TODO substitute further in args
-                        for (
-                            Loc {
-                                value:
-                                    AliasVar {
-                                        var: placeholder,
-                                        opt_bound_abilities,
-                                        ..
-                                    },
-                                ..
-                            },
-                            filler,
-                        ) in alias.type_variables.iter().zip(args.iter())
-                        {
-                            let mut filler = filler.clone();
-                            filler.value.instantiate_aliases(
-                                region,
-                                aliases,
-                                var_store,
-                                new_lambda_set_variables,
-                                new_infer_ext_vars,
-                            );
-                            named_args.push(OptAbleType {
-                                typ: filler.value.clone(),
-                                opt_abilities: opt_bound_abilities.clone(),
-                            });
-                            substitution.insert(*placeholder, filler.value);
-                        }
-
-                        // make sure hidden variables are freshly instantiated
-                        let mut lambda_set_variables =
-                            Vec::with_capacity(alias.lambda_set_variables.len());
-                        for typ in alias.lambda_set_variables.iter() {
-                            if let Type::Variable(var) = typ.0 {
-                                let fresh = var_store.fresh();
-                                new_lambda_set_variables.insert(fresh);
-                                substitution.insert(var, Type::Variable(fresh));
-                                lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
-                            } else {
-                                unreachable!("at this point there should be only vars in there");
-                            }
-                        }
-                        let mut infer_ext_in_output_types =
-                            Vec::with_capacity(alias.infer_ext_in_output_variables.len());
-                        for var in alias.infer_ext_in_output_variables.iter() {
-                            let fresh = var_store.fresh();
-                            new_infer_ext_vars.insert(fresh);
-                            substitution.insert(*var, Type::Variable(fresh));
-                            infer_ext_in_output_types.push(Type::Variable(fresh));
-                        }
-
-                        actual.instantiate_aliases(
-                            region,
-                            aliases,
-                            var_store,
-                            new_lambda_set_variables,
-                            new_infer_ext_vars,
-                        );
-
-                        actual.substitute(&substitution);
-
-                        // instantiate recursion variable!
-                        if let Type::RecursiveTagUnion(rec_var, mut tags, mut ext) = actual {
-                            let new_rec_var = var_store.fresh();
-                            substitution.clear();
-                            substitution.insert(rec_var, Type::Variable(new_rec_var));
-
-                            for typ in tags.iter_mut().flat_map(|v| v.1.iter_mut()) {
-                                typ.substitute(&substitution);
-                            }
-
-                            if let TypeExtension::Open(ext, _) = &mut ext {
-                                ext.substitute(&substitution);
-                            }
-
-                            actual = Type::RecursiveTagUnion(new_rec_var, tags, ext);
-                        }
-                        let alias = Type::Alias {
-                            symbol: *symbol,
-                            type_arguments: named_args,
-                            lambda_set_variables,
-                            infer_ext_in_output_types,
-                            actual: Box::new(actual),
-                            kind: alias.kind,
-                        };
-
-                        *self = alias;
-                    }
-                } else {
-                    // one of the special-cased Apply types.
-                    for x in args {
-                        x.value.instantiate_aliases(
-                            region,
-                            aliases,
-                            var_store,
-                            new_lambda_set_variables,
-                            new_infer_ext_vars,
-                        );
-                    }
-                }
-            }
-            RangedNumber(_) => {}
-            UnspecializedLambdaSet { .. } => {}
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
-        }
+        let mut ctx = InstantiateAliasesCtx {
+            var_store,
+            new_lambda_set_variables,
+            new_recursion_variables,
+            new_infer_ext_vars,
+        };
+        instantiate_aliases(self, region, aliases, &mut ctx)
     }
 
     pub fn instantiate_lambda_sets_as_unspecialized(
@@ -3265,6 +2922,208 @@ impl Type {
             Type::Variable(v) => *v,
             _ => internal_error!("{}", reason),
         }
+    }
+}
+
+struct InstantiateAliasesCtx<'a> {
+    var_store: &'a mut VarStore,
+    new_lambda_set_variables: &'a mut ImSet<Variable>,
+    new_recursion_variables: &'a mut ImSet<Variable>,
+    new_infer_ext_vars: &'a mut ImSet<Variable>,
+}
+
+fn instantiate_aliases<'a, F>(
+    typ: &mut Type,
+    region: Region,
+    aliases: &F,
+    ctx: &mut InstantiateAliasesCtx<'_>,
+) where
+    F: Fn(Symbol) -> Option<&'a Alias>,
+{
+    use Type::*;
+
+    match typ {
+        Function(args, closure, ret) => {
+            for arg in args {
+                instantiate_aliases(arg, region, aliases, ctx);
+            }
+            instantiate_aliases(closure, region, aliases, ctx);
+            instantiate_aliases(ret, region, aliases, ctx);
+        }
+        FunctionOrTagUnion(_, _, ext) => {
+            if let TypeExtension::Open(ext, _) = ext {
+                instantiate_aliases(ext, region, aliases, ctx);
+            }
+        }
+        RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+            for (_, args) in tags {
+                for x in args {
+                    instantiate_aliases(x, region, aliases, ctx);
+                }
+            }
+
+            if let TypeExtension::Open(ext, _) = ext {
+                instantiate_aliases(ext, region, aliases, ctx);
+            }
+        }
+        Record(fields, ext) => {
+            for (_, x) in fields.iter_mut() {
+                x.instantiate_aliases(region, aliases, ctx);
+            }
+
+            if let TypeExtension::Open(ext, _) = ext {
+                instantiate_aliases(ext, region, aliases, ctx);
+            }
+        }
+        Tuple(elems, ext) => {
+            for (_, x) in elems.iter_mut() {
+                instantiate_aliases(x, region, aliases, ctx);
+            }
+
+            if let TypeExtension::Open(ext, _) = ext {
+                instantiate_aliases(ext, region, aliases, ctx);
+            }
+        }
+        DelayedAlias(AliasCommon {
+            type_arguments,
+            lambda_set_variables,
+            infer_ext_in_output_types,
+            symbol: _,
+        }) => {
+            debug_assert!(lambda_set_variables
+                .iter()
+                .all(|lambda_set| matches!(lambda_set.0, Type::Variable(..))));
+            debug_assert!(infer_ext_in_output_types
+                .iter()
+                .all(|t| matches!(t, Type::Variable(..) | Type::EmptyTagUnion)));
+            type_arguments
+                .iter_mut()
+                .for_each(|t| instantiate_aliases(&mut t.value.typ, region, aliases, ctx));
+        }
+        HostExposedAlias {
+            type_arguments: type_args,
+            lambda_set_variables,
+            actual: actual_type,
+            ..
+        } => {
+            for arg in type_args {
+                instantiate_aliases(arg, region, aliases, ctx);
+            }
+
+            for arg in lambda_set_variables {
+                arg.instantiate_aliases(region, aliases, ctx);
+            }
+
+            instantiate_aliases(&mut *actual_type, region, aliases, ctx);
+        }
+        Alias {
+            type_arguments: type_args,
+            lambda_set_variables,
+            actual: actual_type,
+            ..
+        } => {
+            for arg in type_args {
+                instantiate_aliases(&mut arg.typ, region, aliases, ctx);
+            }
+
+            for arg in lambda_set_variables {
+                arg.instantiate_aliases(region, aliases, ctx);
+            }
+
+            instantiate_aliases(actual_type, region, aliases, ctx);
+        }
+        Apply(symbol, args, _) => {
+            if let Some(alias) = aliases(*symbol) {
+                if args.len() != alias.type_variables.len() {
+                    // We will have already reported an error during canonicalization.
+                    *typ = Type::Error;
+                    return;
+                }
+
+                let mut actual = alias.typ.clone();
+
+                let mut named_args = Vec::with_capacity(args.len());
+                let mut substitution = ImMap::default();
+
+                // TODO substitute further in args
+                for (
+                    Loc {
+                        value:
+                            AliasVar {
+                                var: placeholder,
+                                opt_bound_abilities,
+                                ..
+                            },
+                        ..
+                    },
+                    filler,
+                ) in alias.type_variables.iter().zip(args.iter())
+                {
+                    let mut filler = filler.clone();
+                    instantiate_aliases(&mut filler.value, region, aliases, ctx);
+                    named_args.push(OptAbleType {
+                        typ: filler.value.clone(),
+                        opt_abilities: opt_bound_abilities.clone(),
+                    });
+                    substitution.insert(*placeholder, filler.value);
+                }
+
+                // make sure nested lambda set variables are freshly instantiated
+                let mut lambda_set_variables = Vec::with_capacity(alias.lambda_set_variables.len());
+                for typ in alias.lambda_set_variables.iter() {
+                    if let Type::Variable(var) = typ.0 {
+                        let fresh = ctx.var_store.fresh();
+                        ctx.new_lambda_set_variables.insert(fresh);
+                        substitution.insert(var, Type::Variable(fresh));
+                        lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+                    } else {
+                        unreachable!("at this point there should be only vars in there");
+                    }
+                }
+
+                // make sure all nested recursion variables are freshly instantiated
+                let mut recursion_variables = Vec::with_capacity(alias.recursion_variables.len());
+                for var in alias.recursion_variables.iter() {
+                    let fresh = ctx.var_store.fresh();
+                    ctx.new_recursion_variables.insert(fresh);
+                    substitution.insert(*var, Type::Variable(fresh));
+                    recursion_variables.push(Type::Variable(fresh));
+                }
+
+                // make sure all nested infer-open-in-output position ext vars are freshly instantiated
+                let mut infer_ext_in_output_types =
+                    Vec::with_capacity(alias.infer_ext_in_output_variables.len());
+                for var in alias.infer_ext_in_output_variables.iter() {
+                    let fresh = ctx.var_store.fresh();
+                    ctx.new_infer_ext_vars.insert(fresh);
+                    substitution.insert(*var, Type::Variable(fresh));
+                    infer_ext_in_output_types.push(Type::Variable(fresh));
+                }
+
+                instantiate_aliases(&mut actual, region, aliases, ctx);
+
+                actual.substitute(&substitution);
+
+                let alias = Type::Alias {
+                    symbol: *symbol,
+                    type_arguments: named_args,
+                    lambda_set_variables,
+                    infer_ext_in_output_types,
+                    actual: Box::new(actual),
+                    kind: alias.kind,
+                };
+
+                *typ = alias;
+            } else {
+                // one of the special-cased Apply types.
+                for x in args {
+                    instantiate_aliases(&mut x.value, region, aliases, ctx);
+                }
+            }
+        }
+        RangedNumber(_) => {}
+        UnspecializedLambdaSet { .. } => {}
+        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
     }
 }
 
@@ -3781,6 +3640,7 @@ pub enum Category {
     List,
     Str,
     Character,
+    IngestedFile(Box<PathBuf>),
 
     // records
     Record,
@@ -4607,18 +4467,9 @@ pub fn gather_tags_unsorted_iter(
 
     let mut stack = vec![other_fields];
 
-    #[cfg(debug_assertions)]
-    let mut seen_head_union = false;
-
     loop {
         match subs.get_content_without_compacting(ext.var()) {
             Structure(TagUnion(sub_fields, sub_ext)) => {
-                #[cfg(debug_assertions)]
-                {
-                    assert!(!seen_head_union, "extension variable is another tag union, but I expected it to be either open or closed!");
-                    seen_head_union = true;
-                }
-
                 stack.push(*sub_fields);
 
                 ext = *sub_ext;

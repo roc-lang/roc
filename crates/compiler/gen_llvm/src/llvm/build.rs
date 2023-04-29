@@ -200,6 +200,7 @@ pub enum LlvmBackendMode {
     BinaryDev,
     /// Creates a test wrapper around the main roc function to catch and report panics.
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    BinaryGlue,
     GenTest,
     WasmGenTest,
     CliTest,
@@ -210,6 +211,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => true,
             LlvmBackendMode::BinaryDev => true,
+            LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => false,
@@ -221,6 +223,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => false,
             LlvmBackendMode::BinaryDev => false,
+            LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => true,
@@ -231,6 +234,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => false,
             LlvmBackendMode::BinaryDev => true,
+            LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => false,
             LlvmBackendMode::CliTest => true,
@@ -1078,6 +1082,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
     match expr {
         Literal(literal) => build_exp_literal(env, layout_interner, parent, layout, literal),
+        NullPointer => {
+            let basic_type = basic_type_from_layout(env, layout_interner, layout);
+
+            debug_assert!(basic_type.is_pointer_type());
+            basic_type.into_pointer_type().const_zero().into()
+        }
 
         Call(call) => build_exp_call(
             env,
@@ -1221,6 +1231,53 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                 let null_ptr = tag_ptr.get_type().const_null();
                 phi.add_incoming(&[(&tag_ptr, then_block), (&null_ptr, else_block)]);
+
+                phi.as_basic_value()
+            }
+        }
+        ResetRef {
+            symbol,
+            update_mode,
+        } => {
+            let bytes = update_mode.to_bytes();
+            let update_var = UpdateModeVar(&bytes);
+            let update_mode = func_spec_solutions
+                .update_mode(update_var)
+                .unwrap_or(UpdateMode::Immutable);
+
+            let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
+            let tag_ptr = tag_ptr.into_pointer_value();
+
+            let ctx = env.context;
+            let not_unique_block = ctx.append_basic_block(parent, "else_decref");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            let refcount_ptr =
+                PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
+
+            let is_unique = match update_mode {
+                UpdateMode::InPlace => env.context.bool_type().const_int(1, false),
+                UpdateMode::Immutable => refcount_ptr.is_1(env),
+            };
+
+            let parent_block = env.builder.get_insert_block().unwrap();
+
+            env.builder
+                .build_conditional_branch(is_unique, cont_block, not_unique_block);
+
+            {
+                // If reset is used on a shared, non-reusable reference, it behaves
+                // like dec and returns NULL, which instructs reuse to behave like ctor
+                env.builder.position_at_end(not_unique_block);
+                refcount_ptr.decrement(env, layout_interner, layout);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+            {
+                env.builder.position_at_end(cont_block);
+                let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
+
+                let null_ptr = tag_ptr.get_type().const_null();
+                phi.add_incoming(&[(&tag_ptr, parent_block), (&null_ptr, not_unique_block)]);
 
                 phi.as_basic_value()
             }
@@ -4116,7 +4173,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             )
         }
 
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {}
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -4169,7 +4226,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             roc_call_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {
             basic_type_from_layout(env, layout_interner, return_layout)
         }
     };
@@ -5250,7 +5307,7 @@ fn build_proc<'a, 'ctx, 'env>(
                 GenTest | WasmGenTest | CliTest => {
                     /* no host, or exposing types is not supported */
                 }
-                Binary | BinaryDev => {
+                Binary | BinaryDev | BinaryGlue => {
                     for (alias_name, hels) in aliases.iter() {
                         let ident_string = proc.name.name().as_str(&env.interns);
                         let fn_name: String = format!("{}_{}", ident_string, hels.id.0);

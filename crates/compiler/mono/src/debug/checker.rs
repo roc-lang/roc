@@ -390,6 +390,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
     fn check_expr(&mut self, e: &Expr<'a>) -> Option<InLayout<'a>> {
         match e {
             Expr::Literal(_) => None,
+            Expr::NullPointer => None,
             Expr::Call(call) => self.check_call(call),
             &Expr::Tag {
                 tag_layout,
@@ -471,6 +472,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 Some(union)
             }
             &Expr::Reset {
+                symbol,
+                update_mode: _,
+            }
+            | &Expr::ResetRef {
                 symbol,
                 update_mode: _,
             } => {

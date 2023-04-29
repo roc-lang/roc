@@ -265,8 +265,8 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
-fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn expr_of_tag<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     data_addr: usize,
     tag_name: &TagName,
@@ -289,8 +289,8 @@ fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
 
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
-fn tag_id_from_data<'a, 'env, M: ReplAppMemory>(
-    env: &Env<'a, 'env>,
+fn tag_id_from_data<'a, M: ReplAppMemory>(
+    env: &Env<'a, '_>,
     mem: &M,
     union_layout: UnionLayout<'a>,
     data_addr: usize,
@@ -360,27 +360,30 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             })
         }
         Layout::Builtin(Builtin::Int(int_width)) => {
-            use Content::*;
             use IntWidth::*;
 
-            match (env.subs.get_content_without_compacting(raw_var), int_width) {
-                (Alias(Symbol::NUM_UNSIGNED8 | Symbol::NUM_U8, ..), U8) => num_helper!(u8),
-                (_, U8) => {
-                    // This is not a number, it's a tag union or something else
-                    app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
-                        byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
-                    })
+            match int_width {
+                U8 => {
+                    let raw_content = env.subs.get_content_without_compacting(raw_var);
+                    if matches!(raw_content, Content::Alias(name, ..) if name.module_id() == ModuleId::NUM)
+                    {
+                        num_helper!(u8)
+                    } else {
+                        // This is not a number, it's a tag union or something else
+                        app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
+                            byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
+                        })
+                    }
                 }
-                // The rest are numbers... for now
-                (_, U16) => num_helper!(u16),
-                (_, U32) => num_helper!(u32),
-                (_, U64) => num_helper!(u64),
-                (_, U128) => num_helper!(u128),
-                (_, I8) => num_helper!(i8),
-                (_, I16) => num_helper!(i16),
-                (_, I32) => num_helper!(i32),
-                (_, I64) => num_helper!(i64),
-                (_, I128) => num_helper!(i128),
+                U16 => num_helper!(u16),
+                U32 => num_helper!(u32),
+                U64 => num_helper!(u64),
+                U128 => num_helper!(u128),
+                I8 => num_helper!(i8),
+                I16 => num_helper!(i16),
+                I32 => num_helper!(i32),
+                I64 => num_helper!(i64),
+                I128 => num_helper!(i128),
             }
         }
         Layout::Builtin(Builtin::Float(float_width)) => {
@@ -944,8 +947,8 @@ fn list_to_ast<'a, M: ReplAppMemory>(
     Expr::List(Collection::with_items(output))
 }
 
-fn single_tag_union_to_ast<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     field_layouts: &'a [InLayout<'a>],
@@ -1001,8 +1004,8 @@ where
     output
 }
 
-fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn struct_to_ast<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     record_fields: RecordFields,
@@ -1127,8 +1130,8 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
     }
 }
 
-fn struct_to_ast_tuple<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn struct_to_ast_tuple<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     tuple_elems: TupleElems,

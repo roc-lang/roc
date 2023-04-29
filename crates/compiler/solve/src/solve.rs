@@ -1771,6 +1771,87 @@ fn solve(
 
                 state
             }
+            IngestedFile(type_index, file_path, bytes) => {
+                let actual = either_type_index_to_var(
+                    subs,
+                    rank,
+                    pools,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *type_index,
+                );
+
+                let snapshot = subs.snapshot();
+                if let Success {
+                    vars,
+                    must_implement_ability,
+                    lambda_sets_to_specialize,
+                    extra_metadata: _,
+                } = unify(
+                    &mut UEnv::new(subs),
+                    actual,
+                    Variable::LIST_U8,
+                    Mode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
+                    // List U8 always valid.
+                    introduce(subs, rank, pools, &vars);
+
+                    debug_assert!(
+                        must_implement_ability.is_empty() && lambda_sets_to_specialize.is_empty(),
+                        "List U8 will never need to implement abilities or specialize lambda sets"
+                    );
+
+                    state
+                } else {
+                    subs.rollback_to(snapshot);
+
+                    // We explicitly match on the last unify to get the type in the case it errors.
+                    match unify(
+                        &mut UEnv::new(subs),
+                        actual,
+                        Variable::STR,
+                        Mode::EQ,
+                        Polarity::OF_VALUE,
+                    ) {
+                        Success {
+                            vars,
+                            must_implement_ability,
+                            lambda_sets_to_specialize,
+                            extra_metadata: _,
+                        } => {
+                            introduce(subs, rank, pools, &vars);
+
+                            debug_assert!(
+                                must_implement_ability.is_empty() && lambda_sets_to_specialize.is_empty(),
+                                "Str will never need to implement abilities or specialize lambda sets"
+                            );
+
+                            // Str only valid if valid utf8.
+                            if let Err(err) = std::str::from_utf8(bytes) {
+                                let problem =
+                                    TypeError::IngestedFileBadUtf8(file_path.clone(), err);
+                                problems.push(problem);
+                            }
+
+                            state
+                        }
+                        Failure(vars, actual_type, _, _) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            let problem = TypeError::IngestedFileUnsupportedType(
+                                file_path.clone(),
+                                actual_type,
+                            );
+                            problems.push(problem);
+                            state
+                        }
+                    }
+                }
+            }
         };
     }
 
@@ -2456,14 +2537,14 @@ enum TypeToVar {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn type_to_variable<'a>(
+fn type_to_variable(
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<TypeError>,
     abilities_store: &AbilitiesStore,
     obligation_cache: &mut ObligationCache,
-    arena: &'a bumpalo::Bump,
+    arena: &bumpalo::Bump,
     aliases: &mut Aliases,
     types: &mut Types,
     typ: Index<TypeTag>,
@@ -3528,7 +3609,7 @@ fn check_for_infinite_type(
                 }
                 Content::LambdaSet(subs::LambdaSet {
                     solved,
-                    recursion_var: _,
+                    recursion_var: OptVariable::NONE,
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {

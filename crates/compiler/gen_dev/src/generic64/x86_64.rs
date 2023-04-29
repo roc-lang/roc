@@ -7,9 +7,9 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::FloatWidth;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
+use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
 
-use super::CompareOperation;
+use super::{CompareOperation, RegisterWidth};
 
 // Not sure exactly how I want to represent registers.
 // If we want max speed, we would likely make them structs that impl the same trait to avoid ifs.
@@ -216,8 +216,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 
     #[inline(always)]
-    fn setup_stack<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn setup_stack(
+        buf: &mut Vec<'_, u8>,
         saved_general_regs: &[X86_64GeneralReg],
         saved_float_regs: &[X86_64FloatReg],
         requested_stack_size: i32,
@@ -233,8 +233,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 
     #[inline(always)]
-    fn cleanup_stack<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn cleanup_stack(
+        buf: &mut Vec<'_, u8>,
         saved_general_regs: &[X86_64GeneralReg],
         saved_float_regs: &[X86_64FloatReg],
         aligned_stack_size: i32,
@@ -250,11 +250,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 
     #[inline(always)]
-    fn load_args<'a, 'r>(
+    fn load_args<'a>(
         _buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
@@ -284,11 +284,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 
     #[inline(always)]
-    fn store_args<'a, 'r>(
+    fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
@@ -330,11 +330,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         storage_manager.update_fn_call_stack_size(state.tmp_stack_offset as u32);
     }
 
-    fn return_complex_symbol<'a, 'r>(
+    fn return_complex_symbol<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
@@ -388,11 +388,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         }
     }
 
-    fn load_returned_complex_symbol<'a, 'r>(
+    fn load_returned_complex_symbol<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
@@ -447,10 +447,10 @@ impl X64_64SystemVStoreArgs {
     const FLOAT_PARAM_REGS: &'static [X86_64FloatReg] = X86_64SystemV::FLOAT_PARAM_REGS;
     const FLOAT_RETURN_REGS: &'static [X86_64FloatReg] = X86_64SystemV::FLOAT_RETURN_REGS;
 
-    fn store_arg<'a, 'r>(
+    fn store_arg<'a>(
         &mut self,
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
         layout_interner: &mut STLayoutInterner<'a>,
         sym: Symbol,
         in_layout: InLayout<'a>,
@@ -511,6 +511,24 @@ impl X64_64SystemVStoreArgs {
                         }
                         self.tmp_stack_offset += size as i32;
                     }
+                    Layout::Union(UnionLayout::NonRecursive(_)) => {
+                        // for now, just also store this on the stack
+                        let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
+                        debug_assert_eq!(base_offset % 8, 0);
+                        for i in (0..size as i32).step_by(8) {
+                            X86_64Assembler::mov_reg64_base32(
+                                buf,
+                                Self::GENERAL_RETURN_REGS[0],
+                                base_offset + i,
+                            );
+                            X86_64Assembler::mov_stack32_reg64(
+                                buf,
+                                self.tmp_stack_offset + i,
+                                Self::GENERAL_RETURN_REGS[0],
+                            );
+                        }
+                        self.tmp_stack_offset += size as i32;
+                    }
                     _ => {
                         todo!("calling with arg type, {:?}", layout_interner.dbg(other));
                     }
@@ -519,10 +537,10 @@ impl X64_64SystemVStoreArgs {
         }
     }
 
-    fn store_arg_general<'a, 'r>(
+    fn store_arg_general<'a>(
         &mut self,
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
         if self.general_i < Self::GENERAL_PARAM_REGS.len() {
@@ -544,10 +562,10 @@ impl X64_64SystemVStoreArgs {
         }
     }
 
-    fn store_arg_float<'a, 'r>(
+    fn store_arg_float<'a>(
         &mut self,
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
         if self.float_i < Self::FLOAT_PARAM_REGS.len() {
@@ -580,9 +598,9 @@ type X86_64StorageManager<'a, 'r, CallConv> =
     StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, X86_64Assembler, CallConv>;
 
 impl X64_64SystemVLoadArgs {
-    fn load_arg<'a, 'r>(
+    fn load_arg<'a>(
         &mut self,
-        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
         layout_interner: &mut STLayoutInterner<'a>,
         sym: Symbol,
         in_layout: InLayout<'a>,
@@ -615,6 +633,11 @@ impl X64_64SystemVLoadArgs {
                     storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                     self.argument_offset += stack_size as i32;
                 }
+                Layout::Union(UnionLayout::NonRecursive(_)) => {
+                    // for now, just also store this on the stack
+                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                    self.argument_offset += stack_size as i32;
+                }
                 _ => {
                     todo!("Loading args with layout {:?}", layout_interner.dbg(other));
                 }
@@ -622,9 +645,9 @@ impl X64_64SystemVLoadArgs {
         }
     }
 
-    fn load_arg_general<'a, 'r>(
+    fn load_arg_general(
         &mut self,
-        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
         if self.general_i < X86_64SystemV::GENERAL_PARAM_REGS.len() {
@@ -637,9 +660,9 @@ impl X64_64SystemVLoadArgs {
         }
     }
 
-    fn load_arg_float<'a, 'r>(
+    fn load_arg_float(
         &mut self,
-        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64SystemV>,
+        storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
         if self.general_i < X86_64SystemV::GENERAL_PARAM_REGS.len() {
@@ -760,8 +783,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     }
 
     #[inline(always)]
-    fn setup_stack<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn setup_stack(
+        buf: &mut Vec<'_, u8>,
         saved_general_regs: &[X86_64GeneralReg],
         saved_float_regs: &[X86_64FloatReg],
         requested_stack_size: i32,
@@ -777,8 +800,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     }
 
     #[inline(always)]
-    fn cleanup_stack<'a>(
-        buf: &mut Vec<'a, u8>,
+    fn cleanup_stack(
+        buf: &mut Vec<'_, u8>,
         saved_general_regs: &[X86_64GeneralReg],
         saved_float_regs: &[X86_64FloatReg],
         aligned_stack_size: i32,
@@ -794,9 +817,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     }
 
     #[inline(always)]
-    fn load_args<'a, 'r>(
+    fn load_args<'a>(
         _buf: &mut Vec<'a, u8>,
-        storage_manager: &mut X86_64StorageManager<'a, 'r, X86_64WindowsFastcall>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64WindowsFastcall>,
         layout_interner: &mut STLayoutInterner<'a>,
         args: &'a [(InLayout<'a>, Symbol)],
         ret_layout: &InLayout<'a>,
@@ -838,11 +861,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     }
 
     #[inline(always)]
-    fn store_args<'a, 'r>(
+    fn store_args<'a>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
@@ -915,11 +938,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
     }
 
-    fn return_complex_symbol<'a, 'r>(
+    fn return_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
@@ -932,11 +955,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         todo!("Returning complex symbols for X86_64");
     }
 
-    fn load_returned_complex_symbol<'a, 'r>(
+    fn load_returned_complex_symbol<'a>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
-            'r,
+            '_,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
@@ -962,8 +985,8 @@ impl X86_64WindowsFastcall {
 }
 
 #[inline(always)]
-fn x86_64_generic_setup_stack<'a>(
-    buf: &mut Vec<'a, u8>,
+fn x86_64_generic_setup_stack(
+    buf: &mut Vec<'_, u8>,
     saved_general_regs: &[X86_64GeneralReg],
     saved_float_regs: &[X86_64FloatReg],
     requested_stack_size: i32,
@@ -1019,8 +1042,8 @@ fn x86_64_generic_setup_stack<'a>(
 
 #[inline(always)]
 #[allow(clippy::unnecessary_wraps)]
-fn x86_64_generic_cleanup_stack<'a>(
-    buf: &mut Vec<'a, u8>,
+fn x86_64_generic_cleanup_stack(
+    buf: &mut Vec<'_, u8>,
     saved_general_regs: &[X86_64GeneralReg],
     saved_float_regs: &[X86_64FloatReg],
     aligned_stack_size: i32,
@@ -1150,6 +1173,21 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn function_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: X86_64GeneralReg,
+    ) {
+        lea_reg64(buf, dst);
+
+        relocs.push(Relocation::LinkedFunction {
+            offset: buf.len() as u64 - 4,
+            name: fn_name,
+        });
+    }
+
+    #[inline(always)]
     fn imul_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -1160,9 +1198,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         imul_reg64_reg64(buf, dst, src2);
     }
 
-    fn umul_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
@@ -1244,9 +1282,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         }
     }
 
-    fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
@@ -1264,9 +1302,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
     }
 
-    fn udiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
@@ -1554,45 +1592,62 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn eq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
+        cmp_reg64_reg64(buf, register_width, src1, src2);
         sete_reg64(buf, dst);
     }
 
     #[inline(always)]
     fn neq_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
+        cmp_reg64_reg64(buf, register_width, src1, src2);
         setne_reg64(buf, dst);
     }
 
     #[inline(always)]
-    fn ilt_reg64_reg64_reg64(
+    fn signed_compare_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        operation: CompareOperation,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        setl_reg64(buf, dst);
+        cmp_reg64_reg64(buf, register_width, src1, src2);
+
+        match operation {
+            CompareOperation::LessThan => setl_reg64(buf, dst),
+            CompareOperation::LessThanOrEqual => setle_reg64(buf, dst),
+            CompareOperation::GreaterThan => setg_reg64(buf, dst),
+            CompareOperation::GreaterThanOrEqual => setge_reg64(buf, dst),
+        }
     }
 
-    #[inline(always)]
-    fn ult_reg64_reg64_reg64(
+    fn unsigned_compare_reg64(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        operation: CompareOperation,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        setb_reg64(buf, dst);
+        cmp_reg64_reg64(buf, register_width, src1, src2);
+
+        match operation {
+            CompareOperation::LessThan => setb_reg64(buf, dst),
+            CompareOperation::LessThanOrEqual => setbe_reg64(buf, dst),
+            CompareOperation::GreaterThan => seta_reg64(buf, dst),
+            CompareOperation::GreaterThanOrEqual => setae_reg64(buf, dst),
+        }
     }
 
     #[inline(always)]
@@ -1623,28 +1678,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn igt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        setg_reg64(buf, dst);
-    }
-
-    #[inline(always)]
-    fn ugt_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        seta_reg64(buf, dst);
-    }
-
-    #[inline(always)]
     fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
         cvtsi2ss_freg64_reg64(buf, dst, src);
     }
@@ -1662,28 +1695,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
         cvtsi2sd_freg64_reg64(buf, dst, src);
-    }
-
-    #[inline(always)]
-    fn lte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        setle_reg64(buf, dst);
-    }
-
-    #[inline(always)]
-    fn gte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src1: X86_64GeneralReg,
-        src2: X86_64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        setge_reg64(buf, dst);
     }
 
     #[inline(always)]
@@ -1707,9 +1718,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         binop_move_src_to_dst_reg64(buf, xor_reg64_reg64, dst, src1, src2)
     }
 
-    fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn shl_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
@@ -1720,9 +1731,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         shift_reg64_reg64_reg64(buf, storage_manager, shl_reg64_reg64, dst, src1, src2)
     }
 
-    fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn shr_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
@@ -1733,9 +1744,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         shift_reg64_reg64_reg64(buf, storage_manager, shr_reg64_reg64, dst, src1, src2)
     }
 
-    fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+    fn sar_reg64_reg64_reg64<'a, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
@@ -1844,6 +1855,50 @@ fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
         byte | REX_PREFIX_R
     } else {
         byte
+    }
+}
+
+#[inline(always)]
+fn binop_reg16_reg16(
+    op_code: u8,
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = (src as u8 % 8) << 3;
+
+    if dst_high || src_high {
+        let rex = add_rm_extension(dst, REX);
+        let rex = add_reg_extension(src, rex);
+
+        buf.extend([0x66, rex, op_code, 0xC0 | dst_mod | src_mod])
+    } else {
+        buf.extend([0x66, op_code, 0xC0 | dst_mod | src_mod]);
+    }
+}
+
+#[inline(always)]
+fn binop_reg32_reg32(
+    op_code: u8,
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = (src as u8 % 8) << 3;
+
+    if dst_high || src_high {
+        let rex = add_rm_extension(dst, REX);
+        let rex = add_reg_extension(src, rex);
+
+        buf.extend([rex, op_code, 0xC0 | dst_mod | src_mod])
+    } else {
+        buf.extend([op_code, 0xC0 | dst_mod | src_mod]);
     }
 }
 
@@ -2119,8 +2174,18 @@ fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
 
 /// `CMP r/m64,r64` -> Compare r64 to r/m64.
 #[inline(always)]
-fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x39, buf, dst, src);
+fn cmp_reg64_reg64(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    match register_width {
+        RegisterWidth::W8 => binop_reg64_reg64(0x38, buf, dst, src),
+        RegisterWidth::W16 => binop_reg16_reg16(0x39, buf, dst, src),
+        RegisterWidth::W32 => binop_reg32_reg32(0x39, buf, dst, src),
+        RegisterWidth::W64 => binop_reg64_reg64(0x39, buf, dst, src),
+    }
 }
 
 #[inline(always)]
@@ -2317,6 +2382,25 @@ fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i64) {
     }
 }
 
+/// `LEA r64, m` -> Store effective address for m in register r64.
+#[inline(always)]
+fn lea_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
+    let rex = add_opcode_extension(dst, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = dst as u8 % 8;
+
+    #[allow(clippy::unusual_byte_groupings)]
+    buf.extend([
+        rex,
+        0x8d,
+        0b00_000_101 | (dst_mod << 3),
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+    ])
+}
+
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
 /// This will not generate anything if dst and src are the same.
 #[inline(always)]
@@ -2417,13 +2501,6 @@ fn mov_base8_offset32_reg8(
         buf.push(0x24);
     }
     buf.extend(offset.to_le_bytes());
-}
-
-enum RegisterWidth {
-    W8,
-    W16,
-    W32,
-    W64,
 }
 
 #[inline(always)]
@@ -2885,7 +2962,13 @@ fn setae_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x93, buf, reg);
 }
 
-/// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF≠ OF).
+/// `SETBE r/m64` -> Set byte if below or equal (CF=1 or ZF=1).
+#[inline(always)]
+fn setbe_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x96, buf, reg);
+}
+
+/// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF ≠ OF).
 #[inline(always)]
 fn setle_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x9e, buf, reg);
@@ -3340,6 +3423,15 @@ mod tests {
     }
 
     #[test]
+    fn test_lea_reg64() {
+        disassembler_test!(
+            lea_reg64,
+            |reg| format!("lea {}, [rip]", reg),
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
     fn test_mov_reg64_reg64() {
         disassembler_test!(
             raw_mov_reg64_reg64,
@@ -3669,6 +3761,53 @@ mod tests {
             |dst, src| format!("sqrtss {dst}, {src}"),
             ALL_FLOAT_REGS,
             ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_int_cmp() {
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
+                "cmp {}, {}",
+                dst.low_8bits_string(),
+                src.low_8bits_string()
+            ),
+            [RegisterWidth::W8],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
+                "cmp {}, {}",
+                dst.low_16bits_string(),
+                src.low_16bits_string()
+            ),
+            [RegisterWidth::W16],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!(
+                "cmp {}, {}",
+                dst.low_32bits_string(),
+                src.low_32bits_string()
+            ),
+            [RegisterWidth::W32],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+
+        disassembler_test!(
+            cmp_reg64_reg64,
+            |_, dst: X86_64GeneralReg, src: X86_64GeneralReg| format!("cmp {dst}, {src}",),
+            [RegisterWidth::W64],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 }

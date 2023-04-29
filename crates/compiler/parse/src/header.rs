@@ -277,6 +277,9 @@ pub enum ImportsEntry<'a> {
         ModuleName<'a>,
         Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     ),
+
+    /// e.g "path/to/my/file.txt" as myFile : Str
+    IngestedFile(StrLiteral<'a>, Spaced<'a, TypedIdent<'a>>),
 }
 
 /// e.g.

@@ -1253,6 +1253,7 @@ define_builtins! {
         152 NUM_COUNT_LEADING_ZERO_BITS: "countLeadingZeroBits"
         153 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
         154 NUM_COUNT_ONE_BITS: "countOneBits"
+        155 NUM_ABS_DIFF: "absDiff"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1328,6 +1329,7 @@ define_builtins! {
         55 STR_GRAPHEMES: "graphemes"
         56 STR_IS_VALID_SCALAR: "isValidScalar"
         57 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
+        58 STR_WALK_UTF8: "walkUtf8"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1548,16 +1550,17 @@ define_builtins! {
         6  HASH_ADD_U32: "addU32"
         7  HASH_ADD_U64: "addU64"
         8  HASH_ADD_U128: "addU128"
-        9  HASH_HASH_I8: "hashI8"
-        10 HASH_HASH_I16: "hashI16"
-        11 HASH_HASH_I32: "hashI32"
-        12 HASH_HASH_I64: "hashI64"
-        13 HASH_HASH_I128: "hashI128"
-        14 HASH_HASH_NAT: "hashNat"
-        15 HASH_COMPLETE: "complete"
-        16 HASH_HASH_STR_BYTES: "hashStrBytes"
-        17 HASH_HASH_LIST: "hashList"
-        18 HASH_HASH_UNORDERED: "hashUnordered"
+        9  HASH_HASH_BOOL: "hashBool"
+        10 HASH_HASH_I8: "hashI8"
+        11 HASH_HASH_I16: "hashI16"
+        12 HASH_HASH_I32: "hashI32"
+        13 HASH_HASH_I64: "hashI64"
+        14 HASH_HASH_I128: "hashI128"
+        15 HASH_HASH_NAT: "hashNat"
+        16 HASH_COMPLETE: "complete"
+        17 HASH_HASH_STR_BYTES: "hashStrBytes"
+        18 HASH_HASH_LIST: "hashList"
+        19 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 JSON: "Json" => {
         0 JSON_JSON: "Json"

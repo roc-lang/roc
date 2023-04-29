@@ -7,10 +7,12 @@ use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_build::program::{
-    standard_load_config, BuildFileError, BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions,
+    handle_error_module, handle_loading_problem, standard_load_config, BuildFileError,
+    BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
 use roc_error_macros::{internal_error, user_error};
-use roc_load::{ExpectMetadata, LoadingProblem, Threading};
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_load::{ExpectMetadata, Threading};
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
@@ -32,8 +34,6 @@ use tempfile::TempDir;
 
 mod format;
 pub use format::format;
-
-const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
@@ -64,7 +64,8 @@ pub const FLAG_CHECK: &str = "check";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
-pub const GLUE_FILE: &str = "GLUE_FILE";
+pub const GLUE_DIR: &str = "GLUE_DIR";
+pub const GLUE_SPEC: &str = "GLUE_SPEC";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
@@ -279,16 +280,23 @@ pub fn build_app<'a>() -> Command<'a> {
         .subcommand(Command::new(CMD_GLUE)
             .about("Generate glue code between a platform's Roc API and its host language")
             .arg(
-                Arg::new(ROC_FILE)
-                    .help("The .roc file for the platform module")
+                Arg::new(GLUE_SPEC)
+                    .help("The specification for how to translate Roc types into output files.")
                     .allow_invalid_utf8(true)
                     .required(true)
             )
             .arg(
-                Arg::new(GLUE_FILE)
-                    .help("The filename for the generated glue code\n(Currently, this must be a .rs file because only Rust glue generation is supported so far.)")
+                Arg::new(GLUE_DIR)
+                    .help("The directory for the generated glue code.\nNote: The implementation can write to any file in this directory.")
                     .allow_invalid_utf8(true)
                     .required(true)
+            )
+            .arg(
+                Arg::new(ROC_FILE)
+                    .help("The .roc file whose exposed types should be translated.")
+                    .allow_invalid_utf8(true)
+                    .required(false)
+                    .default_value(DEFAULT_ROC_FILENAME)
             )
         )
         .subcommand(Command::new(CMD_GEN_STUB_LIB)
@@ -359,7 +367,6 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
-    use roc_gen_llvm::llvm::build::LlvmBackendMode;
     use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
     use roc_target::TargetInfo;
@@ -593,15 +600,6 @@ pub fn build(
     // so we don't want to spend time freeing these values
     let arena = ManuallyDrop::new(Bump::new());
 
-    let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
-        CodeGenBackend::Wasm
-    } else {
-        match matches.is_present(FLAG_DEV) {
-            true => CodeGenBackend::Assembly,
-            false => CodeGenBackend::Llvm,
-        }
-    };
-
     let opt_level = if let BuildConfig::BuildAndRunIfNoErrors = config {
         OptLevel::Development
     } else {
@@ -617,6 +615,25 @@ pub fn build(
             }
         }
     };
+
+    let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
+        CodeGenBackend::Wasm
+    } else {
+        match matches.is_present(FLAG_DEV) {
+            true => CodeGenBackend::Assembly,
+            false => {
+                let backend_mode = match opt_level {
+                    OptLevel::Development => LlvmBackendMode::BinaryDev,
+                    OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
+                        LlvmBackendMode::Binary
+                    }
+                };
+
+                CodeGenBackend::Llvm(backend_mode)
+            }
+        }
+    };
+
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
 
@@ -713,6 +730,16 @@ pub fn build(
                     Ok(problems.exit_code())
                 }
                 BuildAndRun => {
+                    if problems.fatally_errored {
+                        problems.print_to_stdout(total_time);
+                        println!(
+                            ".\n\nCannot run program due to fatal error…\n\n\x1B[36m{}\x1B[39m",
+                            "─".repeat(80)
+                        );
+
+                        // Return a nonzero exit code due to fatal problem
+                        return Ok(problems.exit_code());
+                    }
                     if problems.errors > 0 || problems.warnings > 0 {
                         problems.print_to_stdout(total_time);
                         println!(
@@ -730,10 +757,21 @@ pub fn build(
                     roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
+                    if problems.fatally_errored {
+                        problems.print_to_stdout(total_time);
+                        println!(
+                            ".\n\nCannot run program due to fatal error…\n\n\x1B[36m{}\x1B[39m",
+                            "─".repeat(80)
+                        );
+
+                        // Return a nonzero exit code due to fatal problem
+                        return Ok(problems.exit_code());
+                    }
                     debug_assert_eq!(
                         problems.errors, 0,
-                        "if there are errors, they should have been returned as an error variant"
+                        "if there are non-fatal errors, they should have been returned as an error variant"
                     );
+
                     if problems.warnings > 0 {
                         problems.print_to_stdout(total_time);
                         println!(
@@ -756,48 +794,6 @@ pub fn build(
             handle_error_module(module, total_time, filename, true)
         }
         Err(BuildFileError::LoadingProblem(problem)) => handle_loading_problem(problem),
-    }
-}
-
-fn handle_error_module(
-    mut module: roc_load::LoadedModule,
-    total_time: std::time::Duration,
-    filename: &OsStr,
-    print_run_anyway_hint: bool,
-) -> io::Result<i32> {
-    debug_assert!(module.total_problems() > 0);
-
-    let problems = roc_build::program::report_problems_typechecked(&mut module);
-
-    problems.print_to_stdout(total_time);
-
-    if print_run_anyway_hint {
-        // If you're running "main.roc" then you can just do `roc run`
-        // to re-run the program.
-        print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
-
-        if filename != DEFAULT_ROC_FILENAME {
-            print!(" {}", &filename.to_string_lossy());
-        }
-
-        println!("\x1B[39m");
-    }
-
-    Ok(problems.exit_code())
-}
-
-fn handle_loading_problem(problem: LoadingProblem) -> io::Result<i32> {
-    match problem {
-        LoadingProblem::FormattedReport(report) => {
-            print!("{}", report);
-            Ok(1)
-        }
-        _ => {
-            // TODO: tighten up the types here, we should always end up with a
-            // formatted report from load.
-            print!("Failed with error: {:?}", problem);
-            Ok(1)
-        }
     }
 }
 
@@ -1238,9 +1234,10 @@ fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path,
     println!("Running wasm files is not supported on this target.");
 }
 
-#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq, Default)]
 pub enum Target {
     #[strum(serialize = "system")]
+    #[default]
     System,
     #[strum(serialize = "linux32")]
     Linux32,
@@ -1250,12 +1247,6 @@ pub enum Target {
     Windows64,
     #[strum(serialize = "wasm32")]
     Wasm32,
-}
-
-impl Default for Target {
-    fn default() -> Self {
-        Target::System
-    }
 }
 
 impl Target {
@@ -1320,42 +1311,5 @@ impl std::str::FromStr for Target {
             "wasm32" => Ok(Target::Wasm32),
             _ => Err(format!("Roc does not know how to compile to {}", string)),
         }
-    }
-}
-
-// These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.
-// On Windows, there seems to be less dead-code-elimination than on Linux or MacOS, or maybe it's done later.
-#[cfg(windows)]
-#[allow(unused_imports)]
-use windows_roc_platform_functions::*;
-
-#[cfg(windows)]
-mod windows_roc_platform_functions {
-    use core::ffi::c_void;
-
-    /// # Safety
-    /// The Roc application needs this.
-    #[no_mangle]
-    pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-        libc::malloc(size)
-    }
-
-    /// # Safety
-    /// The Roc application needs this.
-    #[no_mangle]
-    pub unsafe fn roc_realloc(
-        c_ptr: *mut c_void,
-        new_size: usize,
-        _old_size: usize,
-        _alignment: u32,
-    ) -> *mut c_void {
-        libc::realloc(c_ptr, new_size)
-    }
-
-    /// # Safety
-    /// The Roc application needs this.
-    #[no_mangle]
-    pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
-        libc::free(c_ptr)
     }
 }

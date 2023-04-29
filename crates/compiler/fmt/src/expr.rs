@@ -44,6 +44,7 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
+            | IngestedFile(_, _)
             | Crash => false,
 
             // These expressions always have newlines
@@ -102,9 +103,9 @@ impl<'a> Formattable for Expr<'a> {
         }
     }
 
-    fn format_with_options<'buf>(
+    fn format_with_options(
         &self,
-        buf: &mut Buf<'buf>,
+        buf: &mut Buf<'_>,
         parens: Parens,
         newlines: Newlines,
         indent: u16,
@@ -477,6 +478,7 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
+            IngestedFile(_, _) => {}
         }
     }
 }
@@ -549,7 +551,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
     }
 }
 
-fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, indent: u16) {
+fn format_str_segment(seg: &StrSegment<'_>, buf: &mut Buf<'_>, indent: u16) {
     use StrSegment::*;
 
     match seg {
@@ -612,7 +614,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
     }
 }
 
-pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u16) {
+pub fn fmt_str_literal(buf: &mut Buf<'_>, literal: StrLiteral, indent: u16) {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -671,8 +673,8 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     }
 }
 
-fn fmt_binops<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_binops<'a>(
+    buf: &mut Buf<'_>,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
     loc_right_side: &'a Loc<Expr<'a>>,
     part_of_multi_line_binops: bool,
@@ -702,9 +704,9 @@ fn fmt_binops<'a, 'buf>(
     loc_right_side.format_with_options(buf, Parens::InOperator, Newlines::Yes, indent);
 }
 
-fn format_spaces<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
+fn format_spaces(
+    buf: &mut Buf<'_>,
+    spaces: &[CommentOrNewline<'_>],
     newlines: Newlines,
     indent: u16,
 ) {
@@ -736,8 +738,8 @@ fn is_when_patterns_multiline(when_branch: &WhenBranch) -> bool {
     is_multiline_patterns
 }
 
-fn fmt_when<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_when<'a>(
+    buf: &mut Buf<'_>,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
     indent: u16,
@@ -918,8 +920,8 @@ fn fmt_when<'a, 'buf>(
     }
 }
 
-fn fmt_dbg<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_dbg<'a>(
+    buf: &mut Buf<'_>,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -945,8 +947,8 @@ fn fmt_dbg<'a, 'buf>(
     continuation.format(buf, indent);
 }
 
-fn fmt_expect<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_expect<'a>(
+    buf: &mut Buf<'_>,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -972,8 +974,8 @@ fn fmt_expect<'a, 'buf>(
     continuation.format(buf, indent);
 }
 
-fn fmt_if<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_if<'a>(
+    buf: &mut Buf<'_>,
     branches: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
     final_else: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -1121,8 +1123,8 @@ fn fmt_if<'a, 'buf>(
     final_else.format(buf, return_indent);
 }
 
-fn fmt_closure<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_closure<'a>(
+    buf: &mut Buf<'_>,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_ret: &'a Loc<Expr<'a>>,
     indent: u16,
@@ -1222,8 +1224,8 @@ fn fmt_closure<'a, 'buf>(
     }
 }
 
-fn fmt_backpassing<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_backpassing<'a>(
+    buf: &mut Buf<'_>,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_body: &'a Loc<Expr<'a>>,
     loc_ret: &'a Loc<Expr<'a>>,
@@ -1310,8 +1312,8 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
     }
 }
 
-fn fmt_record<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_record<'a>(
+    buf: &mut Buf<'_>,
     update: Option<&'a Loc<Expr<'a>>>,
     fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
@@ -1402,9 +1404,9 @@ fn fmt_record<'a, 'buf>(
     }
 }
 
-fn format_field_multiline<'a, 'buf, T>(
-    buf: &mut Buf<'buf>,
-    field: &AssignedField<'a, T>,
+fn format_field_multiline<T>(
+    buf: &mut Buf<'_>,
+    field: &AssignedField<'_, T>,
     indent: u16,
     separator_prefix: &str,
 ) where

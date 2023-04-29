@@ -21,6 +21,7 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::soa::Slice;
+use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -1906,7 +1907,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             is_negative,
         },
         // These would not have parsed as patterns
-        Expr::AccessorFunction(_)
+        Expr::IngestedFile(_, _)
+        | Expr::AccessorFunction(_)
         | Expr::RecordAccess(_, _)
         | Expr::TupleAccess(_, _)
         | Expr::List { .. }
@@ -2478,10 +2480,10 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
                     // TODO: make this state impossible to represent in Ident::Access,
                     // by splitting out parts[0] into a separate field with a type of `&'a str`,
                     // rather than a `&'a [Accessor<'a>]`.
-                    panic!("Parsed an Ident::Access with a first part of a tuple index");
+                    internal_error!("Parsed an Ident::Access with a first part of a tuple index");
                 }
                 None => {
-                    panic!("Parsed an Ident::Access with no parts");
+                    internal_error!("Parsed an Ident::Access with no parts");
                 }
             };
 

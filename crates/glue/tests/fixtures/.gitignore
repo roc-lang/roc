@@ -2,7 +2,7 @@ Cargo.lock
 Cargo.toml
 build.rs
 host.c
-test_glue.rs
+test_glue
 roc_externs.rs
 main.rs
 app

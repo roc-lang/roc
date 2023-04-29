@@ -5,7 +5,7 @@ use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
     LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout,
-    STLayoutInterner, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -279,8 +279,9 @@ impl AbilityAliases {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CapturedSymbols<'a> {
+    #[default]
     None,
     Captured(&'a [(Symbol, Variable)]),
 }
@@ -294,12 +295,6 @@ impl<'a> CapturedSymbols<'a> {
     }
 }
 
-impl<'a> Default for CapturedSymbols<'a> {
-    fn default() -> Self {
-        CapturedSymbols::None
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proc<'a> {
     pub name: LambdaName<'a>,
@@ -308,7 +303,6 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<InLayout<'a>>,
     pub ret_layout: InLayout<'a>,
     pub is_self_recursive: SelfRecursive,
-    pub must_own_arguments: bool,
     pub host_exposed_layouts: HostExposedLayouts<'a>,
 }
 
@@ -406,50 +400,6 @@ impl<'a> Proc<'a> {
             .unwrap();
         w.push(b'\n');
         String::from_utf8(w).unwrap()
-    }
-
-    pub fn insert_refcount_operations<'i>(
-        arena: &'a Bump,
-        layout_interner: &'i STLayoutInterner<'a>,
-        home: ModuleId,
-        ident_ids: &'i mut IdentIds,
-        update_mode_ids: &'i mut UpdateModeIds,
-        procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-        host_exposed_procs: &[Symbol],
-    ) {
-        let borrow_params =
-            crate::borrow::infer_borrow(arena, layout_interner, procs, host_exposed_procs);
-
-        crate::inc_dec::visit_procs(
-            arena,
-            layout_interner,
-            home,
-            ident_ids,
-            update_mode_ids,
-            arena.alloc(borrow_params),
-            procs,
-        );
-    }
-
-    pub fn insert_reset_reuse_operations<'i>(
-        arena: &'a Bump,
-        layout_interner: &'i mut STLayoutInterner<'a>,
-        home: ModuleId,
-        ident_ids: &'i mut IdentIds,
-        update_mode_ids: &'i mut UpdateModeIds,
-        procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    ) {
-        for proc in procs.values_mut() {
-            let new_proc = crate::reset_reuse::insert_reset_reuse(
-                arena,
-                layout_interner,
-                home,
-                ident_ids,
-                update_mode_ids,
-                proc.clone(),
-            );
-            *proc = new_proc;
-        }
     }
 
     fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
@@ -1878,6 +1828,7 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
+    NullPointer,
 
     StructAtIndex {
         index: u64,
@@ -1921,6 +1872,13 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Reset {
+        symbol: Symbol,
+        update_mode: UpdateModeId,
+    },
+
+    // Just like Reset, but does not recursively decrement the children.
+    // Used in reuse analysis to replace a decref with a resetRef to avoid decrementing when the dec ref didn't.
+    ResetRef {
         symbol: Symbol,
         update_mode: UpdateModeId,
     },
@@ -2016,6 +1974,7 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            NullPointer => alloc.text("NullPointer"),
             Reuse {
                 symbol,
                 tag_id,
@@ -2043,11 +2002,21 @@ impl<'a> Expr<'a> {
             Reset {
                 symbol,
                 update_mode,
-            } => alloc.text(format!(
-                "Reset {{ symbol: {:?}, id: {} }}",
-                symbol, update_mode.id
-            )),
-
+            } => alloc
+                .text("Reset { symbol: ")
+                .append(symbol_to_doc(alloc, *symbol, pretty))
+                .append(", id: ")
+                .append(format!("{:?}", update_mode))
+                .append(" }"),
+            ResetRef {
+                symbol,
+                update_mode,
+            } => alloc
+                .text("ResetRef { symbol: ")
+                .append(symbol_to_doc(alloc, *symbol, pretty))
+                .append(", id: ")
+                .append(format!("{:?}", update_mode))
+                .append(" }"),
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
@@ -2748,8 +2717,8 @@ fn patterns_to_when<'a>(
 ///          { x } -> body
 ///
 /// conversion of one-pattern when expressions will do the most optimal thing
-fn pattern_to_when<'a>(
-    env: &mut Env<'a, '_>,
+fn pattern_to_when(
+    env: &mut Env<'_, '_>,
     pattern_var: Variable,
     pattern: Loc<roc_can::pattern::Pattern>,
     body_var: Variable,
@@ -3058,13 +3027,24 @@ fn specialize_external_help<'a>(
                 for in_layout in host_exposed_layouts {
                     let layout = layout_cache.interner.get(in_layout);
 
-                    let all_glue_procs = generate_glue_procs(
+                    let mut all_glue_procs = generate_glue_procs(
                         env.home,
                         env.ident_ids,
                         env.arena,
                         &mut layout_cache.interner,
                         env.arena.alloc(layout),
                     );
+
+                    all_glue_procs.extern_names = {
+                        let mut layout_env = layout::Env::from_components(
+                            layout_cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
+
+                        find_lambda_sets(&mut layout_env, variable)
+                    };
 
                     // for now, getters are not processed here
                     let GlueProcs {
@@ -3084,22 +3064,9 @@ fn specialize_external_help<'a>(
 
                     let mut aliases = BumpMap::default();
 
-                    for (id, mut raw_function_layout) in extern_names {
+                    for (id, raw_function_layout) in extern_names {
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
-
-                        // fix the recursion in the rocLovesRust example
-                        if false {
-                            raw_function_layout = match raw_function_layout {
-                                RawFunctionLayout::Function(a, mut lambda_set, _) => {
-                                    lambda_set.ret = in_layout;
-                                    RawFunctionLayout::Function(a, lambda_set, in_layout)
-                                }
-                                RawFunctionLayout::ZeroArgumentThunk(x) => {
-                                    RawFunctionLayout::ZeroArgumentThunk(x)
-                                }
-                            };
-                        }
 
                         let (key, (top_level, proc)) = generate_host_exposed_function(
                             env,
@@ -3200,7 +3167,6 @@ fn generate_runtime_error_function<'a>(
         closure_data_layout: None,
         ret_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        must_own_arguments: false,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
     }
 }
@@ -3293,7 +3259,6 @@ fn generate_host_exposed_function<'a>(
                 closure_data_layout: None,
                 ret_layout: result,
                 is_self_recursive: SelfRecursive::NotSelfRecursive,
-                must_own_arguments: false,
                 host_exposed_layouts: HostExposedLayouts::NotHostExposed,
             };
 
@@ -3358,7 +3323,6 @@ fn generate_host_exposed_lambda_set<'a>(
         closure_data_layout: None,
         ret_layout: return_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        must_own_arguments: false,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
     };
 
@@ -3455,7 +3419,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout: Some(closure_data_layout),
                 ret_layout,
                 is_self_recursive: recursivity,
-                must_own_arguments: false,
                 host_exposed_layouts,
             }
         }
@@ -3506,6 +3469,7 @@ fn specialize_proc_help<'a>(
                                 UnionLayout::NonRecursive(_)
                                     | UnionLayout::Recursive(_)
                                     | UnionLayout::NullableUnwrapped { .. }
+                                    | UnionLayout::NullableWrapped { .. }
                             ));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 
@@ -3654,7 +3618,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
-                must_own_arguments: false,
                 host_exposed_layouts,
             }
         }
@@ -4155,6 +4118,41 @@ pub fn with_hole<'a>(
             hole,
         ),
 
+        IngestedFile(_, bytes, var) => {
+            let interned = layout_cache.from_var(env.arena, var, env.subs).unwrap();
+            let layout = layout_cache.get_in(interned);
+
+            match layout {
+                Layout::Builtin(Builtin::List(elem_layout)) if elem_layout == Layout::U8 => {
+                    let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
+                    for byte in bytes.iter() {
+                        elements.push(ListLiteralElement::Literal(Literal::Byte(*byte)));
+                    }
+                    let expr = Expr::Array {
+                        elem_layout,
+                        elems: elements.into_bump_slice(),
+                    };
+
+                    Stmt::Let(assigned, expr, interned, hole)
+                }
+                Layout::Builtin(Builtin::Str) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Str(
+                        // This is safe because we ensure the utf8 bytes are valid earlier in the compiler pipeline.
+                        arena.alloc(
+                            unsafe { std::str::from_utf8_unchecked(bytes.as_ref()) }.to_owned(),
+                        ),
+                    )),
+                    Layout::STR,
+                    hole,
+                ),
+                _ => {
+                    // This will not manifest as a real runtime error and is just returned to have a value here.
+                    // The actual type error during solve will be fatal.
+                    runtime_error(env, "Invalid type for ingested file")
+                }
+            }
+        }
         SingleQuote(_, _, character, _) => {
             let layout = layout_cache
                 .from_var(env.arena, variable, env.subs)
@@ -4962,9 +4960,6 @@ pub fn with_hole<'a>(
                 _ => arena.alloc([record_layout]),
             };
 
-            debug_assert_eq!(field_layouts.len(), symbols.len());
-            debug_assert_eq!(fields.len(), symbols.len());
-
             if symbols.len() == 1 {
                 // TODO we can probably special-case this more, skippiing the generation of
                 // UpdateExisting
@@ -5014,9 +5009,12 @@ pub fn with_hole<'a>(
                             );
                         }
                         CopyExisting(index) => {
-                            let record_needs_specialization =
-                                procs.ability_member_aliases.get(structure).is_some();
-                            let specialized_structure_sym = if record_needs_specialization {
+                            let structure_needs_specialization =
+                                procs.ability_member_aliases.get(structure).is_some()
+                                    || procs.is_module_thunk(structure)
+                                    || procs.is_imported_module_thunk(structure);
+
+                            let specialized_structure_sym = if structure_needs_specialization {
                                 // We need to specialize the record now; create a new one for it.
                                 // TODO: reuse this symbol for all updates
                                 env.unique_symbol()
@@ -5033,10 +5031,7 @@ pub fn with_hole<'a>(
                             stmt =
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
 
-                            // If the records needs specialization or it's a thunk, we need to
-                            // create the specialized definition or force the thunk, respectively.
-                            // Both cases are handled below.
-                            if record_needs_specialization || procs.is_module_thunk(structure) {
+                            if structure_needs_specialization {
                                 stmt = specialize_symbol(
                                     env,
                                     procs,
@@ -5465,7 +5460,7 @@ pub fn with_hole<'a>(
                                     let passed_function = PassedFunction {
                                         name: lambda_name,
                                         captured_environment: closure_data_symbol,
-                                        owns_captured_environment: false,
+                                        owns_captured_environment: true,
                                         specialization_id,
                                         argument_layouts: arg_layouts,
                                         return_layout: ret_layout,
@@ -5738,8 +5733,8 @@ fn compile_struct_like<'a, L, UnusedLayout>(
 }
 
 #[inline(always)]
-fn late_resolve_ability_specialization<'a>(
-    env: &mut Env<'a, '_>,
+fn late_resolve_ability_specialization(
+    env: &mut Env<'_, '_>,
     member: Symbol,
     specialization_id: Option<SpecializationId>,
     specialization_var: Variable,
@@ -7464,7 +7459,11 @@ fn substitute_in_expr<'a>(
             }
         }
 
-        Reuse { .. } | Reset { .. } => unreachable!("reset/reuse have not been introduced yet"),
+        NullPointer => None,
+
+        Reuse { .. } | Reset { .. } | ResetRef { .. } => {
+            unreachable!("reset/resetref/reuse have not been introduced yet")
+        }
 
         Struct(args) => {
             let mut did_change = false;
@@ -9520,6 +9519,126 @@ impl LambdaSetId {
     }
 }
 
+fn find_lambda_sets<'a>(
+    env: &mut crate::layout::Env<'a, '_>,
+    initial: Variable,
+) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
+    let mut stack = bumpalo::collections::Vec::new_in(env.arena);
+
+    // ignore the lambda set of top-level functions
+    match env.subs.get_without_compacting(initial).content {
+        Content::Structure(FlatType::Func(arguments, _, result)) => {
+            let arguments = &env.subs.variables[arguments.indices()];
+
+            stack.extend(arguments.iter().copied());
+            stack.push(result);
+        }
+        _ => {
+            stack.push(initial);
+        }
+    }
+
+    let lambda_set_variables = find_lambda_sets_help(env.subs, stack);
+    let mut answer =
+        bumpalo::collections::Vec::with_capacity_in(lambda_set_variables.len(), env.arena);
+
+    for (variable, lambda_set_id) in lambda_set_variables {
+        let lambda_set = env.subs.get_lambda_set(variable);
+        let raw_function_layout = RawFunctionLayout::from_var(env, lambda_set.ambient_function)
+            .value()
+            .unwrap();
+
+        let key = (lambda_set_id, raw_function_layout);
+        answer.push(key);
+    }
+
+    answer
+}
+
+pub fn find_lambda_sets_help(
+    subs: &Subs,
+    mut stack: Vec<'_, Variable>,
+) -> MutMap<Variable, LambdaSetId> {
+    use roc_types::subs::GetSubsSlice;
+
+    let mut lambda_set_id = LambdaSetId::default();
+
+    let mut result = MutMap::default();
+
+    while let Some(var) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            Content::RangedNumber(_)
+            | Content::Error
+            | Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _)
+            | Content::RecursionVar { .. } => {}
+            Content::Structure(flat_type) => match flat_type {
+                FlatType::Apply(_, arguments) => {
+                    stack.extend(subs.get_subs_slice(*arguments).iter().rev());
+                }
+                FlatType::Func(arguments, lambda_set_var, ret_var) => {
+                    result.insert(*lambda_set_var, lambda_set_id);
+                    lambda_set_id = lambda_set_id.next();
+
+                    let arguments = &subs.variables[arguments.indices()];
+
+                    stack.extend(arguments.iter().copied());
+                    stack.push(*lambda_set_var);
+                    stack.push(*ret_var);
+                }
+                FlatType::Record(fields, ext) => {
+                    stack.extend(subs.get_subs_slice(fields.variables()).iter().rev());
+                    stack.push(*ext);
+                }
+                FlatType::Tuple(elements, ext) => {
+                    stack.extend(subs.get_subs_slice(elements.variables()).iter().rev());
+                    stack.push(*ext);
+                }
+                FlatType::FunctionOrTagUnion(_, _, ext) => {
+                    // just the ext
+                    match ext {
+                        roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                        roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                    }
+                }
+                FlatType::TagUnion(union_tags, ext)
+                | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
+                    for tag in union_tags.variables() {
+                        stack.extend(
+                            subs.get_subs_slice(subs.variable_slices[tag.index as usize])
+                                .iter()
+                                .rev(),
+                        );
+                    }
+
+                    match ext {
+                        roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                        roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                    }
+                }
+                FlatType::EmptyRecord => {}
+                FlatType::EmptyTuple => {}
+                FlatType::EmptyTagUnion => {}
+            },
+            Content::Alias(_, _, actual, _) => {
+                stack.push(*actual);
+            }
+            Content::LambdaSet(lambda_set) => {
+                // the lambda set itself should already be caught by Func above, but the
+                // capture can itself contain more lambda sets
+                for index in lambda_set.solved.variables() {
+                    let subs_slice = subs.variable_slices[index.index as usize];
+                    stack.extend(subs.variables[subs_slice.indices()].iter());
+                }
+            }
+        }
+    }
+
+    result
+}
+
 pub fn generate_glue_procs<'a, 'i, I>(
     home: ModuleId,
     ident_ids: &mut IdentIds,
@@ -9645,6 +9764,9 @@ where
                 lambda_set_id = lambda_set_id.next();
 
                 stack.push(layout_interner.get(lambda_set.runtime_representation()));
+
+                // TODO: figure out if we need to look at the other layouts
+                // stack.push(layout_interner.get(lambda_set.ret));
             }
             Layout::RecursivePointer(_) => {
                 /* do nothing, we've already generated for this type through the Union(_) */
@@ -9724,7 +9846,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         };
 
@@ -9820,7 +9941,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            must_own_arguments: false,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         };
 

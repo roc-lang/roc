@@ -1,10 +1,5 @@
 procedure Test.1 (Test.4):
-    inc Test.4;
     ret Test.4;
-
-procedure Test.21 (Test.23, #Attr.12):
-    let Test.22 : Str = CallByName Test.5 Test.23 #Attr.12;
-    ret Test.22;
 
 procedure Test.5 (Test.12, Test.4):
     dec Test.4;
@@ -21,10 +16,8 @@ procedure Test.0 ():
     if Test.20 then
         let Test.15 : Str = "";
         let Test.10 : Str = CallByName Test.1 Test.15;
-        dec Test.15;
         jump Test.9 Test.10;
     else
         let Test.18 : Str = "";
         let Test.16 : Str = CallByName Test.1 Test.18;
-        dec Test.18;
         jump Test.9 Test.16;

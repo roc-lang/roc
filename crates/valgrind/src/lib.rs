@@ -10,9 +10,8 @@ fn build_host() {
     use roc_build::program::build_and_preprocess_host;
     use roc_linker::preprocessed_host_filename;
 
-    let platform_main_roc = std::env::current_dir()
-        .unwrap()
-        .join("zig-platform/main.roc");
+    let platform_main_roc =
+        roc_command_utils::root_dir().join("crates/valgrind/zig-platform/main.roc");
 
     // tests always run on the host
     let target = target_lexicon::Triple::host();
@@ -20,6 +19,12 @@ fn build_host() {
     // the preprocessed host is stored beside the platform's main.roc
     let preprocessed_host_path =
         platform_main_roc.with_file_name(preprocessed_host_filename(&target).unwrap());
+
+    // valgrind does not support avx512 yet: https://bugs.kde.org/show_bug.cgi?id=383010
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if is_x86_feature_detected!("avx512f") {
+        std::env::set_var("NO_AVX512", "1");
+    }
 
     build_and_preprocess_host(
         roc_mono::ir::OptLevel::Normal,
@@ -52,15 +57,16 @@ fn valgrind_test_linux(source: &str) {
     // the host is identical for all tests so we only want to build it once
     BUILD_ONCE.call_once(build_host);
 
-    let pf = std::env::current_dir()
-        .unwrap()
-        .join("zig-platform/main.roc");
+    let pf = roc_command_utils::root_dir().join("crates/valgrind/zig-platform/main.roc");
 
     assert!(pf.exists(), "cannot find platform {:?}", &pf);
 
-    let mut app_module_source = format!(
-        indoc::indoc!(
-            r#"
+    let concat_header = !source.trim().starts_with("app ");
+
+    let mut app_module_source = if concat_header {
+        format!(
+            indoc::indoc!(
+                r#"
                 app "test"
                     packages {{ pf: "{}" }}
                     imports []
@@ -68,14 +74,24 @@ fn valgrind_test_linux(source: &str) {
 
                 main =
             "#
-        ),
-        pf.to_str().unwrap()
-    );
+            ),
+            pf.to_str().unwrap()
+        )
+    } else {
+        String::new()
+    };
 
     for line in source.lines() {
-        app_module_source.push_str("    ");
+        if concat_header {
+            app_module_source.push_str("    ");
+        }
         app_module_source.push_str(line);
         app_module_source.push('\n');
+    }
+
+    if !concat_header {
+        app_module_source =
+            app_module_source.replace("replace_me_platform_path", &pf.display().to_string());
     }
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -309,6 +325,227 @@ fn str_concat_later_referencing_empty_list_with_capacity() {
             |> List.len
             |> Num.addWrap (List.len a)
             |> Num.toStr
+        )
+        "#
+    ));
+}
+
+#[test]
+fn joinpoint_with_closure() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            Animal : [Cat, Dog, Goose]
+
+            makeSound : Animal -> Str
+            makeSound = \animal ->
+                dogSound = "Woof"
+                when animal is
+                    Cat | Dog if isCat animal -> "Miauw"
+                    Goose -> "Honk"
+                    _ -> dogSound
+
+            isCat : Animal -> Bool
+            isCat = \animal ->
+                when animal is
+                    Cat -> Bool.true
+                    _ -> Bool.false
+
+            test =
+                catSound = makeSound Cat
+                dogSound = makeSound Dog
+                gooseSound = makeSound Goose
+                "Cat: \(catSound), Dog: \(dogSound), Goose: \(gooseSound)"
+
+            test
+        )
+        "#
+    ));
+}
+
+#[test]
+fn joinpoint_with_reuse() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            LinkedList a : [Cons a (LinkedList a), Nil]
+
+            # mapLinkedList : LinkedList a, (a -> b) -> LinkedList b
+            mapLinkedList = \linkedList, f -> when linkedList is
+                Nil -> Nil
+                Cons x xs ->
+                    x2 = if Bool.true then x else x
+                    Cons (f x2) (mapLinkedList xs f)
+
+            # printLinkedList : LinkedList a, (a -> Str) -> Str
+            printLinkedList = \linkedList, f ->
+                when linkedList is
+                Nil -> "Nil"
+                Cons x xs ->
+                    strX = f x
+                    strXs = printLinkedList xs f
+                    "Cons \(strX) (\(strXs))"
+
+            test =
+                newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
+                printLinkedList newList Num.toStr
+
+            test
+        )
+        "#
+    ));
+}
+
+#[test]
+fn tree_rebalance() {
+    valgrind_test(indoc!(
+        r#"
+        app "test"
+            packages { pf: "replace_me_platform_path" }
+            imports []
+            provides [main] to pf
+
+        main = show (insert 0 {} Empty)
+
+        insert : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
+        insert = \key, value, dict ->
+            when insertHelp key value dict is
+                Node Red k v l r -> Node Black k v l r
+                x -> x
+
+        insertHelp : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
+        insertHelp = \key, value, dict ->
+            when dict is
+                Empty ->
+                    # New nodes are always red. If it violates the rules, it will be fixed
+                    # when balancing.
+                    Node Red key value Empty Empty
+
+                Node nColor nKey nValue nLeft nRight ->
+                    when Num.compare key nKey is
+                        LT -> balance nColor nKey nValue (insertHelp key value nLeft) nRight
+                        EQ -> Node nColor nKey value nLeft nRight
+                        GT -> balance nColor nKey nValue nLeft (insertHelp key value nRight)
+
+        balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
+        balance = \color, key, value, left, right ->
+            when right is
+                Node Red rK rV rLeft rRight ->
+                    when left is
+                        Node Red lK lV lLeft lRight ->
+                            Node
+                                Red
+                                key
+                                value
+                                (Node Black lK lV lLeft lRight)
+                                (Node Black rK rV rLeft rRight)
+
+                        _ ->
+                            Node color rK rV (Node Red key value left rLeft) rRight
+
+                _ ->
+                    when left is
+                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                            Node
+                                Red
+                                lK
+                                lV
+                                (Node Black llK llV llLeft llRight)
+                                (Node Black key value lRight right)
+
+                        _ ->
+                            Node color key value left right
+
+
+        show : RedBlackTree I64 {} -> Str
+        show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")
+
+        showRBTree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
+        showRBTree = \tree, showKey, showValue ->
+            when tree is
+                Empty -> "Empty"
+                Node color key value left right ->
+                    sColor = showColor color
+                    sKey = showKey key
+                    sValue = showValue value
+                    sL = nodeInParens left showKey showValue
+                    sR = nodeInParens right showKey showValue
+
+                    "Node \(sColor) \(sKey) \(sValue) \(sL) \(sR)"
+
+        nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
+        nodeInParens = \tree, showKey, showValue ->
+            when tree is
+                Empty ->
+                    showRBTree tree showKey showValue
+
+                Node _ _ _ _ _ ->
+                    inner = showRBTree tree showKey showValue
+
+                    "(\(inner))"
+
+        showColor : NodeColor -> Str
+        showColor = \color ->
+            when color is
+                Red -> "Red"
+                Black -> "Black"
+
+        NodeColor : [Red, Black]
+
+        RedBlackTree k v : [Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty]
+
+        Key k : Num k
+
+
+        "#
+    ));
+}
+
+#[test]
+fn lowlevel_list_calls() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            a = List.map [1,1,1,1,1] (\x -> x + 0)
+            b = List.map2 a [1,1,1,1,1] (\x, y -> x + y)
+            c = List.map3 a b [1,1,1,1,1] (\x, y, z -> x + y + z)
+            d = List.map4 a b c [1,1,1,1,1] (\x, y, z, w -> x + y + z + w)
+            e = List.sortWith d (\x, y -> Num.compare x y)
+
+            Num.toStr (List.len e)
+        )
+        "#
+    ));
+}
+
+#[test]
+fn joinpoint_nullpointer() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            LinkedList a : [Cons a (LinkedList a), Nil]
+
+            printLinkedList : LinkedList Str -> Str
+            printLinkedList = \linkedList->
+                when linkedList is
+                    Nil -> "Nil"
+                    Cons x xs ->
+                        strXs = printLinkedList xs
+                        "Cons \(x) (\(strXs))"
+
+            linkedListHead : LinkedList Str -> LinkedList Str
+            linkedListHead = \linkedList ->
+                string = when linkedList is
+                    Cons s _ -> s
+                    Nil -> ""
+                Cons string Nil
+
+            test =
+                cons = printLinkedList (linkedListHead (Cons "foo" Nil))
+                nil = printLinkedList (linkedListHead (Nil))
+                "\(cons) - \(nil)"
+
+            test
         )
         "#
     ));
