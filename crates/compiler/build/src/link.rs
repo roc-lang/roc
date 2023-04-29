@@ -362,21 +362,8 @@ pub fn build_zig_host_wasm32(
         unimplemented!("Linking a shared library to wasm not yet implemented");
     }
 
-    let zig_target = if matches!(opt_level, OptLevel::Development) {
-        "wasm32-wasi"
-    } else {
-        // For LLVM backend wasm we are emitting a .bc file anyway so this target is OK
-        "i386-linux-musl"
-    };
-
     // NOTE currently just to get compiler warnings if the host code is invalid.
     // the produced artifact is not used
-    //
-    // NOTE we're emitting LLVM IR here (again, it is not actually used)
-    //
-    // we'd like to compile with `-target wasm32-wasi` but that is blocked on
-    //
-    // https://github.com/ziglang/zig/issues/9414
     let mut zig_cmd = zig();
 
     zig_cmd
@@ -397,7 +384,7 @@ pub fn build_zig_host_wasm32(
             "--library",
             "c",
             "-target",
-            zig_target,
+            "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
             "-fPIC",
             "--strip",
@@ -1280,8 +1267,6 @@ fn link_wasm32(
     input_paths: &[&str],
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let wasi_libc_path = find_wasi_libc_path();
-
     let child = zig()
         // .env_clear()
         // .env("PATH", &env_path)
@@ -1289,8 +1274,9 @@ fn link_wasm32(
         .args(input_paths)
         .args([
             // include wasi libc
+            // TOOD: This now compiles fine with `-lc`. That said, the output file doesn't work.
             // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
-            wasi_libc_path.to_str().unwrap(),
+            find_wasi_libc_path().to_str().unwrap(),
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",

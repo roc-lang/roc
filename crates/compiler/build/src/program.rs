@@ -103,7 +103,7 @@ pub fn gen_from_mono_module<'a>(
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
-        CodeGenBackend::Assembly => gen_from_mono_module_dev(
+        CodeGenBackend::Assembly | CodeGenBackend::Wasm => gen_from_mono_module_dev(
             arena,
             loaded,
             target,
@@ -111,16 +111,6 @@ pub fn gen_from_mono_module<'a>(
             wasm_dev_stack_bytes,
         ),
         CodeGenBackend::Llvm(backend_mode) => {
-            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
-        }
-        CodeGenBackend::Wasm => {
-            // emit wasm via the llvm backend
-
-            let backend_mode = match code_gen_options.opt_level {
-                OptLevel::Development => LlvmBackendMode::BinaryDev,
-                OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
-            };
-
             gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
         }
     }
@@ -966,9 +956,17 @@ fn build_loaded_file<'a>(
             std::fs::write(&output_exe_path, &*roc_app_bytes).unwrap();
         }
         (LinkingStrategy::Legacy, _) => {
+            let extension = if matches!(operating_system, roc_target::OperatingSystem::Wasi) {
+                // Legacy linker is only by used llvm wasm backend, not dev.
+                // llvm wasm backend directly emits a bitcode file when targeting wasi, not a `.o` or `.wasm` file.
+                // If we set the extension wrong, zig will print a ton of warnings when linking.
+                "bc"
+            } else {
+                operating_system.object_file_ext()
+            };
             let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
-                .suffix(&format!(".{}", operating_system.object_file_ext()))
+                .suffix(&format!(".{}", extension))
                 .tempfile()
                 .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
             let app_o_file = app_o_file.path();
