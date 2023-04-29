@@ -3,7 +3,6 @@ use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, Env, RocFunctionCall, Scope,
 };
 use crate::llvm::convert::basic_type_from_layout;
-use crate::llvm::refcounting::increment_refcount_layout;
 use inkwell::builder::Builder;
 use inkwell::types::{BasicType, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -125,7 +124,6 @@ pub(crate) fn list_with_capacity<'a, 'ctx, 'env>(
 pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
-    layout_ids: &mut LayoutIds<'a>,
     element_layout: InLayout<'a>,
     elem_index: IntValue<'ctx>,
     wrapper_struct: StructValue<'ctx>,
@@ -148,17 +146,13 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
         )
     };
 
-    let result = load_roc_value(
+    load_roc_value(
         env,
         layout_interner,
         element_layout,
         elem_ptr,
         "list_get_load_element",
-    );
-
-    increment_refcount_layout(env, layout_interner, layout_ids, 1, result, element_layout);
-
-    result
+    )
 }
 
 /// List.reserve : List elem, Nat -> List elem

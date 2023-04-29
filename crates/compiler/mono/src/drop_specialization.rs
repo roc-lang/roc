@@ -848,20 +848,16 @@ fn get_union_tag_layout(union_layout: UnionLayout<'_>, tag: Option<Tag>) -> Unio
 Branch on the uniqueness of a symbol.
 Using a joinpoint with the continuation as the body.
 */
-fn branch_uniqueness<'a, 'i, F1, F2>(
+fn branch_uniqueness<'a, 'i>(
     arena: &'a Bump,
     ident_ids: &'i mut IdentIds,
     layout_interner: &'i mut STLayoutInterner<'a>,
     environment: &DropSpecializationEnvironment<'a>,
     symbol: Symbol,
-    unique: F1,
-    not_unique: F2,
+    unique: impl FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
+    not_unique: impl FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
     continutation: &'a Stmt<'a>,
-) -> &'a Stmt<'a>
-where
-    F1: FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
-    F2: FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
-{
+) -> &'a Stmt<'a> {
     match continutation {
         // The continuation is a single stmt. So we can insert it inline and skip creating a joinpoint.
         Stmt::Ret(_) | Stmt::Jump(_, _) => {
@@ -911,16 +907,13 @@ where
     }
 }
 
-fn unique_symbol<'a, 'i, F>(
+fn unique_symbol<'a, 'i>(
     arena: &'a Bump,
     ident_ids: &'i mut IdentIds,
     environment: &DropSpecializationEnvironment<'a>,
     symbol: Symbol,
-    continuation: F,
-) -> &'a Stmt<'a>
-where
-    F: FnOnce(Symbol) -> &'a mut Stmt<'a>,
-{
+    continuation: impl FnOnce(Symbol) -> &'a mut Stmt<'a>,
+) -> &'a Stmt<'a> {
     let is_unique = environment.create_symbol(ident_ids, "is_unique");
 
     arena.alloc(Stmt::Let(

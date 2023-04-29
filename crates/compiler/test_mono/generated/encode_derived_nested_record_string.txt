@@ -247,6 +247,7 @@ procedure List.80 (List.547, List.548, List.549, List.550, List.551):
         let List.524 : Int1 = CallByName Num.22 List.436 List.437;
         if List.524 then
             let List.531 : {Str, Str} = CallByName List.66 List.433 List.436;
+            inc List.531;
             let List.525 : {List U8, U64} = CallByName List.139 List.434 List.531 List.435;
             let List.528 : U64 = 1i64;
             let List.527 : U64 = CallByName Num.19 List.436 List.528;
@@ -262,6 +263,7 @@ procedure List.80 (List.621, List.622, List.623, List.624, List.625):
         let List.597 : Int1 = CallByName Num.22 List.436 List.437;
         if List.597 then
             let List.604 : {Str, Str} = CallByName List.66 List.433 List.436;
+            inc List.604;
             let List.598 : {List U8, U64} = CallByName List.139 List.434 List.604 List.435;
             let List.601 : U64 = 1i64;
             let List.600 : U64 = CallByName Num.19 List.436 List.601;

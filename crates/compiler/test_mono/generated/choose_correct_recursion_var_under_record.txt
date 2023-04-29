@@ -7,6 +7,7 @@ procedure List.2 (List.96, List.97):
     let List.504 : Int1 = CallByName Num.22 List.97 List.508;
     if List.504 then
         let List.506 : Str = CallByName List.66 List.96 List.97;
+        inc List.506;
         dec List.96;
         let List.505 : [C {}, C Str] = TagId(1) List.506;
         ret List.505;

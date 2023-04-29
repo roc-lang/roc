@@ -10,6 +10,7 @@ use std::{collections::HashMap, hash::BuildHasherDefault};
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, MutMap, MutSet};
+use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
 use crate::{
@@ -178,7 +179,6 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
                     .chain([(&default_branch.0, default_branch.1)])
                 {
                     match info {
-                        BranchInfo::None => (),
                         BranchInfo::Constructor {
                             scrutinee,
                             layout,
@@ -186,6 +186,7 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
                         } => {
                             self.insert_symbol_layout_rc_type(scrutinee, layout);
                         }
+                        _ => (),
                     }
 
                     self.insert_symbols_rc_type_stmt(stmt);
@@ -860,7 +861,7 @@ fn insert_refcount_operations_binding<'a>(
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     macro_rules! dec_borrowed {
-        ($symbols:expr,$stmt:expr) => {
+        ($symbols:expr, $stmt:expr) => {
             // Insert decrement operations for borrowed symbols if they are currently owned.
             consume_and_insert_dec_stmts(
                 arena,
@@ -889,175 +890,41 @@ fn insert_refcount_operations_binding<'a>(
         };
     }
 
+    macro_rules! refcount_listget {
+        ($arguments:expr) => {{
+            // TODO this index can be used to store the children of the list symbol.
+            // On the decrement of the list (if the list size is known and) the function can be specialized.
+            let [structure, _index] = match $arguments {
+                [structure, index] => Some([*structure, *index]),
+                _ => None,
+            }
+            .unwrap();
+
+            // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
+            // But we do want to make sure to decrement this item if it is the last reference.
+            let new_stmt = dec_borrowed!([structure], stmt);
+
+            // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
+            let newer_stmt = if matches!(
+                environment.get_symbol_rc_type(binding),
+                VarRcType::ReferenceCounted
+            ) {
+                insert_inc_stmt(arena, *binding, 1, new_stmt)
+            } else {
+                // If the symbol is not reference counted, we don't need to increment it.
+                new_stmt
+            };
+
+            new_let!(newer_stmt)
+        }};
+    }
+
     match expr {
         Expr::Literal(_) | Expr::NullPointer | Expr::EmptyArray | Expr::RuntimeErrorFunction(_) => {
             // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
             new_let!(stmt)
         }
-        Expr::Call(Call {
-            arguments,
-            call_type,
-        }) => match call_type {
-            // A by name call refers to a normal function call.
-            // Normal functions take all their parameters as owned, so we can mark them all as such.
-            CallType::ByName { name, .. } => {
-                // Lowlevels are wrapped in another function in order to add type signatures which help with inference.
-                // But the reference counting algorithm inserts reference counting operations in the wrapper function.
-                // But in a later stage, calls to the wrapper function were replaced by calls to the lowlevel function.
-                // Effectively removing the inserted reference counting operations.
-                // Thus to prevent that, we inline the operations here already.
-                if let LowLevelWrapperType::CanBeReplacedBy(op) =
-                    LowLevelWrapperType::from_symbol(name.name())
-                {
-                    let borrow_signature = lowlevel_borrow_signature(arena, op);
-                    let arguments_with_borrow_signature = arguments
-                        .iter()
-                        .copied()
-                        .zip(borrow_signature.iter().copied());
-                    let owned_arguments = arguments_with_borrow_signature
-                        .clone()
-                        .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
-                    let borrowed_arguments =
-                        arguments_with_borrow_signature.filter_map(|(symbol, ownership)| {
-                            ownership.is_borrowed().then_some(symbol)
-                        });
 
-                    let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
-
-                    let new_let = new_let!(new_stmt);
-
-                    inc_owned!(owned_arguments, new_let)
-                } else {
-                    let new_let = new_let!(stmt);
-
-                    inc_owned!(arguments.iter().copied(), new_let)
-                }
-            }
-            CallType::Foreign { .. } => {
-                // Foreign functions should be responsible for their own memory management.
-                // But previously they were assumed to be called with borrowed parameters, so we do the same now.
-                let new_stmt = dec_borrowed!(arguments.iter().copied(), stmt);
-
-                new_let!(new_stmt)
-            }
-            // Doesn't include higher order
-            CallType::LowLevel {
-                op: operator,
-                update_mode: _,
-            } => {
-                let borrow_signature = lowlevel_borrow_signature(arena, *operator);
-                let arguments_with_borrow_signature = arguments
-                    .iter()
-                    .copied()
-                    .zip(borrow_signature.iter().copied());
-                let owned_arguments = arguments_with_borrow_signature
-                    .clone()
-                    .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
-                let borrowed_arguments = arguments_with_borrow_signature
-                    .filter_map(|(symbol, ownership)| ownership.is_borrowed().then_some(symbol));
-
-                let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
-
-                let new_let = new_let!(new_stmt);
-
-                inc_owned!(owned_arguments, new_let)
-            }
-            CallType::HigherOrder(HigherOrderLowLevel {
-                op: operator,
-
-                closure_env_layout: _,
-
-                /// update mode of the higher order lowlevel itself
-                    update_mode: _,
-
-                passed_function,
-            }) => {
-                // Functions always take their arguments as owned.
-                // (Except lowlevels, but those are wrapped in functions that take their arguments as owned and perform rc.)
-
-                // This should always be true, not sure where this could be set to false.
-                debug_assert!(passed_function.owns_captured_environment);
-
-                // define macro that inserts a decref statement for a symbol amount of symbols
-                macro_rules! decref_lists {
-                    ($stmt:expr, $symbol:expr) => {
-                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef($symbol), $stmt))
-                    };
-
-                    ($stmt:expr, $symbol:expr, $($symbols:expr),+) => {{
-                        decref_lists!(decref_lists!($stmt, $symbol), $($symbols),+)
-                    }};
-                }
-
-                match operator {
-                    HigherOrder::ListMap { xs } => {
-                        if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                            let new_stmt = decref_lists!(new_stmt, *xs);
-
-                            let new_let = new_let!(new_stmt);
-
-                            inc_owned!([*xs].into_iter(), new_let)
-                        } else {
-                            panic!("ListMap should have 3 arguments");
-                        }
-                    }
-                    HigherOrder::ListMap2 { xs, ys } => {
-                        if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
-                            &arguments
-                        {
-                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                            let new_stmt = decref_lists!(new_stmt, *xs, *ys);
-
-                            let new_let = new_let!(new_stmt);
-
-                            inc_owned!([*xs, *ys].into_iter(), new_let)
-                        } else {
-                            panic!("ListMap2 should have 4 arguments");
-                        }
-                    }
-                    HigherOrder::ListMap3 { xs, ys, zs } => {
-                        if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
-                            &arguments
-                        {
-                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                            let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs);
-
-                            let new_let = new_let!(new_stmt);
-
-                            inc_owned!([*xs, *ys, *zs].into_iter(), new_let)
-                        } else {
-                            panic!("ListMap3 should have 5 arguments");
-                        }
-                    }
-                    HigherOrder::ListMap4 { xs, ys, zs, ws } => {
-                        if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
-                            &arguments
-                        {
-                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                            let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs, *ws);
-
-                            let new_let = new_let!(new_stmt);
-
-                            inc_owned!([*xs, *ys, *zs, *ws].into_iter(), new_let)
-                        } else {
-                            panic!("ListMap4 should have 6 arguments");
-                        }
-                    }
-                    HigherOrder::ListSortWith { xs } => {
-                        // TODO if non-unique, elements have been consumed, must still consume the list itself
-                        if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
-                            let new_stmt = dec_borrowed!([*closure_symbol], stmt);
-                            let new_let = new_let!(new_stmt);
-
-                            inc_owned!([*xs].into_iter(), new_let)
-                        } else {
-                            panic!("ListSortWith should have 3 arguments");
-                        }
-                    }
-                }
-            }
-        },
         Expr::Tag { arguments, .. } | Expr::Struct(arguments) => {
             let new_let = new_let!(stmt);
 
@@ -1068,13 +935,30 @@ fn insert_refcount_operations_binding<'a>(
 
             inc_owned!([*symbol], new_let)
         }
+        Expr::Call(Call {
+            arguments,
+            call_type:
+                CallType::LowLevel {
+                    op: LowLevel::ListGetUnsafe,
+                    ..
+                },
+        }) => {
+            refcount_listget!(arguments)
+        }
+        Expr::Call(Call {
+            arguments,
+            call_type: CallType::ByName { name, .. },
+        }) if (LowLevelWrapperType::from_symbol(name.name())
+            == LowLevelWrapperType::CanBeReplacedBy(LowLevel::ListGetUnsafe)) =>
+        {
+            refcount_listget!(arguments)
+        }
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
         | Expr::ExprUnbox { symbol: structure } => {
             // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
             // But we do want to make sure to decrement this item if it is the last reference.
-
             let new_stmt = dec_borrowed!([*structure], stmt);
 
             // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
@@ -1113,6 +997,162 @@ fn insert_refcount_operations_binding<'a>(
                 }),
                 new_let
             )
+        }
+        Expr::Call(Call {
+            arguments,
+            call_type,
+        }) => {
+            macro_rules! rc_lowlevel {
+                ($operator:expr) => {{
+                    let borrow_signature = lowlevel_borrow_signature(arena, $operator);
+                    let arguments_with_borrow_signature = arguments
+                        .iter()
+                        .copied()
+                        .zip(borrow_signature.iter().copied());
+                    let owned_arguments = arguments_with_borrow_signature
+                        .clone()
+                        .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
+                    let borrowed_arguments =
+                        arguments_with_borrow_signature.filter_map(|(symbol, ownership)| {
+                            ownership.is_borrowed().then_some(symbol)
+                        });
+
+                    let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
+
+                    let new_let = new_let!(new_stmt);
+
+                    inc_owned!(owned_arguments, new_let)
+                }};
+            }
+            match call_type {
+                // A by name call refers to a normal function call.
+                // Normal functions take all their parameters as owned, so we can mark them all as such.
+                CallType::ByName { name, .. } => {
+                    // Lowlevels are wrapped in another function in order to add type signatures which help with inference.
+                    // But the reference counting algorithm inserts reference counting operations in the wrapper function.
+                    // But in a later stage, calls to the wrapper function were replaced by calls to the lowlevel function.
+                    // Effectively removing the inserted reference counting operations.
+                    // Thus to prevent that, we inline the operations here already.
+                    if let LowLevelWrapperType::CanBeReplacedBy(operator) =
+                        LowLevelWrapperType::from_symbol(name.name())
+                    {
+                        rc_lowlevel!(operator)
+                    } else {
+                        let new_let = new_let!(stmt);
+
+                        inc_owned!(arguments.iter().copied(), new_let)
+                    }
+                }
+                CallType::Foreign { .. } => {
+                    // Foreign functions should be responsible for their own memory management.
+                    // But previously they were assumed to be called with borrowed parameters, so we do the same now.
+                    let new_stmt = dec_borrowed!(arguments.iter().copied(), stmt);
+
+                    new_let!(new_stmt)
+                }
+                // Doesn't include higher order
+                CallType::LowLevel {
+                    op: operator,
+                    update_mode: _,
+                } => {
+                    rc_lowlevel!(*operator)
+                }
+                CallType::HigherOrder(HigherOrderLowLevel {
+                    op: operator,
+
+                    closure_env_layout: _,
+
+                    /// update mode of the higher order lowlevel itself
+                        update_mode: _,
+
+                    passed_function,
+                }) => {
+                    // Functions always take their arguments as owned.
+                    // (Except lowlevels, but those are wrapped in functions that take their arguments as owned and perform rc.)
+
+                    // This should always be true, not sure where this could be set to false.
+                    debug_assert!(passed_function.owns_captured_environment);
+
+                    // define macro that inserts a decref statement for a symbol amount of symbols
+                    macro_rules! decref_lists {
+                            ($stmt:expr, $symbol:expr) => {
+                                arena.alloc(Stmt::Refcounting(ModifyRc::DecRef($symbol), $stmt))
+                            };
+
+                            ($stmt:expr, $symbol:expr, $($symbols:expr),+) => {{
+                                decref_lists!(decref_lists!($stmt, $symbol), $($symbols),+)
+                            }};
+                        }
+
+                    match operator {
+                        HigherOrder::ListMap { xs } => {
+                            if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
+                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                                let new_stmt = decref_lists!(new_stmt, *xs);
+
+                                let new_let = new_let!(new_stmt);
+
+                                inc_owned!([*xs].into_iter(), new_let)
+                            } else {
+                                panic!("ListMap should have 3 arguments");
+                            }
+                        }
+                        HigherOrder::ListMap2 { xs, ys } => {
+                            if let [_xs_symbol, _ys_symbol, _function_symbol, closure_symbol] =
+                                &arguments
+                            {
+                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                                let new_stmt = decref_lists!(new_stmt, *xs, *ys);
+
+                                let new_let = new_let!(new_stmt);
+
+                                inc_owned!([*xs, *ys].into_iter(), new_let)
+                            } else {
+                                panic!("ListMap2 should have 4 arguments");
+                            }
+                        }
+                        HigherOrder::ListMap3 { xs, ys, zs } => {
+                            if let [_xs_symbol, _ys_symbol, _zs_symbol, _function_symbol, closure_symbol] =
+                                &arguments
+                            {
+                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                                let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs);
+
+                                let new_let = new_let!(new_stmt);
+
+                                inc_owned!([*xs, *ys, *zs].into_iter(), new_let)
+                            } else {
+                                panic!("ListMap3 should have 5 arguments");
+                            }
+                        }
+                        HigherOrder::ListMap4 { xs, ys, zs, ws } => {
+                            if let [_xs_symbol, _ys_symbol, _zs_symbol, _ws_symbol, _function_symbol, closure_symbol] =
+                                &arguments
+                            {
+                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                                let new_stmt = decref_lists!(new_stmt, *xs, *ys, *zs, *ws);
+
+                                let new_let = new_let!(new_stmt);
+
+                                inc_owned!([*xs, *ys, *zs, *ws].into_iter(), new_let)
+                            } else {
+                                panic!("ListMap4 should have 6 arguments");
+                            }
+                        }
+                        HigherOrder::ListSortWith { xs } => {
+                            // TODO if non-unique, elements have been consumed, must still consume the list itself
+                            if let [_xs_symbol, _function_symbol, closure_symbol] = &arguments {
+                                let new_stmt = dec_borrowed!([*closure_symbol], stmt);
+                                let new_let = new_let!(new_stmt);
+
+                                inc_owned!([*xs].into_iter(), new_let)
+                            } else {
+                                panic!("ListSortWith should have 3 arguments");
+                            }
+                        }
+                    }
+                }
+            }
         }
         Expr::Reuse { .. } | Expr::Reset { .. } | Expr::ResetRef { .. } => {
             unreachable!("Reset(ref) and reuse should not exist at this point")
