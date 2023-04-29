@@ -71,9 +71,9 @@ pub fn rustup() -> Command {
 /// Gives a friendly error if clang is not installed.
 /// Also makes it easy to track where we use clang in the codebase.
 pub fn clang() -> Command {
-    let command_str = "clang";
+    let command_str = env::var("CC").unwrap_or_else(|_|"clang".to_string());
 
-    if check_command_available(command_str) {
+    if check_command_available(&command_str) {
         Command::new(command_str)
     } else {
         panic!("I could not find the clang command.\nPlease install clang.",)
