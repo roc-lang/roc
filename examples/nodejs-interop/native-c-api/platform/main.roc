@@ -1,4 +1,4 @@
-platform "typescript-interop"
+platform "nodejs-interop"
     requires {} { main : Str -> Str }
     exposes []
     packages {}
