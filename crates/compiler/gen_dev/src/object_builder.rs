@@ -11,8 +11,9 @@ use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol;
 use roc_module::symbol::Interns;
-use roc_mono::ir::{Proc, ProcLayout};
-use roc_mono::layout::{LayoutIds, STLayoutInterner};
+use roc_mono::ir::{Call, CallSpecId, Expr, UpdateModeId};
+use roc_mono::ir::{Proc, ProcLayout, Stmt};
+use roc_mono::layout::{LambdaName, Layout, LayoutIds, LayoutInterner, STLayoutInterner};
 use roc_target::TargetInfo;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
@@ -238,14 +239,48 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Names and linker data for user procedures
     for ((sym, layout), proc) in procedures {
+        let is_exposed = backend.env().exposed_to_host.contains(&sym);
+
+        if is_exposed {
+            let proc = build_generic_proc(&mut backend, sym, &proc);
+
+            #[cfg(debug_assertions)]
+            {
+                let module_id = proc.name.name().module_id();
+                let ident_ids = backend
+                    .interns_mut()
+                    .all_ident_ids
+                    .get_mut(&module_id)
+                    .unwrap();
+                module_id.register_debug_idents(ident_ids);
+            }
+
+            build_proc_symbol(
+                &mut output,
+                &mut layout_ids,
+                &mut procs,
+                &mut backend,
+                proc.name.name(),
+                layout,
+                proc,
+                Exposed::ExposedGeneric,
+            )
+        }
+
         build_proc_symbol(
             &mut output,
             &mut layout_ids,
             &mut procs,
-            &backend,
+            &mut backend,
             sym,
             layout,
             proc,
+            if is_exposed {
+                // Exposed::Exposed
+                Exposed::NotExposed
+            } else {
+                Exposed::NotExposed
+            },
         )
     }
 
@@ -350,35 +385,130 @@ fn build_object<'a, B: Backend<'a>>(
     output
 }
 
+fn build_generic_proc<'a, B: Backend<'a>>(
+    backend: &mut B,
+    sym: roc_module::symbol::Symbol,
+    proc: &Proc<'a>,
+) -> Proc<'a> {
+    let interns = backend.interns();
+
+    let ident_string = sym.as_str(interns);
+    let module_string = interns.module_ids.get_name(sym.module_id()).unwrap();
+    let fn_name = format!("{}{}", module_string, ident_string);
+
+    let platform = sym.module_id();
+
+    let generic_proc_name = backend.debug_symbol_in(platform, &fn_name);
+    let arg_generic = backend.debug_symbol_in(platform, "arg_generic");
+
+    let s1 = backend.debug_symbol_in(platform, "s1");
+    let s2 = backend.debug_symbol_in(platform, "s2");
+    let s3 = backend.debug_symbol_in(platform, "s3");
+
+    let arena = backend.env().arena;
+    let mut args = bumpalo::collections::Vec::new_in(arena);
+
+    let box_layout = backend
+        .interner_mut()
+        .insert(roc_mono::layout::Layout::Boxed(proc.ret_layout));
+
+    args.extend(proc.args);
+    args.push((box_layout, arg_generic));
+
+    let call_args = bumpalo::collections::Vec::from_iter_in(proc.args.iter().map(|t| t.1), arena);
+    let call_layouts =
+        bumpalo::collections::Vec::from_iter_in(proc.args.iter().map(|t| t.0), arena);
+    let call = Call {
+        call_type: roc_mono::ir::CallType::ByName {
+            name: proc.name,
+            ret_layout: proc.ret_layout,
+            arg_layouts: call_layouts.into_bump_slice(),
+            specialization_id: CallSpecId::BACKEND_DUMMY,
+        },
+        arguments: call_args.into_bump_slice(),
+    };
+
+    let box_write = Call {
+        call_type: roc_mono::ir::CallType::LowLevel {
+            op: roc_module::low_level::LowLevel::PtrWrite,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: arena.alloc([arg_generic, s1]),
+    };
+
+    let body = Stmt::Let(
+        s1,
+        Expr::Call(call),
+        proc.ret_layout,
+        arena.alloc(
+            //
+            Stmt::Let(
+                s2,
+                Expr::Call(box_write),
+                box_layout,
+                arena.alloc(
+                    //
+                    Stmt::Let(
+                        s3,
+                        Expr::Struct(&[]),
+                        Layout::UNIT,
+                        arena.alloc(
+                            //
+                            Stmt::Ret(s3),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    );
+
+    Proc {
+        name: LambdaName::no_niche(generic_proc_name),
+        args: args.into_bump_slice(),
+        body,
+        closure_data_layout: None,
+        ret_layout: roc_mono::layout::Layout::UNIT,
+        is_self_recursive: roc_mono::ir::SelfRecursive::NotSelfRecursive,
+        host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
+    }
+}
+
+enum Exposed {
+    ExposedGeneric,
+    Exposed,
+    NotExposed,
+}
+
 fn build_proc_symbol<'a, B: Backend<'a>>(
     output: &mut Object<'a>,
     layout_ids: &mut LayoutIds<'a>,
     procs: &mut Vec<'a, (String, SectionId, SymbolId, Proc<'a>)>,
-    backend: &B,
+    backend: &mut B,
     sym: roc_module::symbol::Symbol,
     layout: ProcLayout<'a>,
     proc: Proc<'a>,
+    exposed: Exposed,
 ) {
-    let base_name = backend.function_symbol_to_string(
-        sym,
-        layout.arguments.iter().copied(),
-        None,
-        layout.result,
-    );
-
-    let fn_name = if backend.env().exposed_to_host.contains(&sym) {
-        layout_ids
-            .get_toplevel(sym, &layout)
-            .to_exposed_symbol_string(sym, backend.interns())
-    } else {
-        base_name
-    };
-
     let section_id = output.add_section(
         output.segment_name(StandardSegment::Text).to_vec(),
         format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
         SectionKind::Text,
     );
+
+    let fn_name = match exposed {
+        Exposed::ExposedGeneric => layout_ids
+            .get_toplevel(sym, &layout)
+            .to_exposed_generic_symbol_string(sym, backend.interns()),
+        Exposed::Exposed => layout_ids
+            .get_toplevel(sym, &layout)
+            .to_exposed_symbol_string(sym, backend.interns()),
+        Exposed::NotExposed => backend.function_symbol_to_string(
+            sym,
+            layout.arguments.iter().copied(),
+            None,
+            layout.result,
+        ),
+    };
 
     let proc_symbol = Symbol {
         name: fn_name.as_bytes().to_vec(),
@@ -387,10 +517,9 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
         kind: SymbolKind::Text,
         // TODO: Depending on whether we are building a static or dynamic lib, this should change.
         // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
-        scope: if backend.env().exposed_to_host.contains(&sym) {
-            SymbolScope::Dynamic
-        } else {
-            SymbolScope::Linkage
+        scope: match exposed {
+            Exposed::ExposedGeneric | Exposed::Exposed => SymbolScope::Dynamic,
+            Exposed::NotExposed => SymbolScope::Linkage,
         },
         weak: false,
         section: SymbolSection::Section(section_id),

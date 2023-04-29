@@ -68,8 +68,17 @@ trait Backend<'a> {
     fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
 
+    fn interner_mut(&mut self) -> &mut STLayoutInterner<'a> {
+        self.module_interns_helpers_mut().1
+    }
+
     fn debug_symbol(&mut self, name: &str) -> Symbol {
         let module_id = self.env().module_id;
+
+        self.debug_symbol_in(module_id, name)
+    }
+
+    fn debug_symbol_in(&mut self, module_id: ModuleId, name: &str) -> Symbol {
         let ident_ids = self
             .interns_mut()
             .all_ident_ids
@@ -77,7 +86,7 @@ trait Backend<'a> {
             .unwrap();
 
         let ident_id = ident_ids.add_str(name);
-        Symbol::new(self.env().module_id, ident_id)
+        Symbol::new(module_id, ident_id)
     }
 
     // This method is suboptimal, but it seems to be the only way to make rust understand
@@ -1118,7 +1127,7 @@ trait Backend<'a> {
             LowLevel::PtrWrite => {
                 let element_layout = match self.interner().get(*ret_layout) {
                     Layout::Boxed(boxed) => boxed,
-                    _ => unreachable!(),
+                    _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 
                 self.build_ptr_write(*sym, args[0], args[1], element_layout);

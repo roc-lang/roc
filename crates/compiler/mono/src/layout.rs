@@ -4410,6 +4410,11 @@ impl LayoutId {
         let ident_string = symbol.as_str(interns);
         format!("roc__{}_{}_exposed", ident_string, self.0)
     }
+
+    pub fn to_exposed_generic_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
+        let ident_string = symbol.as_str(interns);
+        format!("roc__{}_{}_exposed_generic", ident_string, self.0)
+    }
 }
 
 struct IdsByLayout<'a> {
