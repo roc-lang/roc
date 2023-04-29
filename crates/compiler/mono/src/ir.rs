@@ -1599,6 +1599,10 @@ pub enum BranchInfo<'a> {
         layout: InLayout<'a>,
         tag_id: TagIdIntType,
     },
+    List {
+        scrutinee: Symbol,
+        len: u64,
+    },
 }
 
 impl<'a> BranchInfo<'a> {
