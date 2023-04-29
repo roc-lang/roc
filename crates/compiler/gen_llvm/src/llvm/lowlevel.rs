@@ -50,8 +50,8 @@ use super::{
     convert::zig_dec_type,
 };
 
-pub(crate) fn run_low_level<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn run_low_level<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
@@ -1271,8 +1271,8 @@ fn intwidth_from_layout(layout: InLayout) -> IntWidth {
     layout.to_int_width()
 }
 
-fn build_int_binop<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_int_binop<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     parent: FunctionValue<'ctx>,
     int_width: IntWidth,
     lhs: IntValue<'ctx>,
@@ -1492,8 +1492,8 @@ fn build_int_binop<'a, 'ctx, 'env>(
     }
 }
 
-pub fn build_num_binop<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_num_binop<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     lhs_arg: BasicValueEnum<'ctx>,
@@ -1543,8 +1543,8 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
     }
 }
 
-fn build_float_binop<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_float_binop<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     float_width: FloatWidth,
     lhs: FloatValue<'ctx>,
     rhs: FloatValue<'ctx>,
@@ -1656,8 +1656,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
     }
 }
 
-fn throw_on_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn throw_on_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     parent: FunctionValue<'ctx>,
     result: StructValue<'ctx>, // of the form { value: T, has_overflowed: bool }
     message: &str,
@@ -1689,8 +1689,8 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
         .unwrap()
 }
 
-fn dec_split_into_words<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn dec_split_into_words<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: IntValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
     let int_64 = env.context.i128_type().const_int(64, false);
@@ -1706,10 +1706,7 @@ fn dec_split_into_words<'a, 'ctx, 'env>(
     )
 }
 
-fn dec_alloca<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    value: IntValue<'ctx>,
-) -> PointerValue<'ctx> {
+fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> PointerValue<'ctx> {
     let dec_type = zig_dec_type(env);
 
     let alloca = env.builder.build_alloca(dec_type, "dec_alloca");
@@ -1728,10 +1725,7 @@ fn dec_alloca<'a, 'ctx, 'env>(
     alloca
 }
 
-fn dec_to_str<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    dec: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
     use roc_target::OperatingSystem::*;
 
     let dec = dec.into_int_value();
@@ -1762,8 +1756,8 @@ fn dec_to_str<'a, 'ctx, 'env>(
     }
 }
 
-fn dec_binop_with_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn dec_binop_with_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     fn_name: &str,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
@@ -1812,8 +1806,8 @@ fn dec_binop_with_overflow<'a, 'ctx, 'env>(
         .into_struct_value()
 }
 
-pub(crate) fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn dec_binop_with_unchecked<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     fn_name: &str,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
@@ -1851,8 +1845,8 @@ pub(crate) fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
     }
 }
 
-fn build_dec_binop<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_dec_binop<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     parent: FunctionValue<'ctx>,
     lhs: BasicValueEnum<'ctx>,
     _lhs_layout: InLayout<'a>,
@@ -1897,8 +1891,8 @@ fn build_dec_binop<'a, 'ctx, 'env>(
     }
 }
 
-fn build_dec_binop_throw_on_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_dec_binop_throw_on_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     parent: FunctionValue<'ctx>,
     operation: &str,
     lhs: BasicValueEnum<'ctx>,
@@ -2128,8 +2122,8 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     }
 }
 
-fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn int_neg_raise_on_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     arg: IntValue<'ctx>,
     int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -2159,8 +2153,8 @@ fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
     builder.build_int_neg(arg, "negate_int").into()
 }
 
-fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn int_abs_raise_on_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     arg: IntValue<'ctx>,
     int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -2190,8 +2184,8 @@ fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
     int_abs_with_overflow(env, arg, int_type)
 }
 
-fn int_abs_with_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn int_abs_with_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     arg: IntValue<'ctx>,
     int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -2233,8 +2227,8 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     )
 }
 
-fn build_float_unary_op<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_float_unary_op<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     arg: FloatValue<'ctx>,
@@ -2349,8 +2343,8 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     }
 }
 
-pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
@@ -2641,9 +2635,9 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
     }
 }
 
-fn load_symbol_and_lambda_set<'a, 'ctx, 'b>(
+fn load_symbol_and_lambda_set<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
-    scope: &'b Scope<'a, 'ctx>,
+    scope: &Scope<'a, 'ctx>,
     symbol: &Symbol,
 ) -> (BasicValueEnum<'ctx>, LambdaSet<'a>) {
     match scope.get(symbol).map(|(l, v)| (layout_interner.get(*l), v)) {

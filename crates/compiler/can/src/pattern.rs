@@ -322,7 +322,7 @@ pub fn canonicalize_def_header_pattern<'a>(
 pub struct PermitShadows(pub bool);
 
 fn canonicalize_pattern_symbol(
-    env: &mut Env<'_>,
+    env: &mut Env,
     scope: &mut Scope,
     output: &mut Output,
     region: Region,

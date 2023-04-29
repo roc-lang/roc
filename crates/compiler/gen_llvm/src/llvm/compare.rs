@@ -18,8 +18,8 @@ use super::build::{load_roc_value, use_roc_value, BuilderExt};
 use super::convert::argument_type_from_union_layout;
 use super::lowlevel::dec_binop_with_unchecked;
 
-pub fn generic_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn generic_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -38,8 +38,8 @@ pub fn generic_eq<'a, 'ctx, 'env>(
     )
 }
 
-pub fn generic_neq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn generic_neq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -58,8 +58,8 @@ pub fn generic_neq<'a, 'ctx, 'env>(
     )
 }
 
-fn build_eq_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_eq_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -136,8 +136,8 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
     }
 }
 
-fn build_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -236,8 +236,8 @@ fn build_eq<'a, 'ctx, 'env>(
     }
 }
 
-fn build_neq_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_neq_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -326,8 +326,8 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
     }
 }
 
-fn build_neq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_neq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -411,8 +411,8 @@ fn build_neq<'a, 'ctx, 'env>(
     }
 }
 
-fn build_list_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_list_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     list_layout: InLayout<'a>,
@@ -469,8 +469,8 @@ fn build_list_eq<'a, 'ctx, 'env>(
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_list_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_list_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
@@ -627,8 +627,8 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
     }
 }
 
-fn build_struct_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_struct_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     struct_layout: InLayout<'a>,
@@ -679,8 +679,8 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_struct_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_struct_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
@@ -812,8 +812,8 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
     }
 }
 
-fn build_tag_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_tag_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     tag_layout: InLayout<'a>,
@@ -864,8 +864,8 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_tag_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_tag_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
@@ -1265,8 +1265,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     }
 }
 
-fn eq_ptr_to_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn eq_ptr_to_struct<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     struct_layout: InLayout<'a>,
@@ -1314,8 +1314,8 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
 
 /// ----
 
-fn build_box_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_box_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     box_layout: InLayout<'a>,
@@ -1366,8 +1366,8 @@ fn build_box_eq<'a, 'ctx, 'env>(
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_box_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_box_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,

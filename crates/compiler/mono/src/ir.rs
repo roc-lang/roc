@@ -63,7 +63,6 @@ pub fn pretty_print_ir_symbols() -> bool {
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
 roc_error_macros::assert_sizeof_wasm!(Expr, 48);
 roc_error_macros::assert_sizeof_wasm!(Stmt, 64);

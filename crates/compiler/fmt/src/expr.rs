@@ -103,13 +103,7 @@ impl<'a> Formattable for Expr<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf<'_>,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         use self::Expr::*;
 
         let apply_needs_parens = parens == Parens::InApply;
@@ -551,7 +545,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
     }
 }
 
-fn format_str_segment(seg: &StrSegment<'_>, buf: &mut Buf<'_>, indent: u16) {
+fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
     use StrSegment::*;
 
     match seg {
@@ -614,7 +608,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
     }
 }
 
-pub fn fmt_str_literal(buf: &mut Buf<'_>, literal: StrLiteral, indent: u16) {
+pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -674,7 +668,7 @@ pub fn fmt_str_literal(buf: &mut Buf<'_>, literal: StrLiteral, indent: u16) {
 }
 
 fn fmt_binops<'a>(
-    buf: &mut Buf<'_>,
+    buf: &mut Buf,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
     loc_right_side: &'a Loc<Expr<'a>>,
     part_of_multi_line_binops: bool,
@@ -704,12 +698,7 @@ fn fmt_binops<'a>(
     loc_right_side.format_with_options(buf, Parens::InOperator, Newlines::Yes, indent);
 }
 
-fn format_spaces(
-    buf: &mut Buf<'_>,
-    spaces: &[CommentOrNewline<'_>],
-    newlines: Newlines,
-    indent: u16,
-) {
+fn format_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], newlines: Newlines, indent: u16) {
     match newlines {
         Newlines::Yes => {
             fmt_spaces(buf, spaces.iter(), indent);
@@ -739,7 +728,7 @@ fn is_when_patterns_multiline(when_branch: &WhenBranch) -> bool {
 }
 
 fn fmt_when<'a>(
-    buf: &mut Buf<'_>,
+    buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
     indent: u16,
@@ -921,7 +910,7 @@ fn fmt_when<'a>(
 }
 
 fn fmt_dbg<'a>(
-    buf: &mut Buf<'_>,
+    buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -948,7 +937,7 @@ fn fmt_dbg<'a>(
 }
 
 fn fmt_expect<'a>(
-    buf: &mut Buf<'_>,
+    buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -975,7 +964,7 @@ fn fmt_expect<'a>(
 }
 
 fn fmt_if<'a>(
-    buf: &mut Buf<'_>,
+    buf: &mut Buf,
     branches: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
     final_else: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -1124,7 +1113,7 @@ fn fmt_if<'a>(
 }
 
 fn fmt_closure<'a>(
-    buf: &mut Buf<'_>,
+    buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_ret: &'a Loc<Expr<'a>>,
     indent: u16,
@@ -1225,7 +1214,7 @@ fn fmt_closure<'a>(
 }
 
 fn fmt_backpassing<'a>(
-    buf: &mut Buf<'_>,
+    buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_body: &'a Loc<Expr<'a>>,
     loc_ret: &'a Loc<Expr<'a>>,
@@ -1313,7 +1302,7 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
 }
 
 fn fmt_record<'a>(
-    buf: &mut Buf<'_>,
+    buf: &mut Buf,
     update: Option<&'a Loc<Expr<'a>>>,
     fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
     indent: u16,
@@ -1405,8 +1394,8 @@ fn fmt_record<'a>(
 }
 
 fn format_field_multiline<T>(
-    buf: &mut Buf<'_>,
-    field: &AssignedField<'_, T>,
+    buf: &mut Buf,
+    field: &AssignedField<T>,
     indent: u16,
     separator_prefix: &str,
 ) where
