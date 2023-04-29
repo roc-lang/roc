@@ -22,7 +22,7 @@ jobs:
       - uses: cachix/install-nix-action@v20
 
       - name: execute cli_run tests only, the full tests take too long but are run nightly
-        run: nix develop  --print-build-logs -c cargo test --locked --release -p roc_cli
+        run: nix develop -c cargo test --locked --release -p roc_cli
 
       - name: make a libapp.so for the next step
         run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
