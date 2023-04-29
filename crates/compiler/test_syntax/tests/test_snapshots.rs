@@ -544,9 +544,9 @@ mod test_snapshots {
         let mut parent = std::path::PathBuf::from("tests");
         parent.push("snapshots");
         parent.push(expect.to_dir_name());
-        let input_path = parent.join(&format!("{}.{}.roc", name, ty));
-        let result_path = parent.join(&format!("{}.{}.result-ast", name, ty));
-        let formatted_path = parent.join(&format!("{}.{}.formatted.roc", name, ty));
+        let input_path = parent.join(format!("{}.{}.roc", name, ty));
+        let result_path = parent.join(format!("{}.{}.result-ast", name, ty));
+        let formatted_path = parent.join(format!("{}.{}.formatted.roc", name, ty));
 
         let source = std::fs::read_to_string(&input_path).unwrap_or_else(|err| {
             panic!(

@@ -66,8 +66,8 @@ fn pointer_at_offset<'ctx>(
 }
 
 /// Writes the module and region into the buffer
-fn write_header<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn write_header<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
     mut offset: IntValue<'ctx>,
     condition: Symbol,
@@ -95,8 +95,8 @@ fn write_header<'a, 'ctx, 'env>(
 
 /// Read the first two 32-bit values from the shared memory,
 /// representing the total number of expect frames and the next free position
-fn read_state<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn read_state<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
     let ptr_type = env.ptr_int().ptr_type(AddressSpace::default());
@@ -113,8 +113,8 @@ fn read_state<'a, 'ctx, 'env>(
     (count.into_int_value(), offset.into_int_value())
 }
 
-fn write_state<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn write_state<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
     count: IntValue<'ctx>,
     offset: IntValue<'ctx>,
@@ -175,8 +175,8 @@ pub(crate) fn notify_parent_dbg(env: &Env, shared_memory: &SharedMemoryPointer) 
 //     ..
 //     lookup_val_n  (varsize)
 //
-pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     layout_ids: &mut LayoutIds<'a>,
@@ -287,8 +287,8 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     write_state(env, original_ptr, new_count, offset)
 }
 
-fn build_clone<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
@@ -417,8 +417,8 @@ fn build_clone<'a, 'ctx, 'env>(
     }
 }
 
-fn build_clone_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone_struct<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
@@ -467,8 +467,8 @@ fn build_clone_struct<'a, 'ctx, 'env>(
     }
 }
 
-fn build_clone_tag<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone_tag<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
@@ -545,8 +545,8 @@ fn build_clone_tag<'a, 'ctx, 'env>(
     result.into_int_value()
 }
 
-fn load_tag_data<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn load_tag_data<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
     tag_value: PointerValue<'ctx>,
@@ -573,8 +573,8 @@ fn load_tag_data<'a, 'ctx, 'env>(
     env.builder.new_build_load(tag_type, data_ptr, "load_data")
 }
 
-fn clone_tag_payload_and_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn clone_tag_payload_and_id<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
@@ -623,8 +623,8 @@ fn clone_tag_payload_and_id<'a, 'ctx, 'env>(
     answer
 }
 
-fn build_clone_tag_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone_tag_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: UnionLayout<'a>,
@@ -958,8 +958,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
     }
 }
 
-fn write_pointer_with_tag_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn write_pointer_with_tag_id<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
     extra_offset: IntValue<'ctx>,
@@ -986,8 +986,8 @@ fn write_pointer_with_tag_id<'a, 'ctx, 'env>(
     }
 }
 
-fn build_copy<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_copy<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -1012,8 +1012,8 @@ fn build_copy<'a, 'ctx, 'env>(
     env.builder.build_int_add(offset, width, "new_offset")
 }
 
-fn build_clone_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,

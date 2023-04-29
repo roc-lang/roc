@@ -66,7 +66,6 @@ pub fn pretty_print_ir_symbols() -> bool {
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
 roc_error_macros::assert_sizeof_wasm!(Expr, 48);
 roc_error_macros::assert_sizeof_wasm!(Stmt, 64);
@@ -3034,13 +3033,24 @@ fn specialize_external_help<'a>(
                 for in_layout in host_exposed_layouts {
                     let layout = layout_cache.interner.get(in_layout);
 
-                    let all_glue_procs = generate_glue_procs(
+                    let mut all_glue_procs = generate_glue_procs(
                         env.home,
                         env.ident_ids,
                         env.arena,
                         &mut layout_cache.interner,
                         env.arena.alloc(layout),
                     );
+
+                    all_glue_procs.extern_names = {
+                        let mut layout_env = layout::Env::from_components(
+                            layout_cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
+
+                        find_lambda_sets(&mut layout_env, variable)
+                    };
 
                     // for now, getters are not processed here
                     let GlueProcs {
@@ -3060,22 +3070,9 @@ fn specialize_external_help<'a>(
 
                     let mut aliases = BumpMap::default();
 
-                    for (id, mut raw_function_layout) in extern_names {
+                    for (id, raw_function_layout) in extern_names {
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
-
-                        // fix the recursion in the rocLovesRust example
-                        if false {
-                            raw_function_layout = match raw_function_layout {
-                                RawFunctionLayout::Function(a, mut lambda_set, _) => {
-                                    lambda_set.ret = in_layout;
-                                    RawFunctionLayout::Function(a, lambda_set, in_layout)
-                                }
-                                RawFunctionLayout::ZeroArgumentThunk(x) => {
-                                    RawFunctionLayout::ZeroArgumentThunk(x)
-                                }
-                            };
-                        }
 
                         let (key, (top_level, proc)) = generate_host_exposed_function(
                             env,
@@ -9526,6 +9523,126 @@ impl LambdaSetId {
         debug_assert!(self.0 < u32::MAX);
         Self(self.0 + 1)
     }
+}
+
+fn find_lambda_sets<'a>(
+    env: &mut crate::layout::Env<'a, '_>,
+    initial: Variable,
+) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
+    let mut stack = bumpalo::collections::Vec::new_in(env.arena);
+
+    // ignore the lambda set of top-level functions
+    match env.subs.get_without_compacting(initial).content {
+        Content::Structure(FlatType::Func(arguments, _, result)) => {
+            let arguments = &env.subs.variables[arguments.indices()];
+
+            stack.extend(arguments.iter().copied());
+            stack.push(result);
+        }
+        _ => {
+            stack.push(initial);
+        }
+    }
+
+    let lambda_set_variables = find_lambda_sets_help(env.subs, stack);
+    let mut answer =
+        bumpalo::collections::Vec::with_capacity_in(lambda_set_variables.len(), env.arena);
+
+    for (variable, lambda_set_id) in lambda_set_variables {
+        let lambda_set = env.subs.get_lambda_set(variable);
+        let raw_function_layout = RawFunctionLayout::from_var(env, lambda_set.ambient_function)
+            .value()
+            .unwrap();
+
+        let key = (lambda_set_id, raw_function_layout);
+        answer.push(key);
+    }
+
+    answer
+}
+
+pub fn find_lambda_sets_help(
+    subs: &Subs,
+    mut stack: Vec<'_, Variable>,
+) -> MutMap<Variable, LambdaSetId> {
+    use roc_types::subs::GetSubsSlice;
+
+    let mut lambda_set_id = LambdaSetId::default();
+
+    let mut result = MutMap::default();
+
+    while let Some(var) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            Content::RangedNumber(_)
+            | Content::Error
+            | Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _)
+            | Content::RecursionVar { .. } => {}
+            Content::Structure(flat_type) => match flat_type {
+                FlatType::Apply(_, arguments) => {
+                    stack.extend(subs.get_subs_slice(*arguments).iter().rev());
+                }
+                FlatType::Func(arguments, lambda_set_var, ret_var) => {
+                    result.insert(*lambda_set_var, lambda_set_id);
+                    lambda_set_id = lambda_set_id.next();
+
+                    let arguments = &subs.variables[arguments.indices()];
+
+                    stack.extend(arguments.iter().copied());
+                    stack.push(*lambda_set_var);
+                    stack.push(*ret_var);
+                }
+                FlatType::Record(fields, ext) => {
+                    stack.extend(subs.get_subs_slice(fields.variables()).iter().rev());
+                    stack.push(*ext);
+                }
+                FlatType::Tuple(elements, ext) => {
+                    stack.extend(subs.get_subs_slice(elements.variables()).iter().rev());
+                    stack.push(*ext);
+                }
+                FlatType::FunctionOrTagUnion(_, _, ext) => {
+                    // just the ext
+                    match ext {
+                        roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                        roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                    }
+                }
+                FlatType::TagUnion(union_tags, ext)
+                | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
+                    for tag in union_tags.variables() {
+                        stack.extend(
+                            subs.get_subs_slice(subs.variable_slices[tag.index as usize])
+                                .iter()
+                                .rev(),
+                        );
+                    }
+
+                    match ext {
+                        roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                        roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                    }
+                }
+                FlatType::EmptyRecord => {}
+                FlatType::EmptyTuple => {}
+                FlatType::EmptyTagUnion => {}
+            },
+            Content::Alias(_, _, actual, _) => {
+                stack.push(*actual);
+            }
+            Content::LambdaSet(lambda_set) => {
+                // the lambda set itself should already be caught by Func above, but the
+                // capture can itself contain more lambda sets
+                for index in lambda_set.solved.variables() {
+                    let subs_slice = subs.variable_slices[index.index as usize];
+                    stack.extend(subs.variables[subs_slice.indices()].iter());
+                }
+            }
+        }
+    }
+
+    result
 }
 
 pub fn generate_glue_procs<'a, 'i, I>(

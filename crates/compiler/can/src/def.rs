@@ -1338,7 +1338,7 @@ fn canonicalize_type_defs<'a>(
 /// Resolve all pending abilities, to add them to scope.
 #[allow(clippy::too_many_arguments)]
 fn resolve_abilities(
-    env: &mut Env<'_>,
+    env: &mut Env,
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
@@ -2812,7 +2812,7 @@ fn to_pending_value_def<'a>(
 
 /// Make aliases recursive
 fn correct_mutual_recursive_type_alias(
-    env: &mut Env<'_>,
+    env: &mut Env,
     original_aliases: VecMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) -> VecMap<Symbol, Alias> {
@@ -3021,7 +3021,7 @@ fn correct_mutual_recursive_type_alias(
 }
 
 fn make_tag_union_of_alias_recursive(
-    env: &mut Env<'_>,
+    env: &mut Env,
     alias_name: Symbol,
     alias: &mut Alias,
     others: Vec<Symbol>,
@@ -3214,7 +3214,7 @@ fn make_tag_union_recursive_help<'a, 'b>(
 }
 
 fn mark_cyclic_alias(
-    env: &mut Env<'_>,
+    env: &mut Env,
     typ: &mut Type,
     symbol: Symbol,
     alias_kind: AliasKind,

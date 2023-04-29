@@ -10,8 +10,8 @@ use super::build::BuilderExt;
 
 pub static CHAR_LAYOUT: InLayout = Layout::U8;
 
-pub(crate) fn decode_from_utf8_result<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn decode_from_utf8_result<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     pointer: PointerValue<'ctx>,
 ) -> StructValue<'ctx> {
     let builder = env.builder;
@@ -50,8 +50,8 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx, 'env>(
 /// Dec.toStr : Dec -> Str
 
 /// Str.equal : Str, Str -> Bool
-pub(crate) fn str_equal<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn str_equal<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value1: BasicValueEnum<'ctx>,
     value2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -66,8 +66,8 @@ pub(crate) fn str_equal<'a, 'ctx, 'env>(
 
 // Gets a pointer to just after the refcount for a list or seamless slice.
 // The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
-pub(crate) fn str_refcount_ptr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn str_refcount_ptr<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
     call_str_bitcode_fn(

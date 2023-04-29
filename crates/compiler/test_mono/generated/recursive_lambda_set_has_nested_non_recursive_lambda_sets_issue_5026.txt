@@ -3,6 +3,7 @@ procedure Bool.2 ():
     ret Bool.23;
 
 procedure Test.10 (Test.25):
+    dec Test.25;
     let Test.29 : Int1 = CallByName Bool.2;
     if Test.29 then
         let Test.30 : [<rnu><null>, C {}] = CallByName Test.0;
