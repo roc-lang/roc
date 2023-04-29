@@ -1,14 +1,15 @@
 //! The `roc` binary that brings together all functionality in the Roc toolset.
 use roc_build::link::LinkType;
-use roc_build::program::check_file;
+use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
     CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME,
-    GLUE_DIR, GLUE_SPEC, ROC_FILE,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET,
+    FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use std::fs::{self, FileType};
@@ -91,8 +92,13 @@ fn main() -> io::Result<()> {
             let output_path = Path::new(matches.value_of_os(GLUE_DIR).unwrap());
             let spec_path = Path::new(matches.value_of_os(GLUE_SPEC).unwrap());
 
+            let backend = match matches.is_present(FLAG_DEV) {
+                true => CodeGenBackend::Assembly,
+                false => CodeGenBackend::Llvm(LlvmBackendMode::BinaryGlue),
+            };
+
             if !output_path.exists() || output_path.is_dir() {
-                roc_glue::generate(input_path, output_path, spec_path)
+                roc_glue::generate(input_path, output_path, spec_path, backend)
             } else {
                 eprintln!("`roc glue` must be given a directory to output into, because the glue might generate multiple files.");
 

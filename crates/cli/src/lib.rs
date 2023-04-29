@@ -279,6 +279,7 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .subcommand(Command::new(CMD_GLUE)
             .about("Generate glue code between a platform's Roc API and its host language")
+            .arg(&flag_dev)
             .arg(
                 Arg::new(GLUE_SPEC)
                     .help("The specification for how to translate Roc types into output files.")

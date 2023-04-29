@@ -10,7 +10,6 @@ use roc_build::{
     },
 };
 use roc_collections::MutMap;
-use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, GlueProc, OptLevel};
 use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
@@ -34,7 +33,12 @@ impl IgnoreErrors {
     const NONE: Self = IgnoreErrors { can: false };
 }
 
-pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::Result<i32> {
+pub fn generate(
+    input_path: &Path,
+    output_path: &Path,
+    spec_path: &Path,
+    backend: CodeGenBackend,
+) -> io::Result<i32> {
     // TODO: Add verification around the paths. Make sure they heav the correct file extension and what not.
     match load_types(
         input_path.to_path_buf(),
@@ -47,8 +51,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
             let triple = Triple::host();
 
             let code_gen_options = CodeGenOptions {
-                // Maybe eventually use dev here or add flag for this.
-                backend: CodeGenBackend::Llvm(LlvmBackendMode::BinaryGlue),
+                backend,
                 opt_level: OptLevel::Development,
                 emit_debug_info: false,
             };
