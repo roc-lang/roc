@@ -1227,16 +1227,11 @@ impl<'a> DropSpecializationEnvironment<'a> {
     }
 
     fn add_list_child(&mut self, parent: Parent, child: Child, index: &Symbol) {
-        match self.symbol_index.get(index) {
-            Some(index) => {
-                self.list_children
-                    .entry(parent)
-                    .or_insert_with(|| Vec::new_in(self.arena))
-                    .push((child, *index));
-            }
-            None => {
-                // List index is not constant, so we don't know the index of the child.
-            }
+        if let Some(index) = self.symbol_index.get(index) {
+            self.list_children
+                .entry(parent)
+                .or_insert_with(|| Vec::new_in(self.arena))
+                .push((child, *index));
         }
     }
 

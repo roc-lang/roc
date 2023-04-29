@@ -178,15 +178,13 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
                     .map(|(_branch, info, stmt)| (info, stmt))
                     .chain([(&default_branch.0, default_branch.1)])
                 {
-                    match info {
-                        BranchInfo::Constructor {
-                            scrutinee,
-                            layout,
-                            tag_id: _,
-                        } => {
-                            self.insert_symbol_layout_rc_type(scrutinee, layout);
-                        }
-                        _ => (),
+                    if let BranchInfo::Constructor {
+                        scrutinee,
+                        layout,
+                        tag_id: _,
+                    } = info
+                    {
+                        self.insert_symbol_layout_rc_type(scrutinee, layout);
                     }
 
                     self.insert_symbols_rc_type_stmt(stmt);
