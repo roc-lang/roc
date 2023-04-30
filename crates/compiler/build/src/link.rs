@@ -34,8 +34,13 @@ pub fn link(
     match target {
         Triple {
             architecture: Architecture::Wasm32,
+            operating_system: OperatingSystem::Wasi,
             ..
-        } => link_wasm32(target, output_path, input_paths, link_type),
+        } => link_wasm32_wasi(target, output_path, input_paths, link_type),
+        Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => link_wasm32_freestanding(output_path, input_paths, link_type),
         Triple {
             operating_system: OperatingSystem::Linux,
             ..
@@ -357,6 +362,7 @@ pub fn build_zig_host_wasm32(
     zig_host_src: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    target: &Triple,
 ) -> Command {
     if shared_lib_path.is_some() {
         unimplemented!("Linking a shared library to wasm not yet implemented");
@@ -379,16 +385,25 @@ pub fn build_zig_host_wasm32(
             find_zig_glue_path().to_str().unwrap(),
             "--pkg-end",
             // include the zig runtime
-            // "-fcompiler-rt",
+            // "-fcompiler-rt"
+        ]);
+
+    if target.operating_system == OperatingSystem::Wasi {
+        zig_cmd.args([
             // include libc
             "--library",
             "c",
             "-target",
             "wasm32-wasi",
-            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
-            "-fPIC",
-            "--strip",
         ]);
+    } else {
+        zig_cmd.args(["-target", "wasm32-freestanding"]);
+    }
+
+    zig_cmd.args([
+        // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+        "-fPIC", "--strip",
+    ]);
 
     if matches!(opt_level, OptLevel::Optimize) {
         zig_cmd.args(["-O", "ReleaseSafe"]);
@@ -579,6 +594,7 @@ pub fn rebuild_host(
                     zig_host_src.to_str().unwrap(),
                     opt_level,
                     shared_lib_path,
+                    target,
                 )
             }
             Architecture::X86_64 => build_zig_host_native(
@@ -1261,16 +1277,62 @@ fn get_macos_version() -> String {
         .join(".")
 }
 
-fn link_wasm32(
-    _target: &Triple,
+fn link_wasm32_freestanding(
     output_path: PathBuf,
     input_paths: &[&str],
-    _link_type: LinkType,
+    link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
+    let zig_subcommand = match link_type {
+        LinkType::Executable => {
+            panic!("Can't build a freestanding wasm32 binary as an executable - please use `--target=wasm32-wasi` instead!");
+        }
+        LinkType::Dylib => "build-lib",
+        LinkType::None => "build-obj",
+    };
+
     let child = zig()
         // .env_clear()
         // .env("PATH", &env_path)
-        .args(["build-exe"])
+        .args([zig_subcommand])
+        .args(input_paths)
+        .args([
+            &format!("-femit-bin={}", output_path.to_str().unwrap()),
+            "-target",
+            // -dynamic and -rdynamic are recommended with `zig build-lib -target wasm32-freestanding`
+            // see https://ziglang.org/documentation/0.9.1/#Freestanding
+            "wasm32-freestanding",
+            "-dynamic",
+            "-rdynamic",
+            "--pkg-begin",
+            "glue",
+            find_zig_glue_path().to_str().unwrap(),
+            "--pkg-end",
+            "--strip",
+            "-O",
+            "ReleaseSmall",
+            // useful for debugging
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+        ])
+        .spawn()?;
+
+    Ok((child, output_path))
+}
+
+fn link_wasm32_wasi(
+    _target: &Triple,
+    output_path: PathBuf,
+    input_paths: &[&str],
+    link_type: LinkType,
+) -> io::Result<(Child, PathBuf)> {
+    let zig_subcommand = match link_type {
+        LinkType::Executable => "build-exe",
+        LinkType::Dylib => "build-lib",
+        LinkType::None => "build-obj",
+    };
+    let child = zig()
+        // .env_clear()
+        // .env("PATH", &env_path)
+        .args([zig_subcommand])
         .args(input_paths)
         .args([
             // include wasi libc
