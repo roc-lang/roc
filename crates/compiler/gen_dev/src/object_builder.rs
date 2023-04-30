@@ -259,7 +259,6 @@ fn build_object<'a, B: Backend<'a>>(
                 &mut layout_ids,
                 &mut procs,
                 &mut backend,
-                exposed_proc.name.name(),
                 layout,
                 exposed_proc,
                 Exposed::Exposed,
@@ -270,19 +269,19 @@ fn build_object<'a, B: Backend<'a>>(
                 &mut layout_ids,
                 &mut procs,
                 &mut backend,
-                exposed_generic_proc.name.name(),
                 layout,
                 exposed_generic_proc,
                 Exposed::ExposedGeneric,
             );
         }
 
+        debug_assert_eq!(sym, proc.name.name());
+
         build_proc_symbol(
             &mut output,
             &mut layout_ids,
             &mut procs,
             &mut backend,
-            sym,
             layout,
             proc,
             Exposed::NotExposed,
@@ -519,6 +518,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 enum Exposed {
     ExposedGeneric,
     Exposed,
@@ -530,11 +530,12 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
     layout_ids: &mut LayoutIds<'a>,
     procs: &mut Vec<'a, (String, SectionId, SymbolId, Proc<'a>)>,
     backend: &mut B,
-    sym: roc_module::symbol::Symbol,
     layout: ProcLayout<'a>,
     proc: Proc<'a>,
     exposed: Exposed,
 ) {
+    let sym = proc.name.name();
+
     let section_id = output.add_section(
         output.segment_name(StandardSegment::Text).to_vec(),
         format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
