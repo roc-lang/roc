@@ -3278,6 +3278,10 @@ impl<
                 let sym_reg = storage_manager.load_to_float_reg(buf, &value);
                 ASM::movesd_mem64_offset32_freg64(buf, ptr_reg, element_offset, sym_reg);
             }
+            Layout::Boxed(_) => {
+                let sym_reg = storage_manager.load_to_general_reg(buf, &value);
+                ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, sym_reg);
+            }
             _ if element_width == 0 => {}
             _ if element_width > 8 => {
                 let (from_offset, size) = storage_manager.stack_offset_and_size(&value);
