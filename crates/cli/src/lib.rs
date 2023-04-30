@@ -351,9 +351,19 @@ pub fn build_app<'a>() -> Command<'a> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum BuildConfig {
-    BuildOnly,
+    BuildOnly(Target),
     BuildAndRun,
     BuildAndRunIfNoErrors,
+}
+
+impl BuildConfig {
+    pub fn target_triple(&self) -> Triple {
+        match self {
+            BuildConfig::BuildOnly(target) => target.to_triple(),
+            BuildConfig::BuildAndRun => Triple::host(),
+            BuildConfig::BuildAndRunIfNoErrors => Triple::host(),
+        }
+    }
 }
 
 pub enum FormatMode {
@@ -528,13 +538,13 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 pub fn build(
     matches: &ArgMatches,
     config: BuildConfig,
-    triple: Triple,
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
     use roc_build::program::build_file;
     use BuildConfig::*;
 
+    let triple = config.target_triple();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
     let path_buf = {
         let path = Path::new(filename);
@@ -557,7 +567,7 @@ pub fn build(
             process::exit(1);
         }
 
-        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_BUNDLE) {
+        if matches!(config, BuildConfig::BuildOnly(_)) && matches.is_present(FLAG_BUNDLE) {
             let start_time = Instant::now();
 
             let compression =
@@ -705,7 +715,7 @@ pub fn build(
             expect_metadata,
         }) => {
             match config {
-                BuildOnly => {
+                BuildOnly(_) => {
                     // If possible, report the generated executable name relative to the current dir.
                     let generated_filename = binary_path
                         .strip_prefix(env::current_dir().unwrap())
