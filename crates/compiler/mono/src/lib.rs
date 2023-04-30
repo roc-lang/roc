@@ -11,6 +11,7 @@
 
 pub mod borrow;
 pub mod code_gen_help;
+pub mod drop_specialization;
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;

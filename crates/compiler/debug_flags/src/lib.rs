@@ -133,6 +133,10 @@ flags! {
     /// instructions.
     ROC_PRINT_IR_AFTER_REFCOUNT
 
+    /// Writes a pretty-printed mono IR to stderr after performing dropspecialization.
+    /// Which inlines drop functions to remove pairs of alloc/dealloc instructions of its children.
+    ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION
+
     /// Prints debug information during the alias analysis pass.
     ROC_DEBUG_ALIAS_ANALYSIS
 

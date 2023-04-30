@@ -1947,8 +1947,15 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 backend.code_builder.i32_eqz();
             }
-            RefCountInc => self.load_args_and_call_zig(backend, bitcode::UTILS_INCREF),
-            RefCountDec => self.load_args_and_call_zig(backend, bitcode::UTILS_DECREF),
+            RefCountIncRcPtr => self.load_args_and_call_zig(backend, bitcode::UTILS_INCREF_RC_PTR),
+            RefCountDecRcPtr => self.load_args_and_call_zig(backend, bitcode::UTILS_DECREF_RC_PTR),
+            RefCountIncDataPtr => {
+                self.load_args_and_call_zig(backend, bitcode::UTILS_INCREF_DATA_PTR)
+            }
+            RefCountDecDataPtr => {
+                self.load_args_and_call_zig(backend, bitcode::UTILS_DECREF_DATA_PTR)
+            }
+            RefCountIsUnique => self.load_args_and_call_zig(backend, bitcode::UTILS_IS_UNIQUE),
 
             PtrCast => {
                 let code_builder = &mut backend.code_builder;

@@ -212,7 +212,7 @@ fn incref_pointer<'ctx>(
                 .into(),
             amount.into(),
         ],
-        roc_builtins::bitcode::UTILS_INCREF,
+        roc_builtins::bitcode::UTILS_INCREF_RC_PTR,
     );
 }
 
@@ -230,7 +230,7 @@ fn decref_pointer<'ctx>(env: &Env<'_, 'ctx, '_>, pointer: PointerValue<'ctx>, al
                 .into(),
             alignment.into(),
         ],
-        roc_builtins::bitcode::UTILS_DECREF,
+        roc_builtins::bitcode::UTILS_DECREF_RC_PTR,
     );
 }
 
@@ -874,7 +874,14 @@ fn modify_refcount_boxed<'a, 'ctx>(
             let basic_type = basic_type_from_layout(env, layout_interner, boxed_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
-            modify_refcount_box_help(env, layout_interner, mode, inner_layout, function_value);
+            modify_refcount_box_help(
+                env,
+                layout_interner,
+                layout_ids,
+                mode,
+                inner_layout,
+                function_value,
+            );
 
             function_value
         }
@@ -889,6 +896,7 @@ fn modify_refcount_boxed<'a, 'ctx>(
 fn modify_refcount_box_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     inner_layout: InLayout<'a>,
     fn_val: FunctionValue<'ctx>,
@@ -912,10 +920,49 @@ fn modify_refcount_box_help<'a, 'ctx>(
     let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, boxed);
     let call_mode = mode_to_call_mode(fn_val, mode);
     let boxed_layout = layout_interner.insert(Layout::Boxed(inner_layout));
-    refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
 
-    // this function returns void
-    builder.build_return(None);
+    match mode {
+        Mode::Inc => {
+            refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
+            builder.build_return(None);
+        }
+        Mode::Dec => {
+            // if the box is unique, also decrement its inner value
+            let do_recurse_block = env.context.append_basic_block(fn_val, "do_recurse");
+            let no_recurse_block = env.context.append_basic_block(fn_val, "no_recurse");
+
+            builder.build_conditional_branch(
+                refcount_ptr.is_1(env),
+                do_recurse_block,
+                no_recurse_block,
+            );
+
+            {
+                env.builder.position_at_end(do_recurse_block);
+
+                let inner = load_roc_value(env, layout_interner, inner_layout, boxed, "inner");
+
+                modify_refcount_layout(
+                    env,
+                    layout_interner,
+                    layout_ids,
+                    call_mode,
+                    inner,
+                    inner_layout,
+                );
+
+                refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
+                env.builder.build_return(None);
+            }
+
+            {
+                env.builder.position_at_end(no_recurse_block);
+
+                refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
+                env.builder.build_return(None);
+            }
+        }
+    }
 }
 
 /// Build an increment or decrement function for a specific layout

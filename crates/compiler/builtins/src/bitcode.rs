@@ -376,8 +376,11 @@ pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";
-pub const UTILS_INCREF: &str = "roc_builtins.utils.incref";
-pub const UTILS_DECREF: &str = "roc_builtins.utils.decref";
+pub const UTILS_INCREF_RC_PTR: &str = "roc_builtins.utils.incref_rc_ptr";
+pub const UTILS_DECREF_RC_PTR: &str = "roc_builtins.utils.decref_rc_ptr";
+pub const UTILS_INCREF_DATA_PTR: &str = "roc_builtins.utils.incref_data_ptr";
+pub const UTILS_DECREF_DATA_PTR: &str = "roc_builtins.utils.decref_data_ptr";
+pub const UTILS_IS_UNIQUE: &str = "roc_builtins.utils.is_unique";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
 
 pub const UTILS_EXPECT_FAILED_START_SHARED_BUFFER: &str =

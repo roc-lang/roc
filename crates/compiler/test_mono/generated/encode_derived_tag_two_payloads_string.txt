@@ -8,10 +8,7 @@ procedure #Derived.4 (#Derived.5, #Derived.6, #Derived.1):
         ret #Derived_gen.3;
     in
     let #Derived.2 : Str = StructAtIndex 0 #Derived.1;
-    inc #Derived.2;
     let #Derived.3 : Str = StructAtIndex 1 #Derived.1;
-    inc #Derived.3;
-    dec #Derived.1;
     let #Derived_gen.7 : Str = "A";
     let #Derived_gen.9 : Str = CallByName Json.18 #Derived.2;
     let #Derived_gen.10 : Str = CallByName Json.18 #Derived.3;
@@ -63,10 +60,7 @@ procedure Json.102 (Json.103, Json.527, Json.101):
 
 procedure Json.144 (Json.145, Json.486, #Attr.12):
     let Json.143 : List Str = StructAtIndex 1 #Attr.12;
-    inc Json.143;
     let Json.142 : Str = StructAtIndex 0 #Attr.12;
-    inc Json.142;
-    dec #Attr.12;
     let Json.524 : I64 = 123i64;
     let Json.523 : U8 = CallByName Num.127 Json.524;
     let Json.520 : List U8 = CallByName List.4 Json.145 Json.523;
@@ -89,8 +83,6 @@ procedure Json.144 (Json.145, Json.486, #Attr.12):
     let Json.497 : {} = Struct {};
     let Json.495 : {List U8, U64} = CallByName List.18 Json.143 Json.496 Json.497;
     let Json.149 : List U8 = StructAtIndex 0 Json.495;
-    inc Json.149;
-    dec Json.495;
     let Json.494 : I64 = 93i64;
     let Json.493 : U8 = CallByName Num.127 Json.494;
     let Json.490 : List U8 = CallByName List.4 Json.149 Json.493;
@@ -101,9 +93,7 @@ procedure Json.144 (Json.145, Json.486, #Attr.12):
 
 procedure Json.146 (Json.488, Json.152):
     let Json.150 : List U8 = StructAtIndex 0 Json.488;
-    inc Json.150;
     let Json.151 : U64 = StructAtIndex 1 Json.488;
-    dec Json.488;
     let Json.507 : {} = Struct {};
     let Json.153 : List U8 = CallByName Encode.24 Json.150 Json.152 Json.507;
     joinpoint Json.502 Json.154:
@@ -174,6 +164,7 @@ procedure List.80 (List.560, List.561, List.562, List.563, List.564):
         let List.536 : Int1 = CallByName Num.22 List.436 List.437;
         if List.536 then
             let List.543 : Str = CallByName List.66 List.433 List.436;
+            inc List.543;
             let List.537 : {List U8, U64} = CallByName List.139 List.434 List.543 List.435;
             let List.540 : U64 = 1i64;
             let List.539 : U64 = CallByName Num.19 List.436 List.540;
@@ -225,14 +216,13 @@ procedure Str.9 (Str.79):
     let Str.302 : Int1 = StructAtIndex 2 Str.80;
     if Str.302 then
         let Str.304 : Str = StructAtIndex 1 Str.80;
-        inc Str.304;
-        dec Str.80;
         let Str.303 : [C {U64, U8}, C Str] = TagId(1) Str.304;
         ret Str.303;
     else
         let Str.300 : U8 = StructAtIndex 3 Str.80;
         let Str.301 : U64 = StructAtIndex 0 Str.80;
-        dec Str.80;
+        let #Derived_gen.15 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.15;
         let Str.299 : {U64, U8} = Struct {Str.301, Str.300};
         let Str.298 : [C {U64, U8}, C Str] = TagId(0) Str.299;
         ret Str.298;
@@ -249,8 +239,6 @@ procedure Test.0 ():
     let Test.9 : Int1 = lowlevel Eq Test.7 Test.8;
     if Test.9 then
         let Test.4 : Str = UnionAtIndex (Id 1) (Index 0) Test.2;
-        inc Test.4;
-        dec Test.2;
         ret Test.4;
     else
         dec Test.2;

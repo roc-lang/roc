@@ -8,19 +8,26 @@ procedure Test.0 ():
     let Test.18 : Int1 = lowlevel Eq Test.16 Test.17;
     if Test.18 then
         let Test.12 : [<rnu><null>, C *self] = UnionAtIndex (Id 0) (Index 0) Test.2;
-        inc Test.12;
-        dec Test.2;
-        let Test.13 : U8 = 0i64;
-        let Test.14 : U8 = GetTagId Test.12;
-        dec Test.12;
-        let Test.15 : Int1 = lowlevel Eq Test.13 Test.14;
-        if Test.15 then
-            let Test.8 : I64 = 1i64;
-            ret Test.8;
+        joinpoint #Derived_gen.2:
+            let Test.13 : U8 = 0i64;
+            let Test.14 : U8 = GetTagId Test.12;
+            dec Test.12;
+            let Test.15 : Int1 = lowlevel Eq Test.13 Test.14;
+            if Test.15 then
+                let Test.8 : I64 = 1i64;
+                ret Test.8;
+            else
+                let Test.9 : I64 = 0i64;
+                ret Test.9;
+        in
+        let #Derived_gen.3 : Int1 = lowlevel RefCountIsUnique Test.2;
+        if #Derived_gen.3 then
+            decref Test.2;
+            jump #Derived_gen.2;
         else
-            let Test.9 : I64 = 0i64;
-            ret Test.9;
+            inc Test.12;
+            decref Test.2;
+            jump #Derived_gen.2;
     else
-        dec Test.2;
         let Test.10 : I64 = 0i64;
         ret Test.10;

@@ -25,7 +25,7 @@ use crate::llvm::{
     },
     build::{
         complex_bitcast_check_size, create_entry_block_alloca, function_value_by_func_spec,
-        load_roc_value, roc_function_call, BuilderExt, RocReturn,
+        load_roc_value, roc_function_call, tag_pointer_clear_tag_id, BuilderExt, RocReturn,
     },
     build_list::{
         list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
@@ -42,6 +42,7 @@ use crate::llvm::{
         LLVM_LOG, LLVM_MUL_WITH_OVERFLOW, LLVM_POW, LLVM_ROUND, LLVM_SIN, LLVM_SQRT,
         LLVM_SUB_SATURATED, LLVM_SUB_WITH_OVERFLOW,
     },
+    refcounting::PointerToRefcount,
 };
 
 use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec};
@@ -807,7 +808,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_get_unsafe(
                 env,
                 layout_interner,
-                layout_ids,
                 list_element_layout!(layout_interner, list_layout),
                 element_index.into_int_value(),
                 wrapper_struct.into_struct_value(),
@@ -1247,8 +1247,32 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             unreachable!("The {:?} operation is turned into mono Expr", op)
         }
 
-        PtrCast | PtrWrite | RefCountInc | RefCountDec => {
+        PtrCast | PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        | RefCountDecDataPtr => {
             unreachable!("Not used in LLVM backend: {:?}", op);
+        }
+
+        RefCountIsUnique => {
+            arguments_with_layouts!((data_ptr, data_layout));
+
+            let ptr = env.builder.build_pointer_cast(
+                data_ptr.into_pointer_value(),
+                env.context.i8_type().ptr_type(AddressSpace::default()),
+                "cast_to_i8_ptr",
+            );
+
+            let value_ptr = match layout_interner.get(data_layout) {
+                Layout::Union(union_layout)
+                    if union_layout.stores_tag_id_in_pointer(env.target_info) =>
+                {
+                    tag_pointer_clear_tag_id(env, ptr)
+                }
+                _ => ptr,
+            };
+
+            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+
+            BasicValueEnum::IntValue(refcount_ptr.is_1(env))
         }
 
         Unreachable => match RocReturn::from_layout(env, layout_interner, layout) {

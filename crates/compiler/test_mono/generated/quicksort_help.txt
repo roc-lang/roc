@@ -20,8 +20,6 @@ procedure Test.1 (Test.24, Test.25, Test.26):
             let Test.21 : {I64, List I64} = Struct {Test.22, Test.23};
             let Test.5 : I64 = StructAtIndex 0 Test.21;
             let Test.6 : List I64 = StructAtIndex 1 Test.21;
-            inc Test.6;
-            dec Test.21;
             let Test.20 : I64 = 1i64;
             let Test.19 : I64 = CallByName Num.20 Test.5 Test.20;
             let Test.16 : List I64 = CallByName Test.1 Test.6 Test.3 Test.19;

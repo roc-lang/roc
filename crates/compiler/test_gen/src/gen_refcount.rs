@@ -96,7 +96,7 @@ fn list_str_inc() {
         ),
         RocList<RocList<RocStr>>,
         &[
-            Live(6), // s
+            Live(3), // s
             Live(2), // list
             Live(1)  // result
         ]
@@ -228,8 +228,8 @@ fn union_recursive_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(4), // s
-            Live(4), // sym
+            Live(1), // s
+            Live(2), // x
             Live(2), // e
         ]
     );
@@ -294,7 +294,7 @@ fn refcount_different_rosetrees_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(2), // s
+            Live(1), // s
             Live(3), // i1
             Live(2), // s1
             Live(1), // [i1, i1]
@@ -364,10 +364,10 @@ fn union_linked_list_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(6), // s
-            Live(2), // Cons
-            Live(2), // Cons
-            Live(2), // Cons
+            Live(3), // s
+            Live(1), // inner-most Cons
+            Live(1), // middle Cons
+            Live(2), // linked
         ]
     );
 }
@@ -468,7 +468,7 @@ fn boxed_str_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(2), // s
+            Live(1), // s
             Live(2), // b
         ]
     );

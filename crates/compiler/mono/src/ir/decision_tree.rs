@@ -1699,7 +1699,7 @@ fn test_to_comparison<'a>(
                     (
                         stores,
                         (lhs_symbol, Comparator::Eq, rhs_symbol),
-                        Some(ConstructorKnown::OnlyPass {
+                        Some(ConstructorKnown::OneTag {
                             scrutinee: path_symbol,
                             layout: *cond_layout,
                             tag_id,
@@ -1855,7 +1855,7 @@ fn compile_test<'a>(
 ) -> Stmt<'a> {
     compile_test_help(
         env,
-        ConstructorKnown::Neither,
+        ConstructorKnown::None,
         ret_layout,
         stores,
         lhs,
@@ -1885,7 +1885,7 @@ fn compile_test_help<'a>(
     let (pass_info, fail_info) = {
         use ConstructorKnown::*;
         match branch_info {
-            Both {
+            BothTags {
                 scrutinee,
                 layout,
                 pass,
@@ -1905,7 +1905,7 @@ fn compile_test_help<'a>(
                 (pass_info, fail_info)
             }
 
-            OnlyPass {
+            OneTag {
                 scrutinee,
                 layout,
                 tag_id,
@@ -1919,7 +1919,13 @@ fn compile_test_help<'a>(
                 (pass_info, BranchInfo::None)
             }
 
-            Neither => (BranchInfo::None, BranchInfo::None),
+            ListLen { scrutinee, len } => {
+                let pass_info = BranchInfo::List { scrutinee, len };
+
+                (pass_info, BranchInfo::None)
+            }
+
+            None => (BranchInfo::None, BranchInfo::None),
         }
     };
 
@@ -1981,18 +1987,22 @@ fn compile_tests<'a>(
 
 #[derive(Debug)]
 enum ConstructorKnown<'a> {
-    Both {
+    BothTags {
         scrutinee: Symbol,
         layout: InLayout<'a>,
         pass: TagIdIntType,
         fail: TagIdIntType,
     },
-    OnlyPass {
+    OneTag {
         scrutinee: Symbol,
         layout: InLayout<'a>,
         tag_id: TagIdIntType,
     },
-    Neither,
+    ListLen {
+        scrutinee: Symbol,
+        len: u64,
+    },
+    None,
 }
 
 impl<'a> ConstructorKnown<'a> {
@@ -2006,23 +2016,30 @@ impl<'a> ConstructorKnown<'a> {
                 Test::IsCtor { tag_id, union, .. } if path.is_empty() => {
                     if union.alternatives.len() == 2 {
                         // excluded middle: we also know the tag_id in the fail branch
-                        ConstructorKnown::Both {
+                        ConstructorKnown::BothTags {
                             layout: cond_layout,
                             scrutinee: cond_symbol,
                             pass: *tag_id,
                             fail: (*tag_id == 0) as _,
                         }
                     } else {
-                        ConstructorKnown::OnlyPass {
+                        ConstructorKnown::OneTag {
                             layout: cond_layout,
                             scrutinee: cond_symbol,
                             tag_id: *tag_id,
                         }
                     }
                 }
-                _ => ConstructorKnown::Neither,
+                Test::IsListLen {
+                    bound: ListLenBound::Exact,
+                    len,
+                } if path.is_empty() => ConstructorKnown::ListLen {
+                    scrutinee: cond_symbol,
+                    len: *len,
+                },
+                _ => ConstructorKnown::None,
             },
-            _ => ConstructorKnown::Neither,
+            _ => ConstructorKnown::None,
         }
     }
 }
@@ -2255,18 +2272,31 @@ fn decide_to_branching<'a>(
                 };
 
                 // branch info is only useful for refcounted values
-                let branch_info = if let Test::IsCtor { tag_id, union, .. } = test {
-                    tag_id_sum -= tag_id as i64;
-                    union_size = union.alternatives.len() as i64;
+                let branch_info = match test {
+                    Test::IsCtor { tag_id, union, .. } => {
+                        tag_id_sum -= tag_id as i64;
+                        union_size = union.alternatives.len() as i64;
 
-                    BranchInfo::Constructor {
-                        scrutinee: inner_cond_symbol,
-                        layout: inner_cond_layout,
-                        tag_id,
+                        BranchInfo::Constructor {
+                            scrutinee: inner_cond_symbol,
+                            layout: inner_cond_layout,
+                            tag_id,
+                        }
                     }
-                } else {
-                    tag_id_sum = -1;
-                    BranchInfo::None
+                    Test::IsListLen {
+                        bound: ListLenBound::Exact,
+                        len,
+                    } => {
+                        tag_id_sum = -1;
+                        BranchInfo::List {
+                            scrutinee: inner_cond_symbol,
+                            len,
+                        }
+                    }
+                    _ => {
+                        tag_id_sum = -1;
+                        BranchInfo::None
+                    }
                 };
 
                 branches.push((tag, branch_info, branch));

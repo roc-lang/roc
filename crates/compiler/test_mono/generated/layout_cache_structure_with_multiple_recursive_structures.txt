@@ -19,6 +19,7 @@ procedure List.80 (List.517, List.518, List.519, List.520, List.521):
         let List.502 : Int1 = CallByName Num.22 List.436 List.437;
         if List.502 then
             let List.509 : [<rnu>C *self, <null>] = CallByName List.66 List.433 List.436;
+            inc List.509;
             let List.503 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.139 List.434 List.509 List.435;
             let List.506 : U64 = 1i64;
             let List.505 : U64 = CallByName Num.19 List.436 List.506;

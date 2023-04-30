@@ -86,8 +86,11 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
                 LowLevel::PtrWrite => unimplemented!(),
-                LowLevel::RefCountInc => unimplemented!(),
-                LowLevel::RefCountDec => unimplemented!(),
+                LowLevel::RefCountIncRcPtr => unimplemented!(),
+                LowLevel::RefCountDecRcPtr=> unimplemented!(),
+                LowLevel::RefCountIncDataPtr => unimplemented!(),
+                LowLevel::RefCountDecDataPtr=> unimplemented!(),
+                LowLevel::RefCountIsUnique => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),

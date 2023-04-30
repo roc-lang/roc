@@ -1,4 +1,5 @@
 use bumpalo::collections::vec::Vec;
+use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -40,6 +41,10 @@ impl HelperOp {
     fn is_decref(&self) -> bool {
         matches!(self, Self::DecRef(_))
     }
+
+    fn is_dec(&self) -> bool {
+        matches!(self, Self::Dec)
+    }
 }
 
 #[derive(Debug)]
@@ -80,7 +85,6 @@ pub struct CodeGenHelp<'a> {
     home: ModuleId,
     target_info: TargetInfo,
     layout_isize: InLayout<'a>,
-    union_refcount: UnionLayout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
     debug_recursion_depth: usize,
 }
@@ -89,15 +93,11 @@ impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
         let layout_isize = Layout::isize(target_info);
 
-        // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
-        let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));
-
         CodeGenHelp {
             arena,
             home,
             target_info,
             layout_isize,
-            union_refcount,
             specializations: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,
         }
@@ -538,46 +538,44 @@ impl<'a> CodeGenHelp<'a> {
 
     fn union_tail_recursion_fields(
         &self,
-        layout_interner: &STLayoutInterner<'a>,
+        union_in_layout: InLayout<'a>,
         union: UnionLayout<'a>,
-    ) -> (bool, Vec<'a, Option<usize>>) {
+    ) -> Option<Vec<'a, Option<usize>>> {
         use UnionLayout::*;
         match union {
-            NonRecursive(_) => (false, bumpalo::vec![in self.arena]),
+            NonRecursive(_) => None,
 
-            Recursive(tags) => self.union_tail_recursion_fields_help(layout_interner, tags),
+            Recursive(tags) => self.union_tail_recursion_fields_help(union_in_layout, tags),
 
             NonNullableUnwrapped(field_layouts) => {
-                self.union_tail_recursion_fields_help(layout_interner, &[field_layouts])
+                self.union_tail_recursion_fields_help(union_in_layout, &[field_layouts])
             }
 
             NullableWrapped {
                 other_tags: tags, ..
-            } => self.union_tail_recursion_fields_help(layout_interner, tags),
+            } => self.union_tail_recursion_fields_help(union_in_layout, tags),
 
             NullableUnwrapped { other_fields, .. } => {
-                self.union_tail_recursion_fields_help(layout_interner, &[other_fields])
+                self.union_tail_recursion_fields_help(union_in_layout, &[other_fields])
             }
         }
     }
 
     fn union_tail_recursion_fields_help(
         &self,
-        layout_interner: &STLayoutInterner<'a>,
+        in_layout: InLayout<'a>,
         tags: &[&'a [InLayout<'a>]],
-    ) -> (bool, Vec<'a, Option<usize>>) {
-        let mut can_use_tailrec = false;
-        let mut tailrec_indices = Vec::with_capacity_in(tags.len(), self.arena);
+    ) -> Option<Vec<'a, Option<usize>>> {
+        let tailrec_indices = tags
+            .iter()
+            .map(|fields| fields.iter().position(|f| *f == in_layout))
+            .collect_in::<Vec<_>>(self.arena);
 
-        for fields in tags.iter() {
-            let found_index = fields
-                .iter()
-                .position(|f| matches!(layout_interner.get(*f), Layout::RecursivePointer(_)));
-            tailrec_indices.push(found_index);
-            can_use_tailrec |= found_index.is_some();
+        if tailrec_indices.iter().any(|i| i.is_some()) {
+            None
+        } else {
+            Some(tailrec_indices)
         }
-
-        (can_use_tailrec, tailrec_indices)
     }
 }
 

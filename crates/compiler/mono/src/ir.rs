@@ -17,15 +17,15 @@ use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
-    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
-    ROC_PRINT_RUNTIME_ERROR_GEN,
+    ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION, ROC_PRINT_IR_AFTER_REFCOUNT,
+    ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_RUNTIME_ERROR_GEN,
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -55,6 +55,9 @@ pub fn pretty_print_ir_symbols() -> bool {
         return true;
     });
     dbg_do!(ROC_PRINT_IR_AFTER_REFCOUNT, {
+        return true;
+    });
+    dbg_do!(ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION, {
         return true;
     });
     false
@@ -1595,6 +1598,10 @@ pub enum BranchInfo<'a> {
         layout: InLayout<'a>,
         tag_id: TagIdIntType,
     },
+    List {
+        scrutinee: Symbol,
+        len: u64,
+    },
 }
 
 impl<'a> BranchInfo<'a> {
@@ -1781,6 +1788,24 @@ pub enum CallType<'a> {
         update_mode: UpdateModeId,
     },
     HigherOrder(&'a HigherOrderLowLevel<'a>),
+}
+
+impl<'a> CallType<'a> {
+    /**
+    Replace calls to wrappers of lowlevel functions with the lowlevel function itself
+    */
+    pub fn replace_lowlevel_wrapper(self) -> Self {
+        match self {
+            CallType::ByName { name, .. } => match LowLevelWrapperType::from_symbol(name.name()) {
+                LowLevelWrapperType::CanBeReplacedBy(lowlevel) => CallType::LowLevel {
+                    op: lowlevel,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                LowLevelWrapperType::NotALowLevelWrapper => self,
+            },
+            _ => self,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

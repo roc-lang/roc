@@ -642,6 +642,7 @@ fn eq_boxed<'a>(
 }
 
 /// List equality
+/// TODO, ListGetUnsafe no longer increments the refcount, so we can use it here.
 /// We can't use `ListGetUnsafe` because it increments the refcount, and we don't want that.
 /// Another way to dereference a heap pointer is to use `Expr::UnionAtIndex`.
 /// To achieve this we use `PtrCast` to cast the element pointer to a "Box" layout.

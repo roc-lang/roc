@@ -116,8 +116,11 @@ pub enum LowLevel {
     Hash,
     PtrCast,
     PtrWrite,
-    RefCountInc,
-    RefCountDec,
+    RefCountIncRcPtr,
+    RefCountDecRcPtr,
+    RefCountIncDataPtr,
+    RefCountDecDataPtr,
+    RefCountIsUnique,
     BoxExpr,
     UnboxExpr,
     Unreachable,
@@ -155,6 +158,7 @@ impl LowLevel {
 /// Some wrapper functions can just be replaced by lowlevels in the backend for performance.
 /// For example, Num.add should be an instruction, not a function call.
 /// Variant names are chosen to help explain what to do when adding new lowlevels
+#[derive(PartialEq, Eq)]
 pub enum LowLevelWrapperType {
     /// This wrapper function contains no logic and we can remove it in code gen
     CanBeReplacedBy(LowLevel),
@@ -221,8 +225,11 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
                 LowLevel::PtrWrite => unimplemented!(),
-                LowLevel::RefCountInc => unimplemented!(),
-                LowLevel::RefCountDec => unimplemented!(),
+                LowLevel::RefCountIncRcPtr => unimplemented!(),
+                LowLevel::RefCountDecRcPtr=> unimplemented!(),
+                LowLevel::RefCountIncDataPtr => unimplemented!(),
+                LowLevel::RefCountDecDataPtr=> unimplemented!(),
+                LowLevel::RefCountIsUnique => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),
