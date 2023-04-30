@@ -13,7 +13,7 @@ use std::iter::Iterator;
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
 
-use roc_module::low_level::{LowLevel, LowLevelWrapperType};
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
@@ -92,22 +92,17 @@ fn specialize_drops_stmt<'a, 'i>(
                     call_type,
                     arguments,
                 }) => {
-                    match call_type {
-                        CallType::ByName { name, .. }
-                            if (LowLevelWrapperType::from_symbol(name.name())
-                                == LowLevelWrapperType::CanBeReplacedBy(
-                                    LowLevel::ListGetUnsafe,
-                                )) =>
-                        {
-                            environment.add_list_child(arguments[0], *binding, &arguments[1]);
-
-                            alloc_let_with_continuation!(environment)
-                        }
+                    match call_type.clone().replace_lowlevel_wrapper() {
                         CallType::LowLevel {
                             op: LowLevel::ListGetUnsafe,
                             ..
                         } => {
-                            environment.add_list_child(arguments[0], *binding, &arguments[1]);
+                            let [structure, index] = match arguments {
+                                [structure, index] => [structure, index],
+                                _ => unreachable!("List get should have two arguments"),
+                            };
+
+                            environment.add_list_child(*structure, *binding, index);
 
                             alloc_let_with_continuation!(environment)
                         }
@@ -668,14 +663,12 @@ fn specialize_union<'a, 'i>(
                         continuation,
                     );
 
+                    type RCFun<'a> =
+                        Option<fn(arena: &'a Bump, Symbol, &'a Stmt<'a>) -> &'a Stmt<'a>>;
                     let refcount_fields = |layout_interner: &mut STLayoutInterner<'a>,
                                            ident_ids: &mut IdentIds,
-                                           rc_popped: Option<
-                        fn(arena: &'a Bump, Symbol, &'a Stmt<'a>) -> &'a Stmt<'a>,
-                    >,
-                                           rc_unpopped: Option<
-                        fn(arena: &'a Bump, Symbol, &'a Stmt<'a>) -> &'a Stmt<'a>,
-                    >,
+                                           rc_popped: RCFun<'a>,
+                                           rc_unpopped: RCFun<'a>,
                                            continuation: &'a Stmt<'a>|
                      -> &'a Stmt<'a> {
                         let mut new_continuation = continuation;
@@ -865,10 +858,9 @@ fn specialize_list<'a, 'i>(
     ) {
         (true, Some(length)) => {
             match environment.list_children.get(symbol) {
+                // Only specialize lists if all children are known.
+                // Otherwise we might have to insert an unbouned number of decrements.
                 Some(children) if children.len() as u64 == length => {
-                    // Only specialize lists if all children are known.
-                    // Otherwise we might have to insert an unbouned number of decrements.
-
                     // TODO perhaps this allocation can be avoided.
                     let children_clone = children.clone();
 
@@ -877,10 +869,7 @@ fn specialize_list<'a, 'i>(
                     let mut index_symbols = MutMap::default();
 
                     for index in 0..length {
-                        for (child, i) in children_clone
-                            .iter()
-                            .filter(|(_child, i)| *i == index as u64)
-                        {
+                        for (child, i) in children_clone.iter().filter(|(_child, i)| *i == index) {
                             debug_assert!(length > *i);
 
                             let removed = incremented_children.remove(child);
@@ -900,49 +889,25 @@ fn specialize_list<'a, 'i>(
                         continuation,
                     );
 
-                    |rc_popped: Option<
-                        fn(arena: &'a Bump, Symbol, &'a Stmt<'a>) -> &'a Stmt<'a>,
-                    >,
-                     rc_unpopped: Option<
-                        fn(arena: &'a Bump, Symbol, &'a Stmt<'a>) -> &'a Stmt<'a>,
-                    >,
-                     continuation: &'a Stmt<'a>|
-                     -> &'a Stmt<'a> {
-                        let mut new_continuation = continuation;
+                    let mut newer_continuation = arena.alloc(Stmt::Refcounting(
+                        ModifyRc::DecRef(*symbol),
+                        new_continuation,
+                    ));
 
-                        // Reversed to ensure that the generated code decrements the items in the correct order.
-                        for i in (0..length).rev() {
-                            let (s, popped) = index_symbols.get(&i).unwrap();
-                            new_continuation = {
-                                if *popped {
-                                    // This symbol was popped, so we can skip the decrement.
-                                    match rc_popped {
-                                        Some(rc) => rc(arena, *s, new_continuation),
-                                        None => new_continuation,
-                                    }
-                                } else {
-                                    // This symbol was indexed but not decremented, so we will decrement it.
-                                    match rc_unpopped {
-                                        Some(rc) => rc(arena, *s, new_continuation),
-                                        None => new_continuation,
-                                    }
-                                }
-                            };
+                    // Reversed to ensure that the generated code decrements the items in the correct order.
+                    for i in (0..length).rev() {
+                        let (s, popped) = index_symbols.get(&i).unwrap();
+
+                        if !*popped {
+                            // Decrement the children that were not incremented before. And thus don't cancel out.
+                            newer_continuation = arena
+                                .alloc(Stmt::Refcounting(ModifyRc::Dec(*s), newer_continuation));
                         }
 
-                        new_continuation
-                    }(
                         // Do nothing for the children that were incremented before, as the decrement will cancel out.
-                        None,
-                        // Decrement the children that were not incremented before. And thus don't cancel out.
-                        Some(|arena, symbol, continuation| {
-                            arena.alloc(Stmt::Refcounting(ModifyRc::Dec(symbol), continuation))
-                        }),
-                        arena.alloc(Stmt::Refcounting(
-                            ModifyRc::DecRef(*symbol),
-                            new_continuation,
-                        )),
-                    )
+                    }
+
+                    newer_continuation
                 }
                 _ => keep_original_decrement!(),
             }
@@ -1020,16 +985,20 @@ fn get_union_tag_layout(union_layout: UnionLayout<'_>, tag: Option<Tag>) -> Unio
 Branch on the uniqueness of a symbol.
 Using a joinpoint with the continuation as the body.
 */
-fn branch_uniqueness<'a, 'i>(
+fn branch_uniqueness<'a, 'i, F1, F2>(
     arena: &'a Bump,
     ident_ids: &'i mut IdentIds,
     layout_interner: &'i mut STLayoutInterner<'a>,
     environment: &DropSpecializationEnvironment<'a>,
     symbol: Symbol,
-    unique: impl FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
-    not_unique: impl FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
+    unique: F1,
+    not_unique: F2,
     continutation: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
+) -> &'a Stmt<'a>
+where
+    F1: FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
+    F2: FnOnce(&mut STLayoutInterner<'a>, &mut IdentIds, &'a Stmt<'a>) -> &'a Stmt<'a>,
+{
     match continutation {
         // The continuation is a single stmt. So we can insert it inline and skip creating a joinpoint.
         Stmt::Ret(_) | Stmt::Jump(_, _) => {
@@ -1239,19 +1208,19 @@ impl<'a> DropSpecializationEnvironment<'a> {
         let mut res = Vec::new_in(self.arena);
 
         if let Some(children) = self.struct_children.get(parent) {
-            children.iter().for_each(|(child, _)| res.push(*child));
+            res.extend(children.iter().map(|(child, _)| child));
         }
 
         if let Some(children) = self.union_children.get(parent) {
-            children.iter().for_each(|(child, _, _)| res.push(*child));
+            res.extend(children.iter().map(|(child, _, _)| child));
         }
 
         if let Some(children) = self.box_children.get(parent) {
-            children.iter().for_each(|child| res.push(*child));
+            res.extend(children.iter());
         }
 
         if let Some(children) = self.list_children.get(parent) {
-            children.iter().for_each(|(child, _)| res.push(*child));
+            res.extend(children.iter().map(|(child, _)| child));
         }
 
         res

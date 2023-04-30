@@ -888,35 +888,6 @@ fn insert_refcount_operations_binding<'a>(
         };
     }
 
-    macro_rules! refcount_listget {
-        ($arguments:expr) => {{
-            // TODO this index can be used to store the children of the list symbol.
-            // On the decrement of the list (if the list size is known and) the function can be specialized.
-            let [structure, _index] = match $arguments {
-                [structure, index] => Some([*structure, *index]),
-                _ => None,
-            }
-            .unwrap();
-
-            // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
-            // But we do want to make sure to decrement this item if it is the last reference.
-            let new_stmt = dec_borrowed!([structure], stmt);
-
-            // Add an increment operation for the binding if it is reference counted and if the expression creates a new reference to a value.
-            let newer_stmt = if matches!(
-                environment.get_symbol_rc_type(binding),
-                VarRcType::ReferenceCounted
-            ) {
-                insert_inc_stmt(arena, *binding, 1, new_stmt)
-            } else {
-                // If the symbol is not reference counted, we don't need to increment it.
-                new_stmt
-            };
-
-            new_let!(newer_stmt)
-        }};
-    }
-
     match expr {
         Expr::Literal(_) | Expr::NullPointer | Expr::EmptyArray | Expr::RuntimeErrorFunction(_) => {
             // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
@@ -933,24 +904,7 @@ fn insert_refcount_operations_binding<'a>(
 
             inc_owned!([*symbol], new_let)
         }
-        Expr::Call(Call {
-            arguments,
-            call_type:
-                CallType::LowLevel {
-                    op: LowLevel::ListGetUnsafe,
-                    ..
-                },
-        }) => {
-            refcount_listget!(arguments)
-        }
-        Expr::Call(Call {
-            arguments,
-            call_type: CallType::ByName { name, .. },
-        }) if (LowLevelWrapperType::from_symbol(name.name())
-            == LowLevelWrapperType::CanBeReplacedBy(LowLevel::ListGetUnsafe)) =>
-        {
-            refcount_listget!(arguments)
-        }
+
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
@@ -1000,46 +954,13 @@ fn insert_refcount_operations_binding<'a>(
             arguments,
             call_type,
         }) => {
-            macro_rules! rc_lowlevel {
-                ($operator:expr) => {{
-                    let borrow_signature = lowlevel_borrow_signature(arena, $operator);
-                    let arguments_with_borrow_signature = arguments
-                        .iter()
-                        .copied()
-                        .zip(borrow_signature.iter().copied());
-                    let owned_arguments = arguments_with_borrow_signature
-                        .clone()
-                        .filter_map(|(symbol, ownership)| ownership.is_owned().then_some(symbol));
-                    let borrowed_arguments =
-                        arguments_with_borrow_signature.filter_map(|(symbol, ownership)| {
-                            ownership.is_borrowed().then_some(symbol)
-                        });
-
-                    let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
-
-                    let new_let = new_let!(new_stmt);
-
-                    inc_owned!(owned_arguments, new_let)
-                }};
-            }
-            match call_type {
+            match call_type.clone().replace_lowlevel_wrapper() {
                 // A by name call refers to a normal function call.
                 // Normal functions take all their parameters as owned, so we can mark them all as such.
-                CallType::ByName { name, .. } => {
-                    // Lowlevels are wrapped in another function in order to add type signatures which help with inference.
-                    // But the reference counting algorithm inserts reference counting operations in the wrapper function.
-                    // But in a later stage, calls to the wrapper function were replaced by calls to the lowlevel function.
-                    // Effectively removing the inserted reference counting operations.
-                    // Thus to prevent that, we inline the operations here already.
-                    if let LowLevelWrapperType::CanBeReplacedBy(operator) =
-                        LowLevelWrapperType::from_symbol(name.name())
-                    {
-                        rc_lowlevel!(operator)
-                    } else {
-                        let new_let = new_let!(stmt);
+                CallType::ByName { .. } => {
+                    let new_let = new_let!(stmt);
 
-                        inc_owned!(arguments.iter().copied(), new_let)
-                    }
+                    inc_owned!(arguments.iter().copied(), new_let)
                 }
                 CallType::Foreign { .. } => {
                     // Foreign functions should be responsible for their own memory management.
@@ -1052,9 +973,44 @@ fn insert_refcount_operations_binding<'a>(
                 CallType::LowLevel {
                     op: operator,
                     update_mode: _,
-                } => {
-                    rc_lowlevel!(*operator)
-                }
+                } => match operator {
+                    // List get unsafe is a special case, because it returns a reference to the list element.
+                    // This means that we have to increment the reference count of this element.
+                    LowLevel::ListGetUnsafe => {
+                        let structure = match arguments {
+                            [structure, _index] => *structure,
+                            _ => unreachable!("List get should have two arguments"),
+                        };
+                        let new_stmt = dec_borrowed!([structure], stmt);
+                        let newer_stmt = if matches!(
+                            environment.get_symbol_rc_type(binding),
+                            VarRcType::ReferenceCounted
+                        ) {
+                            insert_inc_stmt(arena, *binding, 1, new_stmt)
+                        } else {
+                            new_stmt
+                        };
+                        new_let!(newer_stmt)
+                    }
+                    // Otherwise, perform regular reference counting using the lowlevel borrow signature.
+                    _ => {
+                        let borrow_signature = lowlevel_borrow_signature(arena, operator);
+                        let arguments_with_borrow_signature = arguments
+                            .iter()
+                            .copied()
+                            .zip(borrow_signature.iter().copied());
+                        let owned_arguments = arguments_with_borrow_signature.clone().filter_map(
+                            |(symbol, ownership)| ownership.is_owned().then_some(symbol),
+                        );
+                        let borrowed_arguments =
+                            arguments_with_borrow_signature.filter_map(|(symbol, ownership)| {
+                                ownership.is_borrowed().then_some(symbol)
+                            });
+                        let new_stmt = dec_borrowed!(borrowed_arguments, stmt);
+                        let new_let = new_let!(new_stmt);
+                        inc_owned!(owned_arguments, new_let)
+                    }
+                },
                 CallType::HigherOrder(HigherOrderLowLevel {
                     op: operator,
 

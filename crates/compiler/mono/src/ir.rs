@@ -25,7 +25,7 @@ use roc_error_macros::{internal_error, todo_abilities};
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -1788,6 +1788,24 @@ pub enum CallType<'a> {
         update_mode: UpdateModeId,
     },
     HigherOrder(&'a HigherOrderLowLevel<'a>),
+}
+
+impl<'a> CallType<'a> {
+    /**
+    Replace calls to wrappers of lowlevel functions with the lowlevel function itself
+    */
+    pub fn replace_lowlevel_wrapper(self) -> Self {
+        match self {
+            CallType::ByName { name, .. } => match LowLevelWrapperType::from_symbol(name.name()) {
+                LowLevelWrapperType::CanBeReplacedBy(lowlevel) => CallType::LowLevel {
+                    op: lowlevel,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                LowLevelWrapperType::NotALowLevelWrapper => self,
+            },
+            _ => self,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
