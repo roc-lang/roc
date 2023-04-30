@@ -773,6 +773,7 @@ fn build_loaded_file<'a>(
         if let roc_target::OperatingSystem::Wasi = operating_system {
             // when compiling a wasm application, we implicitly assume here that the host is in zig
             // and has a file called "host.zig"
+            // and also that it is preprocessed which is obviously isn't since it is unprocessed source code
             platform_main_roc.with_file_name("host.zig")
         } else {
             platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())

@@ -126,6 +126,16 @@ fn find_wasi_libc_path() -> PathBuf {
     internal_error!("cannot find `wasi-libc.a`")
 }
 
+fn find_wasi_compiler_rt_path() -> PathBuf {
+    // Environment variable defined in wasi-libc-sys/build.rs
+    let pathbuf = PathBuf::from(WASI_COMPILER_RT_PATH);
+    if std::path::Path::exists(&pathbuf) {
+        return pathbuf;
+    }
+
+    internal_error!("cannot find WASI compiler-rt")
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
@@ -1277,6 +1287,7 @@ fn link_wasm32(
             // TOOD: This now compiles fine with `-lc`. That said, the output file doesn't work.
             // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
             find_wasi_libc_path().to_str().unwrap(),
+            find_wasi_compiler_rt_path().to_str().unwrap(),
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",
