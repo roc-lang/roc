@@ -1217,6 +1217,10 @@ trait Backend<'a> {
                 let intrinsic = bitcode::NUM_IS_MULTIPLE_OF[int_width].to_string();
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
             }
+            LowLevel::ListSublist => {
+                let intrinsic = bitcode::LIST_SUBLIST.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
             x => todo!("low level, {:?}", x),
         }
     }
