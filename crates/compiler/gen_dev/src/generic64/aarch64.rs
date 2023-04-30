@@ -523,6 +523,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn function_pointer(
+        _buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        _fn_name: String,
+        _dst: AArch64GeneralReg,
+    ) {
+        todo!("calling functions literal for AArch64");
+    }
+
+    #[inline(always)]
     fn imul_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: AArch64GeneralReg,
@@ -1036,28 +1046,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn to_float_freg64_freg32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
         fcvt_freg64_freg32(buf, dst, src);
-    }
-
-    #[inline(always)]
-    fn lte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        cset_reg64_cond(buf, dst, ConditionCode::LE);
-    }
-
-    #[inline(always)]
-    fn gte_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-    ) {
-        cmp_reg64_reg64(buf, src1, src2);
-        cset_reg64_cond(buf, dst, ConditionCode::GE);
     }
 
     fn set_if_overflow(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg) {

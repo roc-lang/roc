@@ -18,10 +18,6 @@ procedure Test.34 (Test.35):
     let Test.37 : {} = StructAtIndex 1 Test.36;
     ret Test.37;
 
-procedure Test.38 (Test.40, #Attr.12):
-    let Test.39 : Str = CallByName Test.4 Test.40 #Attr.12;
-    ret Test.39;
-
 procedure Test.4 (Test.13, #Attr.12):
     let Test.3 : {} = StructAtIndex 1 #Attr.12;
     let Test.2 : U8 = StructAtIndex 0 #Attr.12;
@@ -37,10 +33,6 @@ procedure Test.4 (Test.13, #Attr.12):
     let Test.25 : {} = Struct {};
     let Test.24 : Str = CallByName Test.8 Test.25;
     ret Test.24;
-
-procedure Test.41 (Test.43, #Attr.12):
-    let Test.42 : {U8, {}} = CallByName Test.6 Test.43;
-    ret Test.42;
 
 procedure Test.6 (Test.17):
     let Test.19 : U8 = 1i64;

@@ -2550,7 +2550,6 @@ fn recursively_build_effect() {
 }
 
 #[mono_test]
-#[ignore = "roc glue code generation cannot handle a type that this test generates"]
 fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
     indoc!(
         r#"

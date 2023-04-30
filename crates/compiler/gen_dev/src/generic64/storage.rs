@@ -654,7 +654,15 @@ impl<
         }
         let base_offset = self.claim_stack_area(sym, struct_size);
 
-        if let Layout::Struct { field_layouts, .. } = layout_interner.get(*layout) {
+        let mut in_layout = *layout;
+        let layout = loop {
+            match layout_interner.get(in_layout) {
+                Layout::LambdaSet(inner) => in_layout = inner.runtime_representation(),
+                other => break other,
+            }
+        };
+
+        if let Layout::Struct { field_layouts, .. } = layout {
             let mut current_offset = base_offset;
             for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
                 self.copy_symbol_to_stack_offset(
@@ -670,7 +678,13 @@ impl<
         } else {
             // This is a single element struct. Just copy the single field to the stack.
             debug_assert_eq!(fields.len(), 1);
-            self.copy_symbol_to_stack_offset(layout_interner, buf, base_offset, &fields[0], layout);
+            self.copy_symbol_to_stack_offset(
+                layout_interner,
+                buf,
+                base_offset,
+                &fields[0],
+                &in_layout,
+            );
         }
     }
 

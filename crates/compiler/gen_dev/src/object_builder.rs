@@ -246,10 +246,16 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Generate IR for specialized helper procs (refcounting & equality)
     let helper_procs = {
-        let (module_id, _interner, interns, helper_proc_gen) = backend.module_interns_helpers_mut();
+        let (module_id, _interner, interns, helper_proc_gen, caller_procs) =
+            backend.module_interns_helpers_mut();
+
+        let mut owned_caller_procs = bumpalo::collections::Vec::new_in(arena);
+        std::mem::swap(caller_procs, &mut owned_caller_procs);
 
         let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
-        let helper_procs = helper_proc_gen.take_procs();
+        let mut helper_procs = helper_proc_gen.take_procs();
+
+        helper_procs.extend(owned_caller_procs.into_iter().map(|cp| cp.proc));
         module_id.register_debug_idents(ident_ids);
 
         helper_procs
