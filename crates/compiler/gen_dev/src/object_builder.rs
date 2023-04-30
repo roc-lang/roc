@@ -239,9 +239,11 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Names and linker data for user procedures
     for ((sym, layout), proc) in procedures {
+        debug_assert_eq!(sym, proc.name.name());
+
         if backend.env().exposed_to_host.contains(&sym) {
-            let exposed_proc = build_exposed_proc(&mut backend, sym, &proc);
-            let exposed_generic_proc = build_exposed_generic_proc(&mut backend, sym, &proc);
+            let exposed_proc = build_exposed_proc(&mut backend, &proc);
+            let exposed_generic_proc = build_exposed_generic_proc(&mut backend, &proc);
 
             #[cfg(debug_assertions)]
             {
@@ -274,8 +276,6 @@ fn build_object<'a, B: Backend<'a>>(
                 Exposed::ExposedGeneric,
             );
         }
-
-        debug_assert_eq!(sym, proc.name.name());
 
         build_proc_symbol(
             &mut output,
@@ -389,19 +389,16 @@ fn build_object<'a, B: Backend<'a>>(
     output
 }
 
-fn build_exposed_proc<'a, B: Backend<'a>>(
-    backend: &mut B,
-    sym: roc_module::symbol::Symbol,
-    proc: &Proc<'a>,
-) -> Proc<'a> {
+fn build_exposed_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'a>) -> Proc<'a> {
     let arena = backend.env().arena;
     let interns = backend.interns();
 
+    let sym = proc.name.name();
     let platform = sym.module_id();
 
     let fn_name = sym.as_str(interns).to_string();
     let generic_proc_name = backend.debug_symbol_in(platform, &fn_name);
-    let s1 = backend.debug_symbol_in(platform, "s1");
+    let s4 = backend.debug_symbol_in(platform, "s4");
 
     let call_args = bumpalo::collections::Vec::from_iter_in(proc.args.iter().map(|t| t.1), arena);
     let call_layouts =
@@ -417,10 +414,10 @@ fn build_exposed_proc<'a, B: Backend<'a>>(
     };
 
     let body = Stmt::Let(
-        s1,
+        s4,
         Expr::Call(call),
         proc.ret_layout,
-        arena.alloc(Stmt::Ret(s1)),
+        arena.alloc(Stmt::Ret(s4)),
     );
 
     Proc {
@@ -434,14 +431,11 @@ fn build_exposed_proc<'a, B: Backend<'a>>(
     }
 }
 
-fn build_exposed_generic_proc<'a, B: Backend<'a>>(
-    backend: &mut B,
-    sym: roc_module::symbol::Symbol,
-    proc: &Proc<'a>,
-) -> Proc<'a> {
+fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'a>) -> Proc<'a> {
     let arena = backend.env().arena;
     let interns = backend.interns();
 
+    let sym = proc.name.name();
     let platform = sym.module_id();
 
     let fn_name = sym.as_str(interns).to_string();
