@@ -1609,6 +1609,18 @@ trait Backend<'a> {
     /// load_literal sets a symbol to be equal to a literal.
     fn load_literal(&mut self, sym: &Symbol, layout: &InLayout<'a>, lit: &Literal<'a>);
 
+    fn load_literal_i64(&mut self, sym: &Symbol, value: i64) {
+        let literal = Literal::Int((value as i128).to_ne_bytes());
+
+        self.load_literal(sym, &Layout::I64, &literal)
+    }
+
+    fn load_literal_i32(&mut self, sym: &Symbol, value: i32) {
+        let literal = Literal::Int((value as i128).to_ne_bytes());
+
+        self.load_literal(sym, &Layout::I32, &literal)
+    }
+
     /// create_empty_array creates an empty array with nullptr, zero length, and zero capacity.
     fn create_empty_array(&mut self, sym: &Symbol);
 
