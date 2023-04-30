@@ -774,7 +774,6 @@ fn build_loaded_file<'a>(
     compilation_start: Instant,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let operating_system = roc_target::OperatingSystem::from(target.operating_system);
-
     let platform_main_roc = match &loaded.entry_point {
         EntryPoint::Executable { platform_path, .. } => platform_path.to_path_buf(),
         _ => unreachable!(),
@@ -798,10 +797,10 @@ fn build_loaded_file<'a>(
     let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
 
     let cwd = app_module_path.parent().unwrap();
-    let mut output_exe_path = cwd.join(&*loaded.output_path);
+    let mut output_binary_path = cwd.join(&*loaded.output_path);
 
     if let Some(extension) = operating_system.executable_file_ext() {
-        output_exe_path.set_extension(extension);
+        output_binary_path.set_extension(extension);
     }
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
@@ -817,7 +816,7 @@ fn build_loaded_file<'a>(
         if linking_strategy == LinkingStrategy::Surgical {
             // Copy preprocessed host to executable location.
             // The surgical linker will modify that copy in-place.
-            std::fs::copy(&preprocessed_host_path, output_exe_path.as_path()).unwrap();
+            std::fs::copy(&preprocessed_host_path, output_binary_path.as_path()).unwrap();
         }
 
         None
@@ -837,7 +836,7 @@ fn build_loaded_file<'a>(
             linking_strategy,
             platform_main_roc.clone(),
             preprocessed_host_path.clone(),
-            output_exe_path.clone(),
+            output_binary_path.clone(),
             target,
             dll_stub_symbols,
         );
@@ -959,28 +958,29 @@ fn build_loaded_file<'a>(
                 target,
                 &platform_main_roc,
                 &roc_app_bytes,
-                &output_exe_path,
+                &output_binary_path,
             );
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
             // Just copy the object file to the output folder.
-            output_exe_path.set_extension(
-                operating_system.object_file_ext(target.architecture.into())
-            );
-            std::fs::write(&output_exe_path, &*roc_app_bytes).unwrap();
+            output_binary_path
+                .set_extension(operating_system.object_file_ext(target.architecture.into()));
+            std::fs::write(&output_binary_path, &*roc_app_bytes).unwrap();
         }
         (LinkingStrategy::Legacy, _) => {
-            let extension = if matches!(operating_system, roc_target::OperatingSystem::Wasi) {
-                // Legacy linker is only by used llvm wasm backend, not dev.
-                // llvm wasm backend directly emits a bitcode file when targeting wasi, not a `.o` or `.wasm` file.
-                // If we set the extension wrong, zig will print a ton of warnings when linking.
-                "bc"
-            } else {
-                operating_system.object_file_ext(target.architecture.into())
-            };
+            let app_o_file_extension =
+                if matches!(operating_system, roc_target::OperatingSystem::Wasi) {
+                    // Legacy linker is only by used llvm wasm backend, not dev.
+                    // llvm wasm backend directly emits a bitcode file when targeting wasi, not a `.o` or `.wasm` file.
+                    // If we set the extension wrong, zig will print a ton of warnings when linking.
+                    "bc"
+                } else {
+                    roc_target::OperatingSystem::from(Triple::host().operating_system)
+                        .object_file_ext(target.architecture.into())
+                };
             let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
-                .suffix(&format!(".{}", extension))
+                .suffix(&format!(".{}", app_o_file_extension))
                 .tempfile()
                 .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
             let app_o_file = app_o_file.path();
@@ -1001,7 +1001,10 @@ fn build_loaded_file<'a>(
                 inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 
-            let (mut child, _) = link(target, output_exe_path.clone(), &inputs, link_type)
+            output_binary_path
+                .set_extension(operating_system.object_file_ext(target.architecture.into()));
+
+            let (mut child, _) = link(target, output_binary_path.clone(), &inputs, link_type)
                 .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
 
             let exit_status = child
@@ -1030,7 +1033,7 @@ fn build_loaded_file<'a>(
     let total_time = compilation_start.elapsed();
 
     Ok(BuiltFile {
-        binary_path: output_exe_path,
+        binary_path: output_binary_path,
         problems,
         total_time,
         expect_metadata,
