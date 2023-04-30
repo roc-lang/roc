@@ -398,12 +398,9 @@ fn build_exposed_proc<'a, B: Backend<'a>>(
     let arena = backend.env().arena;
     let interns = backend.interns();
 
-    let ident_string = sym.as_str(interns);
-    let module_string = interns.module_ids.get_name(sym.module_id()).unwrap();
-    let fn_name = format!("{}{}", module_string, ident_string);
-
     let platform = sym.module_id();
 
+    let fn_name = sym.as_str(interns).to_string();
     let generic_proc_name = backend.debug_symbol_in(platform, &fn_name);
     let s1 = backend.debug_symbol_in(platform, "s1");
 
@@ -446,12 +443,9 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(
     let arena = backend.env().arena;
     let interns = backend.interns();
 
-    let ident_string = sym.as_str(interns);
-    let module_string = interns.module_ids.get_name(sym.module_id()).unwrap();
-    let fn_name = format!("{}{}", module_string, ident_string);
-
     let platform = sym.module_id();
 
+    let fn_name = sym.as_str(interns).to_string();
     let generic_proc_name = backend.debug_symbol_in(platform, &fn_name);
     let arg_generic = backend.debug_symbol_in(platform, "arg_generic");
 
