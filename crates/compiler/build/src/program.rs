@@ -110,7 +110,7 @@ pub fn gen_from_mono_module<'a>(
             target,
             preprocessed_host_path,
             wasm_dev_stack_bytes,
-            AssemblyBackendMode::Binary, // unused in practice
+            AssemblyBackendMode::Binary, // dummy value, unused in practice
         ),
         CodeGenBackend::Assembly(backend_mode) => gen_from_mono_module_dev(
             arena,
