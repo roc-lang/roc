@@ -3282,21 +3282,75 @@ impl<
                 let sym_reg = storage_manager.load_to_general_reg(buf, &value);
                 ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, sym_reg);
             }
-            _ if element_width == 0 => {}
-            _ if element_width > 8 => {
-                let (from_offset, size) = storage_manager.stack_offset_and_size(&value);
+            _other => {
+                if element_width == 0 {
+                    return;
+                }
+
+                let (from_offset, stack_size) = storage_manager.stack_offset_and_size(&value);
                 debug_assert!(from_offset % 8 == 0);
-                debug_assert!(size % 8 == 0);
-                debug_assert_eq!(size as u64, element_width);
+
                 storage_manager.with_tmp_general_reg(buf, |_storage_manager, buf, tmp_reg| {
-                    // a crude memcpy
-                    for i in (0..size as i32).step_by(8) {
-                        ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
-                        ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset + i, tmp_reg);
+                    let mut copied = 0;
+                    let size = stack_size as i32;
+
+                    if size - copied >= 8 {
+                        for _ in (0..(size - copied)).step_by(8) {
+                            ASM::mov_reg64_base32(buf, tmp_reg, from_offset + copied);
+                            ASM::mov_mem64_offset32_reg64(
+                                buf,
+                                ptr_reg,
+                                element_offset + copied,
+                                tmp_reg,
+                            );
+
+                            copied += 8;
+                        }
+                    }
+
+                    if size - copied >= 4 {
+                        for _ in (0..(size - copied)).step_by(4) {
+                            ASM::mov_reg32_base32(buf, tmp_reg, from_offset + copied);
+                            ASM::mov_mem32_offset32_reg32(
+                                buf,
+                                ptr_reg,
+                                element_offset + copied,
+                                tmp_reg,
+                            );
+
+                            copied += 4;
+                        }
+                    }
+
+                    if size - copied >= 2 {
+                        for _ in (0..(size - copied)).step_by(2) {
+                            ASM::mov_reg16_base32(buf, tmp_reg, from_offset + copied);
+                            ASM::mov_mem16_offset32_reg16(
+                                buf,
+                                ptr_reg,
+                                element_offset + copied,
+                                tmp_reg,
+                            );
+
+                            copied += 2;
+                        }
+                    }
+
+                    if size - copied >= 1 {
+                        for _ in (0..(size - copied)).step_by(1) {
+                            ASM::mov_reg8_base32(buf, tmp_reg, from_offset + copied);
+                            ASM::mov_mem8_offset32_reg8(
+                                buf,
+                                ptr_reg,
+                                element_offset + copied,
+                                tmp_reg,
+                            );
+
+                            copied += 1;
+                        }
                     }
                 });
             }
-            x => todo!("copying data to list with layout, {:?}", x),
         }
     }
 
