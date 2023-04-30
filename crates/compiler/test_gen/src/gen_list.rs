@@ -1620,7 +1620,7 @@ fn list_repeat() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_reverse() {
     assert_evals_to!(
         "List.reverse [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]",
@@ -1636,7 +1636,7 @@ fn list_reverse() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_reverse_empty_list_of_int() {
     assert_evals_to!(
         indoc!(

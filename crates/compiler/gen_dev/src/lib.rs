@@ -79,6 +79,11 @@ pub enum Relocation {
     },
 }
 
+#[repr(u8)]
+enum UpdateMode {
+    Immutable = 0,
+}
+
 trait Backend<'a> {
     fn env(&self) -> &Env<'a>;
     fn interns(&self) -> &Interns;
@@ -1221,6 +1226,53 @@ trait Backend<'a> {
                 let intrinsic = bitcode::LIST_SUBLIST.to_string();
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
             }
+            LowLevel::ListSwap => {
+                let list = args[0];
+                let i = args[1];
+                let j = args[2];
+
+                let list_layout = arg_layouts[0];
+                let element_layout = match self.interner().get(list_layout) {
+                    Layout::Builtin(Builtin::List(e)) => e,
+                    _ => unreachable!(),
+                };
+
+                let (element_width_int, alignment_int) =
+                    self.interner().stack_size_and_alignment(element_layout);
+
+                let alignment = self.debug_symbol("alignment");
+                self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
+
+                let element_width = self.debug_symbol("element_width");
+                self.load_literal_i64(&element_width, element_width_int as i64);
+
+                let update_mode = self.debug_symbol("update_mode");
+                self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
+
+                let layout_usize = Layout::U64;
+
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    index_1: usize,
+                //    index_2: usize,
+                //    update_mode: UpdateMode,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_SWAP.to_string(),
+                    &[list, alignment, element_width, i, j, update_mode],
+                    &[
+                        list_layout,
+                        Layout::U32,
+                        layout_usize,
+                        layout_usize,
+                        layout_usize,
+                        Layout::U8,
+                    ],
+                    ret_layout,
+                );
+            }
             x => todo!("low level, {:?}", x),
         }
     }
@@ -1619,6 +1671,18 @@ trait Backend<'a> {
         let literal = Literal::Int((value as i128).to_ne_bytes());
 
         self.load_literal(sym, &Layout::I32, &literal)
+    }
+
+    fn load_literal_i16(&mut self, sym: &Symbol, value: i16) {
+        let literal = Literal::Int((value as i128).to_ne_bytes());
+
+        self.load_literal(sym, &Layout::I16, &literal)
+    }
+
+    fn load_literal_i8(&mut self, sym: &Symbol, value: i8) {
+        let literal = Literal::Int((value as i128).to_ne_bytes());
+
+        self.load_literal(sym, &Layout::I8, &literal)
     }
 
     /// create_empty_array creates an empty array with nullptr, zero length, and zero capacity.
