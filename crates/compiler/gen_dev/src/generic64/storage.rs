@@ -542,13 +542,21 @@ impl<
         field_layouts: &'a [InLayout<'a>],
     ) {
         debug_assert!(index < field_layouts.len() as u64);
+
+        let storage = *self.get_storage_for_sym(structure);
+
+        if let NoData = storage {
+            return self.no_data(sym);
+        }
+
         // This must be removed and reinserted for ownership and mutability reasons.
         let owned_data = self.remove_allocation_for_sym(structure);
         self.allocation_map
             .insert(*structure, Rc::clone(&owned_data));
-        match self.get_storage_for_sym(structure) {
+
+        match storage {
             Stack(Complex { base_offset, size }) => {
-                let (base_offset, size) = (*base_offset, *size);
+                let (base_offset, size) = (base_offset, size);
                 let mut data_offset = base_offset;
                 for layout in field_layouts.iter().take(index as usize) {
                     let field_size = layout_interner.stack_size(*layout);
