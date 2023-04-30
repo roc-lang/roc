@@ -28,12 +28,29 @@ mod object_builder;
 pub use object_builder::build_module;
 mod run_roc;
 
+#[derive(Debug, Clone, Copy)]
+pub enum AssemblyBackendMode {
+    /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
+    Binary,
+    /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    Test,
+}
+
+impl AssemblyBackendMode {
+    fn generate_allocators(self) -> bool {
+        match self {
+            AssemblyBackendMode::Binary => false,
+            AssemblyBackendMode::Test => true,
+        }
+    }
+}
+
 pub struct Env<'a> {
     pub arena: &'a Bump,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
-    pub generate_allocators: bool,
+    pub mode: AssemblyBackendMode,
 }
 
 // These relocations likely will need a length.
@@ -1280,9 +1297,7 @@ trait Backend<'a> {
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
-            other => {
-                eprintln!("maybe {other:?} should have a custom implementation?");
-
+            _other => {
                 // just call the function
                 let fn_name = self.function_symbol_to_string(
                     func_sym,

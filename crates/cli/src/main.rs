@@ -9,6 +9,7 @@ use roc_cli::{
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
+use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
@@ -92,8 +93,9 @@ fn main() -> io::Result<()> {
             let output_path = Path::new(matches.value_of_os(GLUE_DIR).unwrap());
             let spec_path = Path::new(matches.value_of_os(GLUE_SPEC).unwrap());
 
+            // have the backend supply `roc_alloc` and friends
             let backend = match matches.is_present(FLAG_DEV) {
-                true => CodeGenBackend::Assembly,
+                true => CodeGenBackend::Assembly(AssemblyBackendMode::Test),
                 false => CodeGenBackend::Llvm(LlvmBackendMode::BinaryGlue),
             };
 

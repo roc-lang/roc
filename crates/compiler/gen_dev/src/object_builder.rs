@@ -190,7 +190,7 @@ fn build_object<'a, B: Backend<'a>>(
     );
     */
 
-    if backend.env().generate_allocators {
+    if backend.env().mode.generate_allocators() {
         generate_wrapper(
             &mut backend,
             &mut output,

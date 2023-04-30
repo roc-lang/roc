@@ -47,6 +47,7 @@ roc_editor = { path = "../editor", optional = true }
 roc_error_macros = { path = "../error_macros" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_gen_llvm = { path = "../compiler/gen_llvm" }
+roc_gen_dev = { path = "../compiler/gen_dev" }
 roc_glue = { path = "../glue" }
 roc_linker = { path = "../linker" }
 roc_load = { path = "../compiler/load" }

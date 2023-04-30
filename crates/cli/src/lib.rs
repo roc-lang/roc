@@ -11,6 +11,7 @@ use roc_build::program::{
     BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
 use roc_error_macros::{internal_error, user_error};
+use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExpectMetadata, Threading};
 use roc_mono::ir::OptLevel;
@@ -617,7 +618,7 @@ pub fn build(
         if matches!(triple.architecture, Architecture::Wasm32) {
             CodeGenBackend::Wasm
         } else {
-            CodeGenBackend::Assembly
+            CodeGenBackend::Assembly(AssemblyBackendMode::Binary)
         }
     } else {
         let backend_mode = match opt_level {
