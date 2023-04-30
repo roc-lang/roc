@@ -195,9 +195,10 @@ pub struct Target {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum OperatingSystem {
-    Unix = 0,
-    Wasi = 1,
+    Unknown = 0,
+    Unix = 1,
     Windows = 2,
+    Wasi = 3,
 }
 
 impl core::fmt::Debug for OperatingSystem {
@@ -206,6 +207,7 @@ impl core::fmt::Debug for OperatingSystem {
             Self::Unix => f.write_str("OperatingSystem::Unix"),
             Self::Wasi => f.write_str("OperatingSystem::Wasi"),
             Self::Windows => f.write_str("OperatingSystem::Windows"),
+            Self::Unknown => f.write_str("OperatingSystem::Unknown"),
         }
     }
 }

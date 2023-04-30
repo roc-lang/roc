@@ -10,6 +10,8 @@ pub enum OperatingSystem {
     Windows,
     Unix,
     Wasi,
+    /// e.g. for freestanding wasm32 builds
+    Unknown,
 }
 
 impl OperatingSystem {
@@ -20,24 +22,32 @@ impl OperatingSystem {
             target_lexicon::OperatingSystem::Linux => Some(OperatingSystem::Unix),
             target_lexicon::OperatingSystem::MacOSX { .. } => Some(OperatingSystem::Unix),
             target_lexicon::OperatingSystem::Darwin => Some(OperatingSystem::Unix),
-            target_lexicon::OperatingSystem::Unknown => Some(OperatingSystem::Unix),
+            target_lexicon::OperatingSystem::Unknown => Some(OperatingSystem::Unknown),
             _ => None,
         }
     }
 
-    pub const fn object_file_ext(&self) -> &str {
+    pub const fn object_file_ext(&self, arch: Architecture) -> &str {
         match self {
             OperatingSystem::Windows => "obj",
             OperatingSystem::Unix => "o",
             OperatingSystem::Wasi => "wasm",
+            OperatingSystem::Unknown => {
+                if matches!(arch, Architecture::Wasm32) {
+                    "wasm"
+                } else {
+                    ""
+                }
+            }
         }
     }
 
     pub const fn executable_file_ext(&self) -> Option<&str> {
         match self {
             OperatingSystem::Windows => Some("exe"),
-            OperatingSystem::Unix => None,
             OperatingSystem::Wasi => Some("wasm"),
+            OperatingSystem::Unix => None,
+            OperatingSystem::Unknown => None,
         }
     }
 }

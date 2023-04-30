@@ -60,7 +60,7 @@ pub fn link(
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
 pub fn legacy_host_filename(target: &Triple) -> Option<String> {
     let os = roc_target::OperatingSystem::from(target.operating_system);
-    let ext = os.object_file_ext();
+    let ext = os.object_file_ext(target.architecture.into());
 
     Some(
         roc_linker::preprocessed_host_filename(target)?
@@ -555,6 +555,7 @@ pub fn rebuild_host(
         roc_target::OperatingSystem::Windows => "exe",
         roc_target::OperatingSystem::Unix => "",
         roc_target::OperatingSystem::Wasi => "",
+        roc_target::OperatingSystem::Unknown => "",
     };
 
     let host_dest = if matches!(target.architecture, Architecture::Wasm32) {

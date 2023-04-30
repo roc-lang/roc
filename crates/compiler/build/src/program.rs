@@ -964,7 +964,9 @@ fn build_loaded_file<'a>(
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
             // Just copy the object file to the output folder.
-            output_exe_path.set_extension(operating_system.object_file_ext());
+            output_exe_path.set_extension(
+                operating_system.object_file_ext(target.architecture.into())
+            );
             std::fs::write(&output_exe_path, &*roc_app_bytes).unwrap();
         }
         (LinkingStrategy::Legacy, _) => {
@@ -974,7 +976,7 @@ fn build_loaded_file<'a>(
                 // If we set the extension wrong, zig will print a ton of warnings when linking.
                 "bc"
             } else {
-                operating_system.object_file_ext()
+                operating_system.object_file_ext(target.architecture.into())
             };
             let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")

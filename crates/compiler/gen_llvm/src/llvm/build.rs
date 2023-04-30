@@ -5839,8 +5839,11 @@ pub fn to_cc_return<'a>(
         roc_target::OperatingSystem::Windows => {
             return_size >= 2 * env.target_info.ptr_width() as u32
         }
-        roc_target::OperatingSystem::Unix => return_size > 2 * env.target_info.ptr_width() as u32,
-        roc_target::OperatingSystem::Wasi => return_size > 2 * env.target_info.ptr_width() as u32,
+        roc_target::OperatingSystem::Unix
+        | roc_target::OperatingSystem::Wasi
+        | roc_target::OperatingSystem::Unknown => {
+            return_size > 2 * env.target_info.ptr_width() as u32
+        }
     };
 
     if return_size == 0 {

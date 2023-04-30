@@ -933,6 +933,7 @@ impl From<OperatingSystem> for roc_type::OperatingSystem {
             OperatingSystem::Windows => roc_type::OperatingSystem::Windows,
             OperatingSystem::Unix => roc_type::OperatingSystem::Unix,
             OperatingSystem::Wasi => roc_type::OperatingSystem::Wasi,
+            OperatingSystem::Unknown => roc_type::OperatingSystem::Unknown,
         }
     }
 }

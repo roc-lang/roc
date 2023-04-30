@@ -515,7 +515,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         }
                     }
                 }
-                Wasi => unimplemented!(),
+                Wasi | Unknown => unimplemented!(),
             }
         }
         StrCountUtf8Bytes => {
@@ -1776,7 +1776,7 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
                 bitcode::DEC_TO_STR,
             )
         }
-        Wasi => unimplemented!(),
+        Wasi | Unknown => unimplemented!(),
     }
 }
 
@@ -1822,7 +1822,7 @@ fn dec_binop_with_overflow<'ctx>(
                 fn_name,
             );
         }
-        Wasi => unimplemented!(),
+        Wasi | Unknown => unimplemented!(),
     }
 
     env.builder
@@ -1865,7 +1865,7 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
                 fn_name,
             )
         }
-        Wasi => unimplemented!(),
+        Wasi | Unknown => unimplemented!(),
     }
 }
 
