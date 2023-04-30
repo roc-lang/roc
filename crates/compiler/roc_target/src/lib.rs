@@ -27,7 +27,7 @@ impl OperatingSystem {
         }
     }
 
-    pub const fn object_file_ext(&self, arch: Architecture) -> &str {
+    pub const fn object_file_ext(&self, arch: Architecture) -> &'static str {
         match self {
             OperatingSystem::Windows => "obj",
             OperatingSystem::Unix => "o",
@@ -42,7 +42,7 @@ impl OperatingSystem {
         }
     }
 
-    pub const fn executable_file_ext(&self) -> Option<&str> {
+    pub const fn executable_file_ext(&self) -> Option<&'static str> {
         match self {
             OperatingSystem::Windows => Some("exe"),
             OperatingSystem::Wasi => Some("wasm"),
