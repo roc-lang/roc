@@ -64,7 +64,7 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
     }
 
     let mut env = ReuseEnvironment {
-        layout_tags: MutMap::default(),
+        symbol_tags: MutMap::default(),
         reuse_tokens: MutMap::default(),
         symbol_layouts: symbol_layout,
         joinpoint_reuse_tokens: MutMap::default(),
@@ -128,7 +128,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     } => {
                         // The value of the tag is currently only used in the case of nullable recursive unions.
                         // But for completeness we add every kind of union to the layout_tags.
-                        environment.add_layout_tag(layout, *tag_id);
+                        environment.add_symbol_tag(*binding, *tag_id);
 
                         // Check if the tag id for this layout can be reused at all.
                         match can_reuse_union_layout_tag(tag_layout, Option::Some(*tag_id)) {
@@ -193,12 +193,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 .map(|(tag_id, info, branch)| {
                     let mut branch_env = environment.clone();
                     if let BranchInfo::Constructor {
+                        scrutinee,
                         tag_id: tag,
-                        layout: branch_layout,
                         ..
                     } = info
                     {
-                        branch_env.add_layout_tag(branch_layout, *tag);
+                        branch_env.add_symbol_tag(*scrutinee, *tag);
                     }
 
                     let new_branch = insert_reset_reuse_operations_stmt(
@@ -220,12 +220,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                 let mut branch_env = environment.clone();
                 if let BranchInfo::Constructor {
+                    scrutinee,
                     tag_id: tag,
-                    layout: branch_layout,
                     ..
                 } = info
                 {
-                    branch_env.add_layout_tag(branch_layout, *tag);
+                    branch_env.add_symbol_tag(*scrutinee, *tag);
                 }
 
                 let new_branch = insert_reset_reuse_operations_stmt(
@@ -355,7 +355,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     match layout_option.clone() {
                         LayoutOption::Layout(layout)
                             if matches!(
-                                can_reuse_layout(layout_interner, environment, layout),
+                                symbol_layout_reusability(
+                                    layout_interner,
+                                    environment,
+                                    symbol,
+                                    layout
+                                ),
                                 Reuse::Reusable
                             ) =>
                         {
@@ -590,7 +595,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut first_pass_body_environment = ReuseEnvironment {
-                    layout_tags: environment.layout_tags.clone(),
+                    symbol_tags: environment.symbol_tags.clone(),
                     reuse_tokens: max_reuse_token_symbols.clone(),
                     symbol_layouts: environment.symbol_layouts.clone(),
                     joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
@@ -764,7 +769,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             let (second_pass_body_environment, second_pass_body) = {
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut body_environment = ReuseEnvironment {
-                    layout_tags: environment.layout_tags.clone(),
+                    symbol_tags: environment.symbol_tags.clone(),
                     reuse_tokens: used_reuse_tokens.clone(),
                     symbol_layouts: environment.symbol_layouts.clone(),
                     joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
@@ -914,12 +919,6 @@ enum Reuse {
 }
 
 /**
-Map containing the curren't known tag of a layout.
-A layout with a tag will be inserted e.g. after pattern matching. where the tag is known.
-*/
-type LayoutTags<'a> = MutMap<&'a InLayout<'a>, Tag>;
-
-/**
 Map containing the reuse tokens of a layout.
 A vec is used as a stack as we want to use the latest reuse token available.
 */
@@ -976,7 +975,7 @@ enum JoinPointReuseTokens<'a> {
 
 #[derive(Default, Clone)]
 struct ReuseEnvironment<'a> {
-    layout_tags: LayoutTags<'a>,
+    symbol_tags: MutMap<Symbol, Tag>,
     reuse_tokens: ReuseTokens<'a>,
     symbol_layouts: SymbolLayout<'a>,
     // A map containing the amount of reuse tokens a join point expects for each layout.
@@ -990,15 +989,15 @@ impl<'a> ReuseEnvironment<'a> {
      Add the known tag for a layout.
      Used to optimize reuse of unions that are know to have a null pointer.
     */
-    fn add_layout_tag(&mut self, layout: &'a InLayout<'a>, tag: Tag) {
-        self.layout_tags.insert(layout, tag);
+    fn add_symbol_tag(&mut self, symbol: Symbol, tag: Tag) {
+        self.symbol_tags.insert(symbol, tag);
     }
 
     /**
     Retrieve the known tag for a layout.
      */
-    fn get_layout_tag(&self, layout: &InLayout<'a>) -> Option<Tag> {
-        self.layout_tags.get(layout).copied()
+    fn get_symbol_tag(&self, symbol: &Symbol) -> Option<Tag> {
+        self.symbol_tags.get(symbol).copied()
     }
 
     /**
@@ -1128,14 +1127,15 @@ impl<'a> ReuseEnvironment<'a> {
 /**
 Check if a layout can be reused. by verifying if the layout is a union and if the tag is not nullable.
 */
-fn can_reuse_layout<'a>(
+fn symbol_layout_reusability<'a>(
     layout_interner: &STLayoutInterner<'a>,
     environment: &ReuseEnvironment<'a>,
+    symbol: &Symbol,
     layout: &InLayout<'a>,
 ) -> Reuse {
     match layout_interner.get(*layout) {
         Layout::Union(union_layout) => {
-            can_reuse_union_layout_tag(&union_layout, environment.get_layout_tag(layout))
+            can_reuse_union_layout_tag(&union_layout, environment.get_symbol_tag(symbol))
         }
         // Strings literals are constants.
         // Arrays are probably given to functions and reused there. Little use to reuse them here.
