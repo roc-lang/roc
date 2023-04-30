@@ -55,6 +55,9 @@ interface Num
         toFrac,
         isPositive,
         isNegative,
+        isNaN,
+        isInfinite,
+        isFinite,
         rem,
         remChecked,
         div,
@@ -620,6 +623,29 @@ isNegative : Num a -> Bool
 isNegative = \x -> x < 0
 
 toFrac : Num * -> Frac *
+
+## Returns `Bool.true` if the [Frac] is not a number as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+##
+## ```
+## Num.isNaN (0 / 0)
+## ```
+isNaN : Frac * -> Bool
+
+## Returns `Bool.true` if the [Frac] is positive or negative infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+##
+## ```
+## Num.isInfinite (1 / 0)
+##
+## Num.isInfinite (-1 / 0)
+## ```
+isInfinite : Frac * -> Bool
+
+## Returns `Bool.true` if the [Frac] is not an infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+##
+## ```
+## Num.isFinite 42
+## ```
+isFinite : Frac * -> Bool
 
 ## Return the absolute value of the number.
 ##

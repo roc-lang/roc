@@ -1613,6 +1613,8 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, &bitcode::NUM_POW_INT[width])
             }
 
+            NumIsNan => num_is_nan(backend, self.arguments[0]),
+            NumIsInfinite => num_is_infinite(backend, self.arguments[0]),
             NumIsFinite => num_is_finite(backend, self.arguments[0]),
 
             NumAtan => match self.ret_layout_raw {
@@ -2163,6 +2165,112 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::DEC_TO_STR)
             }
             x => internal_error!("NumToStr is not defined for {:?}", x),
+        }
+    }
+}
+
+/// Helper for NumIsNan op
+fn num_is_nan(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
+    use StoredValue::*;
+    let stored = backend.storage.get(&argument).to_owned();
+    match stored {
+        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+            backend
+                .storage
+                .load_symbols(&mut backend.code_builder, &[argument]);
+            match value_type {
+                // Integers are never NaN. Just return False.
+                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(0),
+                ValueType::F32 => {
+                    backend.code_builder.i32_reinterpret_f32();
+                    backend.code_builder.i32_const(0x7f80_0000);
+                    backend.code_builder.i32_and();
+                    backend.code_builder.i32_const(0x7f80_0000);
+                    backend.code_builder.i32_eq(); // Exponents are all ones
+
+                    backend
+                        .storage
+                        .load_symbols(&mut backend.code_builder, &[argument]);
+                    backend.code_builder.i32_reinterpret_f32();
+                    backend.code_builder.i32_const(0x007f_ffff);
+                    backend.code_builder.i32_and();
+                    backend.code_builder.i32_const(0);
+                    backend.code_builder.i32_ne(); // Mantissa is non-zero
+                    backend.code_builder.i32_and();
+                }
+                ValueType::F64 => {
+                    backend.code_builder.i64_reinterpret_f64();
+                    backend.code_builder.i64_const(0x7ff0_0000_0000_0000);
+                    backend.code_builder.i64_and();
+                    backend.code_builder.i64_const(0x7ff0_0000_0000_0000);
+                    backend.code_builder.i64_eq(); // Exponents are all ones
+
+                    backend
+                        .storage
+                        .load_symbols(&mut backend.code_builder, &[argument]);
+                    backend.code_builder.i64_reinterpret_f64();
+                    backend.code_builder.i64_const(0x000f_ffff_ffff_ffff);
+                    backend.code_builder.i64_and();
+                    backend.code_builder.i64_const(0);
+                    backend.code_builder.i64_ne(); // Mantissa is non-zero
+                    backend.code_builder.i32_and();
+                }
+            }
+        }
+        StackMemory { format, .. } => {
+            match format {
+                // Integers and fixed-point numbers are NaN. Just return False.
+                StackMemoryFormat::Int128 | StackMemoryFormat::Decimal => {
+                    backend.code_builder.i32_const(0)
+                }
+
+                StackMemoryFormat::DataStructure => {
+                    internal_error!("Tried to perform NumIsInfinite on a data structure")
+                }
+            }
+        }
+    }
+}
+
+/// Helper for NumIsInfinite op
+fn num_is_infinite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
+    use StoredValue::*;
+    let stored = backend.storage.get(&argument).to_owned();
+    match stored {
+        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+            backend
+                .storage
+                .load_symbols(&mut backend.code_builder, &[argument]);
+            match value_type {
+                // Integers are never infinite. Just return False.
+                ValueType::I32 | ValueType::I64 => backend.code_builder.i32_const(0),
+                ValueType::F32 => {
+                    backend.code_builder.i32_reinterpret_f32();
+                    backend.code_builder.i32_const(0x7fff_ffff);
+                    backend.code_builder.i32_and();
+                    backend.code_builder.i32_const(0x7f80_0000);
+                    backend.code_builder.i32_eq();
+                }
+                ValueType::F64 => {
+                    backend.code_builder.i64_reinterpret_f64();
+                    backend.code_builder.i64_const(0x7fff_ffff_ffff_ffff);
+                    backend.code_builder.i64_and();
+                    backend.code_builder.i64_const(0x7ff0_0000_0000_0000);
+                    backend.code_builder.i64_eq();
+                }
+            }
+        }
+        StackMemory { format, .. } => {
+            match format {
+                // Integers and fixed-point numbers are never infinite. Just return False.
+                StackMemoryFormat::Int128 | StackMemoryFormat::Decimal => {
+                    backend.code_builder.i32_const(0)
+                }
+
+                StackMemoryFormat::DataStructure => {
+                    internal_error!("Tried to perform NumIsInfinite on a data structure")
+                }
+            }
         }
     }
 }

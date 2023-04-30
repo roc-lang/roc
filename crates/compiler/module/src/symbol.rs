@@ -1254,6 +1254,9 @@ define_builtins! {
         153 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
         154 NUM_COUNT_ONE_BITS: "countOneBits"
         155 NUM_ABS_DIFF: "absDiff"
+        156 NUM_IS_NAN: "isNaN"
+        157 NUM_IS_INFINITE: "isInfinite"
+        158 NUM_IS_FINITE: "isFinite"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias

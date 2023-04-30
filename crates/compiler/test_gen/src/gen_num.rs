@@ -1707,6 +1707,31 @@ fn float_to_float() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn frac_is_nan() {
+    assert_evals_to!("Num.isNaN (0 / 0)", true, bool);
+    assert_evals_to!("Num.isNaN (1 / 0)", false, bool);
+    assert_evals_to!("Num.isNaN 42", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn frac_is_infinite() {
+    assert_evals_to!("Num.isInfinite (1 / 0)", true, bool);
+    assert_evals_to!("Num.isInfinite (-1 / 0)", true, bool);
+    assert_evals_to!("Num.isInfinite (0 / 0)", false, bool);
+    assert_evals_to!("Num.isInfinite 42", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn frac_is_finite() {
+    assert_evals_to!("Num.isFinite 42", true, bool);
+    assert_evals_to!("Num.isFinite (1 / 0)", false, bool);
+    assert_evals_to!("Num.isFinite (0 / 0)", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_compare() {
     assert_evals_to!("Num.compare 0 1", RocOrder::Lt, RocOrder);
     assert_evals_to!("Num.compare 1 1", RocOrder::Eq, RocOrder);
