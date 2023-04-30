@@ -1241,8 +1241,8 @@ pub enum Target {
     Windows64,
     #[strum(serialize = "wasm32")]
     Wasm32,
-    #[strum(serialize = "wasm32-wasi")]
-    Wasm32Wasi,
+    #[strum(serialize = "wasi32")]
+    Wasi32,
 }
 
 impl Target {
@@ -1279,7 +1279,7 @@ impl Target {
                 environment: Environment::Unknown,
                 binary_format: BinaryFormat::Wasm,
             },
-            Wasm32Wasi => Triple {
+            Wasi32 => Triple {
                 architecture: Architecture::Wasm32,
                 vendor: Vendor::Unknown,
                 operating_system: OperatingSystem::Wasi,
