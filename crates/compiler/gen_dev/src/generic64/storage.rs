@@ -1112,7 +1112,7 @@ impl<
     }
 
     /// Specifies a no data exists.
-    pub fn no_data_arg(&mut self, sym: &Symbol) {
+    pub fn no_data(&mut self, sym: &Symbol) {
         self.symbol_storage_map.insert(*sym, NoData);
     }
 
