@@ -192,8 +192,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 .iter()
                 .map(|(tag_id, info, branch)| {
                     let mut branch_env = environment.clone();
-                    if let BranchInfo::Constructor { tag_id: tag, .. } = info {
-                        branch_env.add_symbol_tag(*cond_symbol, *tag);
+                    if let BranchInfo::Constructor {
+                        scrutinee,
+                        tag_id: tag,
+                        ..
+                    } = info
+                    {
+                        branch_env.add_symbol_tag(*scrutinee, *tag);
                     }
 
                     let new_branch = insert_reset_reuse_operations_stmt(
@@ -214,8 +219,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 let (info, branch) = default_branch;
 
                 let mut branch_env = environment.clone();
-                if let BranchInfo::Constructor { tag_id: tag, .. } = info {
-                    branch_env.add_symbol_tag(*cond_symbol, *tag);
+                if let BranchInfo::Constructor {
+                    scrutinee,
+                    tag_id: tag,
+                    ..
+                } = info
+                {
+                    branch_env.add_symbol_tag(*scrutinee, *tag);
                 }
 
                 let new_branch = insert_reset_reuse_operations_stmt(
