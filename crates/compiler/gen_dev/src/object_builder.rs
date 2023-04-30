@@ -239,14 +239,13 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Names and linker data for user procedures
     for ((sym, layout), proc) in procedures {
-        let is_exposed = backend.env().exposed_to_host.contains(&sym);
-
-        if is_exposed {
-            let proc = build_generic_proc(&mut backend, sym, &proc);
+        if backend.env().exposed_to_host.contains(&sym) {
+            let exposed_proc = build_exposed_proc(&mut backend, sym, &proc);
+            let exposed_generic_proc = build_exposed_generic_proc(&mut backend, sym, &proc);
 
             #[cfg(debug_assertions)]
             {
-                let module_id = proc.name.name().module_id();
+                let module_id = exposed_generic_proc.name.name().module_id();
                 let ident_ids = backend
                     .interns_mut()
                     .all_ident_ids
@@ -260,11 +259,22 @@ fn build_object<'a, B: Backend<'a>>(
                 &mut layout_ids,
                 &mut procs,
                 &mut backend,
-                proc.name.name(),
+                exposed_proc.name.name(),
                 layout,
-                proc,
+                exposed_proc,
+                Exposed::Exposed,
+            );
+
+            build_proc_symbol(
+                &mut output,
+                &mut layout_ids,
+                &mut procs,
+                &mut backend,
+                exposed_generic_proc.name.name(),
+                layout,
+                exposed_generic_proc,
                 Exposed::ExposedGeneric,
-            )
+            );
         }
 
         build_proc_symbol(
@@ -275,12 +285,7 @@ fn build_object<'a, B: Backend<'a>>(
             sym,
             layout,
             proc,
-            if is_exposed {
-                // Exposed::Exposed
-                Exposed::NotExposed
-            } else {
-                Exposed::NotExposed
-            },
+            Exposed::NotExposed,
         )
     }
 
@@ -385,11 +390,60 @@ fn build_object<'a, B: Backend<'a>>(
     output
 }
 
-fn build_generic_proc<'a, B: Backend<'a>>(
+fn build_exposed_proc<'a, B: Backend<'a>>(
     backend: &mut B,
     sym: roc_module::symbol::Symbol,
     proc: &Proc<'a>,
 ) -> Proc<'a> {
+    let arena = backend.env().arena;
+    let interns = backend.interns();
+
+    let ident_string = sym.as_str(interns);
+    let module_string = interns.module_ids.get_name(sym.module_id()).unwrap();
+    let fn_name = format!("{}{}", module_string, ident_string);
+
+    let platform = sym.module_id();
+
+    let generic_proc_name = backend.debug_symbol_in(platform, &fn_name);
+    let s1 = backend.debug_symbol_in(platform, "s1");
+
+    let call_args = bumpalo::collections::Vec::from_iter_in(proc.args.iter().map(|t| t.1), arena);
+    let call_layouts =
+        bumpalo::collections::Vec::from_iter_in(proc.args.iter().map(|t| t.0), arena);
+    let call = Call {
+        call_type: roc_mono::ir::CallType::ByName {
+            name: proc.name,
+            ret_layout: proc.ret_layout,
+            arg_layouts: call_layouts.into_bump_slice(),
+            specialization_id: CallSpecId::BACKEND_DUMMY,
+        },
+        arguments: call_args.into_bump_slice(),
+    };
+
+    let body = Stmt::Let(
+        s1,
+        Expr::Call(call),
+        proc.ret_layout,
+        arena.alloc(Stmt::Ret(s1)),
+    );
+
+    Proc {
+        name: LambdaName::no_niche(generic_proc_name),
+        args: proc.args,
+        body,
+        closure_data_layout: None,
+        ret_layout: proc.ret_layout,
+        is_self_recursive: roc_mono::ir::SelfRecursive::NotSelfRecursive,
+        host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
+    }
+}
+
+fn build_exposed_generic_proc<'a, B: Backend<'a>>(
+    backend: &mut B,
+    sym: roc_module::symbol::Symbol,
+    proc: &Proc<'a>,
+) -> Proc<'a> {
+    let arena = backend.env().arena;
     let interns = backend.interns();
 
     let ident_string = sym.as_str(interns);
@@ -405,13 +459,11 @@ fn build_generic_proc<'a, B: Backend<'a>>(
     let s2 = backend.debug_symbol_in(platform, "s2");
     let s3 = backend.debug_symbol_in(platform, "s3");
 
-    let arena = backend.env().arena;
-    let mut args = bumpalo::collections::Vec::new_in(arena);
-
     let box_layout = backend
         .interner_mut()
         .insert(roc_mono::layout::Layout::Boxed(proc.ret_layout));
 
+    let mut args = bumpalo::collections::Vec::new_in(arena);
     args.extend(proc.args);
     args.push((box_layout, arg_generic));
 
