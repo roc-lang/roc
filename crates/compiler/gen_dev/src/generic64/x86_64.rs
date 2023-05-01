@@ -4,10 +4,10 @@ use crate::{
     single_register_layouts, Relocation,
 };
 use bumpalo::collections::Vec;
-use roc_builtins::bitcode::FloatWidth;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
 
 use super::{CompareOperation, RegisterWidth};
 
@@ -458,6 +458,30 @@ impl X64_64SystemVStoreArgs {
         match in_layout {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
+            Layout::I128 | Layout::U128 => {
+                let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+                if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                    let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
+                    let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
+
+                    X86_64Assembler::mov_reg64_base32(buf, reg1, offset);
+                    X86_64Assembler::mov_reg64_base32(buf, reg2, offset + 8);
+
+                    self.general_i += 2;
+                } else {
+                    // Copy to stack using return reg as buffer.
+                    let reg = Self::GENERAL_RETURN_REGS[0];
+
+                    X86_64Assembler::mov_reg64_base32(buf, reg, offset);
+                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+                    X86_64Assembler::mov_reg64_base32(buf, reg, offset + 8);
+                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+
+                    self.tmp_stack_offset += 16;
+                }
+            }
             x if layout_interner.stack_size(x) == 0 => {}
             x if layout_interner.stack_size(x) > 16 => {
                 // TODO: Double check this.
@@ -512,21 +536,50 @@ impl X64_64SystemVStoreArgs {
                         self.tmp_stack_offset += size as i32;
                     }
                     Layout::Union(UnionLayout::NonRecursive(_)) => {
-                        // for now, just also store this on the stack
+                        type ASM = X86_64Assembler;
+
+                        let tmp_reg = Self::GENERAL_RETURN_REGS[0];
+                        let stack_offset = self.tmp_stack_offset as i32;
+
+                        let mut copied = 0;
                         let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-                        debug_assert_eq!(base_offset % 8, 0);
-                        for i in (0..size as i32).step_by(8) {
-                            X86_64Assembler::mov_reg64_base32(
-                                buf,
-                                Self::GENERAL_RETURN_REGS[0],
-                                base_offset + i,
-                            );
-                            X86_64Assembler::mov_stack32_reg64(
-                                buf,
-                                self.tmp_stack_offset + i,
-                                Self::GENERAL_RETURN_REGS[0],
-                            );
+
+                        if size - copied >= 8 {
+                            for _ in (0..(size - copied)).step_by(8) {
+                                ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
+                                ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
+
+                                copied += 8;
+                            }
                         }
+
+                        if size - copied >= 4 {
+                            for _ in (0..(size - copied)).step_by(4) {
+                                ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
+                                ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
+
+                                copied += 4;
+                            }
+                        }
+
+                        if size - copied >= 2 {
+                            for _ in (0..(size - copied)).step_by(2) {
+                                ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
+                                ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
+
+                                copied += 2;
+                            }
+                        }
+
+                        if size - copied >= 1 {
+                            for _ in (0..(size - copied)).step_by(1) {
+                                ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
+                                ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
+
+                                copied += 1;
+                            }
+                        }
+
                         self.tmp_stack_offset += size as i32;
                     }
                     _ => {
@@ -630,6 +683,10 @@ impl X64_64SystemVLoadArgs {
                 ),
                 Layout::Struct { .. } => {
                     // for now, just also store this on the stack
+                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                    self.argument_offset += stack_size as i32;
+                }
+                Layout::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
                     storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                     self.argument_offset += stack_size as i32;
                 }
@@ -1322,6 +1379,46 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
     }
 
+    fn irem_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
+        idiv_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RDX);
+    }
+
+    fn urem_reg64_reg64_reg64<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
+        use crate::generic64::RegStorage;
+
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RAX));
+        storage_manager.ensure_reg_free(buf, RegStorage::General(X86_64GeneralReg::RDX));
+
+        mov_reg64_reg64(buf, X86_64GeneralReg::RAX, src1);
+        udiv_reg64_reg64(buf, src2);
+        mov_reg64_reg64(buf, dst, X86_64GeneralReg::RDX);
+    }
+
     #[inline(always)]
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
         jmp_imm32(buf, offset);
@@ -1385,8 +1482,22 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         movsd_freg64_freg64(buf, dst, src);
     }
     #[inline(always)]
-    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-        mov_reg64_reg64(buf, dst, src);
+    fn mov_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+    ) {
+        mov_reg_reg(buf, register_width, dst, src);
+    }
+    #[inline(always)]
+    fn movsx_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+    ) {
+        raw_movsx_reg_reg(buf, input_width, dst, src);
     }
 
     #[inline(always)]
@@ -1558,8 +1669,13 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         movsd_base64_offset32_freg64(buf, X86_64GeneralReg::RSP, offset, src)
     }
     #[inline(always)]
-    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
-        mov_base64_offset32_reg64(buf, X86_64GeneralReg::RSP, offset, src)
+    fn mov_stack32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base_offset32_reg(buf, register_width, X86_64GeneralReg::RSP, offset, src)
     }
 
     #[inline(always)]
@@ -1590,7 +1706,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn eq_reg64_reg64_reg64(
+    fn eq_reg_reg_reg(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,
         dst: X86_64GeneralReg,
@@ -1855,6 +1971,34 @@ fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
         byte | REX_PREFIX_R
     } else {
         byte
+    }
+}
+
+#[inline(always)]
+fn binop_reg8_reg8(op_code: u8, buf: &mut Vec<u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        let rex = add_rm_extension(dst, REX);
+        let rex = add_reg_extension(src, rex);
+
+        buf.extend([rex, op_code, 0xC0 | dst_mod | (src_mod << 3)])
+    } else {
+        let rex_prefix = [
+            X86_64GeneralReg::RBP,
+            X86_64GeneralReg::RSP,
+            X86_64GeneralReg::RSI,
+            X86_64GeneralReg::RDI,
+        ];
+
+        if rex_prefix.contains(&src) || rex_prefix.contains(&dst) {
+            buf.push(0x40);
+        }
+
+        buf.extend([op_code, 0xC0 | dst_mod | (src_mod << 3)]);
     }
 }
 
@@ -2401,23 +2545,88 @@ fn lea_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     ])
 }
 
-/// `MOV r/m64,r64` -> Move r64 to r/m64.
-/// This will not generate anything if dst and src are the same.
-#[inline(always)]
-fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    if dst != src {
-        raw_mov_reg64_reg64(buf, dst, src);
+fn raw_mov_reg_reg(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    match register_width {
+        RegisterWidth::W8 => binop_reg8_reg8(0x88, buf, dst, src),
+        RegisterWidth::W16 => binop_reg16_reg16(0x89, buf, dst, src),
+        RegisterWidth::W32 => binop_reg32_reg32(0x89, buf, dst, src),
+        RegisterWidth::W64 => binop_reg64_reg64(0x89, buf, dst, src),
+    }
+}
+
+#[allow(unused)]
+fn raw_movsx_reg_reg(
+    buf: &mut Vec<u8>,
+    input_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    // NOTE src and dst seem to be flipped here. It works this way though
+    let mod_rm = 0xC0 | (dst_mod << 3) | src_mod;
+
+    let rex = add_rm_extension(src, REX_W);
+    let rex = add_reg_extension(dst, rex);
+
+    match input_width {
+        RegisterWidth::W8 => {
+            buf.extend([rex, 0x0f, 0xbe, mod_rm]);
+        }
+        RegisterWidth::W16 => {
+            buf.extend([rex, 0x0f, 0xbf, mod_rm]);
+        }
+        RegisterWidth::W32 => {
+            buf.extend([rex, 0x63, mod_rm]);
+        }
+        RegisterWidth::W64 => { /* do nothing */ }
     }
 }
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
-/// This will always generate the move. It is used for verification.
+/// This will not generate anything if dst and src are the same.
 #[inline(always)]
-fn raw_mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    binop_reg64_reg64(0x89, buf, dst, src);
+fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    mov_reg_reg(buf, RegisterWidth::W64, dst, src)
+}
+
+#[inline(always)]
+fn mov_reg_reg(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    if dst != src {
+        raw_mov_reg_reg(buf, register_width, dst, src);
+    }
 }
 
 // The following base and stack based operations could be optimized based on how many bytes the offset actually is.
+
+#[inline(always)]
+fn mov_base_offset32_reg(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    match register_width {
+        RegisterWidth::W8 => mov_base16_offset32_reg16(buf, base, offset, src),
+        RegisterWidth::W16 => mov_base16_offset32_reg16(buf, base, offset, src),
+        RegisterWidth::W32 => mov_base32_offset32_reg32(buf, base, offset, src),
+        RegisterWidth::W64 => mov_base64_offset32_reg64(buf, base, offset, src),
+    }
+}
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64, where m64 references a base + offset.
 #[inline(always)]
@@ -3051,8 +3260,8 @@ mod tests {
                 X86_64GeneralReg::RDX => "edx",
                 X86_64GeneralReg::RBP => "ebp",
                 X86_64GeneralReg::RSP => "esp",
-                X86_64GeneralReg::RDI => "edi",
                 X86_64GeneralReg::RSI => "esi",
+                X86_64GeneralReg::RDI => "edi",
                 X86_64GeneralReg::R8 => "r8d",
                 X86_64GeneralReg::R9 => "r9d",
                 X86_64GeneralReg::R10 => "r10d",
@@ -3073,8 +3282,8 @@ mod tests {
                 X86_64GeneralReg::RDX => "dx",
                 X86_64GeneralReg::RBP => "bp",
                 X86_64GeneralReg::RSP => "sp",
-                X86_64GeneralReg::RDI => "di",
                 X86_64GeneralReg::RSI => "si",
+                X86_64GeneralReg::RDI => "di",
                 X86_64GeneralReg::R8 => "r8w",
                 X86_64GeneralReg::R9 => "r9w",
                 X86_64GeneralReg::R10 => "r10w",
@@ -3095,8 +3304,9 @@ mod tests {
                 X86_64GeneralReg::RDX => "dl",
                 X86_64GeneralReg::RBP => "bpl",
                 X86_64GeneralReg::RSP => "spl",
-                X86_64GeneralReg::RDI => "dil",
                 X86_64GeneralReg::RSI => "sil",
+                X86_64GeneralReg::RDI => "dil",
+
                 X86_64GeneralReg::R8 => "r8b",
                 X86_64GeneralReg::R9 => "r9b",
                 X86_64GeneralReg::R10 => "r10b",
@@ -3111,6 +3321,13 @@ mod tests {
     const TEST_I32: i32 = 0x12345678;
     const TEST_I64: i64 = 0x1234_5678_9ABC_DEF0;
 
+    const ALL_REGISTER_WIDTHS: &[RegisterWidth] = &[
+        RegisterWidth::W8,
+        RegisterWidth::W16,
+        RegisterWidth::W32,
+        RegisterWidth::W64,
+    ];
+
     const ALL_GENERAL_REGS: &[X86_64GeneralReg] = &[
         X86_64GeneralReg::RAX,
         X86_64GeneralReg::RBX,
@@ -3118,8 +3335,8 @@ mod tests {
         X86_64GeneralReg::RDX,
         X86_64GeneralReg::RBP,
         X86_64GeneralReg::RSP,
-        X86_64GeneralReg::RDI,
         X86_64GeneralReg::RSI,
+        X86_64GeneralReg::RDI,
         X86_64GeneralReg::R8,
         X86_64GeneralReg::R9,
         X86_64GeneralReg::R10,
@@ -3434,8 +3651,58 @@ mod tests {
     #[test]
     fn test_mov_reg64_reg64() {
         disassembler_test!(
-            raw_mov_reg64_reg64,
-            |reg1, reg2| format!("mov {}, {}", reg1, reg2),
+            raw_mov_reg_reg,
+            |w, reg1, reg2| {
+                match w {
+                    RegisterWidth::W8 => format!(
+                        "mov {}, {}",
+                        X86_64GeneralReg::low_8bits_string(&reg1),
+                        X86_64GeneralReg::low_8bits_string(&reg2)
+                    ),
+                    RegisterWidth::W16 => format!(
+                        "mov {}, {}",
+                        X86_64GeneralReg::low_16bits_string(&reg1),
+                        X86_64GeneralReg::low_16bits_string(&reg2)
+                    ),
+                    RegisterWidth::W32 => format!(
+                        "mov {}, {}",
+                        X86_64GeneralReg::low_32bits_string(&reg1),
+                        X86_64GeneralReg::low_32bits_string(&reg2)
+                    ),
+                    RegisterWidth::W64 => format!("mov {}, {}", reg1, reg2),
+                }
+            },
+            ALL_REGISTER_WIDTHS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_movsx_reg64_reg64() {
+        disassembler_test!(
+            raw_movsx_reg_reg,
+            |w, reg1, reg2| {
+                match w {
+                    RegisterWidth::W8 => format!(
+                        "movsx {}, {}",
+                        reg1,
+                        X86_64GeneralReg::low_8bits_string(&reg2)
+                    ),
+                    RegisterWidth::W16 => format!(
+                        "movsx {}, {}",
+                        reg1,
+                        X86_64GeneralReg::low_16bits_string(&reg2)
+                    ),
+                    RegisterWidth::W32 => format!(
+                        "movsxd {}, {}",
+                        reg1,
+                        X86_64GeneralReg::low_32bits_string(&reg2)
+                    ),
+                    RegisterWidth::W64 => String::new(),
+                }
+            },
+            ALL_REGISTER_WIDTHS,
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );

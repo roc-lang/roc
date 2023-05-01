@@ -852,15 +852,10 @@ impl<
                 )
             }
             _ if layout_interner.stack_size(*layout) == 0 => {}
-            // TODO: Verify this is always true.
-            // The dev backend does not deal with refcounting and does not care about if data is safe to memcpy.
-            // It is just temporarily storing the value due to needing to free registers.
-            // Later, it will be reloaded and stored in refcounted as needed.
-            _ if layout_interner.stack_size(*layout) > 8 => {
+            Layout::Struct { .. } | Layout::Union(UnionLayout::NonRecursive(_)) => {
                 let (from_offset, size) = self.stack_offset_and_size(sym);
-                debug_assert_eq!(from_offset % 8, 0);
-                debug_assert_eq!(size % 8, 0);
                 debug_assert_eq!(size, layout_interner.stack_size(*layout));
+
                 self.copy_to_stack_offset(buf, size, from_offset, to_offset)
             }
             x => todo!("copying data to the stack with layout, {:?}", x),

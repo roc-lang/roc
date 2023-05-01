@@ -14,8 +14,8 @@ use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::{CallerProc, CodeGenHelp};
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement, Literal,
-    Param, Proc, ProcLayout, SelfRecursive, Stmt,
+    BranchInfo, CallType, CrashTag, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
+    Literal, Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
@@ -279,9 +279,33 @@ trait Backend<'a> {
                 self.build_jump(id, args, arg_layouts.into_bump_slice(), ret_layout);
                 self.free_symbols(stmt);
             }
+            Stmt::Crash(msg, crash_tag) => self.roc_panic(*msg, *crash_tag),
             x => todo!("the statement, {:?}", x),
         }
     }
+
+    fn roc_panic(&mut self, msg: Symbol, crash_tag: CrashTag) {
+        self.load_literal(
+            &Symbol::DEV_TMP,
+            &Layout::U32,
+            &Literal::Int((crash_tag as u128).to_ne_bytes()),
+        );
+
+        // Now that the arguments are needed, load them if they are literals.
+        let arguments = &[msg, Symbol::DEV_TMP];
+        self.load_literal_symbols(arguments);
+        self.build_fn_call(
+            &Symbol::DEV_TMP2,
+            String::from("roc_panic"),
+            arguments,
+            &[Layout::STR, Layout::U32],
+            &Layout::UNIT,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+    }
+
     // build_switch generates a instructions for a switch statement.
     fn build_switch(
         &mut self,
@@ -546,22 +570,8 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::NumMul => {
-                debug_assert_eq!(
-                    2,
-                    args.len(),
-                    "NumMul: expected to have exactly two argument"
-                );
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
-                    "NumMul: expected all arguments of to have the same layout"
-                );
-                debug_assert_eq!(
-                    arg_layouts[0], *ret_layout,
-                    "NumMul: expected to have the same argument and return layout"
-                );
-                self.build_num_mul(sym, &args[0], &args[1], ret_layout)
-            }
+            LowLevel::NumMul => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
+            LowLevel::NumMulWrap => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
                 debug_assert_eq!(
                     2,
@@ -578,6 +588,8 @@ trait Backend<'a> {
                 );
                 self.build_num_div(sym, &args[0], &args[1], ret_layout)
             }
+
+            LowLevel::NumRemUnchecked => self.build_num_rem(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumNeg => {
                 debug_assert_eq!(
                     1,
@@ -1174,6 +1186,11 @@ trait Backend<'a> {
 
                 self.build_num_int_cast(sym, &args[0], source_width, target_width)
             }
+            LowLevel::NumIsMultipleOf => {
+                let int_width = arg_layouts[0].try_int_width().unwrap();
+                let intrinsic = bitcode::NUM_IS_MULTIPLE_OF[int_width].to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
             x => todo!("low level, {:?}", x),
         }
     }
@@ -1327,6 +1344,9 @@ trait Backend<'a> {
 
     /// build_num_mul stores `src1 / src2` into dst.
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    /// build_num_mul stores `src1 % src2` into dst.
+    fn build_num_rem(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_neg stores the negated value of src into dst.
     fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>);
@@ -1788,7 +1808,9 @@ trait Backend<'a> {
             Stmt::Expect { .. } => todo!("expect is not implemented in the dev backend"),
             Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the dev backend"),
 
-            Stmt::Crash(..) => todo!("crash is not implemented in the dev backend"),
+            Stmt::Crash(msg, _crash_tag) => {
+                self.set_last_seen(*msg, stmt);
+            }
         }
     }
 

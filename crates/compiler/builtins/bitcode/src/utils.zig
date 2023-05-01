@@ -107,15 +107,16 @@ pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
-pub fn test_panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
     _ = c_ptr;
-    _ = alignment;
-    // const cstr = @ptrCast([*:0]u8, c_ptr);
+    _ = crash_tag;
 
-    // const stderr = std.io.getStdErr().writer();
-    // stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
-
-    // std.c.exit(1);
+    //    const cstr = @ptrCast([*:0]u8, c_ptr);
+    //
+    //    const stderr = std.io.getStdErr().writer();
+    //    stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
+    //
+    //    std.c.exit(1);
 }
 
 pub const Inc = fn (?[*]u8) callconv(.C) void;
