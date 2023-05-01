@@ -539,7 +539,7 @@ impl X64_64SystemVStoreArgs {
                         type ASM = X86_64Assembler;
 
                         let tmp_reg = Self::GENERAL_RETURN_REGS[0];
-                        let stack_offset = self.tmp_stack_offset as i32;
+                        let stack_offset = self.tmp_stack_offset;
 
                         let mut copied = 0;
                         let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
