@@ -6,6 +6,7 @@ zig-cache
 *.rs.bk
 *.o
 *.so
+*.so.*
 *.obj
 *.dll
 *.dylib
