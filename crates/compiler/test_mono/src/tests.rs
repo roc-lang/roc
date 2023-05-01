@@ -2889,6 +2889,30 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
     )
 }
 
+#[mono_test]
+fn issue_4770() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            isCorrectOrder { left: IsList [IsInteger 10], right: IsList [IsInteger 20] }
+
+        isCorrectOrder = \pair ->
+            when pair is
+                { left: IsInteger left, right: IsInteger right } -> left < right
+                { left: IsList l, right: IsList r } ->
+                    if List.map2 l r (\left, right -> { left, right }) |> List.all isCorrectOrder then
+                        List.len l < List.len r
+                    else
+                        Bool.false
+
+                { left: IsList _, right: IsInteger _ } -> isCorrectOrder { left: pair.left, right: IsList [pair.right] }
+                { left: IsInteger _, right: IsList _ } -> isCorrectOrder { left: IsList [pair.left], right: pair.right }
+        "#
+    )
+}
+
 #[mono_test(allow_type_errors = "true")]
 fn error_on_erroneous_condition() {
     indoc!(

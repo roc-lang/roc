@@ -698,7 +698,7 @@ fn solve(
                 // after a LetCon, we must check if any of the variables that we introduced
                 // loop back to themselves after solving the ret_constraint
                 for (symbol, loc_var) in def_vars.iter() {
-                    check_for_infinite_type(subs, problems, *symbol, *loc_var);
+                    check_for_infinite_type(subs, pools, problems, *symbol, *loc_var);
                 }
 
                 continue;
@@ -1331,7 +1331,7 @@ fn solve(
                     *type_index,
                 );
 
-                open_tag_union(subs, actual);
+                open_tag_union(subs, pools, actual);
 
                 state
             }
@@ -1571,7 +1571,7 @@ fn solve(
                         let almost_eq_snapshot = subs.snapshot();
                         // TODO: turn this on for bidirectional exhaustiveness checking
                         // open_tag_union(subs, real_var);
-                        open_tag_union(subs, branches_var);
+                        open_tag_union(subs, pools, branches_var);
                         let almost_eq = matches!(
                             unify(
                                 &mut UEnv::new(subs),
@@ -1901,7 +1901,7 @@ fn compact_lambdas_and_check_obligations(
     awaiting_specialization.union(new_awaiting);
 }
 
-fn open_tag_union(subs: &mut Subs, var: Variable) {
+fn open_tag_union(subs: &mut Subs, pools: &mut Pools, var: Variable) {
     let mut stack = vec![var];
     while let Some(var) = stack.pop() {
         use {Content::*, FlatType::*};
@@ -1910,9 +1910,9 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
         match desc.content {
             Structure(TagUnion(tags, ext)) => {
                 if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext.var()) {
-                    let new_ext = TagExt::Any(subs.fresh_unnamed_flex_var());
-                    subs.set_rank(new_ext.var(), desc.rank);
-                    let new_union = Structure(TagUnion(tags, new_ext));
+                    let new_ext_var = register(subs, desc.rank, pools, Content::FlexVar(None));
+
+                    let new_union = Structure(TagUnion(tags, TagExt::Any(new_ext_var)));
                     subs.set_content(var, new_union);
                 }
 
@@ -3592,6 +3592,7 @@ fn create_union_lambda(
 
 fn check_for_infinite_type(
     subs: &mut Subs,
+    pools: &mut Pools,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
     loc_var: Loc<Variable>,
@@ -3604,7 +3605,9 @@ fn check_for_infinite_type(
         for &var in chain.iter().rev() {
             match *subs.get_content_without_compacting(var) {
                 Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                    subs.mark_tag_union_recursive(var, tags, ext_var);
+                    let rec_var = subs.mark_tag_union_recursive(var, tags, ext_var);
+                    register_to_pools(subs, rec_var, pools);
+
                     continue 'next_occurs_check;
                 }
                 Content::LambdaSet(subs::LambdaSet {
@@ -3613,12 +3616,14 @@ fn check_for_infinite_type(
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {
-                    subs.mark_lambda_set_recursive(
+                    let rec_var = subs.mark_lambda_set_recursive(
                         var,
                         solved,
                         unspecialized,
                         ambient_function_var,
                     );
+                    register_to_pools(subs, rec_var, pools);
+
                     continue 'next_occurs_check;
                 }
                 _ => { /* fall through */ }
@@ -4494,4 +4499,9 @@ fn register_with_known_var(
     pools.get_mut(rank).push(var);
 
     var
+}
+
+#[inline(always)]
+fn register_to_pools(subs: &Subs, var: Variable, pools: &mut Pools) {
+    pools.get_mut(subs.get_rank(var)).push(var);
 }
