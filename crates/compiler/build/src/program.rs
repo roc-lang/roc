@@ -4,6 +4,7 @@ use crate::link::{
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
 use roc_error_macros::internal_error;
+use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{
@@ -74,7 +75,7 @@ impl Deref for CodeObject {
 
 #[derive(Debug, Clone, Copy)]
 pub enum CodeGenBackend {
-    Assembly,
+    Assembly(AssemblyBackendMode),
     Llvm(LlvmBackendMode),
     Wasm,
 }
@@ -103,12 +104,21 @@ pub fn gen_from_mono_module<'a>(
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
-        CodeGenBackend::Assembly | CodeGenBackend::Wasm => gen_from_mono_module_dev(
+        CodeGenBackend::Wasm => gen_from_mono_module_dev(
             arena,
             loaded,
             target,
             preprocessed_host_path,
             wasm_dev_stack_bytes,
+            AssemblyBackendMode::Binary, // unused in practice
+        ),
+        CodeGenBackend::Assembly(backend_mode) => gen_from_mono_module_dev(
+            arena,
+            loaded,
+            target,
+            preprocessed_host_path,
+            wasm_dev_stack_bytes,
+            backend_mode,
         ),
         CodeGenBackend::Llvm(backend_mode) => {
             gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
@@ -449,6 +459,7 @@ fn gen_from_mono_module_dev<'a>(
     target: &target_lexicon::Triple,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
+    backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     use target_lexicon::Architecture;
 
@@ -460,7 +471,7 @@ fn gen_from_mono_module_dev<'a>(
             wasm_dev_stack_bytes,
         ),
         Architecture::X86_64 | Architecture::Aarch64(_) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target)
+            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
         }
         _ => todo!(),
     }
@@ -473,12 +484,13 @@ pub fn gen_from_mono_module_dev<'a>(
     target: &target_lexicon::Triple,
     _host_input_path: &Path,
     _wasm_dev_stack_bytes: Option<u32>,
+    backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     use target_lexicon::Architecture;
 
     match target.architecture {
         Architecture::X86_64 | Architecture::Aarch64(_) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target)
+            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
         }
         _ => todo!(),
     }
@@ -555,11 +567,11 @@ fn gen_from_mono_module_dev_assembly<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
     target: &target_lexicon::Triple,
+    backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     let code_gen_start = Instant::now();
 
     let lazy_literals = true;
-    let generate_allocators = false; // provided by the platform
 
     let MonomorphizedModule {
         module_id,
@@ -575,7 +587,7 @@ fn gen_from_mono_module_dev_assembly<'a>(
         module_id,
         exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
-        generate_allocators,
+        mode: backend_mode,
     };
 
     let module_object =
@@ -983,7 +995,7 @@ fn build_loaded_file<'a>(
                 inputs.push(preprocessed_host_path.as_path().to_str().unwrap());
             }
 
-            if matches!(code_gen_options.backend, CodeGenBackend::Assembly) {
+            if matches!(code_gen_options.backend, CodeGenBackend::Assembly(_)) {
                 inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 

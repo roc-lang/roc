@@ -28,12 +28,29 @@ mod object_builder;
 pub use object_builder::build_module;
 mod run_roc;
 
+#[derive(Debug, Clone, Copy)]
+pub enum AssemblyBackendMode {
+    /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
+    Binary,
+    /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    Test,
+}
+
+impl AssemblyBackendMode {
+    fn generate_allocators(self) -> bool {
+        match self {
+            AssemblyBackendMode::Binary => false,
+            AssemblyBackendMode::Test => true,
+        }
+    }
+}
+
 pub struct Env<'a> {
     pub arena: &'a Bump,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
-    pub generate_allocators: bool,
+    pub mode: AssemblyBackendMode,
 }
 
 // These relocations likely will need a length.
@@ -68,8 +85,17 @@ trait Backend<'a> {
     fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
 
+    fn interner_mut(&mut self) -> &mut STLayoutInterner<'a> {
+        self.module_interns_helpers_mut().1
+    }
+
     fn debug_symbol(&mut self, name: &str) -> Symbol {
         let module_id = self.env().module_id;
+
+        self.debug_symbol_in(module_id, name)
+    }
+
+    fn debug_symbol_in(&mut self, module_id: ModuleId, name: &str) -> Symbol {
         let ident_ids = self
             .interns_mut()
             .all_ident_ids
@@ -77,7 +103,7 @@ trait Backend<'a> {
             .unwrap();
 
         let ident_id = ident_ids.add_str(name);
-        Symbol::new(self.env().module_id, ident_id)
+        Symbol::new(module_id, ident_id)
     }
 
     // This method is suboptimal, but it seems to be the only way to make rust understand
@@ -1118,7 +1144,7 @@ trait Backend<'a> {
             LowLevel::PtrWrite => {
                 let element_layout = match self.interner().get(*ret_layout) {
                     Layout::Boxed(boxed) => boxed,
-                    _ => unreachable!(),
+                    _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 
                 self.build_ptr_write(*sym, args[0], args[1], element_layout);
@@ -1271,9 +1297,7 @@ trait Backend<'a> {
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
-            other => {
-                eprintln!("maybe {other:?} should have a custom implementation?");
-
+            _other => {
                 // just call the function
                 let fn_name = self.function_symbol_to_string(
                     func_sym,

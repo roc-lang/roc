@@ -11,6 +11,7 @@ use roc_build::program::{
     BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
 use roc_error_macros::{internal_error, user_error};
+use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExpectMetadata, Threading};
 use roc_mono::ir::OptLevel;
@@ -279,6 +280,7 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .subcommand(Command::new(CMD_GLUE)
             .about("Generate glue code between a platform's Roc API and its host language")
+            .arg(&flag_dev)
             .arg(
                 Arg::new(GLUE_SPEC)
                     .help("The specification for how to translate Roc types into output files.")
@@ -616,7 +618,7 @@ pub fn build(
         if matches!(triple.architecture, Architecture::Wasm32) {
             CodeGenBackend::Wasm
         } else {
-            CodeGenBackend::Assembly
+            CodeGenBackend::Assembly(AssemblyBackendMode::Binary)
         }
     } else {
         let backend_mode = match opt_level {

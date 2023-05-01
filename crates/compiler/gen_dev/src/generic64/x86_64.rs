@@ -406,7 +406,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if layout_interner.stack_size(x) == 0 => {}
+            x if layout_interner.stack_size(x) == 0 => {
+                storage_manager.no_data(sym);
+            }
             x if !Self::returns_via_arg_pointer(layout_interner, &x) => {
                 let size = layout_interner.stack_size(*layout);
                 let offset = storage_manager.claim_stack_area(sym, size);
@@ -663,7 +665,7 @@ impl X64_64SystemVLoadArgs {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
             single_register_floats!() => self.load_arg_float(storage_manager, sym),
             _ if stack_size == 0 => {
-                storage_manager.no_data_arg(&sym);
+                storage_manager.no_data(&sym);
             }
             _ if stack_size > 16 => {
                 // TODO: Double check this.

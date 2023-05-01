@@ -190,7 +190,7 @@ pub fn helper(
         module_id,
         exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
-        generate_allocators: true, // Needed for testing, since we don't have a platform
+        mode: roc_gen_dev::AssemblyBackendMode::Test,
     };
 
     let target = target_lexicon::Triple::host();

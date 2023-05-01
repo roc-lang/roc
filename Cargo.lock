@@ -3248,6 +3248,7 @@ dependencies = [
  "roc_editor",
  "roc_error_macros",
  "roc_fmt",
+ "roc_gen_dev",
  "roc_gen_llvm",
  "roc_glue",
  "roc_linker",
