@@ -621,6 +621,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, mem, addr, *fields)
             }
+            Content::Structure(FlatType::Tuple(elems,_)) => {
+                struct_to_ast_tuple(env, mem, addr, *elems)
+            }
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
 
