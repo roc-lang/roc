@@ -724,8 +724,8 @@ impl X64_64SystemVLoadArgs {
         storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
-        if self.general_i < X86_64SystemV::GENERAL_PARAM_REGS.len() {
-            let reg = X86_64SystemV::FLOAT_PARAM_REGS[self.general_i];
+        if self.float_i < X86_64SystemV::FLOAT_PARAM_REGS.len() {
+            let reg = X86_64SystemV::FLOAT_PARAM_REGS[self.float_i];
             storage_manager.float_reg_arg(&sym, reg);
             self.float_i += 1;
         } else {
@@ -942,15 +942,21 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
             storage_manager.claim_stack_area(dst, layout_interner.stack_size(*ret_layout));
             todo!("claim first parama reg for the address");
         }
-        for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
+
+        let mut general_registers_used = 0;
+        let mut float_registers_used = 0;
+
+        for (_, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
             match *layout {
                 single_register_integers!() => {
-                    if i < Self::GENERAL_PARAM_REGS.len() {
+                    if general_registers_used < Self::GENERAL_PARAM_REGS.len() {
                         storage_manager.load_to_specified_general_reg(
                             buf,
                             sym,
-                            Self::GENERAL_PARAM_REGS[i],
+                            Self::GENERAL_PARAM_REGS[general_registers_used],
                         );
+
+                        general_registers_used += 1;
                     } else {
                         // Copy to stack using return reg as buffer.
                         storage_manager.load_to_specified_general_reg(
@@ -967,12 +973,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                     }
                 }
                 single_register_floats!() => {
-                    if i < Self::FLOAT_PARAM_REGS.len() {
+                    if float_registers_used < Self::FLOAT_PARAM_REGS.len() {
                         storage_manager.load_to_specified_float_reg(
                             buf,
                             sym,
-                            Self::FLOAT_PARAM_REGS[i],
+                            Self::FLOAT_PARAM_REGS[float_registers_used],
                         );
+
+                        float_registers_used += 1;
                     } else {
                         // Copy to stack using return reg as buffer.
                         storage_manager.load_to_specified_float_reg(

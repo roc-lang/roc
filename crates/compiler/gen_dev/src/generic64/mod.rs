@@ -2336,7 +2336,10 @@ impl<
             // Refactor this and switch to one external match.
             // We also could make loadining indivitual literals much faster
             let element_symbol = match elem {
-                ListLiteralElement::Symbol(sym) => *sym,
+                ListLiteralElement::Symbol(sym) => {
+                    self.load_literal_symbols(&[*sym]);
+                    *sym
+                }
                 ListLiteralElement::Literal(lit) => {
                     self.load_literal(&Symbol::DEV_TMP, element_in_layout, lit);
                     Symbol::DEV_TMP

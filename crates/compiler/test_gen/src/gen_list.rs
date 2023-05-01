@@ -1572,14 +1572,23 @@ fn list_join_one_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_single() {
     assert_evals_to!("List.single 1", RocList::from_slice(&[1]), RocList<i64>);
-    assert_evals_to!("List.single 5.6", RocList::from_slice(&[5.6]), RocList<f64>);
+    assert_evals_to!(
+        "List.single 5.6f32",
+        RocList::from_slice(&[5.6]),
+        RocList<f32>
+    );
+    assert_evals_to!(
+        "List.single 5.6f64",
+        RocList::from_slice(&[5.6]),
+        RocList<f64>
+    );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_repeat() {
     assert_evals_to!(
         "List.repeat 1 5",
@@ -1654,7 +1663,7 @@ fn list_reverse_empty_list_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_reverse_empty_list() {
     assert_evals_to!(
         "List.reverse []",
@@ -1732,7 +1741,7 @@ fn list_concat_two_non_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_bigger_non_empty_lists() {
     assert_evals_to!(
         "List.concat [1.1, 2.2] [3.3, 4.4, 5.5]",
