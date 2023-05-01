@@ -1449,8 +1449,8 @@ fn separate_union_lambdas<M: MetaCollector>(
                                 // code generator, we have not yet observed a case where they must
                                 // collapsed to the type checker of the surface syntax.
                                 // It is possible this assumption will be invalidated!
-                                maybe_mark_union_recursive(env, var1);
-                                maybe_mark_union_recursive(env, var2);
+                                maybe_mark_union_recursive(env, pool, var1);
+                                maybe_mark_union_recursive(env, pool, var2);
                             }
 
                             // Check whether the two type variables in the closure set are
@@ -2721,7 +2721,6 @@ fn unify_tag_unions<M: MetaCollector>(
     initial_ext1: TagExt,
     tags2: UnionTags,
     initial_ext2: TagExt,
-    recursion_var: Rec,
 ) -> Outcome<M> {
     let (separate, mut ext1, mut ext2) =
         separate_union_tags(env.subs, tags1, initial_ext1, tags2, initial_ext2);
@@ -2781,7 +2780,6 @@ fn unify_tag_unions<M: MetaCollector>(
                 shared_tags,
                 OtherTags2::Empty,
                 merge_tag_exts(ext1, ext2),
-                recursion_var,
             );
 
             shared_tags_outcome.union(ext_outcome);
@@ -2818,15 +2816,8 @@ fn unify_tag_unions<M: MetaCollector>(
 
             let combined_ext = ext1.map(|_| extra_tags_in_2);
 
-            let mut shared_tags_outcome = unify_shared_tags(
-                env,
-                pool,
-                ctx,
-                shared_tags,
-                OtherTags2::Empty,
-                combined_ext,
-                recursion_var,
-            );
+            let mut shared_tags_outcome =
+                unify_shared_tags(env, pool, ctx, shared_tags, OtherTags2::Empty, combined_ext);
 
             shared_tags_outcome.union(ext_outcome);
 
@@ -2881,15 +2872,8 @@ fn unify_tag_unions<M: MetaCollector>(
 
         let combined_ext = ext2.map(|_| extra_tags_in_1);
 
-        let shared_tags_outcome = unify_shared_tags(
-            env,
-            pool,
-            ctx,
-            shared_tags,
-            OtherTags2::Empty,
-            combined_ext,
-            recursion_var,
-        );
+        let shared_tags_outcome =
+            unify_shared_tags(env, pool, ctx, shared_tags, OtherTags2::Empty, combined_ext);
         total_outcome.union(shared_tags_outcome);
 
         if extend_ext_with_uninhabited {
@@ -2954,8 +2938,7 @@ fn unify_tag_unions<M: MetaCollector>(
 
         env.subs.commit_snapshot(snapshot);
 
-        let shared_tags_outcome =
-            unify_shared_tags(env, pool, ctx, shared_tags, other_tags, ext, recursion_var);
+        let shared_tags_outcome = unify_shared_tags(env, pool, ctx, shared_tags, other_tags, ext);
         total_outcome.union(shared_tags_outcome);
         total_outcome
     }
@@ -2972,7 +2955,7 @@ enum OtherTags2 {
 
 /// Promotes a non-recursive tag union or lambda set to its recursive variant, if it is found to be
 /// recursive.
-fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
+fn maybe_mark_union_recursive(env: &mut Env, pool: &mut Pool, union_var: Variable) {
     let subs = &mut env.subs;
     'outer: while let Err((_, chain)) = subs.occurs(union_var) {
         // walk the chain till we find a tag union or lambda set, starting from the variable that
@@ -2981,7 +2964,9 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
             let description = subs.get(v);
             match description.content {
                 Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                    subs.mark_tag_union_recursive(v, tags, ext_var);
+                    let rec_var = subs.mark_tag_union_recursive(v, tags, ext_var);
+                    pool.push(rec_var);
+
                     continue 'outer;
                 }
                 LambdaSet(self::LambdaSet {
@@ -2990,7 +2975,14 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {
-                    subs.mark_lambda_set_recursive(v, solved, unspecialized, ambient_function_var);
+                    let rec_var = subs.mark_lambda_set_recursive(
+                        v,
+                        solved,
+                        unspecialized,
+                        ambient_function_var,
+                    );
+                    pool.push(rec_var);
+
                     continue 'outer;
                 }
                 _ => { /* fall through */ }
@@ -3066,6 +3058,24 @@ fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
     }
 }
 
+#[inline]
+fn find_union_rec(subs: &Subs, ctx: &Context) -> Rec {
+    match (
+        subs.get_content_without_compacting(ctx.first),
+        subs.get_content_without_compacting(ctx.second),
+    ) {
+        (Structure(s1), Structure(s2)) => match (s1, s2) {
+            (FlatType::RecursiveTagUnion(l, _, _), FlatType::RecursiveTagUnion(r, _, _)) => {
+                Rec::Both(*l, *r)
+            }
+            (FlatType::RecursiveTagUnion(l, _, _), _) => Rec::Left(*l),
+            (_, FlatType::RecursiveTagUnion(r, _, _)) => Rec::Right(*r),
+            _ => Rec::None,
+        },
+        _ => Rec::None,
+    }
+}
+
 #[must_use]
 fn unify_shared_tags<M: MetaCollector>(
     env: &mut Env,
@@ -3074,7 +3084,6 @@ fn unify_shared_tags<M: MetaCollector>(
     shared_tags: Vec<(TagName, (VariableSubsSlice, VariableSubsSlice))>,
     other_tags: OtherTags2,
     ext: TagExt,
-    recursion_var: Rec,
 ) -> Outcome<M> {
     let mut matching_tags = Vec::default();
     let num_shared_tags = shared_tags.len();
@@ -3119,8 +3128,8 @@ fn unify_shared_tags<M: MetaCollector>(
             // since we're expanding tag unions to equal depths as described above,
             // we'll always pass through this branch. So, we promote tag unions to recursive
             // ones here if it turns out they are that.
-            maybe_mark_union_recursive(env, actual);
-            maybe_mark_union_recursive(env, expected);
+            maybe_mark_union_recursive(env, pool, actual);
+            maybe_mark_union_recursive(env, pool, expected);
 
             let mut outcome = Outcome::<M>::default();
 
@@ -3182,6 +3191,13 @@ fn unify_shared_tags<M: MetaCollector>(
                 UnionTags::insert_into_subs(env.subs, all_fields)
             }
         };
+
+        // Look up if either unions are recursive, and if so, what the recursive variable is.
+        //
+        // We wait until we're about to merge the unions to do this, since above, while unifying
+        // payloads, we may have promoted a non-recursive union involved in this unification to
+        // a recursive one.
+        let recursion_var = find_union_rec(env.subs, ctx);
 
         let merge_outcome = unify_shared_tags_merge(env, ctx, new_tags, new_ext_var, recursion_var);
 
@@ -3266,24 +3282,20 @@ fn unify_flat_type<M: MetaCollector>(
         }
 
         (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
             debug_assert!(is_recursion_var(env.subs, *recursion_var));
             // this never happens in type-correct programs, but may happen if there is a type error
 
-            let rec = Rec::Left(*recursion_var);
-
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(env.subs, *recursion_var));
 
-            let rec = Rec::Right(*recursion_var);
-
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
@@ -3298,8 +3310,7 @@ fn unify_flat_type<M: MetaCollector>(
                 env.subs.dbg(*rec2)
             );
 
-            let rec = Rec::Both(*rec1, *rec2);
-            let mut outcome = unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
+            let mut outcome = unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2);
             outcome.union(unify_pool(env, pool, *rec1, *rec2, ctx.mode));
 
             outcome
@@ -3398,7 +3409,7 @@ fn unify_flat_type<M: MetaCollector>(
             );
             let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2)
         }
         (FunctionOrTagUnion(tag_names, _, ext1), TagUnion(tags2, ext2)) => {
             let empty_tag_var_slices = SubsSlice::extend_new(
@@ -3407,7 +3418,7 @@ fn unify_flat_type<M: MetaCollector>(
             );
             let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
-            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
@@ -3419,9 +3430,8 @@ fn unify_flat_type<M: MetaCollector>(
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
             let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
-            let rec = Rec::Left(*recursion_var);
 
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2)
         }
 
         (FunctionOrTagUnion(tag_names, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
@@ -3432,9 +3442,8 @@ fn unify_flat_type<M: MetaCollector>(
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
             let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
-            let rec = Rec::Right(*recursion_var);
 
-            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2)
         }
 
         // these have underscores because they're unused in --release builds

@@ -2010,22 +2010,35 @@ impl Subs {
         result
     }
 
-    pub fn mark_tag_union_recursive(&mut self, recursive: Variable, tags: UnionTags, ext: TagExt) {
+    /// Returns the new recursion variable, which should be introduced to the environment as
+    /// appropriate.
+    #[must_use]
+    pub fn mark_tag_union_recursive(
+        &mut self,
+        recursive: Variable,
+        tags: UnionTags,
+        ext: TagExt,
+    ) -> Variable {
         let (rec_var, new_tags) = self.mark_union_recursive_help(recursive, tags);
 
         let new_ext = ext.map(|v| self.explicit_substitute(recursive, rec_var, v));
         let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext);
 
         self.set_content(recursive, Content::Structure(flat_type));
+
+        rec_var
     }
 
+    /// Returns the new recursion variable, which should be introduced to the environment as
+    /// appropriate.
+    #[must_use]
     pub fn mark_lambda_set_recursive(
         &mut self,
         recursive: Variable,
         solved_lambdas: UnionLambdas,
         unspecialized_lambdas: SubsSlice<Uls>,
         ambient_function_var: Variable,
-    ) {
+    ) -> Variable {
         let (rec_var, new_tags) = self.mark_union_recursive_help(recursive, solved_lambdas);
 
         let new_lambda_set = Content::LambdaSet(LambdaSet {
@@ -2036,6 +2049,8 @@ impl Subs {
         });
 
         self.set_content(recursive, new_lambda_set);
+
+        rec_var
     }
 
     fn mark_union_recursive_help<L: Label>(
