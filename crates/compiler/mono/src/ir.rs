@@ -6613,12 +6613,16 @@ pub fn from_can<'a>(
             branches,
             final_else,
         } => {
-            let ret_layout = layout_cache
-                .from_var(env.arena, branch_var, env.subs)
-                .expect("invalid ret_layout");
-            let cond_layout = layout_cache
-                .from_var(env.arena, cond_var, env.subs)
-                .expect("invalid cond_layout");
+            let ret_layout = return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, branch_var, env.subs),
+                "invalid return type in if expression"
+            );
+            let cond_layout = return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, cond_var, env.subs),
+                "invalid condition type in if expression"
+            );
 
             let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 

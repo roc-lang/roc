@@ -7,6 +7,7 @@ use quote::quote;
 #[proc_macro_attribute]
 pub fn mono_test(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut no_check = false;
+    let mut allow_type_errors = false;
     let mut mode = "exec".to_owned();
     for arg in syn::parse_macro_input!(args as syn::AttributeArgs) {
         use syn::{Lit, Meta, MetaNameValue, NestedMeta};
@@ -21,6 +22,9 @@ pub fn mono_test(args: TokenStream, item: TokenStream) -> TokenStream {
             }
             if path.is_ident("no_check") {
                 no_check = true;
+            }
+            if path.is_ident("allow_type_errors") {
+                allow_type_errors = true;
             }
         }
     }
@@ -40,7 +44,7 @@ pub fn mono_test(args: TokenStream, item: TokenStream) -> TokenStream {
         #[test]
         #(#attributes)*
         #visibility fn #name(#args) {
-            compiles_to_ir(#name_str, #body, &#mode, #no_check);
+            compiles_to_ir(#name_str, #body, &#mode, #allow_type_errors, #no_check);
 
         }
     };
