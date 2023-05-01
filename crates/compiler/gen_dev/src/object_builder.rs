@@ -214,6 +214,22 @@ fn build_object<'a, B: Backend<'a>>(
             "roc_panic".into(),
             "roc_builtins.utils.test_panic".into(),
         );
+        // Extra symbols only required on unix systems.
+        if matches!(output.format(), BinaryFormat::Elf | BinaryFormat::MachO) {
+            generate_wrapper(
+                &mut backend,
+                &mut output,
+                "roc_getppid".into(),
+                "getppid".into(),
+            );
+            generate_wrapper(&mut backend, &mut output, "roc_mmap".into(), "mmap".into());
+            generate_wrapper(
+                &mut backend,
+                &mut output,
+                "roc_shm_open".into(),
+                "shm_open".into(),
+            );
+        }
     }
 
     // Setup layout_ids for procedure calls.
