@@ -41,11 +41,16 @@ pub fn build_module<'a, 'r>(
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
             >(env, TargetInfo::default_x86_64(), interns, layout_interner);
-            build_object(
-                procedures,
-                backend,
-                Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little),
-            )
+            // Newer version of `ld` require `.note.GNU-stack` for security reasons.
+            // It specifies that we will not execute code stored on the stack.
+            let mut object =
+                Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+            object.add_section(
+                vec![],
+                b".note.GNU-stack".to_vec(),
+                SectionKind::Elf(object::elf::SHT_PROGBITS),
+            );
+            build_object(procedures, backend, object)
         }
         Triple {
             architecture: TargetArch::X86_64,
