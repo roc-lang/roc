@@ -2,7 +2,9 @@ use bitflags::bitflags;
 use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::{dbg_do, dbg_set};
 #[cfg(debug_assertions)]
-use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_RECURSION};
+use roc_debug_flags::{
+    ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_ONE_RECURSION,
+};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
@@ -2998,12 +3000,12 @@ fn maybe_mark_union_recursive(env: &mut Env, pool: &mut Pool, union_var: Variabl
         }) {
             return;
         } else {
-            // We may have partially solved a recursive type, but still see an occurs, if the type
-            // has errors inside of it. As such, admit this; however, for well-typed programs, this
-            // case should never be observed. Set ROC_VERIFY_OCCURS_RECURSION to verify this branch
-            // is not reached for well-typed programs.
-            if dbg_set!(ROC_VERIFY_OCCURS_RECURSION)
-                || !chain.iter().any(|&var| {
+            // We may seen an occurs check that passes through another recursion var if the occurs
+            // check is passing through another recursive type.
+            // But, if ROC_VERIFY_OCCURS_ONE_RECURSION is set, we check that we only found a new
+            // recursion.
+            if dbg_set!(ROC_VERIFY_OCCURS_ONE_RECURSION)
+                && !chain.iter().any(|&var| {
                     matches!(
                         subs.get_content_without_compacting(var),
                         Content::Structure(FlatType::RecursiveTagUnion(..))
