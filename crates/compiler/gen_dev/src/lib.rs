@@ -502,9 +502,6 @@ trait Backend<'a> {
                 }) {
                     syms.push(*sym);
                 }
-                // TODO: This could be a huge waste.
-                // We probably want to call this within create_array, one element at a time.
-                self.load_literal_symbols(syms.into_bump_slice());
                 self.create_array(sym, elem_layout, elems);
             }
             Expr::Struct(fields) => {
