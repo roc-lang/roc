@@ -13,7 +13,8 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
+    UnionLayout,
 };
 use roc_mono::low_level::HigherOrder;
 use roc_target::TargetInfo;
@@ -921,6 +922,7 @@ impl<
 
     fn build_switch(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         cond_symbol: &Symbol,
         _cond_layout: &InLayout<'a>, // cond_layout must be a integer due to potential jump table optimizations.
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
@@ -953,7 +955,7 @@ impl<
             // Build all statements in this branch. Using storage as from before any branch.
             self.storage_manager = base_storage.clone();
             self.literal_map = base_literal_map.clone();
-            self.build_stmt(stmt, ret_layout);
+            self.build_stmt(layout_ids, stmt, ret_layout);
 
             // Build unconditional jump to the end of this switch.
             // Since we don't know the offset yet, set it to 0 and overwrite later.
@@ -979,7 +981,7 @@ impl<
         self.storage_manager
             .update_stack_size(max_branch_stack_size);
         let (_branch_info, stmt) = default_branch;
-        self.build_stmt(stmt, ret_layout);
+        self.build_stmt(layout_ids, stmt, ret_layout);
 
         // Update all return jumps to jump past the default case.
         let ret_offset = self.buf.len();
@@ -995,6 +997,7 @@ impl<
 
     fn build_join(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         id: &JoinPointId,
         parameters: &'a [Param<'a>],
         body: &'a Stmt<'a>,
@@ -1013,12 +1016,12 @@ impl<
         self.join_map.insert(*id, bumpalo::vec![in self.env.arena]);
 
         // Build remainder of function first. It is what gets run and jumps to join.
-        self.build_stmt(remainder, ret_layout);
+        self.build_stmt(layout_ids, remainder, ret_layout);
 
         let join_location = self.buf.len() as u64;
 
         // Build all statements in body.
-        self.build_stmt(body, ret_layout);
+        self.build_stmt(layout_ids, body, ret_layout);
 
         // Overwrite the all jumps to the joinpoint with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];

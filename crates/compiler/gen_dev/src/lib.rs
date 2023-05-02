@@ -210,7 +210,7 @@ trait Backend<'a> {
         }
         self.scan_ast(&proc.body);
         self.create_free_map();
-        self.build_stmt(&proc.body, &proc.ret_layout);
+        self.build_stmt(layout_ids, &proc.body, &proc.ret_layout);
         let mut helper_proc_names = bumpalo::vec![in self.env().arena];
         helper_proc_names.reserve(self.helper_proc_symbols().len());
         for (rc_proc_sym, rc_proc_layout) in self.helper_proc_symbols() {
@@ -225,13 +225,18 @@ trait Backend<'a> {
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &InLayout<'a>) {
+    fn build_stmt(
+        &mut self,
+        layout_ids: &mut LayoutIds<'a>,
+        stmt: &Stmt<'a>,
+        ret_layout: &InLayout<'a>,
+    ) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
-                self.build_expr(sym, expr, layout);
+                self.build_expr(layout_ids, sym, expr, layout);
                 self.set_layout_map(*sym, layout);
                 self.free_symbols(stmt);
-                self.build_stmt(following, ret_layout);
+                self.build_stmt(layout_ids, following, ret_layout);
             }
             Stmt::Ret(sym) => {
                 self.load_literal_symbols(&[*sym]);
@@ -263,7 +268,7 @@ trait Backend<'a> {
                     self.helper_proc_symbols_mut().push(spec);
                 }
 
-                self.build_stmt(rc_stmt, ret_layout)
+                self.build_stmt(layout_ids, rc_stmt, ret_layout)
             }
             Stmt::Switch {
                 cond_symbol,
@@ -274,6 +279,7 @@ trait Backend<'a> {
             } => {
                 self.load_literal_symbols(&[*cond_symbol]);
                 self.build_switch(
+                    layout_ids,
                     cond_symbol,
                     cond_layout,
                     branches,
@@ -291,7 +297,7 @@ trait Backend<'a> {
                 for param in parameters.iter() {
                     self.set_layout_map(param.symbol, &param.layout);
                 }
-                self.build_join(id, parameters, body, remainder, ret_layout);
+                self.build_join(layout_ids, id, parameters, body, remainder, ret_layout);
                 self.free_symbols(stmt);
             }
             Stmt::Jump(id, args) => {
@@ -333,13 +339,14 @@ trait Backend<'a> {
             &Layout::UNIT,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&error_message);
         self.free_symbol(&Symbol::DEV_TMP2);
     }
 
     // build_switch generates a instructions for a switch statement.
     fn build_switch(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         cond_symbol: &Symbol,
         cond_layout: &InLayout<'a>,
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
@@ -350,6 +357,7 @@ trait Backend<'a> {
     // build_join generates a instructions for a join statement.
     fn build_join(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         id: &JoinPointId,
         parameters: &'a [Param<'a>],
         body: &'a Stmt<'a>,
@@ -368,7 +376,13 @@ trait Backend<'a> {
 
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be referred to later.
-    fn build_expr(&mut self, sym: &Symbol, expr: &Expr<'a>, layout: &InLayout<'a>) {
+    fn build_expr(
+        &mut self,
+        layout_ids: &mut LayoutIds<'a>,
+        sym: &Symbol,
+        expr: &Expr<'a>,
+        layout: &InLayout<'a>,
+    ) {
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
@@ -392,6 +406,7 @@ trait Backend<'a> {
                             LowLevelWrapperType::from_symbol(func_sym.name())
                         {
                             return self.build_run_low_level(
+                                layout_ids,
                                 sym,
                                 &lowlevel,
                                 arguments,
@@ -434,7 +449,9 @@ trait Backend<'a> {
                                 internal_error!("the argument, {:?}, has no know layout", arg);
                             }
                         }
+
                         self.build_run_low_level(
+                            layout_ids,
                             sym,
                             lowlevel,
                             arguments,
@@ -521,6 +538,7 @@ trait Backend<'a> {
     /// The builder must keep track of the symbol because it may be referred to later.
     fn build_run_low_level(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         sym: &Symbol,
         lowlevel: &LowLevel,
         args: &'a [Symbol],
