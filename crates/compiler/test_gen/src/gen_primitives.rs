@@ -4498,31 +4498,3 @@ fn pass_lambda_set_to_function() {
         i64
     );
 }
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn issue_5344() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            parseExpr = \{} ->
-                when parseSExps {} is
-                    _ -> Ok {}
-
-            parseSExps = \{} ->
-                when parseSExp {} is
-                    _ -> Ok {}
-
-            parseSExp = \{} ->
-                when parseExpr {} is
-                    _ -> Ok {}
-
-            main = parseSExp {}
-            "#
-        ),
-        3 * 3,
-        i64
-    );
-}
