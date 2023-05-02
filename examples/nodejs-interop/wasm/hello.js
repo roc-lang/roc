@@ -1,15 +1,20 @@
-const fs = require('fs/promises');
+const fs = require('fs');
 const { TextDecoder } = require('util');
 
-async function roc_nodejs_platform_run(wasm_filename, callback) {
+const wasmFilename = './roc-app.wasm';
+const moduleBytes = fs.readFileSync(wasmFilename);
+const wasmModule = new WebAssembly.Module(moduleBytes);
+
+function hello() {
     const decoder = new TextDecoder();
     let wasmMemoryBuffer;
-    let exit_code;
+    let exitCode;
+    let returnVal;
 
-    function js_display_roc_string(str_bytes, str_len) {
-        const utf8_bytes = wasmMemoryBuffer.subarray(str_bytes, str_bytes + str_len);
-        const js_string = decoder.decode(utf8_bytes);
-        callback(js_string);
+    function js_display_roc_string(strBytes, strLen) {
+        const utf8Bytes = wasmMemoryBuffer.subarray(strBytes, strBytes + strLen);
+
+        returnVal = decoder.decode(utf8Bytes);
     }
 
     const importObj = {
@@ -18,7 +23,7 @@ async function roc_nodejs_platform_run(wasm_filename, callback) {
                 if (code !== 0) {
                     console.error(`Exited with code ${code}`);
                 }
-                exit_code = code;
+                exitCode = code;
             },
             fd_write: (x) => {
                 console.error(`fd_write not supported: ${x}`);
@@ -32,28 +37,26 @@ async function roc_nodejs_platform_run(wasm_filename, callback) {
         },
     };
 
-    const module_bytes = await fs.readFile(wasm_filename);
-    const wasm = await WebAssembly.instantiate(module_bytes, importObj);
+    const instance = new WebAssembly.Instance(wasmModule, importObj);
 
-    wasmMemoryBuffer = new Uint8Array(wasm.instance.exports.memory.buffer);
+    wasmMemoryBuffer = new Uint8Array(instance.exports.memory.buffer);
 
     try {
-        wasm.instance.exports._start();
+        instance.exports._start();
     } catch (e) {
-        const is_ok = e.message === "unreachable" && exit_code === 0;
-        if (!is_ok) {
-            console.error(e);
+        const isOk = e.message === "unreachable" && exitCode === 0;
+
+        if (!isOk) {
+            throw e;
         }
     }
+
+    return returnVal;
 }
 
-if (typeof module !== "undefined") {
-    module.exports = {
-        roc_nodejs_platform_run,
-    };
+if (typeof module === "object") {
+    module.exports = { hello };
 }
 
-// Run the code with a sample WebAssembly file
-roc_nodejs_platform_run('./roc-app.wasm', (output) => {
-    console.log(output);
-});
+// As an example, run hello() from Roc and print the string it returns
+console.log(hello());
