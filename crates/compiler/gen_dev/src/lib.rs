@@ -322,14 +322,16 @@ trait Backend<'a> {
     }
 
     fn roc_panic(&mut self, msg: Symbol, crash_tag: CrashTag) {
+        let error_message = self.debug_symbol("error_message");
+
         self.load_literal(
-            &Symbol::DEV_TMP,
+            &error_message,
             &Layout::U32,
             &Literal::Int((crash_tag as u128).to_ne_bytes()),
         );
 
         // Now that the arguments are needed, load them if they are literals.
-        let arguments = &[msg, Symbol::DEV_TMP];
+        let arguments = &[msg, error_message];
         self.load_literal_symbols(arguments);
         self.build_fn_call(
             &Symbol::DEV_TMP2,

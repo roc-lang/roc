@@ -252,7 +252,11 @@ impl<
     /// Claims a general reg for a specific symbol.
     /// They symbol should not already have storage.
     pub fn claim_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
-        debug_assert_eq!(self.symbol_storage_map.get(sym), None);
+        debug_assert_eq!(
+            self.symbol_storage_map.get(sym),
+            None,
+            "Symbol {sym:?} is already in the storage map!"
+        );
         let reg = self.get_general_reg(buf);
         self.general_used_regs.push((reg, *sym));
         self.symbol_storage_map.insert(*sym, Reg(General(reg)));
