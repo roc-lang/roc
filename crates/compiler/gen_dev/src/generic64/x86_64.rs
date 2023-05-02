@@ -1511,6 +1511,26 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        movsd_freg64_base64_offset32(buf, dst, src, offset)
+    }
+
+    #[inline(always)]
+    fn mov_freg32_mem32_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        movss_freg32_base32_offset32(buf, dst, src, offset)
+    }
+
+    #[inline(always)]
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
         movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
     }
@@ -2997,7 +3017,7 @@ fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset:
     buf.extend(offset.to_le_bytes());
 }
 
-/// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pointer.
+// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pointer.
 #[inline(always)]
 fn movsd_base64_offset32_freg64(
     buf: &mut Vec<'_, u8>,
@@ -3036,6 +3056,31 @@ fn movsd_freg64_base64_offset32(
     let base_mod = base as u8 % 8;
     buf.reserve(10);
     buf.push(0xF2);
+    if dst as u8 > 7 || base as u8 > 7 {
+        buf.push(rex);
+    }
+    buf.extend([0x0F, 0x10, 0x80 | dst_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOVSS xmm1,r/m32` -> Move r/m32 to xmm1. where m64 references the base pointer.
+#[inline(always)]
+fn movss_freg32_base32_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64FloatReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(10);
+    buf.push(0xF3);
     if dst as u8 > 7 || base as u8 > 7 {
         buf.push(rex);
     }
@@ -3723,6 +3768,17 @@ mod tests {
         disassembler_test!(
             movsd_freg64_base64_offset32,
             |reg1, reg2, imm| format!("movsd {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movss_freg32_base32_offset32() {
+        disassembler_test!(
+            movss_freg32_base32_offset32,
+            |reg1, reg2, imm| format!("movss {}, dword ptr [{} + 0x{:x}]", reg1, reg2, imm),
             ALL_FLOAT_REGS,
             ALL_GENERAL_REGS,
             [TEST_I32]

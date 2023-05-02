@@ -332,6 +332,19 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
     fn mov_reg8_mem8_offset32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg, offset: i32);
 
+    fn mov_freg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src: GeneralReg,
+        offset: i32,
+    );
+    fn mov_freg32_mem32_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src: GeneralReg,
+        offset: i32,
+    );
+
     // move from register to memory
     fn mov_mem64_offset32_reg64(
         buf: &mut Vec<'_, u8>,
@@ -3204,9 +3217,13 @@ impl<
                         ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, 0);
                     }
                 },
-                Builtin::Float(_) => {
+                Builtin::Float(FloatWidth::F64) => {
                     let dst_reg = storage_manager.claim_float_reg(buf, &dst);
-                    ASM::mov_freg64_freg64(buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
+                    ASM::mov_freg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                }
+                Builtin::Float(FloatWidth::F32) => {
+                    let dst_reg = storage_manager.claim_float_reg(buf, &dst);
+                    ASM::mov_freg32_mem32_offset32(buf, dst_reg, ptr_reg, 0);
                 }
                 Builtin::Bool => {
                     // the same as an 8-bit integer
