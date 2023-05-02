@@ -3594,7 +3594,7 @@ fn constraint_recursive_function(
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
             let def_con = expr_con;
 
-            flex_info.vars = vec![expr_var];
+            flex_info.vars.push(expr_var);
             flex_info.constraints.push(def_con);
             flex_info.def_types.insert(
                 loc_symbol.value,
