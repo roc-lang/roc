@@ -3298,6 +3298,17 @@ impl<
                 });
             }
 
+            Layout::LambdaSet(lambda_set) => {
+                Self::ptr_read(
+                    buf,
+                    storage_manager,
+                    layout_interner,
+                    ptr_reg,
+                    lambda_set.runtime_representation(),
+                    dst,
+                );
+            }
+
             _ => todo!("unboxing of {:?}", layout_interner.dbg(element_in_layout)),
         }
     }

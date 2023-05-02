@@ -1168,28 +1168,43 @@ impl<
         {
             // Claim a location for every join point parameter to be loaded at.
             // Put everything on the stack for simplicity.
-            match *layout {
-                single_register_layouts!() => {
-                    let base_offset = self.claim_stack_size(8);
-                    self.symbol_storage_map.insert(
-                        *symbol,
-                        Stack(Primitive {
-                            base_offset,
-                            reg: None,
-                        }),
-                    );
-                    self.allocation_map
-                        .insert(*symbol, Rc::new((base_offset, 8)));
-                }
-                _ => {
-                    let stack_size = layout_interner.stack_size(*layout);
-                    if stack_size == 0 {
-                        self.symbol_storage_map.insert(*symbol, NoData);
-                    } else {
-                        self.claim_stack_area(symbol, stack_size);
+            let mut layout = *layout;
+
+            'inner: loop {
+                match layout {
+                    single_register_layouts!() => {
+                        let base_offset = self.claim_stack_size(8);
+                        self.symbol_storage_map.insert(
+                            *symbol,
+                            Stack(Primitive {
+                                base_offset,
+                                reg: None,
+                            }),
+                        );
+                        self.allocation_map
+                            .insert(*symbol, Rc::new((base_offset, 8)));
+
+                        break 'inner;
                     }
+                    _ => match layout_interner.get(layout) {
+                        Layout::LambdaSet(lambda_set) => {
+                            layout = lambda_set.runtime_representation();
+                            continue 'inner;
+                        }
+                        _ => {
+                            let stack_size = layout_interner.stack_size(layout);
+                            if stack_size == 0 {
+                                self.no_data(symbol);
+                            } else {
+                                self.claim_stack_area(symbol, stack_size);
+                            }
+
+                            break 'inner;
+                        }
+                    },
                 }
             }
+
             param_storage.push(*self.get_storage_for_sym(symbol));
         }
         self.join_param_map.insert(*id, param_storage);
@@ -1238,22 +1253,34 @@ impl<
                 Stack(Primitive {
                     base_offset,
                     reg: None,
-                }) => match *layout {
-                    single_register_integers!() => {
-                        let reg = self.load_to_general_reg(buf, sym);
-                        ASM::mov_base32_reg64(buf, *base_offset, reg);
+                }) => {
+                    let mut layout = *layout;
+                    loop {
+                        match layout {
+                            single_register_integers!() => {
+                                let reg = self.load_to_general_reg(buf, sym);
+                                ASM::mov_base32_reg64(buf, *base_offset, reg);
+                            }
+                            single_register_floats!() => {
+                                let reg = self.load_to_float_reg(buf, sym);
+                                ASM::mov_base32_freg64(buf, *base_offset, reg);
+                            }
+                            _ => {
+                                if let Layout::LambdaSet(lambda_set) = layout_interner.get(layout) {
+                                    layout = lambda_set.runtime_representation();
+                                    continue;
+                                } else {
+                                    internal_error!(
+                                        r"cannot load non-primitive layout ({:?}) to primitive stack location",
+                                        layout
+                                    )
+                                }
+                            }
+                        }
+
+                        break;
                     }
-                    single_register_floats!() => {
-                        let reg = self.load_to_float_reg(buf, sym);
-                        ASM::mov_base32_freg64(buf, *base_offset, reg);
-                    }
-                    _ => {
-                        internal_error!(
-                            "cannot load non-primitive layout ({:?}) to primitive stack location",
-                            layout
-                        );
-                    }
-                },
+                }
                 NoData => {}
                 Stack(Primitive { reg: Some(_), .. }) => {
                     internal_error!(
