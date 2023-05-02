@@ -463,7 +463,7 @@ fn list_split_last() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop() {
     assert_evals_to!(
         "List.drop [1,2,3] 2",
@@ -483,7 +483,7 @@ fn list_drop() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_at() {
     assert_evals_to!(
         "List.dropAt [1, 2, 3] 0",
@@ -531,7 +531,7 @@ fn list_intersperse() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_at_shared() {
     assert_evals_to!(
         indoc!(
@@ -685,7 +685,7 @@ fn list_drop_last_mutable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_first() {
     assert_evals_to!(
         "List.dropFirst [1, 2, 3]",
@@ -705,7 +705,7 @@ fn list_drop_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_swap() {
     assert_evals_to!(
         "List.swap [] 0 1",
@@ -810,7 +810,7 @@ fn list_prepend() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend_str() {
     assert_evals_to!(
         indoc!(
@@ -850,7 +850,7 @@ fn list_prepend_big_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_empty_all_inline() {
     assert_evals_to!(
         indoc!(
