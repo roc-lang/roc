@@ -76,7 +76,7 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
+fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: bool, no_check: bool) {
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
 
@@ -146,7 +146,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
-    assert!(type_problems.is_empty());
+    assert!(allow_type_errors || type_problems.is_empty());
 
     let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
 
@@ -2909,6 +2909,17 @@ fn issue_4770() {
 
                 { left: IsList _, right: IsInteger _ } -> isCorrectOrder { left: pair.left, right: IsList [pair.right] }
                 { left: IsInteger _, right: IsList _ } -> isCorrectOrder { left: IsList [pair.left], right: pair.right }
+        "#
+    )
+}
+
+#[mono_test(allow_type_errors = "true")]
+fn error_on_erroneous_condition() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = if True then 1 else 2
         "#
     )
 }
