@@ -464,7 +464,31 @@ trait Backend<'a> {
                     CallType::HigherOrder(higher_order) => {
                         self.build_higher_order_lowlevel(sym, higher_order, *layout)
                     }
-                    x => todo!("the call type, {:?}", x),
+                    CallType::Foreign {
+                        foreign_symbol,
+                        ret_layout,
+                    } => {
+                        let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
+                            bumpalo::vec![in self.env().arena];
+                        arg_layouts.reserve(arguments.len());
+                        let layout_map = self.layout_map();
+                        for arg in *arguments {
+                            if let Some(layout) = layout_map.get(arg) {
+                                arg_layouts.push(*layout);
+                            } else {
+                                internal_error!("the argument, {:?}, has no know layout", arg);
+                            }
+                        }
+
+                        self.load_literal_symbols(arguments);
+                        self.build_fn_call(
+                            sym,
+                            foreign_symbol.as_str().to_string(),
+                            arguments,
+                            arg_layouts.into_bump_slice(),
+                            ret_layout,
+                        );
+                    }
                 }
             }
             Expr::EmptyArray => {
