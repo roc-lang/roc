@@ -121,7 +121,7 @@ fn bool_list_concat() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bool_list_literal_repeat() {
     assert_evals_to!(
         indoc!(
@@ -198,7 +198,7 @@ fn list_append_basic() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_take_first() {
     assert_evals_to!(
         "List.takeFirst [1, 2, 3] 2",
@@ -223,7 +223,7 @@ fn list_take_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_take_last() {
     assert_evals_to!(
         "List.takeLast [1, 2, 3] 2",
@@ -288,7 +288,7 @@ fn list_sublist() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_try_ok() {
     assert_evals_to!(
         // No transformation
@@ -318,7 +318,7 @@ fn list_map_try_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_try_err() {
     use core::convert::Infallible;
 
@@ -508,7 +508,7 @@ fn list_drop_at() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_intersperse() {
     assert_evals_to!(
         indoc!(
@@ -553,7 +553,7 @@ fn list_drop_at_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
@@ -570,7 +570,7 @@ fn list_drop_if_empty_list_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -587,7 +587,7 @@ fn list_drop_if_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -601,7 +601,7 @@ fn list_drop_if_always_false_for_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_always_true_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -615,7 +615,7 @@ fn list_drop_if_always_true_for_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_geq3() {
     assert_evals_to!(
         indoc!(
@@ -643,7 +643,7 @@ fn list_drop_if_string_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_last() {
     assert_evals_to!(
         "List.dropLast [1, 2, 3]",
@@ -3799,6 +3799,9 @@ mod pattern_match {
 
     #[cfg(feature = "gen-wasm")]
     use crate::helpers::wasm::assert_evals_to;
+
+    #[cfg(feature = "gen-dev")]
+    use crate::helpers::dev::assert_evals_to;
 
     use super::RocList;
 

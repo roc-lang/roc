@@ -841,8 +841,6 @@ impl<
                 Builtin::Decimal => todo!(),
                 Builtin::Str | Builtin::List(_) => {
                     let (from_offset, size) = self.stack_offset_and_size(sym);
-                    debug_assert_eq!(from_offset % 8, 0);
-                    debug_assert_eq!(size % 8, 0);
                     debug_assert_eq!(size, layout_interner.stack_size(*layout));
                     self.copy_to_stack_offset(buf, size, from_offset, to_offset)
                 }
@@ -885,6 +883,14 @@ impl<
         let size = size as i32;
 
         self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+            // on targets beside x86, misaligned copies might be a problem
+            for _ in 0..size % 8 {
+                ASM::mov_reg8_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg8(buf, to_offset + copied, reg);
+
+                copied += 1;
+            }
+
             if size - copied >= 8 {
                 for _ in (0..(size - copied)).step_by(8) {
                     ASM::mov_reg64_base32(buf, reg, from_offset + copied);

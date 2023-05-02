@@ -1417,6 +1417,72 @@ trait Backend<'a> {
                 );
             }
 
+            LowLevel::ListDropAt => {
+                let list = args[0];
+                let drop_index = args[1];
+
+                let list_layout = arg_layouts[0];
+                let element_layout = match self.interner().get(list_layout) {
+                    Layout::Builtin(Builtin::List(e)) => e,
+                    _ => unreachable!(),
+                };
+
+                let (element_width_int, alignment_int) =
+                    self.interner().stack_size_and_alignment(element_layout);
+
+                let alignment = self.debug_symbol("alignment");
+                self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
+
+                let element_width = self.debug_symbol("element_width");
+                self.load_literal_i64(&element_width, element_width_int as i64);
+
+                let update_mode = self.debug_symbol("update_mode");
+                self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
+
+                let arena = self.env().arena;
+
+                let element_decrement = self.debug_symbol("element_decrement");
+                let element_decrement_symbol = self.gen_refcount_proc_dec(element_layout);
+                let element_decrement_layout = ProcLayout {
+                    arguments: arena.alloc([element_layout]),
+                    result: Layout::UNIT,
+                    niche: roc_mono::layout::Niche::NONE,
+                };
+                let element_decrement_string = layout_ids
+                    .get_toplevel(element_decrement_symbol, &element_decrement_layout)
+                    .to_symbol_string(element_decrement_symbol, self.interns());
+
+                self.build_fn_pointer(&element_decrement, element_decrement_string);
+
+                let layout_usize = Layout::U64;
+
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    drop_index: usize,
+                //    dec: Dec,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_DROP_AT.to_string(),
+                    &[
+                        list,
+                        alignment,
+                        element_width,
+                        drop_index,
+                        element_decrement,
+                    ],
+                    &[
+                        list_layout,
+                        Layout::U32,
+                        layout_usize,
+                        layout_usize,
+                        layout_usize,
+                    ],
+                    ret_layout,
+                );
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }
