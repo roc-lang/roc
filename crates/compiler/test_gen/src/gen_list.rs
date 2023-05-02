@@ -248,7 +248,7 @@ fn list_take_last() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sublist() {
     assert_evals_to!(
         "List.sublist [1, 2, 3] { start: 0 , len: 2 } ",
@@ -345,7 +345,7 @@ fn list_map_try_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_split() {
     assert_evals_to!(
         r#"
@@ -397,7 +397,7 @@ fn list_split() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_split_first() {
     assert_evals_to!(
         r#"
@@ -430,7 +430,7 @@ fn list_split_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_split_last() {
     assert_evals_to!(
         r#"
@@ -1509,7 +1509,7 @@ fn list_join_two_non_empty_lists_of_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_to_big_list() {
     assert_evals_to!(
         indoc!(
@@ -1535,7 +1535,7 @@ fn list_join_to_big_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_defined_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1553,7 +1553,7 @@ fn list_join_defined_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_all_empty_lists() {
     assert_evals_to!(
         "List.join [[], [], []]",
@@ -1563,7 +1563,7 @@ fn list_join_all_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_one_empty_list() {
     assert_evals_to!(
         "List.join [[1.2, 1.1], []]",
@@ -2128,7 +2128,7 @@ fn replace_unique_get_large_value() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn replace_shared_int_list() {
     assert_evals_to!(
         indoc!(
