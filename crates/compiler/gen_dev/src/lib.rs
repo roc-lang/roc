@@ -1267,8 +1267,76 @@ trait Backend<'a> {
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
             }
             LowLevel::ListSublist => {
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    start: usize,
+                //    len: usize,
+                //    dec: Dec,
+
+                let list = args[0];
+                let start = args[1];
+                let len = args[2];
+
+                let list_layout = arg_layouts[0];
+                let element_layout = match self.interner().get(list_layout) {
+                    Layout::Builtin(Builtin::List(e)) => e,
+                    _ => unreachable!(),
+                };
+
+                let (element_width_int, alignment_int) =
+                    self.interner().stack_size_and_alignment(element_layout);
+
+                let alignment = self.debug_symbol("alignment");
+                self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
+
+                let element_width = self.debug_symbol("element_width");
+                self.load_literal_i64(&element_width, element_width_int as i64);
+
+                // self.load_layout_alignment(new_element_layout, alignment);
+                // self.load_layout_stack_size(old_element_layout, old_element_width);
+
+                let arena = self.env().arena;
+
+                let element_decrement = self.debug_symbol("element_decrement");
+                let element_decrement_symbol = self.gen_refcount_proc_dec(element_layout);
+                let element_decrement_layout = ProcLayout {
+                    arguments: arena.alloc([element_layout]),
+                    result: Layout::UNIT,
+                    niche: roc_mono::layout::Niche::NONE,
+                };
+                let element_decrement_string = layout_ids
+                    .get_toplevel(element_decrement_symbol, &element_decrement_layout)
+                    .to_symbol_string(element_decrement_symbol, self.interns());
+
+                println!("{} {} {}", alignment, element_width, element_decrement);
+
+                self.build_fn_pointer(&element_decrement, element_decrement_string);
+
+                let args = [
+                    list,
+                    alignment,
+                    element_width,
+                    start,
+                    len,
+                    element_decrement,
+                ];
+
+                let layout_usize = Layout::U64;
+
+                let arg_layouts = [
+                    arg_layouts[0],
+                    Layout::U32,
+                    layout_usize,
+                    arg_layouts[1],
+                    arg_layouts[2],
+                    layout_usize,
+                ];
+
+                dbg!(arg_layouts);
+
                 let intrinsic = bitcode::LIST_SUBLIST.to_string();
-                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+                self.build_fn_call(sym, intrinsic, &args, &arg_layouts, &list_layout);
             }
             LowLevel::ListSwap => {
                 let list = args[0];
