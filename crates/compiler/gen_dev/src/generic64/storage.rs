@@ -1079,6 +1079,7 @@ impl<
                 }
                 | Complex { base_offset, size },
             ) => (*base_offset, *size),
+            NoData => (0, 0),
             storage => {
                 internal_error!(
                     "Data not on the stack for sym {:?} with storage {:?}",

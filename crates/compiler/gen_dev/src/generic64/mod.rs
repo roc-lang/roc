@@ -3175,6 +3175,11 @@ impl<
         let mut copied = 0;
         let size = stack_size as i32;
 
+        if size == 0 {
+            storage_manager.no_data(&dst);
+            return;
+        }
+
         let base_offset = storage_manager.claim_stack_area(&dst, stack_size);
 
         if size - copied >= 8 {
