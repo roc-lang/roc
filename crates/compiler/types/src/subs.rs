@@ -3572,34 +3572,15 @@ fn occurs(
                 }
                 EmptyRecord | EmptyTuple | EmptyTagUnion => Ok(()),
             },
-            Alias(_, args, real_var, _) => {
-                let real_var = *real_var;
+            Alias(_, args, _, _) => {
+                // THEORY: we only need to explore the args, as that is the surface of all
+                // unification between aliases, and hence the only source of new recursion points.
+                //
+                // Recursion points in the definition of the alias are covered by the arguments, or
+                // already resolved during the alias's instantiation.
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
-                    if let Err(arg_err) = short_circuit_help(subs, root_var, ctx, var) {
-                        // Try to figure out what the actual recursion point under the real_var is,
-                        // if it appears.
-                        //
-                        // However, the relevant recursion point may not be immediately be evident
-                        // to use under the real_var. That may happen if the real_var is *itself*
-                        // involved in another recursion point, and is now a recursion pointer
-                        // itself. Since we don't look under recursion pointer, we won't see the
-                        // cycle that this arg is involved in. In those cases, fall back to the
-                        // cycle given to us by the arg.
-                        //
-                        // As a concrete example, consider
-                        //
-                        // p=Alias ( [a, LambdaSet x *p], real_var )
-                        //   real_var = RecursionPointer ( Func(a, LambdaSet (x *p), a) )
-                        //
-                        // in this case, we will see that `LambdaSet x *p` is involved in a cycle,
-                        // but that cycle is not under `real_var`. Instead, the cycle is under `p`.
-                        let err = short_circuit_help(subs, root_var, ctx, real_var)
-                            .err()
-                            .unwrap_or(arg_err);
-
-                        return Err(err);
-                    }
+                    short_circuit_help(subs, root_var, ctx, var)?;
                 }
 
                 Ok(())
