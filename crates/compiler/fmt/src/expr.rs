@@ -37,6 +37,7 @@ impl<'a> Formattable for Expr<'a> {
             | SingleQuote(_)
             | RecordAccess(_, _)
             | AccessorFunction(_)
+            | UpdaterFunction(_)
             | TupleAccess(_, _)
             | Var { .. }
             | Underscore { .. }
@@ -451,6 +452,14 @@ impl<'a> Formattable for Expr<'a> {
             AccessorFunction(key) => {
                 buf.indent(indent);
                 buf.push('.');
+                match key {
+                    Accessor::RecordField(key) => buf.push_str(key),
+                    Accessor::TupleIndex(key) => buf.push_str(key),
+                }
+            }
+            UpdaterFunction(key) => {
+                buf.indent(indent);
+                buf.push('&');
                 match key {
                     Accessor::RecordField(key) => buf.push_str(key),
                     Accessor::TupleIndex(key) => buf.push_str(key),

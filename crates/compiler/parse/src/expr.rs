@@ -1909,6 +1909,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         // These would not have parsed as patterns
         Expr::IngestedFile(_, _)
         | Expr::AccessorFunction(_)
+        | Expr::UpdaterFunction(_)
         | Expr::RecordAccess(_, _)
         | Expr::TupleAccess(_, _)
         | Expr::List { .. }
@@ -2506,6 +2507,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             answer
         }
         Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::UpdaterFunction(string) => Expr::UpdaterFunction(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }

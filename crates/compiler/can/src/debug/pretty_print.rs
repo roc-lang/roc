@@ -364,7 +364,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
             f.text(format!("@{}", opaque_name.as_str(c.interns)))
         }
-        RecordAccessor(_) => todo!(),
+        RecordAccessor(_) | RecordUpdater(_) => todo!(),
         RecordUpdate {
             symbol, updates, ..
         } => f

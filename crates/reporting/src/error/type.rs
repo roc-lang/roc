@@ -1788,7 +1788,7 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
 
-        Accessor(field) => (
+        Accessor(field) | Updater(field) => (
             alloc.concat([
                 alloc.text(format!("{}his ", t)),
                 match field {

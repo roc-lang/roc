@@ -421,6 +421,10 @@ fn loc_ident_pattern_help<'a>(
                 MadeProgress,
                 EPattern::AccessorFunction(loc_ident.region.start()),
             )),
+            Ident::UpdaterFunction(_string) => Err((
+                MadeProgress,
+                EPattern::UpdaterFunction(loc_ident.region.start()),
+            )),
             Ident::Malformed(malformed, problem) => {
                 debug_assert!(!malformed.is_empty());
 

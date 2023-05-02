@@ -1,7 +1,7 @@
 use crate::{
     def::Def,
     expr::{
-        ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, WhenBranchPattern,
+        ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, StructUpdaterData, WhenBranchPattern,
     },
     pattern::{DestructType, ListPatterns, Pattern, RecordDestruct, TupleDestruct},
 };
@@ -524,6 +524,24 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             field_var,
             field,
         }) => RecordAccessor(StructAccessorData {
+            name: *name,
+            function_var: sub!(*function_var),
+            record_var: sub!(*record_var),
+            closure_var: sub!(*closure_var),
+            ext_var: sub!(*ext_var),
+            field_var: sub!(*field_var),
+            field: field.clone(),
+        }),
+
+        RecordUpdater(StructUpdaterData {
+            name,
+            function_var,
+            record_var,
+            closure_var,
+            ext_var,
+            field_var,
+            field,
+        }) => RecordUpdater(StructUpdaterData {
             name: *name,
             function_var: sub!(*function_var),
             record_var: sub!(*record_var),

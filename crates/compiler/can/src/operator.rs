@@ -132,6 +132,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | Str(_)
         | SingleQuote(_)
         | AccessorFunction(_)
+        | UpdaterFunction(_)
         | Var { .. }
         | Underscore { .. }
         | MalformedIdent(_, _)

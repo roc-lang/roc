@@ -1100,7 +1100,8 @@ fn fix_values_captured_in_closure_expr(
         | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
-        | RecordAccessor { .. } => {}
+        | RecordAccessor { .. }
+        | RecordUpdater { .. } => {}
 
         List { loc_elems, .. } => {
             for elem in loc_elems.iter_mut() {

@@ -17,7 +17,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
     AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, ExpectLookup, Field,
-    FunctionDef, OpaqueWrapFunctionData, StructAccessorData, WhenBranch,
+    FunctionDef, OpaqueWrapFunctionData, StructAccessorData, StructUpdaterData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -1240,6 +1240,94 @@ pub fn constrain_expr(
                     vec![record_type],
                     Box::new(closure_type),
                     Box::new(field_type),
+                ));
+                constraints.push_type(types, typ)
+            };
+
+            let cons = [
+                constraints.equal_types_var(
+                    *closure_var,
+                    expected_lambda_set,
+                    category.clone(),
+                    region,
+                ),
+                constraints.equal_types(function_type_index, expected, category.clone(), region),
+                {
+                    let store_fn_var_index = constraints.push_variable(*function_var);
+                    let store_fn_var_expected =
+                        constraints.push_expected_type(NoExpectation(store_fn_var_index));
+                    constraints.equal_types(
+                        function_type_index,
+                        store_fn_var_expected,
+                        category,
+                        region,
+                    )
+                },
+                record_con,
+            ];
+
+            constraints.exists_many(
+                [*record_var, *function_var, *closure_var, field_var, ext_var],
+                cons,
+            )
+        }
+        RecordUpdater(StructUpdaterData {
+            name: closure_name,
+            function_var,
+            field,
+            record_var,
+            closure_var,
+            ext_var,
+            field_var,
+        }) => {
+            let ext_var = *ext_var;
+            let ext_type = Variable(ext_var);
+            let field_var = *field_var;
+            let field_type = Variable(field_var);
+
+            let record_type = match field {
+                IndexOrField::Field(field) => {
+                    let mut field_types = SendMap::default();
+                    let label = field.clone();
+                    field_types.insert(label, RecordField::Demanded(field_type.clone()));
+                    Type::Record(
+                        field_types,
+                        TypeExtension::from_non_annotation_type(ext_type),
+                    )
+                }
+                IndexOrField::Index(index) => todo!(),
+            };
+
+            let record_type_index = {
+                let typ = types.from_old_type(&record_type);
+                constraints.push_type(types, typ)
+            };
+
+            let category = Category::Updater(field.clone());
+
+            let record_expected = constraints.push_expected_type(NoExpectation(record_type_index));
+            let record_con =
+                constraints.equal_types_var(*record_var, record_expected, category.clone(), region);
+
+            let expected_lambda_set = {
+                let lambda_set_ty = {
+                    let typ = types.from_old_type(&Type::ClosureTag {
+                        name: *closure_name,
+                        captures: vec![],
+                        ambient_function: *function_var,
+                    });
+                    constraints.push_type(types, typ)
+                };
+                constraints.push_expected_type(NoExpectation(lambda_set_ty))
+            };
+
+            let closure_type = Type::Variable(*closure_var);
+
+            let function_type_index = {
+                let typ = types.from_old_type(&Type::Function(
+                    vec![record_type.clone(), field_type],
+                    Box::new(closure_type),
+                    Box::new(record_type),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -4032,6 +4120,10 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             Closure(_) => return true,
             RecordAccessor(_) => {
                 // RecordAccessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
+                return true;
+            }
+            RecordUpdater(_) => {
+                // RecordUpdater functions `&field` are equivalent to closures `\r, value -> { r & field: value }`, no need to weaken them.
                 return true;
             }
             OpaqueWrapFunction(_) => {

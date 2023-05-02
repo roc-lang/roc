@@ -197,6 +197,9 @@ pub enum Expr {
     /// tuple or field accessor as a function, e.g. (.foo) expr or (.1) expr
     RecordAccessor(StructAccessorData),
 
+    /// tuple or field updater as a function, e.g. (&foo) record value or (&1) record value
+    RecordUpdater(StructUpdaterData),
+
     TupleAccess {
         tuple_var: Variable,
         ext_var: Variable,
@@ -322,6 +325,7 @@ impl Expr {
             Self::EmptyRecord => Category::Record,
             Self::RecordAccess { field, .. } => Category::RecordAccess(field.clone()),
             Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
+            Self::RecordUpdater(data) => Category::Updater(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
             Self::Tag {
@@ -457,6 +461,82 @@ impl StructAccessorData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: field_var,
+            name,
+            captured_symbols: vec![],
+            recursive: Recursive::NotRecursive,
+            arguments,
+            loc_body: Box::new(loc_body),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructUpdaterData {
+    pub name: Symbol,
+    pub function_var: Variable,
+    pub record_var: Variable,
+    pub closure_var: Variable,
+    pub ext_var: Variable,
+    pub field_var: Variable,
+    pub field: IndexOrField,
+}
+
+impl StructUpdaterData {
+    pub fn to_closure_data(self, record_symbol: Symbol, field_symbol: Symbol) -> ClosureData {
+        let StructUpdaterData {
+            name,
+            function_var,
+            record_var,
+            closure_var,
+            ext_var,
+            field_var,
+            field,
+        } = self;
+
+        // IDEA: convert accessor from
+        //
+        // &foo
+        //
+        // into
+        //
+        // (\record, value -> { record & foo: value })
+        let body = match field {
+            IndexOrField::Index(index) => todo!(),
+            IndexOrField::Field(field) => Expr::RecordUpdate {
+                record_var,
+                ext_var,
+                symbol: record_symbol,
+                updates: {
+                    let mut map = SendMap::default();
+                    map.insert(field, Field {
+                        var: field_var,
+                        region: Region::zero(),
+                        loc_expr: Box::new(Loc::at_zero(Expr::Var(field_symbol, field_var))),
+                    });
+                    map
+                },
+            },
+        };
+
+        let loc_body = Loc::at_zero(body);
+
+        let arguments = vec![
+            (
+                record_var,
+                AnnotatedMark::known_exhaustive(),
+                Loc::at_zero(Pattern::Identifier(record_symbol)),
+            ),
+            (
+                field_var,
+                AnnotatedMark::known_exhaustive(),
+                Loc::at_zero(Pattern::Identifier(field_symbol)),
+            )
+        ];
+
+        ClosureData {
+            function_type: function_var,
+            closure_type: closure_var,
+            return_type: record_var,
             name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -1125,6 +1205,21 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::AccessorFunction(field) => (
             RecordAccessor(StructAccessorData {
+                name: scope.gen_unique_symbol(),
+                function_var: var_store.fresh(),
+                record_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                closure_var: var_store.fresh(),
+                field_var: var_store.fresh(),
+                field: match field {
+                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
+                },
+            }),
+            Output::default(),
+        ),
+        ast::Expr::UpdaterFunction(field) => (
+            RecordUpdater(StructUpdaterData {
                 name: scope.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
@@ -1909,6 +2004,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ RecordAccessor { .. }
+        | other @ RecordUpdater { .. }
         | other @ RecordUpdate { .. }
         | other @ Var(..)
         | other @ AbilityMember(..)
@@ -3039,6 +3135,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::IngestedFile(..)
             | Expr::ZeroArgumentTag { .. }
             | Expr::RecordAccessor(_)
+            | Expr::RecordUpdater(_)
             | Expr::SingleQuote(..)
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
