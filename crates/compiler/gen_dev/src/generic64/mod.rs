@@ -1653,6 +1653,32 @@ impl<
         )
     }
 
+    fn gen_refcount_proc_dec(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, _) = self.helper_proc_gen.gen_refcount_proc(
+            ident_ids,
+            self.layout_interner,
+            layout,
+            HelperOp::Dec,
+        );
+
+        let proc_layout = ProcLayout {
+            arguments: self.env().arena.alloc([layout]),
+            result: Layout::UNIT,
+            niche: roc_mono::layout::Niche::NONE,
+        };
+
+        self.helper_proc_symbols_mut()
+            .push((refcount_proc_name, proc_layout));
+
+        refcount_proc_name
+    }
+
     fn build_higher_order_lowlevel(
         &mut self,
         dst: &Symbol,

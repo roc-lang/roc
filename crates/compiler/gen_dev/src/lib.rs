@@ -1609,6 +1609,8 @@ trait Backend<'a> {
         ret_layout: InLayout<'a>,
     );
 
+    fn gen_refcount_proc_dec(&mut self, layout: InLayout<'a>) -> Symbol;
+
     /// build_list_with_capacity creates and returns a list with the given capacity.
     fn build_list_with_capacity(
         &mut self,
