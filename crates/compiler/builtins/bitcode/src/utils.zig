@@ -1,6 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const Monotonic = std.builtin.AtomicOrder.Monotonic;
+
+const DEBUG_INCDEC = false;
 
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
@@ -40,7 +43,6 @@ fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int
 }
 
 comptime {
-    const builtin = @import("builtin");
     // During tests, use the testing allocators to satisfy these functions.
     if (builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
@@ -156,7 +158,18 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             Refcount.normal => {
+                const old = @intCast(usize, ptr_to_refcount.*);
                 ptr_to_refcount.* += amount;
+                const new = @intCast(usize, ptr_to_refcount.*);
+
+                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const stdout = std.io.getStdOut().writer();
+
+                    const oldH = old - REFCOUNT_ONE + 1;
+                    const newH = new - REFCOUNT_ONE + 1;
+
+                    stdout.print("| increment {*}: {} + {} = {}!\n", .{ ptr_to_refcount, oldH, amount, newH }) catch unreachable;
+                }
             },
             Refcount.atomic => {
                 _ = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, amount, Monotonic);
@@ -246,7 +259,19 @@ inline fn decref_ptr_to_refcount(
     if (refcount != REFCOUNT_MAX_ISIZE) {
         switch (RC_TYPE) {
             Refcount.normal => {
+                const old = @intCast(usize, refcount);
                 refcount_ptr[0] = refcount -% 1;
+                const new = @intCast(usize, refcount -% 1);
+
+                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const stdout = std.io.getStdOut().writer();
+
+                    const oldH = old - REFCOUNT_ONE + 1;
+                    const newH = new - REFCOUNT_ONE + 1;
+
+                    stdout.print("| decrement {*}: {} - 1 = {}!\n", .{ refcount_ptr, oldH, newH }) catch unreachable;
+                }
+
                 if (refcount == REFCOUNT_ONE_ISIZE) {
                     dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
                 }

@@ -860,23 +860,23 @@ fn refcount_list<'a>(
         arena.alloc(ret_stmt),
     );
 
-    let modify_elems_and_list =
-        if layout_interner.get(elem_layout).is_refcounted() && ctx.op.is_dec() {
-            refcount_list_elems(
-                root,
-                ident_ids,
-                ctx,
-                layout_interner,
-                elem_layout,
-                LAYOUT_UNIT,
-                box_layout,
-                len,
-                elements,
-                modify_list,
-            )
-        } else {
-            modify_list
-        };
+    let relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
+    let modify_elems_and_list = if relevant_op && layout_interner.get(elem_layout).is_refcounted() {
+        refcount_list_elems(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            elem_layout,
+            LAYOUT_UNIT,
+            box_layout,
+            len,
+            elements,
+            modify_list,
+        )
+    } else {
+        modify_list
+    };
 
     //
     // Do nothing if the list is empty
