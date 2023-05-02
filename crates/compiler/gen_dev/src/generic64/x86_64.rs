@@ -1483,6 +1483,16 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
         movsd_freg64_freg64(buf, dst, src);
     }
+
+    #[inline(always)]
+    fn mov_reg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64FloatReg) {
+        movd_reg32_freg32(buf, dst, src);
+    }
+    #[inline(always)]
+    fn mov_reg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64FloatReg) {
+        movq_reg64_freg64(buf, dst, src);
+    }
+
     #[inline(always)]
     fn mov_reg_reg(
         buf: &mut Vec<'_, u8>,
@@ -2901,6 +2911,33 @@ fn movzx_reg64_base16_offset32(
     movzx_reg64_base_offset32(buf, dst, base, offset, 0xB7)
 }
 
+#[inline(always)]
+fn movd_reg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        let rex = add_rm_extension(dst, REX);
+        let rex = add_reg_extension(src, rex);
+
+        buf.extend([0x66, rex, 0x0F, 0x7E, 0xC0 | (src_mod << 3) | (dst_mod)])
+    } else {
+        buf.extend([0x66, 0x0F, 0x7E, 0xC0 | (src_mod << 3) | (dst_mod)])
+    }
+}
+
+#[inline(always)]
+fn movq_reg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64FloatReg) {
+    let dst_mod = dst as u8 % 8;
+    let src_mod = src as u8 % 8;
+
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(src, rex);
+
+    buf.extend([0x66, rex, 0x0F, 0x7E, 0xC0 | (src_mod << 3) | (dst_mod)]);
+}
+
 /// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
 /// This will not generate anything if dst and src are the same.
 #[inline(always)]
@@ -3902,6 +3939,26 @@ mod tests {
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movd_reg32_freg32() {
+        disassembler_test!(
+            movd_reg32_freg32,
+            |dst: X86_64GeneralReg, src| format!("movd {}, {}", dst.low_32bits_string(), src),
+            ALL_GENERAL_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_movq_reg64_freg64() {
+        disassembler_test!(
+            movq_reg64_freg64,
+            |dst, src| format!("movq {}, {}", dst, src),
+            ALL_GENERAL_REGS,
+            ALL_FLOAT_REGS
         );
     }
 

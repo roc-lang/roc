@@ -750,6 +750,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
         fmov_freg_freg(buf, FloatWidth::F64, dst, src);
     }
+
+    #[inline(always)]
+    fn mov_reg32_freg32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64FloatReg) {
+        unimplemented!();
+    }
+    #[inline(always)]
+    fn mov_reg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64FloatReg) {
+        unimplemented!();
+    }
+
     #[inline(always)]
     fn mov_reg_reg(
         buf: &mut Vec<'_, u8>,
