@@ -3428,7 +3428,7 @@ fn list_starts_with_nonempty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn monomorphized_lists() {
     assert_evals_to!(
         indoc!(
@@ -3525,7 +3525,7 @@ fn reserve_unchanged() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn release_excess_capacity() {
     assert_evals_to!(
         indoc!(
@@ -3541,7 +3541,7 @@ fn release_excess_capacity() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn release_excess_capacity_with_len() {
     assert_evals_to!(
         indoc!(
@@ -3557,7 +3557,7 @@ fn release_excess_capacity_with_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn release_excess_capacity_empty() {
     assert_evals_to!(
         indoc!(
@@ -3572,7 +3572,7 @@ fn release_excess_capacity_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn call_function_in_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -3588,7 +3588,7 @@ fn call_function_in_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn call_function_in_empty_list_unbound() {
     assert_evals_to!(
         indoc!(
@@ -3635,7 +3635,7 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3530_uninitialized_capacity_in_list_literal() {
     assert_evals_to!(
         indoc!(
@@ -3650,7 +3650,7 @@ fn issue_3530_uninitialized_capacity_in_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_infer_usage() {
     assert_evals_to!(
         indoc!(
@@ -3670,7 +3670,7 @@ fn list_infer_usage() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_implements_position() {
     assert_evals_to!(
         r#"
@@ -3698,7 +3698,7 @@ fn list_walk_backwards_implements_position() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_until_sum() {
     assert_evals_to!(
         r#"List.walkBackwardsUntil [1, 2] 0 \a,b -> Continue (a + b)"#,
@@ -3708,7 +3708,7 @@ fn list_walk_backwards_until_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_until_even_prefix_sum() {
     assert_evals_to!(
         r#"
@@ -3726,7 +3726,7 @@ fn list_walk_backwards_until_even_prefix_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_from_until_sum() {
     assert_evals_to!(
         r#"List.walkFromUntil [1, 2, 3, 4] 2 0 \a,b -> Continue (a + b)"#,
@@ -3736,7 +3736,7 @@ fn list_walk_from_until_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn concat_unique_to_nonunique_overlapping_issue_4697() {
     assert_evals_to!(
         r#"
@@ -3757,7 +3757,7 @@ fn concat_unique_to_nonunique_overlapping_issue_4697() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_from_even_prefix_sum() {
     assert_evals_to!(
         r#"

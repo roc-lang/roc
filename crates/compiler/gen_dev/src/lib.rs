@@ -1330,8 +1330,6 @@ trait Backend<'a> {
                     layout_usize,
                 ];
 
-                dbg!(arg_layouts);
-
                 let intrinsic = bitcode::LIST_SUBLIST.to_string();
                 self.build_fn_call(sym, intrinsic, &args, &arg_layouts, &list_layout);
             }
@@ -1382,6 +1380,43 @@ trait Backend<'a> {
                     ret_layout,
                 );
             }
+            LowLevel::ListReleaseExcessCapacity => {
+                let list = args[0];
+
+                let list_layout = arg_layouts[0];
+                let element_layout = match self.interner().get(list_layout) {
+                    Layout::Builtin(Builtin::List(e)) => e,
+                    _ => unreachable!(),
+                };
+
+                let (element_width_int, alignment_int) =
+                    self.interner().stack_size_and_alignment(element_layout);
+
+                let alignment = self.debug_symbol("alignment");
+                self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
+
+                let element_width = self.debug_symbol("element_width");
+                self.load_literal_i64(&element_width, element_width_int as i64);
+
+                let update_mode = self.debug_symbol("update_mode");
+                self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
+
+                let layout_usize = Layout::U64;
+
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    update_mode: UpdateMode,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_RELEASE_EXCESS_CAPACITY.to_string(),
+                    &[list, alignment, element_width, update_mode],
+                    &[list_layout, Layout::U32, layout_usize, Layout::U8],
+                    ret_layout,
+                );
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }
