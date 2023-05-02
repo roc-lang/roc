@@ -3576,10 +3576,29 @@ fn occurs(
                 let real_var = *real_var;
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
-                    if short_circuit_help(subs, root_var, ctx, var).is_err() {
-                        // Pay the cost and figure out what the actual recursion point is
+                    if let Err(arg_err) = short_circuit_help(subs, root_var, ctx, var) {
+                        // Try to figure out what the actual recursion point under the real_var is,
+                        // if it appears.
+                        //
+                        // However, the relevant recursion point may not be immediately be evident
+                        // to use under the real_var. That may happen if the real_var is *itself*
+                        // involved in another recursion point, and is now a recursion pointer
+                        // itself. Since we don't look under recursion pointer, we won't see the
+                        // cycle that this arg is involved in. In those cases, fall back to the
+                        // cycle given to us by the arg.
+                        //
+                        // As a concrete example, consider
+                        //
+                        // p=Alias ( [a, LambdaSet x *p], real_var )
+                        //   real_var = RecursionPointer ( Func(a, LambdaSet (x *p), a) )
+                        //
+                        // in this case, we will see that `LambdaSet x *p` is involved in a cycle,
+                        // but that cycle is not under `real_var`. Instead, the cycle is under `p`.
+                        let err = short_circuit_help(subs, root_var, ctx, real_var)
+                            .err()
+                            .unwrap_or(arg_err);
 
-                        return short_circuit_help(subs, root_var, ctx, real_var);
+                        return Err(err);
                     }
                 }
 
