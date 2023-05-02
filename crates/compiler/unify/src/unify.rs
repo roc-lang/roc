@@ -370,7 +370,7 @@ impl<'a> Env<'a> {
         debug_assert!(size_after < size_before, "nothing was removed");
     }
 
-    fn seen_recursion_pair(&mut self, var1: Variable, var2: Variable) -> bool {
+    fn seen_recursion_pair(&self, var1: Variable, var2: Variable) -> bool {
         let (var1, var2) = (
             self.subs.get_root_key_without_compacting(var1),
             self.subs.get_root_key_without_compacting(var2),
