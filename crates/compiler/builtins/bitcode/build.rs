@@ -1,4 +1,5 @@
 use roc_command_utils::{pretty_command_string, zig};
+use roc_error_macros::internal_error;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -80,9 +81,11 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
 
         // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
         fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
-            panic!(
+            internal_error!(
                 "Failed to copy object file {} to {}: {:?}",
-                src_obj, dest_obj, err
+                src_obj,
+                dest_obj,
+                err
             );
         });
     }
@@ -107,9 +110,11 @@ fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
     let zig_src_dir = bitcode_path.join("src");
 
     cp_unless_zig_cache(&zig_src_dir, &target_profile_dir).unwrap_or_else(|err| {
-        panic!(
+        internal_error!(
             "Failed to copy zig bitcode files {:?} to {:?}: {:?}",
-            zig_src_dir, target_profile_dir, err
+            zig_src_dir,
+            target_profile_dir,
+            err
         );
     });
 }
@@ -118,9 +123,10 @@ fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
 fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
     // Make sure the destination directory exists before we try to copy anything into it.
     std::fs::create_dir_all(target_dir).unwrap_or_else(|err| {
-        panic!(
+        internal_error!(
             "Failed to create output library directory for zig bitcode {:?}: {:?}",
-            target_dir, err
+            target_dir,
+            err
         );
     });
 
@@ -133,9 +139,11 @@ fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
             let dest = target_dir.join(src_filename);
 
             fs::copy(&src_path, &dest).unwrap_or_else(|err| {
-                panic!(
+                internal_error!(
                     "Failed to copy zig bitcode file {:?} to {:?}: {:?}",
-                    src_path, dest, err
+                    src_path,
+                    dest,
+                    err
                 );
             });
         } else if src_path.is_dir() && src_filename != "zig-cache" {
@@ -168,20 +176,20 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                     || error_str.contains("LLVM failed to emit asm")
                 {
                     if flaky_fail_counter == 10 {
-                        panic!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
+                        internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
                     } else {
                         run_command(command, flaky_fail_counter + 1)
                     }
                 } else if error_str
                     .contains("lld-link: error: failed to write the output file: Permission denied")
                 {
-                    panic!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
+                    internal_error!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
                 } else {
-                    panic!("{} failed with:\n\n  {}\n", command_str, error_str);
+                    internal_error!("{} failed with:\n\n  {}\n", command_str, error_str);
                 }
             }
         },
-        Err(reason) => panic!("{} failed: {}", command_str, reason),
+        Err(reason) => internal_error!("{} failed: {}", command_str, reason),
     }
 }
 

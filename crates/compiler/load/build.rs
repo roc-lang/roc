@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(not(windows))]
 use bumpalo::Bump;
+use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
 
 const SKIP_SUBS_CACHE: bool = {
@@ -93,10 +94,10 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     let mut module = match res_module {
         Ok(v) => v,
         Err(LoadingProblem::FormattedReport(report)) => {
-            panic!("{}", report);
+            internal_error!("{}", report);
         }
         Err(other) => {
-            panic!("build_file failed with error:\n{:?}", other);
+            internal_error!("build_file failed with error:\n{:?}", other);
         }
     };
 
@@ -109,7 +110,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     );
 
     if problems.errors + problems.warnings > 0 {
-        panic!("Problems were found! Refusing to build cached subs.");
+        internal_error!("Problems were found! Refusing to build cached subs.");
     }
 
     let subs = module.solved.into_inner();

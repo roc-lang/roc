@@ -1,4 +1,5 @@
 use roc_command_utils::{pretty_command_string, zig};
+use roc_error_macros::internal_error;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -112,20 +113,20 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                     || error_str.contains("LLVM failed to emit asm")
                 {
                     if flaky_fail_counter == 10 {
-                        panic!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
+                        internal_error!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);
                     } else {
                         run_command(command, flaky_fail_counter + 1)
                     }
                 } else if error_str
                     .contains("lld-link: error: failed to write the output file: Permission denied")
                 {
-                    panic!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
+                    internal_error!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
                 } else {
-                    panic!("{} failed with:\n\n  {}\n", command_str, error_str);
+                    internal_error!("{} failed with:\n\n  {}\n", command_str, error_str);
                 }
             }
         },
-        Err(reason) => panic!("{} failed: {}", command_str, reason),
+        Err(reason) => internal_error!("{} failed: {}", command_str, reason),
     }
 }
 

@@ -12,6 +12,7 @@ roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_region = { path = "../region" }
 roc_target = { path = "../roc_target" }
+roc_error_macros = { path = "../../error_macros" }
 
 tempfile.workspace = true
 
