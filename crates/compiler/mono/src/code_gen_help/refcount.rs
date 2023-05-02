@@ -1280,24 +1280,28 @@ fn refcount_union_nonrec<'a>(
 
     let continuation = rc_return_stmt(root, ident_ids, ctx);
 
-    let switch_stmt = refcount_union_contents(
-        root,
-        ident_ids,
-        ctx,
-        layout_interner,
-        union_layout,
-        tag_layouts,
-        None,
-        structure,
-        tag_id_sym,
-        tag_id_layout,
-        continuation,
-    );
+    if tag_layouts.is_empty() {
+        continuation
+    } else {
+        let switch_stmt = refcount_union_contents(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            union_layout,
+            tag_layouts,
+            None,
+            structure,
+            tag_id_sym,
+            tag_id_layout,
+            continuation,
+        );
 
-    tag_id_stmt(root.arena.alloc(
-        //
-        switch_stmt,
-    ))
+        tag_id_stmt(root.arena.alloc(
+            //
+            switch_stmt,
+        ))
+    }
 }
 
 fn refcount_union_contents<'a>(
