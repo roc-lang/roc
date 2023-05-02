@@ -257,6 +257,7 @@ impl<'a> TestCase<'a> {
                 "allow_errors" => infer_opts.allow_errors = true,
                 "print_only_under_alias" => infer_opts.print_only_under_alias = true,
                 "print_ranks" => infer_opts.print_ranks = true,
+                "print_variables" => infer_opts.print_variables = true,
                 other => return Err(format!("unknown infer option: {other:?}").into()),
             }
         }

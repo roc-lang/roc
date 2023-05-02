@@ -62,6 +62,7 @@ pub struct DebugPrint {
     pub print_ranks: bool,
     pub ignore_polarity: bool,
     pub print_weakened_vars: bool,
+    pub print_variables: bool,
 }
 
 impl DebugPrint {
@@ -71,6 +72,7 @@ impl DebugPrint {
         print_ranks: false,
         ignore_polarity: false,
         print_weakened_vars: false,
+        print_variables: false,
     };
 }
 
@@ -657,6 +659,12 @@ fn write_content<'a>(
 
     if env.debug.print_ranks {
         buf.push_str(&format!("⟨@{:?}⟩", subs.get_rank(var).into_usize()));
+    }
+    if env.debug.print_variables {
+        buf.push_str(&format!(
+            "<{:?}>",
+            subs.get_root_key_without_compacting(var)
+        ));
     }
 
     match subs.get_content_without_compacting(var) {

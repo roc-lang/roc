@@ -258,6 +258,7 @@ pub struct InferOptions {
     pub print_can_decls: bool,
     pub print_only_under_alias: bool,
     pub print_ranks: bool,
+    pub print_variables: bool,
     pub no_promote: bool,
 }
 
@@ -467,6 +468,7 @@ impl<'a> QueryCtx<'a> {
                 print_lambda_sets: true,
                 print_only_under_alias: self.options.print_only_under_alias,
                 print_ranks: self.options.print_ranks,
+                print_variables: self.options.print_variables,
                 ignore_polarity: true,
                 print_weakened_vars: true,
             },
