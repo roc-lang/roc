@@ -1097,6 +1097,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn is_nan_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src: AArch64FloatReg,
+        width: FloatWidth,
+    ) {
+        fcmp_freg_freg(buf, width, src, src);
+        cset_reg64_cond(buf, dst, ConditionCode::NE);
+    }
+
+    #[inline(always)]
     fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64GeneralReg) {
         scvtf_freg_reg64(buf, FloatWidth::F64, dst, src);
     }

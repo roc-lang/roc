@@ -538,6 +538,8 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         operation: CompareOperation,
     );
 
+    fn is_nan_freg_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: FloatReg, width: FloatWidth);
+
     fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
 
     fn to_float_freg64_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);

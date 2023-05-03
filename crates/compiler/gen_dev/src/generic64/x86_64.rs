@@ -1806,6 +1806,21 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn is_nan_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64FloatReg,
+        width: FloatWidth,
+    ) {
+        match width {
+            FloatWidth::F32 => cmp_freg32_freg32(buf, src, src),
+            FloatWidth::F64 => cmp_freg64_freg64(buf, src, src),
+        }
+
+        setp_reg64(buf, dst)
+    }
+
+    #[inline(always)]
     fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
         cvtsi2ss_freg64_reg64(buf, dst, src);
     }
@@ -3228,10 +3243,16 @@ fn setge_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x9d, buf, reg);
 }
 
-/// `SETO r/m64` -> Set byte if oveflow flag is set.
+/// `SETO r/m64` -> Set byte if overflow flag is set.
 #[inline(always)]
 fn seto_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x90, buf, reg);
+}
+
+/// `SETP r/m64` -> Set byte if parity (PF=1).
+#[inline(always)]
+fn setp_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x9A, buf, reg);
 }
 
 /// `RET` -> Near return to calling procedure.
