@@ -1,6 +1,6 @@
 procedure Num.45 (#Attr.2):
-    let Num.278 : I64 = lowlevel NumRound #Attr.2;
-    ret Num.278;
+    let Num.281 : I64 = lowlevel NumRound #Attr.2;
+    ret Num.281;
 
 procedure Test.0 ():
     let Test.2 : Float64 = 3.6f64;
