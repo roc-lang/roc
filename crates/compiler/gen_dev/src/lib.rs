@@ -84,6 +84,13 @@ enum UpdateMode {
     Immutable = 0,
 }
 
+struct ListArgument<'a> {
+    element_layout: InLayout<'a>,
+
+    alignment: Symbol,
+    element_width: Symbol,
+}
+
 trait Backend<'a> {
     fn env(&self) -> &Env<'a>;
     fn interns(&self) -> &Interns;
@@ -164,6 +171,51 @@ trait Backend<'a> {
         symbol
             .module_string(self.interns())
             .starts_with(ModuleName::APP)
+    }
+
+    fn list_argument(&mut self, list_layout: InLayout<'a>) -> ListArgument<'a> {
+        let element_layout = match self.interner().get(list_layout) {
+            Layout::Builtin(Builtin::List(e)) => e,
+            _ => unreachable!(),
+        };
+
+        let (element_width_int, alignment_int) =
+            self.interner().stack_size_and_alignment(element_layout);
+
+        let alignment = self.debug_symbol("alignment");
+        self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
+
+        let element_width = self.debug_symbol("element_width");
+        self.load_literal_i64(&element_width, element_width_int as i64);
+
+        ListArgument {
+            element_layout,
+            alignment,
+            element_width,
+        }
+    }
+
+    fn decrement_fn_pointer(
+        &mut self,
+        layout_ids: &mut LayoutIds<'a>,
+        layout: InLayout<'a>,
+    ) -> Symbol {
+        let arena = self.env().arena;
+
+        let element_decrement = self.debug_symbol("element_decrement");
+        let element_decrement_symbol = self.gen_refcount_proc_dec(layout);
+        let element_decrement_layout = ProcLayout {
+            arguments: arena.alloc([layout]),
+            result: Layout::UNIT,
+            niche: roc_mono::layout::Niche::NONE,
+        };
+        let element_decrement_string = layout_ids
+            .get_toplevel(element_decrement_symbol, &element_decrement_layout)
+            .to_symbol_string(element_decrement_symbol, self.interns());
+
+        self.build_fn_pointer(&element_decrement, element_decrement_string);
+
+        element_decrement
     }
 
     fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a>;
@@ -1276,47 +1328,16 @@ trait Backend<'a> {
                 let len = args[2];
 
                 let list_layout = arg_layouts[0];
-                let element_layout = match self.interner().get(list_layout) {
-                    Layout::Builtin(Builtin::List(e)) => e,
-                    _ => unreachable!(),
-                };
-
-                let (element_width_int, alignment_int) =
-                    self.interner().stack_size_and_alignment(element_layout);
-
-                let alignment = self.debug_symbol("alignment");
-                self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
-
-                let element_width = self.debug_symbol("element_width");
-                self.load_literal_i64(&element_width, element_width_int as i64);
-
-                // self.load_layout_alignment(new_element_layout, alignment);
-                // self.load_layout_stack_size(old_element_layout, old_element_width);
-
-                let arena = self.env().arena;
-
-                let element_decrement = self.debug_symbol("element_decrement");
-                let element_decrement_symbol = self.gen_refcount_proc_dec(element_layout);
-                let element_decrement_layout = ProcLayout {
-                    arguments: arena.alloc([element_layout]),
-                    result: Layout::UNIT,
-                    niche: roc_mono::layout::Niche::NONE,
-                };
-                let element_decrement_string = layout_ids
-                    .get_toplevel(element_decrement_symbol, &element_decrement_layout)
-                    .to_symbol_string(element_decrement_symbol, self.interns());
-
-                println!("{} {} {}", alignment, element_width, element_decrement);
-
-                self.build_fn_pointer(&element_decrement, element_decrement_string);
+                let list_argument = self.list_argument(list_layout);
+                let element_layout = list_argument.element_layout;
 
                 let args = [
                     list,
-                    alignment,
-                    element_width,
+                    list_argument.alignment,
+                    list_argument.element_width,
                     start,
                     len,
-                    element_decrement,
+                    self.decrement_fn_pointer(layout_ids, element_layout),
                 ];
 
                 let layout_usize = Layout::U64;
@@ -1339,19 +1360,7 @@ trait Backend<'a> {
                 let j = args[2];
 
                 let list_layout = arg_layouts[0];
-                let element_layout = match self.interner().get(list_layout) {
-                    Layout::Builtin(Builtin::List(e)) => e,
-                    _ => unreachable!(),
-                };
-
-                let (element_width_int, alignment_int) =
-                    self.interner().stack_size_and_alignment(element_layout);
-
-                let alignment = self.debug_symbol("alignment");
-                self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
-
-                let element_width = self.debug_symbol("element_width");
-                self.load_literal_i64(&element_width, element_width_int as i64);
+                let list_argument = self.list_argument(list_layout);
 
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
@@ -1368,7 +1377,14 @@ trait Backend<'a> {
                 self.build_fn_call(
                     sym,
                     bitcode::LIST_SWAP.to_string(),
-                    &[list, alignment, element_width, i, j, update_mode],
+                    &[
+                        list,
+                        list_argument.alignment,
+                        list_argument.element_width,
+                        i,
+                        j,
+                        update_mode,
+                    ],
                     &[
                         list_layout,
                         Layout::U32,
@@ -1384,19 +1400,7 @@ trait Backend<'a> {
                 let list = args[0];
 
                 let list_layout = arg_layouts[0];
-                let element_layout = match self.interner().get(list_layout) {
-                    Layout::Builtin(Builtin::List(e)) => e,
-                    _ => unreachable!(),
-                };
-
-                let (element_width_int, alignment_int) =
-                    self.interner().stack_size_and_alignment(element_layout);
-
-                let alignment = self.debug_symbol("alignment");
-                self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
-
-                let element_width = self.debug_symbol("element_width");
-                self.load_literal_i64(&element_width, element_width_int as i64);
+                let list_argument = self.list_argument(list_layout);
 
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
@@ -1411,7 +1415,12 @@ trait Backend<'a> {
                 self.build_fn_call(
                     sym,
                     bitcode::LIST_RELEASE_EXCESS_CAPACITY.to_string(),
-                    &[list, alignment, element_width, update_mode],
+                    &[
+                        list,
+                        list_argument.alignment,
+                        list_argument.element_width,
+                        update_mode,
+                    ],
                     &[list_layout, Layout::U32, layout_usize, Layout::U8],
                     ret_layout,
                 );
@@ -1422,39 +1431,14 @@ trait Backend<'a> {
                 let drop_index = args[1];
 
                 let list_layout = arg_layouts[0];
-                let element_layout = match self.interner().get(list_layout) {
-                    Layout::Builtin(Builtin::List(e)) => e,
-                    _ => unreachable!(),
-                };
-
-                let (element_width_int, alignment_int) =
-                    self.interner().stack_size_and_alignment(element_layout);
-
-                let alignment = self.debug_symbol("alignment");
-                self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
-
-                let element_width = self.debug_symbol("element_width");
-                self.load_literal_i64(&element_width, element_width_int as i64);
+                let list_argument = self.list_argument(list_layout);
+                let element_layout = list_argument.element_layout;
 
                 let update_mode = self.debug_symbol("update_mode");
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
-                let arena = self.env().arena;
-
-                let element_decrement = self.debug_symbol("element_decrement");
-                let element_decrement_symbol = self.gen_refcount_proc_dec(element_layout);
-                let element_decrement_layout = ProcLayout {
-                    arguments: arena.alloc([element_layout]),
-                    result: Layout::UNIT,
-                    niche: roc_mono::layout::Niche::NONE,
-                };
-                let element_decrement_string = layout_ids
-                    .get_toplevel(element_decrement_symbol, &element_decrement_layout)
-                    .to_symbol_string(element_decrement_symbol, self.interns());
-
-                self.build_fn_pointer(&element_decrement, element_decrement_string);
-
                 let layout_usize = Layout::U64;
+                let element_decrement = self.decrement_fn_pointer(layout_ids, element_layout);
 
                 //    list: RocList,
                 //    alignment: u32,
@@ -1467,8 +1451,8 @@ trait Backend<'a> {
                     bitcode::LIST_DROP_AT.to_string(),
                     &[
                         list,
-                        alignment,
-                        element_width,
+                        list_argument.alignment,
+                        list_argument.element_width,
                         drop_index,
                         element_decrement,
                     ],
