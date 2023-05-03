@@ -560,7 +560,6 @@ impl<
 
         match storage {
             Stack(Complex { base_offset, size }) => {
-                let (base_offset, size) = (base_offset, size);
                 let mut data_offset = base_offset;
                 for layout in field_layouts.iter().take(index as usize) {
                     let field_size = layout_interner.stack_size(*layout);
@@ -1153,6 +1152,44 @@ impl<
         self.fn_call_stack_size = max(self.fn_call_stack_size, tmp_size);
     }
 
+    fn joinpoint_argument_stack_storage(
+        &mut self,
+        layout_interner: &mut STLayoutInterner<'a>,
+        symbol: Symbol,
+        layout: InLayout<'a>,
+    ) {
+        match layout {
+            single_register_layouts!() => {
+                let base_offset = self.claim_stack_size(8);
+                self.symbol_storage_map.insert(
+                    symbol,
+                    Stack(Primitive {
+                        base_offset,
+                        reg: None,
+                    }),
+                );
+                self.allocation_map
+                    .insert(symbol, Rc::new((base_offset, 8)));
+            }
+            _ => {
+                if let Layout::LambdaSet(lambda_set) = layout_interner.get(layout) {
+                    self.joinpoint_argument_stack_storage(
+                        layout_interner,
+                        symbol,
+                        lambda_set.runtime_representation(),
+                    )
+                } else {
+                    let stack_size = layout_interner.stack_size(layout);
+                    if stack_size == 0 {
+                        self.no_data(&symbol);
+                    } else {
+                        self.claim_stack_area(&symbol, stack_size);
+                    }
+                }
+            }
+        }
+    }
+
     /// Setups a join point.
     /// To do this, each of the join pionts params are given a storage location.
     /// Then those locations are stored.
@@ -1174,46 +1211,47 @@ impl<
         {
             // Claim a location for every join point parameter to be loaded at.
             // Put everything on the stack for simplicity.
-            let mut layout = *layout;
-
-            'inner: loop {
-                match layout {
-                    single_register_layouts!() => {
-                        let base_offset = self.claim_stack_size(8);
-                        self.symbol_storage_map.insert(
-                            *symbol,
-                            Stack(Primitive {
-                                base_offset,
-                                reg: None,
-                            }),
-                        );
-                        self.allocation_map
-                            .insert(*symbol, Rc::new((base_offset, 8)));
-
-                        break 'inner;
-                    }
-                    _ => match layout_interner.get(layout) {
-                        Layout::LambdaSet(lambda_set) => {
-                            layout = lambda_set.runtime_representation();
-                            continue 'inner;
-                        }
-                        _ => {
-                            let stack_size = layout_interner.stack_size(layout);
-                            if stack_size == 0 {
-                                self.no_data(symbol);
-                            } else {
-                                self.claim_stack_area(symbol, stack_size);
-                            }
-
-                            break 'inner;
-                        }
-                    },
-                }
-            }
+            self.joinpoint_argument_stack_storage(layout_interner, *symbol, *layout);
 
             param_storage.push(*self.get_storage_for_sym(symbol));
         }
         self.join_param_map.insert(*id, param_storage);
+    }
+
+    fn jump_argument_stack_storage(
+        &mut self,
+        layout_interner: &mut STLayoutInterner<'a>,
+        buf: &mut Vec<'a, u8>,
+        symbol: Symbol,
+        layout: InLayout<'a>,
+        base_offset: i32,
+    ) {
+        match layout {
+            single_register_integers!() => {
+                let reg = self.load_to_general_reg(buf, &symbol);
+                ASM::mov_base32_reg64(buf, base_offset, reg);
+            }
+            single_register_floats!() => {
+                let reg = self.load_to_float_reg(buf, &symbol);
+                ASM::mov_base32_freg64(buf, base_offset, reg);
+            }
+            _ => {
+                if let Layout::LambdaSet(lambda_set) = layout_interner.get(layout) {
+                    self.jump_argument_stack_storage(
+                        layout_interner,
+                        buf,
+                        symbol,
+                        lambda_set.runtime_representation(),
+                        base_offset,
+                    );
+                } else {
+                    internal_error!(
+                        r"cannot load non-primitive layout ({:?}) to primitive stack location",
+                        layout
+                    )
+                }
+            }
+        }
     }
 
     /// Setup jump loads the parameters for the joinpoint.
@@ -1260,32 +1298,13 @@ impl<
                     base_offset,
                     reg: None,
                 }) => {
-                    let mut layout = *layout;
-                    loop {
-                        match layout {
-                            single_register_integers!() => {
-                                let reg = self.load_to_general_reg(buf, sym);
-                                ASM::mov_base32_reg64(buf, *base_offset, reg);
-                            }
-                            single_register_floats!() => {
-                                let reg = self.load_to_float_reg(buf, sym);
-                                ASM::mov_base32_freg64(buf, *base_offset, reg);
-                            }
-                            _ => {
-                                if let Layout::LambdaSet(lambda_set) = layout_interner.get(layout) {
-                                    layout = lambda_set.runtime_representation();
-                                    continue;
-                                } else {
-                                    internal_error!(
-                                        r"cannot load non-primitive layout ({:?}) to primitive stack location",
-                                        layout
-                                    )
-                                }
-                            }
-                        }
-
-                        break;
-                    }
+                    self.jump_argument_stack_storage(
+                        layout_interner,
+                        buf,
+                        *sym,
+                        *layout,
+                        *base_offset,
+                    );
                 }
                 NoData => {}
                 Stack(Primitive { reg: Some(_), .. }) => {
