@@ -29,4 +29,4 @@ jobs:
         run: nix develop -c cargo test --locked --release --features="wasm32-cli-run"
 
       - name: test the dev backend # these tests require an explicit feature flag
-        run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev
+        run: nix develop -c cargo test --locked --release --package test_gen --no-default-features --features gen-dev
