@@ -1706,7 +1706,7 @@ fn float_to_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn frac_is_nan() {
     assert_evals_to!("Num.isNaN (0 / 0)", true, bool);
     assert_evals_to!("Num.isNaN (1 / 0)", false, bool);
@@ -1714,7 +1714,7 @@ fn frac_is_nan() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn frac_is_infinite() {
     assert_evals_to!("Num.isInfinite (1 / 0)", true, bool);
     assert_evals_to!("Num.isInfinite (-1 / 0)", true, bool);
@@ -1723,7 +1723,7 @@ fn frac_is_infinite() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn frac_is_finite() {
     assert_evals_to!("Num.isFinite 42", true, bool);
     assert_evals_to!("Num.isFinite (1 / 0)", false, bool);
