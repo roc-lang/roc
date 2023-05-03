@@ -1,4 +1,4 @@
-# Roc installation guide for x86_64 macOS systems
+# Roc installation guide for x86_64 MacOS systems
 
 ## How to install Roc
 
