@@ -45,8 +45,8 @@ pub enum Ident<'a> {
     },
     /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
     AccessorFunction(Accessor<'a>),
-    /// `&foo { foo: 42 }, 3` or `&1 (1, 2, 3) 4`
-    UpdaterFunction(Accessor<'a>),
+    /// `&foo { foo: 42 }, 3`
+    UpdaterFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
 }
@@ -402,16 +402,11 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
 }
 
 /// a `&foo` or `&1` updater function
-fn chomp_updater(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
+fn chomp_updater(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `&` has been chomped already
     match chomp_lowercase_part(buffer) {
-        Ok(name) => Ok(Accessor::RecordField(name)),
-        Err(_) => {
-            match chomp_integer_part(buffer) {
-                Ok(name) => Ok(Accessor::TupleIndex(name)),
-                Err(_) => Err(BadIdent::Start(pos)),
-            }
-        }
+        Ok(name) => Ok(name),
+        Err(_) => Err(BadIdent::Start(pos)),
     }
 }
 

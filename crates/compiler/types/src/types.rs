@@ -3645,7 +3645,7 @@ pub enum Category {
     // records
     Record,
     Accessor(IndexOrField),
-    Updater(IndexOrField),
+    Updater(Lowercase),
     RecordAccess(Lowercase),
     Tuple,
     TupleAccess(usize),

@@ -460,10 +460,7 @@ impl<'a> Formattable for Expr<'a> {
             UpdaterFunction(key) => {
                 buf.indent(indent);
                 buf.push('&');
-                match key {
-                    Accessor::RecordField(key) => buf.push_str(key),
-                    Accessor::TupleIndex(key) => buf.push_str(key),
-                }
+                buf.push_str(key);
             }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);

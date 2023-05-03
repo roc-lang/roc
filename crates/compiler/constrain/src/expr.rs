@@ -1285,18 +1285,13 @@ pub fn constrain_expr(
             let field_var = *field_var;
             let field_type = Variable(field_var);
 
-            let record_type = match field {
-                IndexOrField::Field(field) => {
-                    let mut field_types = SendMap::default();
-                    let label = field.clone();
-                    field_types.insert(label, RecordField::Demanded(field_type.clone()));
-                    Type::Record(
-                        field_types,
-                        TypeExtension::from_non_annotation_type(ext_type),
-                    )
-                }
-                IndexOrField::Index(index) => todo!(),
-            };
+            let mut field_types = SendMap::default();
+            let label = field.clone();
+            field_types.insert(label, RecordField::Demanded(field_type.clone()));
+            let record_type = Type::Record(
+                field_types,
+                TypeExtension::from_non_annotation_type(ext_type),
+            );
 
             let record_type_index = {
                 let typ = types.from_old_type(&record_type);

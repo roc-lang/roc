@@ -1788,13 +1788,21 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
 
-        Accessor(field) | Updater(field) => (
+        Accessor(field) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                alloc.text(format!("{t}his ")),
                 match field {
                     IndexOrField::Index(index) => alloc.tuple_field(*index),
                     IndexOrField::Field(field) => alloc.record_field(field.to_owned()),
                 },
+                alloc.text(" value"),
+            ]),
+            alloc.text(" is a:"),
+        ),
+        Updater(field) => (
+            alloc.concat([
+                alloc.text(format!("{t}his ")),
+                alloc.record_field(field.to_owned()),
                 alloc.text(" value"),
             ]),
             alloc.text(" is a:"),

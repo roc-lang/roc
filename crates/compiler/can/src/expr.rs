@@ -197,7 +197,7 @@ pub enum Expr {
     /// tuple or field accessor as a function, e.g. (.foo) expr or (.1) expr
     RecordAccessor(StructAccessorData),
 
-    /// tuple or field updater as a function, e.g. (&foo) record value or (&1) record value
+    /// tuple or field updater as a function, e.g. (&foo) record value
     RecordUpdater(StructUpdaterData),
 
     TupleAccess {
@@ -478,7 +478,7 @@ pub struct StructUpdaterData {
     pub closure_var: Variable,
     pub ext_var: Variable,
     pub field_var: Variable,
-    pub field: IndexOrField,
+    pub field: Lowercase,
 }
 
 impl StructUpdaterData {
@@ -500,21 +500,18 @@ impl StructUpdaterData {
         // into
         //
         // (\record, value -> { record & foo: value })
-        let body = match field {
-            IndexOrField::Index(index) => todo!(),
-            IndexOrField::Field(field) => Expr::RecordUpdate {
-                record_var,
-                ext_var,
-                symbol: record_symbol,
-                updates: {
-                    let mut map = SendMap::default();
-                    map.insert(field, Field {
-                        var: field_var,
-                        region: Region::zero(),
-                        loc_expr: Box::new(Loc::at_zero(Expr::Var(field_symbol, field_var))),
-                    });
-                    map
-                },
+        let body = Expr::RecordUpdate {
+            record_var,
+            ext_var,
+            symbol: record_symbol,
+            updates: {
+                let mut map = SendMap::default();
+                map.insert(field, Field {
+                    var: field_var,
+                    region: Region::zero(),
+                    loc_expr: Box::new(Loc::at_zero(Expr::Var(field_symbol, field_var))),
+                });
+                map
             },
         };
 
@@ -1226,10 +1223,7 @@ pub fn canonicalize_expr<'a>(
                 ext_var: var_store.fresh(),
                 closure_var: var_store.fresh(),
                 field_var: var_store.fresh(),
-                field: match field {
-                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
-                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
-                },
+                field: (*field).into(),
             }),
             Output::default(),
         ),

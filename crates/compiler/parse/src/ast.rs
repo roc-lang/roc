@@ -249,8 +249,8 @@ pub enum Expr<'a> {
     /// e.g. `.foo` or `.0`
     AccessorFunction(Accessor<'a>),
 
-    /// e.g. `&foo` or `&0`
-    UpdaterFunction(Accessor<'a>),
+    /// e.g. `&foo`
+    UpdaterFunction(&'a str),
 
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
