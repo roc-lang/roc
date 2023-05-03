@@ -109,13 +109,12 @@ flags! {
     ROC_VERIFY_RIGID_LET_GENERALIZED
 
     /// Verifies that an `occurs` check indeed only contains non-recursive types that need to be
-    /// fixed-up.
+    /// fixed-up with one new recursion variable.
     ///
-    /// This flag is disabled by default because an occurs check may pass through an inferred
-    /// partially-recursive structure if a part of that structure also has type errors. However, in
-    /// the presence of programs without type errors, occurs checks should always consist of only
-    /// non-recursive types, and this flag should pass.
-    ROC_VERIFY_OCCURS_RECURSION
+    /// This flag is disabled by default because an occurs check may pass through another recursive
+    /// structure for which a recursive pointer has already been allocated. However, during debugging,
+    /// you may be interested in checking that the occurs check finds only one variable to fix.
+    ROC_VERIFY_OCCURS_ONE_RECURSION
 
     // ===Mono===
 

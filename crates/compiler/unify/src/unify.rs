@@ -2,7 +2,9 @@ use bitflags::bitflags;
 use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::{dbg_do, dbg_set};
 #[cfg(debug_assertions)]
-use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_RECURSION};
+use roc_debug_flags::{
+    ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_ONE_RECURSION,
+};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
@@ -370,7 +372,7 @@ impl<'a> Env<'a> {
         debug_assert!(size_after < size_before, "nothing was removed");
     }
 
-    fn seen_recursion_pair(&mut self, var1: Variable, var2: Variable) -> bool {
+    fn seen_recursion_pair(&self, var1: Variable, var2: Variable) -> bool {
         let (var1, var2) = (
             self.subs.get_root_key_without_compacting(var1),
             self.subs.get_root_key_without_compacting(var2),
@@ -861,68 +863,77 @@ fn unify_two_aliases<M: MetaCollector>(
             merged_args.push(merged_var);
         }
 
-        for (l, r) in lambda_set_it {
-            let l_var = env.subs[l];
-            let r_var = env.subs[r];
-            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
-
-            let merged_var = choose_merged_var(env.subs, l_var, r_var);
-            merged_lambda_set_args.push(merged_var);
+        if !outcome.mismatches.is_empty() {
+            return outcome;
         }
 
-        for (l, r) in infer_ext_in_output_vars_it {
-            let l_var = env.subs[l];
-            let r_var = env.subs[r];
-            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+        // Even if there are no changes to alias arguments, and no new variables were
+        // introduced, we may still need to unify the "actual types" of the alias or opaque!
+        //
+        // The unification is not necessary from a types perspective (and in fact, we may want
+        // to disable it for `roc check` later on), but it is necessary for the monomorphizer,
+        // which expects identical types to be reflected in the same variable.
+        //
+        // As a concrete example, consider the unification of two opaques
+        //
+        //   P := [Zero, Succ P]
+        //
+        //   (@P (Succ n)) ~ (@P (Succ o))
+        //
+        // `P` has no arguments, and unification of the surface of `P` introduces nothing new.
+        // But if we do not unify the types of `n` and `o`, which are recursion variables, they
+        // will remain disjoint! Currently, the implication of this is that they will be seen
+        // to have separate recursive memory layouts in the monomorphizer - which is no good
+        // for our compilation model.
+        //
+        // As such, always unify the real vars.
 
-            let merged_var = choose_merged_var(env.subs, l_var, r_var);
-            merged_infer_ext_in_output_vars.push(merged_var);
+        // Don't report real_var mismatches, because they must always be surfaced higher, from
+        // the argument types.
+        let mut real_var_outcome = unify_pool::<M>(env, pool, real_var, other_real_var, ctx.mode);
+        let _ = real_var_outcome.mismatches.drain(..);
+        outcome.union(real_var_outcome);
+
+        let merged_real_var = choose_merged_var(env.subs, real_var, other_real_var);
+
+        // Now, we need to unify the lambda set and IOIOP variables of both aliases.
+        //
+        // We wait to do this until after we have unified the real vars, because the real vars
+        // should contain the lambda set and IOIOP variables of the aliases, so most of these
+        // should be short-circuits.
+        {
+            for (l, r) in lambda_set_it {
+                let l_var = env.subs[l];
+                let r_var = env.subs[r];
+                outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+                let merged_var = choose_merged_var(env.subs, l_var, r_var);
+                merged_lambda_set_args.push(merged_var);
+            }
+
+            for (l, r) in infer_ext_in_output_vars_it {
+                let l_var = env.subs[l];
+                let r_var = env.subs[r];
+                outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+                let merged_var = choose_merged_var(env.subs, l_var, r_var);
+                merged_infer_ext_in_output_vars.push(merged_var);
+            }
         }
 
-        if outcome.mismatches.is_empty() {
-            // Even if there are no changes to alias arguments, and no new variables were
-            // introduced, we may still need to unify the "actual types" of the alias or opaque!
-            //
-            // The unification is not necessary from a types perspective (and in fact, we may want
-            // to disable it for `roc check` later on), but it is necessary for the monomorphizer,
-            // which expects identical types to be reflected in the same variable.
-            //
-            // As a concrete example, consider the unification of two opaques
-            //
-            //   P := [Zero, Succ P]
-            //
-            //   (@P (Succ n)) ~ (@P (Succ o))
-            //
-            // `P` has no arguments, and unification of the surface of `P` introduces nothing new.
-            // But if we do not unify the types of `n` and `o`, which are recursion variables, they
-            // will remain disjoint! Currently, the implication of this is that they will be seen
-            // to have separate recursive memory layouts in the monomorphizer - which is no good
-            // for our compilation model.
-            //
-            // As such, always unify the real vars.
+        // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
+        // the merged vars are all left, avoid re-insertion. Is checking for argument slice
+        // equality faster than re-inserting?
+        let merged_variables = AliasVariables::insert_into_subs(
+            env.subs,
+            merged_args,
+            merged_lambda_set_args,
+            merged_infer_ext_in_output_vars,
+        );
 
-            // Don't report real_var mismatches, because they must always be surfaced higher, from
-            // the argument types.
-            let mut real_var_outcome =
-                unify_pool::<M>(env, pool, real_var, other_real_var, ctx.mode);
-            let _ = real_var_outcome.mismatches.drain(..);
-            outcome.union(real_var_outcome);
+        let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
 
-            let merged_real_var = choose_merged_var(env.subs, real_var, other_real_var);
-
-            // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
-            // the merged vars are all left, avoid re-insertion. Is checking for argument slice
-            // equality faster than re-inserting?
-            let merged_variables = AliasVariables::insert_into_subs(
-                env.subs,
-                merged_args,
-                merged_lambda_set_args,
-                merged_infer_ext_in_output_vars,
-            );
-            let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
-
-            outcome.union(merge(env, ctx, merged_content));
-        }
+        outcome.union(merge(env, ctx, merged_content));
 
         outcome
     } else {
@@ -2998,12 +3009,12 @@ fn maybe_mark_union_recursive(env: &mut Env, pool: &mut Pool, union_var: Variabl
         }) {
             return;
         } else {
-            // We may have partially solved a recursive type, but still see an occurs, if the type
-            // has errors inside of it. As such, admit this; however, for well-typed programs, this
-            // case should never be observed. Set ROC_VERIFY_OCCURS_RECURSION to verify this branch
-            // is not reached for well-typed programs.
-            if dbg_set!(ROC_VERIFY_OCCURS_RECURSION)
-                || !chain.iter().any(|&var| {
+            // We may seen an occurs check that passes through another recursion var if the occurs
+            // check is passing through another recursive type.
+            // But, if ROC_VERIFY_OCCURS_ONE_RECURSION is set, we check that we only found a new
+            // recursion.
+            if dbg_set!(ROC_VERIFY_OCCURS_ONE_RECURSION)
+                && !chain.iter().any(|&var| {
                     matches!(
                         subs.get_content_without_compacting(var),
                         Content::Structure(FlatType::RecursiveTagUnion(..))

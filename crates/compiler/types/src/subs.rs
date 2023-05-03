@@ -3572,15 +3572,15 @@ fn occurs(
                 }
                 EmptyRecord | EmptyTuple | EmptyTagUnion => Ok(()),
             },
-            Alias(_, args, real_var, _) => {
-                let real_var = *real_var;
+            Alias(_, args, _, _) => {
+                // THEORY: we only need to explore the args, as that is the surface of all
+                // unification between aliases, and hence the only source of new recursion points.
+                //
+                // Recursion points in the definition of the alias are covered by the arguments, or
+                // already resolved during the alias's instantiation.
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
-                    if short_circuit_help(subs, root_var, ctx, var).is_err() {
-                        // Pay the cost and figure out what the actual recursion point is
-
-                        return short_circuit_help(subs, root_var, ctx, real_var);
-                    }
+                    short_circuit_help(subs, root_var, ctx, var)?;
                 }
 
                 Ok(())
