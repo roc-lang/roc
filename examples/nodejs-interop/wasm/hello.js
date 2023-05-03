@@ -83,7 +83,12 @@ function hello() {
         // TODO handle small strings
 
         const rocStrHeapAddr = dataView.getUint32(0, true); // true because wasm is little-endian
-        const rocStrLen = dataView.getUint32(usize, true); // true because wasm is little-endian
+        const rocStrCapacity = dataView.getInt32(usize * 2, true);
+        const isSmallStr = rocStrCapacity < 0;
+        const rocStrLen =
+            isSmallStr
+                ? dataView.getUint8((usize * 3) - 1) // in small strings, the length is stored in the very last byte
+                : dataView.getUint32(usize, true);
         const utf8Bytes = wasmMemoryBuffer.subarray(rocStrHeapAddr, rocStrHeapAddr + rocStrLen);
 
         return decoder.decode(utf8Bytes);

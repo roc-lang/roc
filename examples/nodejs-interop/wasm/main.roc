@@ -4,4 +4,4 @@ app "roc-app"
     provides [main] to pf
 
 main : Str
-main = "Hello from Roc!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1"
+main = "Hello from Roc!"
