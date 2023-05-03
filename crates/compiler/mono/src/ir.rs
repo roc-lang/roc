@@ -3048,10 +3048,11 @@ fn specialize_external_help<'a>(
                 host_exposed_layouts.sort();
                 host_exposed_layouts.dedup();
 
+                // Computer the getter procs for every host-exposed layout.
                 for in_layout in host_exposed_layouts {
                     let layout = layout_cache.interner.get(in_layout);
 
-                    let mut all_glue_procs = generate_glue_procs(
+                    let all_glue_procs = generate_glue_procs(
                         env.home,
                         env.ident_ids,
                         env.arena,
@@ -3059,21 +3060,9 @@ fn specialize_external_help<'a>(
                         env.arena.alloc(layout),
                     );
 
-                    all_glue_procs.extern_names = {
-                        let mut layout_env = layout::Env::from_components(
-                            layout_cache,
-                            env.subs,
-                            env.arena,
-                            env.target_info,
-                        );
-
-                        find_lambda_sets(&mut layout_env, variable)
-                    };
-
-                    // for now, getters are not processed here
                     let GlueProcs {
                         getters,
-                        extern_names,
+                        legacy_layout_based_extern_names: _,
                     } = all_glue_procs;
 
                     for (_layout, glue_procs) in getters {
@@ -3085,6 +3074,21 @@ fn specialize_external_help<'a>(
                             );
                         }
                     }
+                }
+
+                // Now, let's generate the host-exposed lambda set wrappers from the type of the
+                // host-exported function.
+                {
+                    let extern_names = {
+                        let mut layout_env = layout::Env::from_components(
+                            layout_cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
+
+                        find_lambda_sets(&mut layout_env, variable)
+                    };
 
                     let mut aliases = BumpMap::default();
 
@@ -9533,7 +9537,9 @@ pub struct GlueProc<'a> {
 
 pub struct GlueProcs<'a> {
     pub getters: Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)>,
-    pub extern_names: Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)>,
+    /// Lambda set IDs computed from the layout of the lambda set. Should be replaced by
+    /// computation from type variable eventually.
+    pub legacy_layout_based_extern_names: Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -9679,7 +9685,7 @@ where
 {
     let mut answer = GlueProcs {
         getters: Vec::new_in(arena),
-        extern_names: Vec::new_in(arena),
+        legacy_layout_based_extern_names: Vec::new_in(arena),
     };
 
     let mut lambda_set_id = LambdaSetId(0);
@@ -9786,7 +9792,7 @@ where
                     RawFunctionLayout::Function(lambda_set.args, lambda_set, lambda_set.ret);
 
                 let key = (lambda_set_id, raw_function_layout);
-                answer.extern_names.push(key);
+                answer.legacy_layout_based_extern_names.push(key);
 
                 // this id is used, increment for the next one
                 lambda_set_id = lambda_set_id.next();

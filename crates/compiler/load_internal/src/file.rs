@@ -3437,7 +3437,7 @@ fn finish_specialization<'a>(
                 );
 
                 let lambda_set_names = all_glue_procs
-                    .extern_names
+                    .legacy_layout_based_extern_names
                     .iter()
                     .map(|(lambda_set_id, _)| (*_name, *lambda_set_id));
                 exposed_to_host.lambda_sets.extend(lambda_set_names);
