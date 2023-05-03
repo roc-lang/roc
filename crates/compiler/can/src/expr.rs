@@ -198,7 +198,7 @@ pub enum Expr {
     RecordAccessor(StructAccessorData),
 
     /// tuple or field updater as a function, e.g. (&foo) record value
-    RecordUpdater(StructUpdaterData),
+    RecordUpdater(RecordUpdaterData),
 
     TupleAccess {
         tuple_var: Variable,
@@ -471,7 +471,7 @@ impl StructAccessorData {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StructUpdaterData {
+pub struct RecordUpdaterData {
     pub name: Symbol,
     pub function_var: Variable,
     pub record_var: Variable,
@@ -481,9 +481,9 @@ pub struct StructUpdaterData {
     pub field: Lowercase,
 }
 
-impl StructUpdaterData {
+impl RecordUpdaterData {
     pub fn to_closure_data(self, record_symbol: Symbol, field_symbol: Symbol) -> ClosureData {
-        let StructUpdaterData {
+        let RecordUpdaterData {
             name,
             function_var,
             record_var,
@@ -1219,7 +1219,7 @@ pub fn canonicalize_expr<'a>(
             Output::default(),
         ),
         ast::Expr::UpdaterFunction(field) => (
-            RecordUpdater(StructUpdaterData {
+            RecordUpdater(RecordUpdaterData {
                 name: scope.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),

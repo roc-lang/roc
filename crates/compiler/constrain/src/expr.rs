@@ -17,7 +17,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
     AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, ExpectLookup, Field,
-    FunctionDef, OpaqueWrapFunctionData, StructAccessorData, StructUpdaterData, WhenBranch,
+    FunctionDef, OpaqueWrapFunctionData, StructAccessorData, RecordUpdaterData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -1271,7 +1271,7 @@ pub fn constrain_expr(
                 cons,
             )
         }
-        RecordUpdater(StructUpdaterData {
+        RecordUpdater(RecordUpdaterData {
             name: closure_name,
             function_var,
             field,
