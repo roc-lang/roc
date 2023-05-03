@@ -1801,8 +1801,8 @@ fn format_category<'b>(
         ),
         Updater(field) => (
             alloc.concat([
-                alloc.text(format!("{t}his ")),
-                alloc.record_field(field.to_owned()),
+                alloc.as_string(format_args!("{t}his ")),
+                alloc.record_updater(field.to_owned()),
                 alloc.text(" value"),
             ]),
             alloc.text(" is a:"),
