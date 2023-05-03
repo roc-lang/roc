@@ -401,7 +401,7 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     }
 }
 
-/// a `&foo` or `&1` updater function
+/// a `&foo` updater function
 fn chomp_updater(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `&` has been chomped already
     match chomp_lowercase_part(buffer) {
