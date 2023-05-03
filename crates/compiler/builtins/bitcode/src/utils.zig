@@ -163,12 +163,10 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
                 const new = @bitCast(usize, ptr_to_refcount.*);
 
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                    const stdout = std.io.getStdOut().writer();
-
                     const oldH = old - REFCOUNT_ONE + 1;
                     const newH = new - REFCOUNT_ONE + 1;
 
-                    stdout.print("| increment {*}: {} + {} = {}!\n", .{ ptr_to_refcount, oldH, amount, newH }) catch unreachable;
+                    std.debug.print("| increment {*}: {} + {} = {}!\n", .{ ptr_to_refcount, oldH, amount, newH });
                 }
             },
             Refcount.atomic => {
@@ -264,12 +262,10 @@ inline fn decref_ptr_to_refcount(
                 const new = @bitCast(usize, refcount -% 1);
 
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                    const stdout = std.io.getStdOut().writer();
-
                     const oldH = old - REFCOUNT_ONE + 1;
                     const newH = new - REFCOUNT_ONE + 1;
 
-                    stdout.print("| decrement {*}: {} - 1 = {}!\n", .{ refcount_ptr, oldH, newH }) catch unreachable;
+                    std.debug.print("| decrement {*}: {} - 1 = {}!\n", .{ refcount_ptr, oldH, newH });
                 }
 
                 if (refcount == REFCOUNT_ONE_ISIZE) {
