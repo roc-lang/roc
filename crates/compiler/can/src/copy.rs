@@ -1,7 +1,8 @@
 use crate::{
     def::Def,
     expr::{
-        ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, StructUpdaterData, WhenBranchPattern,
+        ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, StructUpdaterData,
+        WhenBranchPattern,
     },
     pattern::{DestructType, ListPatterns, Pattern, RecordDestruct, TupleDestruct},
 };

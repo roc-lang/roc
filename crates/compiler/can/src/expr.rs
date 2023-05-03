@@ -506,11 +506,14 @@ impl StructUpdaterData {
             symbol: record_symbol,
             updates: {
                 let mut map = SendMap::default();
-                map.insert(field, Field {
-                    var: field_var,
-                    region: Region::zero(),
-                    loc_expr: Box::new(Loc::at_zero(Expr::Var(field_symbol, field_var))),
-                });
+                map.insert(
+                    field,
+                    Field {
+                        var: field_var,
+                        region: Region::zero(),
+                        loc_expr: Box::new(Loc::at_zero(Expr::Var(field_symbol, field_var))),
+                    },
+                );
                 map
             },
         };
@@ -527,7 +530,7 @@ impl StructUpdaterData {
                 field_var,
                 AnnotatedMark::known_exhaustive(),
                 Loc::at_zero(Pattern::Identifier(field_symbol)),
-            )
+            ),
         ];
 
         ClosureData {
