@@ -558,7 +558,7 @@ SomethingIJustMadeUp "hi" "there" : [SomethingIJustMadeUp Str Str]*
 Foo : [Foo]*
 
 > y = Foo "hi" Bar
-Foo "hi" 5 : [Foo Str [Bar]*]*
+Foo "hi" Bar : [Foo Str [Bar]*]*
 
 > z = Foo ["str1", "str2"]
 Foo ["str1", "str2"] : [Foo (List Str)]*
