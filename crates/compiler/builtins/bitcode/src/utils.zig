@@ -158,9 +158,9 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             Refcount.normal => {
-                const old = @intCast(usize, ptr_to_refcount.*);
+                const old = @bitCast(usize, ptr_to_refcount.*);
                 ptr_to_refcount.* += amount;
-                const new = @intCast(usize, ptr_to_refcount.*);
+                const new = @bitCast(usize, ptr_to_refcount.*);
 
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
                     const stdout = std.io.getStdOut().writer();
@@ -259,9 +259,9 @@ inline fn decref_ptr_to_refcount(
     if (refcount != REFCOUNT_MAX_ISIZE) {
         switch (RC_TYPE) {
             Refcount.normal => {
-                const old = @intCast(usize, refcount);
+                const old = @bitCast(usize, refcount);
                 refcount_ptr[0] = refcount -% 1;
-                const new = @intCast(usize, refcount -% 1);
+                const new = @bitCast(usize, refcount -% 1);
 
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
                     const stdout = std.io.getStdOut().writer();
