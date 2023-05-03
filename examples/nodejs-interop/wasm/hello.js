@@ -4,6 +4,7 @@ const { TextDecoder } = require('util');
 const wasmFilename = './roc-app.wasm';
 const moduleBytes = fs.readFileSync(wasmFilename);
 const wasmModule = new WebAssembly.Module(moduleBytes);
+const decoder = new TextDecoder();
 
 let allocatedBytes = 0;
 
@@ -32,44 +33,19 @@ function realloc(addr, newSize, oldSize, align) {
 }
 
 function hello() {
-    const decoder = new TextDecoder();
-    let wasmMemoryBuffer;
-    let exitCode;
-
-    function js_display_roc_string(strBytes, strLen) {
-        const utf8Bytes = wasmMemoryBuffer.subarray(strBytes, strBytes + strLen);
-
-        returnVal = decoder.decode(utf8Bytes);
-    }
-
-    const importObj = {
-        wasi_snapshot_preview1: {
-            proc_exit: (code) => {
-                if (code !== 0) {
-                    console.error(`Exited with code ${code}`);
-                }
-                exitCode = code;
-            },
-            fd_write: (x) => {
-                console.error(`fd_write not supported: ${x}`);
-            },
-        },
-        env: {
-            js_display_roc_string,
-            roc_alloc: alloc,
-            roc_dealloc: dealloc,
-            roc_realloc: realloc,
-            roc_panic: (_pointer, _tag_id) => {
-                throw "Roc panicked!";
-            },
-        },
-    };
-
-    const instance = new WebAssembly.Instance(wasmModule, importObj);
-
-    wasmMemoryBuffer = new Uint8Array(instance.exports.memory.buffer);
-
     try {
+        const instance = new WebAssembly.Instance(wasmModule, {
+            env: {
+                roc_alloc: alloc,
+                roc_dealloc: dealloc,
+                roc_realloc: realloc,
+                roc_panic: (_pointer, _tag_id) => {
+                    throw "Roc panicked!";
+                },
+            },
+        });
+        const wasmMemoryBuffer = new Uint8Array(instance.exports.memory.buffer);
+
         const usize = 4; // size_of::<usize>() on a 32-bit target (namely, wasm32)
         const rocStrSize = 3 * usize;
         const retAddr = alloc(rocStrSize);
@@ -79,9 +55,6 @@ function hello() {
 
         const rocStr = wasmMemoryBuffer.subarray(retAddr, retAddr + (usize * 3));
         const dataView = new DataView(rocStr.buffer);
-
-        // TODO handle small strings
-
         const rocStrHeapAddr = dataView.getUint32(0, true); // true because wasm is little-endian
         const rocStrCapacity = dataView.getInt32(usize * 2, true);
         const isSmallStr = rocStrCapacity < 0;
@@ -93,14 +66,8 @@ function hello() {
 
         return decoder.decode(utf8Bytes);
     } catch (e) {
-        const isOk = e.message === "unreachable" && exitCode === 0;
-
-        if (!isOk) {
-            throw e;
-        }
+        throw new Error("Error running Roc WebAssembly code:" + e);
     }
-
-    return null;
 }
 
 if (typeof module === "object") {
