@@ -197,7 +197,7 @@ pub enum Expr {
     /// tuple or field accessor as a function, e.g. (.foo) expr or (.1) expr
     RecordAccessor(StructAccessorData),
 
-    /// tuple or field updater as a function, e.g. (&foo) record value
+    /// Field updater as a function, e.g. (&foo) record value
     RecordUpdater(StructUpdaterData),
 
     TupleAccess {
