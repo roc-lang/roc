@@ -659,7 +659,7 @@ pub fn rebuild_host(
             let mut exe_path = cargo_out_dir.join("host");
             exe_path.set_extension(executable_extension);
             if let Err(e) = std::fs::copy(&exe_path, &host_dest) {
-                panic!(
+                internal_error!(
                     "unable to copy {} => {}: {:?}\n\nIs the file used by another invocation of roc?",
                     exe_path.display(),
                     host_dest.display(),
@@ -825,7 +825,7 @@ fn find_used_target_sub_folder(opt_level: OptLevel, target_folder: PathBuf) -> P
 
     let mut out_folder = match matching_folders_iter.next() {
         Some(dir_entry) => dir_entry,
-        None => panic!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
+        None => internal_error!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
     };
 
     let mut out_folder_last_change = out_folder.metadata().unwrap().modified().unwrap();

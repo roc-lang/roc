@@ -26,6 +26,7 @@ roc_module = { path = "../module" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
+roc_error_macros = { path = "../../error_macros" }
 
 bumpalo.workspace = true
 
