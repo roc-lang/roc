@@ -36,25 +36,50 @@ pub fn generate_docs_html(root_file: PathBuf) {
     fs::create_dir_all(build_dir).expect("TODO gracefully handle being unable to create build dir");
 
     // Copy over the assets
-    fs::write(
-        build_dir.join("search.js"),
-        include_str!("./static/search.js"),
-    )
-    .expect("TODO gracefully handle failing to make the search javascript");
+    // For debug builds, read assets from fs to speed up build
+    // Otherwise, include as string literal
 
-    fs::write(
-        build_dir.join("styles.css"),
-        include_str!("./static/styles.css"),
-    )
-    .expect("TODO gracefully handle failing to make the stylesheet");
+    // Copy search.js
+    #[cfg(not(debug_assertions))]
+    let search_js = include_str!("./static/search.js");
 
-    fs::write(
-        build_dir.join("favicon.svg"),
-        include_str!("./static/favicon.svg"),
-    )
-    .expect("TODO gracefully handle failing to make the favicon");
+    #[cfg(debug_assertions)]
+    let search_js = fs::read_to_string("./crates/docs/src/static/search.js").unwrap();
 
-    let template_html = include_str!("./static/index.html")
+    fs::write(build_dir.join("search.js"), search_js)
+        .expect("TODO gracefully handle failing to make the search javascript");
+
+    // Copy styles.css
+    #[cfg(not(debug_assertions))]
+    let styles_css = include_str!("./static/styles.css");
+
+    #[cfg(debug_assertions)]
+    let styles_css = fs::read_to_string("./crates/docs/src/static/styles.css").unwrap();
+
+    fs::write(build_dir.join("styles.css"), styles_css)
+        .expect("TODO gracefully handle failing to make the stylesheet");
+
+    // Copy favicon.svg
+    #[cfg(not(debug_assertions))]
+    let favicon_svg = include_str!("./static/favicon.svg");
+
+    #[cfg(debug_assertions)]
+    let favicon_svg = fs::read_to_string("./crates/docs/src/static/favicon.svg").unwrap();
+
+    fs::write(build_dir.join("favicon.svg"), favicon_svg)
+        .expect("TODO gracefully handle failing to make the favicon");
+
+    // Get the html template
+    // For debug builds, read from fs to speed up build
+    // Otherwise, include as string literal
+    #[cfg(not(debug_assertions))]
+    let raw_template_html = include_str!("./static/index.html");
+
+    #[cfg(debug_assertions)]
+    let raw_template_html = fs::read_to_string("./crates/docs/src/static/index.html").unwrap();
+
+    // Insert asset urls & sidebar links
+    let template_html = raw_template_html
         .replace("<!-- search.js -->", "/search.js")
         .replace("<!-- styles.css -->", "/styles.css")
         .replace("<!-- favicon.svg -->", "/favicon.svg")
