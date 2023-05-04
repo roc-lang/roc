@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
 use crate::report::{to_file_problem_report, Annotation, Report, RocDocAllocator, RocDocBuilder};
-use ven_pretty::DocAllocator;
+use ven_pretty::{text, DocAllocator};
 
 const SYNTAX_PROBLEM: &str = "SYNTAX PROBLEM";
 const NAMING_PROBLEM: &str = "NAMING PROBLEM";
@@ -352,7 +352,7 @@ pub fn can_problem<'b>(
                     alloc.reflow("The definition of "),
                     alloc.symbol_unqualified(alias),
                     alloc.reflow(" has "),
-                    alloc.text(format!("{}", num_unbound)),
+                    text!(alloc, "{}", num_unbound),
                     alloc.reflow(" unbound type variables."),
                 ]));
                 stack.push(alloc.reflow("Here is one occurrence:"));
@@ -1748,9 +1748,9 @@ fn pretty_runtime_error<'b>(
                 alloc.concat([
                     alloc
                         .reflow("Roc uses signed 64-bit floating points, allowing values between "),
-                    alloc.text(format!("{:e}", f64::MIN)),
+                    text!(alloc, "{:e}", f64::MIN),
                     alloc.reflow(" and "),
-                    alloc.text(format!("{:e}", f64::MAX)),
+                    text!(alloc, "{:e}", f64::MAX),
                 ]),
                 tip,
             ]);
