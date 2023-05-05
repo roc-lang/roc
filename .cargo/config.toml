@@ -12,10 +12,6 @@ uitest = "test -p uitest"
 # embed-bitcode=yes  Turn back on lto since it is no longer default
 rustflags = ["-Copt-level=s", "-Clto=fat", "-Cembed-bitcode=yes"]
 
-[target.'cfg(not(target = "wasm32-unknown-unknown"))']
-# Sets the avx, avx2, sse2 and sse4.2 target-features correctly based on your CPU.
-rustflags = ["-Ctarget-cpu=native"]
-
 # TODO: there is probably a more proper solution to this.
 # We are pulling in roc_alloc and friends due to using roc_std.
 # They ared defined in roc_glue, but windows linking breaks before we get there.
