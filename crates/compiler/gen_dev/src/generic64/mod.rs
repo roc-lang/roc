@@ -2487,6 +2487,7 @@ impl<
             Self::ptr_write(
                 &mut self.buf,
                 &mut self.storage_manager,
+                self.layout_interner,
                 ptr_reg,
                 element_offset,
                 element_width,
@@ -2583,13 +2584,16 @@ impl<
         let element_width = self.layout_interner.stack_size(element_layout) as u64;
         let element_offset = 0;
 
+        let layout = self.layout_interner.get(element_layout);
+
         Self::ptr_write(
             &mut self.buf,
             &mut self.storage_manager,
+            self.layout_interner,
             ptr_reg,
             element_offset,
             element_width,
-            self.layout_interner.get(element_layout),
+            layout,
             value,
         );
 
@@ -3409,9 +3413,11 @@ impl<
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ptr_write(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        layout_interner: &STLayoutInterner<'a>,
         ptr_reg: GeneralReg,
         element_offset: i32,
         element_width: u64,
@@ -3443,6 +3449,21 @@ impl<
                 let sym_reg = storage_manager.load_to_general_reg(buf, &value);
                 ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, sym_reg);
             }
+            Layout::LambdaSet(lambda_set) => {
+                let layout = layout_interner.get(lambda_set.runtime_representation());
+
+                Self::ptr_write(
+                    buf,
+                    storage_manager,
+                    layout_interner,
+                    ptr_reg,
+                    element_offset,
+                    element_width,
+                    layout,
+                    value,
+                );
+            }
+
             _other => {
                 if element_width == 0 {
                     return;
