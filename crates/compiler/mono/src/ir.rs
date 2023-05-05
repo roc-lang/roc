@@ -36,7 +36,7 @@ use roc_types::subs::{
     StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
-use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
+use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder};
 
 use pattern::{from_can_pattern, store_pattern, Pattern};
 
@@ -1647,7 +1647,7 @@ impl ModifyRc {
                 .append(";"),
             Inc(symbol, n) => alloc
                 .text("inc ")
-                .append(alloc.text(format!("{} ", n)))
+                .append(text!(alloc, "{} ", n))
                 .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
             Dec(symbol) => alloc
@@ -1700,24 +1700,19 @@ impl<'a> Call<'a> {
             LowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
-                alloc
-                    .text(format!("lowlevel {:?} ", lowlevel))
-                    .append(alloc.intersperse(it, " "))
+                text!(alloc, "lowlevel {:?} ", lowlevel).append(alloc.intersperse(it, " "))
             }
             HigherOrder(higher_order) => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
-                alloc
-                    .text(format!("lowlevel {:?} ", higher_order.op))
-                    .append(alloc.intersperse(it, " "))
+                text!(alloc, "lowlevel {:?} ", higher_order.op).append(alloc.intersperse(it, " "))
             }
             Foreign {
                 ref foreign_symbol, ..
             } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
-                alloc
-                    .text(format!("foreign {:?} ", foreign_symbol.as_str()))
+                text!(alloc, "foreign {:?} ", foreign_symbol.as_str())
                     .append(alloc.intersperse(it, " "))
             }
         }
@@ -1920,13 +1915,13 @@ impl<'a> Literal<'a> {
         use Literal::*;
 
         match self {
-            Int(bytes) => alloc.text(format!("{}i64", i128::from_ne_bytes(*bytes))),
-            U128(bytes) => alloc.text(format!("{}u128", u128::from_ne_bytes(*bytes))),
-            Float(lit) => alloc.text(format!("{}f64", lit)),
-            Decimal(bytes) => alloc.text(format!("{}dec", RocDec::from_ne_bytes(*bytes))),
-            Bool(lit) => alloc.text(format!("{}", lit)),
-            Byte(lit) => alloc.text(format!("{}u8", lit)),
-            Str(lit) => alloc.text(format!("{:?}", lit)),
+            Int(bytes) => text!(alloc, "{}i64", i128::from_ne_bytes(*bytes)),
+            U128(bytes) => text!(alloc, "{}u128", u128::from_ne_bytes(*bytes)),
+            Float(lit) => text!(alloc, "{}f64", lit),
+            Decimal(bytes) => text!(alloc, "{}dec", RocDec::from_ne_bytes(*bytes)),
+            Bool(lit) => text!(alloc, "{}", lit),
+            Byte(lit) => text!(alloc, "{}u8", lit),
+            Str(lit) => text!(alloc, "{:?}", lit),
         }
     }
 }
@@ -2064,11 +2059,10 @@ impl<'a> Expr<'a> {
 
             StructAtIndex {
                 index, structure, ..
-            } => alloc
-                .text(format!("StructAtIndex {} ", index))
+            } => text!(alloc, "StructAtIndex {} ", index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
+            RuntimeErrorFunction(s) => text!(alloc, "ErrorFunction {}", s),
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
@@ -2087,8 +2081,7 @@ impl<'a> Expr<'a> {
                 structure,
                 index,
                 ..
-            } => alloc
-                .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
+            } => text!(alloc, "UnionAtIndex (Id {}) (Index {}) ", tag_id, index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
         }
     }
@@ -2216,8 +2209,7 @@ impl<'a> Stmt<'a> {
                         let branches_docs = branches
                             .iter()
                             .map(|(tag, _info, expr)| {
-                                alloc
-                                    .text(format!("case {}:", tag))
+                                text!(alloc, "case {}:", tag)
                                     .append(alloc.hardline())
                                     .append(expr.to_doc(alloc, interner, pretty).indent(4))
                                     .indent(4)

@@ -25,7 +25,7 @@ use roc_types::types::{
     RecordField, TypeExt,
 };
 use std::path::PathBuf;
-use ven_pretty::DocAllocator;
+use ven_pretty::{text, DocAllocator};
 
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
@@ -213,10 +213,10 @@ pub fn type_problem<'b>(
             let stack = [
                 alloc.concat([
                     alloc.reflow("Failed to load "),
-                    alloc.text(format!("{:?}", file_path)),
+                    text!(alloc, "{:?}", file_path),
                     alloc.reflow(" as Str:"),
                 ]),
-                alloc.text(format!("{}", utf8_err)),
+                text!(alloc, "{}", utf8_err),
             ];
             Some(Report {
                 title: "INVALID UTF-8".to_string(),
@@ -228,7 +228,7 @@ pub fn type_problem<'b>(
         IngestedFileUnsupportedType(file_path, typ) => {
             let stack = [
                 alloc.concat([
-                    alloc.text(format!("{:?}", file_path)),
+                    text!(alloc, "{:?}", file_path),
                     alloc.reflow(" is annotated to be a "),
                     alloc.inline_type_block(error_type_to_doc(alloc, typ)),
                     alloc.reflow("."),
@@ -1678,7 +1678,7 @@ fn format_category<'b>(
     match category {
         Lookup(name) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.symbol_foreign_qualified(*name),
                 alloc.text(" value"),
             ]),
@@ -1687,7 +1687,7 @@ fn format_category<'b>(
 
         If => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.keyword("if"),
                 alloc.text(" expression"),
             ]),
@@ -1695,7 +1695,7 @@ fn format_category<'b>(
         ),
         When => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.keyword("when"),
                 alloc.text(" expression"),
             ]),
@@ -1730,10 +1730,7 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
         IngestedFile(file_path) => (
-            alloc.concat([
-                this_is,
-                alloc.text(format!(" an ingested file ({:?})", file_path)),
-            ]),
+            alloc.concat([this_is, text!(alloc, " an ingested file ({:?})", file_path)]),
             alloc.text(" of type:"),
         ),
         Lambda => (
@@ -1747,7 +1744,7 @@ fn format_category<'b>(
 
         OpaqueWrap(opaque) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.opaque_name(*opaque),
                 alloc.text(" opaque wrapping"),
             ]),
@@ -1755,7 +1752,7 @@ fn format_category<'b>(
         ),
 
         OpaqueArg => (
-            alloc.concat([alloc.text(format!("{}his argument to an opaque type", t))]),
+            alloc.concat([text!(alloc, "{}his argument to an opaque type", t)]),
             alloc.text(" has type:"),
         ),
 
@@ -1764,7 +1761,7 @@ fn format_category<'b>(
             args_count: 0,
         } => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.tag(name.to_owned()),
                 alloc.text(" tag"),
             ]),
@@ -1776,7 +1773,7 @@ fn format_category<'b>(
             args_count: _,
         } => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.tag(name.to_owned()),
                 alloc.text(" tag application"),
             ]),
@@ -1790,7 +1787,7 @@ fn format_category<'b>(
 
         Accessor(field) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 match field {
                     IndexOrField::Index(index) => alloc.tuple_field(*index),
                     IndexOrField::Field(field) => alloc.record_field(field.to_owned()),
@@ -1801,7 +1798,7 @@ fn format_category<'b>(
         ),
         RecordAccess(field) => (
             alloc.concat([
-                alloc.text(format!("{}he value at ", t)),
+                text!(alloc, "{}he value at ", t),
                 alloc.record_field(field.to_owned()),
             ]),
             alloc.text(" is a:"),
@@ -1813,10 +1810,7 @@ fn format_category<'b>(
         ),
 
         TupleAccess(index) => (
-            alloc.concat([
-                alloc.text(format!("{}he value at ", t)),
-                alloc.tuple_field(*index),
-            ]),
+            alloc.concat([text!(alloc, "{}he value at ", t), alloc.tuple_field(*index)]),
             alloc.text(" is a:"),
         ),
 
@@ -1831,7 +1825,7 @@ fn format_category<'b>(
                 | BinOp::GreaterThanOrEq,
             ),
         ) => (
-            alloc.text(format!("{}his comparison", t)),
+            text!(alloc, "{}his comparison", t),
             alloc.text(" produces:"),
         ),
         CallResult(Some(_), CalledVia::StringInterpolation) => (
@@ -1840,7 +1834,7 @@ fn format_category<'b>(
         ),
         CallResult(Some(symbol), _) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.symbol_foreign_qualified(*symbol),
                 alloc.text(" call"),
             ]),
@@ -4812,8 +4806,7 @@ fn report_record_field_typo<'b>(
         } else {
             let f = suggestions.remove(0);
             let fs = suggestions;
-            let f_doc = alloc
-                .text(format!("{}{}{}", field_prefix, field, field_suffix))
+            let f_doc = text!(alloc, "{}{}{}", field_prefix, field, field_suffix)
                 .annotate(Annotation::Typo);
 
             let r_doc = match opt_sym {
@@ -4832,8 +4825,7 @@ fn report_record_field_typo<'b>(
                     alloc.reflow("Maybe "),
                     f_doc,
                     alloc.reflow(" should be "),
-                    alloc
-                        .text(format!("{}{}{}", field_prefix, f.0, field_suffix))
+                    text!(alloc, "{}{}{}", field_prefix, f.0, field_suffix)
                         .annotate(Annotation::TypoSuggestion),
                     alloc.reflow(" instead?"),
                 ]),
