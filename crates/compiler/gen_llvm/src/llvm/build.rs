@@ -5571,9 +5571,12 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
 ) -> RocFunctionCall<'ctx> {
     use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
 
+    let closure_data_type =
+        basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation());
+
     let closure_data_ptr = env
         .builder
-        .build_alloca(closure_data.get_type(), "closure_data_ptr");
+        .build_alloca(closure_data_type, "closure_data_ptr");
 
     store_roc_value(
         env,
