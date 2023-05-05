@@ -629,7 +629,7 @@ fn list_drop_if_geq3() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_string_eq() {
     assert_evals_to!(
         indoc!(
@@ -1368,6 +1368,23 @@ fn list_map_closure_float() {
         ),
         RocList::from_slice(&[1.23]),
         RocList<f64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_map_closure_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            one : Str
+            one = "one "
+
+            List.map ["pear", "apple"] (\x -> Str.concat one x)
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from("one pear"), RocStr::from("one apple")]),
+        RocList<RocStr>
     );
 }
 

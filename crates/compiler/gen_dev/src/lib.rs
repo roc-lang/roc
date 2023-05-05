@@ -195,23 +195,36 @@ trait Backend<'a> {
         }
     }
 
-    fn decrement_fn_pointer(
-        &mut self,
-        layout_ids: &mut LayoutIds<'a>,
-        layout: InLayout<'a>,
-    ) -> Symbol {
-        let arena = self.env().arena;
+    fn increment_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
+        let box_layout = self.interner_mut().insert(Layout::Boxed(layout));
+
+        let element_increment = self.debug_symbol("element_increment");
+        let element_increment_symbol = self.build_indirect_inc(layout);
+
+        let element_increment_string = self.function_symbol_to_string(
+            element_increment_symbol,
+            [box_layout].into_iter(),
+            None,
+            Layout::UNIT,
+        );
+
+        self.build_fn_pointer(&element_increment, element_increment_string);
+
+        element_increment
+    }
+
+    fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
+        let box_layout = self.interner_mut().insert(Layout::Boxed(layout));
 
         let element_decrement = self.debug_symbol("element_decrement");
-        let element_decrement_symbol = self.gen_refcount_proc_dec(layout);
-        let element_decrement_layout = ProcLayout {
-            arguments: arena.alloc([layout]),
-            result: Layout::UNIT,
-            niche: roc_mono::layout::Niche::NONE,
-        };
-        let element_decrement_string = layout_ids
-            .get_toplevel(element_decrement_symbol, &element_decrement_layout)
-            .to_symbol_string(element_decrement_symbol, self.interns());
+        let element_decrement_symbol = self.build_indirect_dec(layout);
+
+        let element_decrement_string = self.function_symbol_to_string(
+            element_decrement_symbol,
+            [box_layout].into_iter(),
+            None,
+            Layout::UNIT,
+        );
 
         self.build_fn_pointer(&element_decrement, element_decrement_string);
 
@@ -223,6 +236,7 @@ trait Backend<'a> {
     fn helper_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
 
     fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)>;
+    fn caller_procs(&self) -> &Vec<'a, CallerProc<'a>>;
 
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
@@ -263,6 +277,7 @@ trait Backend<'a> {
         self.scan_ast(&proc.body);
         self.create_free_map();
         self.build_stmt(layout_ids, &proc.body, &proc.ret_layout);
+
         let mut helper_proc_names = bumpalo::vec![in self.env().arena];
         helper_proc_names.reserve(self.helper_proc_symbols().len());
         for (rc_proc_sym, rc_proc_layout) in self.helper_proc_symbols() {
@@ -272,6 +287,17 @@ trait Backend<'a> {
 
             helper_proc_names.push((*rc_proc_sym, name));
         }
+
+        for caller_proc in self.caller_procs() {
+            let proc_layout = caller_proc.proc_layout;
+            let proc_symbol = caller_proc.proc_symbol;
+            let name = layout_ids
+                .get_toplevel(proc_symbol, &proc_layout)
+                .to_symbol_string(proc_symbol, self.interns());
+
+            helper_proc_names.push((proc_symbol, name));
+        }
+
         let (bytes, relocs) = self.finalize();
         (bytes, relocs, helper_proc_names)
     }
@@ -285,7 +311,7 @@ trait Backend<'a> {
     ) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
-                self.build_expr(layout_ids, sym, expr, layout);
+                self.build_expr(sym, expr, layout);
                 self.set_layout_map(*sym, layout);
                 self.free_symbols(stmt);
                 self.build_stmt(layout_ids, following, ret_layout);
@@ -430,13 +456,7 @@ trait Backend<'a> {
 
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be referred to later.
-    fn build_expr(
-        &mut self,
-        layout_ids: &mut LayoutIds<'a>,
-        sym: &Symbol,
-        expr: &Expr<'a>,
-        layout: &InLayout<'a>,
-    ) {
+    fn build_expr(&mut self, sym: &Symbol, expr: &Expr<'a>, layout: &InLayout<'a>) {
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
@@ -460,7 +480,6 @@ trait Backend<'a> {
                             LowLevelWrapperType::from_symbol(func_sym.name())
                         {
                             return self.build_run_low_level(
-                                layout_ids,
                                 sym,
                                 &lowlevel,
                                 arguments,
@@ -505,7 +524,6 @@ trait Backend<'a> {
                         }
 
                         self.build_run_low_level(
-                            layout_ids,
                             sym,
                             lowlevel,
                             arguments,
@@ -613,7 +631,6 @@ trait Backend<'a> {
     /// The builder must keep track of the symbol because it may be referred to later.
     fn build_run_low_level(
         &mut self,
-        layout_ids: &mut LayoutIds<'a>,
         sym: &Symbol,
         lowlevel: &LowLevel,
         args: &'a [Symbol],
@@ -1337,7 +1354,7 @@ trait Backend<'a> {
                     list_argument.element_width,
                     start,
                     len,
-                    self.decrement_fn_pointer(layout_ids, element_layout),
+                    self.decrement_fn_pointer(element_layout),
                 ];
 
                 let layout_usize = Layout::U64;
@@ -1438,7 +1455,7 @@ trait Backend<'a> {
                 self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
 
                 let layout_usize = Layout::U64;
-                let element_decrement = self.decrement_fn_pointer(layout_ids, element_layout);
+                let element_decrement = self.decrement_fn_pointer(element_layout);
 
                 //    list: RocList,
                 //    alignment: u32,
@@ -1759,7 +1776,8 @@ trait Backend<'a> {
         ret_layout: InLayout<'a>,
     );
 
-    fn gen_refcount_proc_dec(&mut self, layout: InLayout<'a>) -> Symbol;
+    fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol;
+    fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol;
 
     /// build_list_with_capacity creates and returns a list with the given capacity.
     fn build_list_with_capacity(

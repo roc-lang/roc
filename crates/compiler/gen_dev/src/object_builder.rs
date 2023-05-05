@@ -305,6 +305,10 @@ fn build_object<'a, B: Backend<'a>>(
     }
 
     // Generate IR for specialized helper procs (refcounting & equality)
+    let empty = bumpalo::collections::Vec::new_in(arena);
+    let mut helper_symbols_and_layouts =
+        std::mem::replace(backend.helper_proc_symbols_mut(), empty);
+
     let helper_procs = {
         let (module_id, _interner, interns, helper_proc_gen, caller_procs) =
             backend.module_interns_helpers_mut();
@@ -315,18 +319,24 @@ fn build_object<'a, B: Backend<'a>>(
         let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
         let mut helper_procs = helper_proc_gen.take_procs();
 
-        helper_procs.extend(owned_caller_procs.into_iter().map(|cp| cp.proc));
+        for caller_proc in owned_caller_procs {
+            helper_symbols_and_layouts.push((caller_proc.proc_symbol, caller_proc.proc_layout));
+            helper_procs.push(caller_proc.proc);
+        }
+
         module_id.register_debug_idents(ident_ids);
 
         helper_procs
     };
 
-    let empty = bumpalo::collections::Vec::new_in(arena);
-    let helper_symbols_and_layouts = std::mem::replace(backend.helper_proc_symbols_mut(), empty);
     let mut helper_names_symbols_procs = Vec::with_capacity_in(helper_procs.len(), arena);
+
+    debug_assert_eq!(helper_symbols_and_layouts.len(), helper_procs.len());
 
     // Names and linker data for helpers
     for ((sym, layout), proc) in helper_symbols_and_layouts.into_iter().zip(helper_procs) {
+        debug_assert_eq!(sym, proc.name.name());
+
         let fn_name = backend.function_symbol_to_string(
             sym,
             layout.arguments.iter().copied(),
@@ -641,6 +651,7 @@ fn build_proc<'a, B: Backend<'a>>(
                     };
                     output.add_symbol(builtin_symbol);
                 }
+
                 // If the symbol is an undefined reference counting procedure, we need to add it here.
                 if output.symbol_id(name.as_bytes()).is_none() {
                     for (sym, rc_name) in rc_proc_names.iter() {

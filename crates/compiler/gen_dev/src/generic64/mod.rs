@@ -697,6 +697,9 @@ impl<
     fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
         &self.helper_proc_symbols
     }
+    fn caller_procs(&self) -> &Vec<'a, CallerProc<'a>> {
+        &self.caller_procs
+    }
 
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
         self.proc_name = Some(name);
@@ -1653,28 +1656,40 @@ impl<
         )
     }
 
-    fn gen_refcount_proc_dec(&mut self, layout: InLayout<'a>) -> Symbol {
+    fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol {
         let ident_ids = self
             .interns
             .all_ident_ids
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        let (refcount_proc_name, _) = self.helper_proc_gen.gen_refcount_proc(
+        let (refcount_proc_name, linker_data) = self.helper_proc_gen.gen_refcount_proc(
             ident_ids,
             self.layout_interner,
             layout,
-            HelperOp::Dec,
+            HelperOp::IndirectInc,
         );
 
-        let proc_layout = ProcLayout {
-            arguments: self.env().arena.alloc([layout]),
-            result: Layout::UNIT,
-            niche: roc_mono::layout::Niche::NONE,
-        };
+        self.helper_proc_symbols_mut().extend(linker_data);
 
-        self.helper_proc_symbols_mut()
-            .push((refcount_proc_name, proc_layout));
+        refcount_proc_name
+    }
+
+    fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, linker_data) = self.helper_proc_gen.gen_refcount_proc(
+            ident_ids,
+            self.layout_interner,
+            layout,
+            HelperOp::IndirectDec,
+        );
+
+        self.helper_proc_symbols_mut().extend(linker_data);
 
         refcount_proc_name
     }
@@ -1690,13 +1705,6 @@ impl<
             .all_ident_ids
             .get_mut(&self.env.module_id)
             .unwrap();
-
-        let (inc_n_data_symbol, inc_n_data_linker_data) = self.helper_proc_gen.gen_refcount_proc(
-            ident_ids,
-            self.layout_interner,
-            Layout::UNIT,
-            HelperOp::Inc,
-        );
 
         let caller_proc = CallerProc::new(
             self.env.arena,
@@ -1726,17 +1734,6 @@ impl<
                 self.load_layout_stack_size(old_element_layout, old_element_width);
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                self.helper_proc_symbols.extend(inc_n_data_linker_data);
-                self.helper_proc_symbols
-                    .extend([(caller_proc.proc_symbol, caller_proc.proc_layout)]);
-
-                let inc_n_data_string = self.function_symbol_to_string(
-                    inc_n_data_symbol,
-                    std::iter::empty(),
-                    None,
-                    Layout::UNIT,
-                );
-
                 let caller_string = self.function_symbol_to_string(
                     caller_proc.proc_symbol,
                     std::iter::empty(),
@@ -1744,10 +1741,17 @@ impl<
                     Layout::UNIT,
                 );
 
+                // self.helper_proc_symbols .extend([(caller_proc.proc_symbol, caller_proc.proc_layout)]);
                 self.caller_procs.push(caller_proc);
 
-                let inc_n_data = Symbol::DEV_TMP;
-                self.build_fn_pointer(&inc_n_data, inc_n_data_string);
+                // function pointer to a function that takes a pointer, and increments
+                let inc_n_data = if let Some(closure_env_layout) = higher_order.closure_env_layout {
+                    self.increment_fn_pointer(closure_env_layout)
+                } else {
+                    // null pointer
+                    self.load_literal_i64(&Symbol::DEV_TMP, 0);
+                    Symbol::DEV_TMP
+                };
 
                 self.build_fn_pointer(&caller, caller_string);
 
@@ -1771,10 +1775,14 @@ impl<
                     self.load_literal(&data, &Layout::U64, &Literal::Int(0u128.to_be_bytes()));
                 }
 
+                // we pass a null pointer when the data is not owned. the zig code must not call this!
+                let data_is_owned = higher_order.closure_env_layout.is_some()
+                    && higher_order.passed_function.owns_captured_environment;
+
                 self.load_literal(
                     &Symbol::DEV_TMP2,
                     &Layout::BOOL,
-                    &Literal::Bool(higher_order.passed_function.owns_captured_environment),
+                    &Literal::Bool(data_is_owned),
                 );
 
                 //    list: RocList,
