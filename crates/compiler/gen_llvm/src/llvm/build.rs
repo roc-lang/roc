@@ -5574,7 +5574,14 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
     let closure_data_ptr = env
         .builder
         .build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
+
+    store_roc_value(
+        env,
+        layout_interner,
+        lambda_set.runtime_representation(),
+        closure_data_ptr,
+        closure_data,
+    );
 
     let stepper_caller = build_transform_caller(
         env,
