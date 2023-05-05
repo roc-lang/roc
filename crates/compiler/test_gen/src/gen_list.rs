@@ -663,7 +663,7 @@ fn list_drop_last() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_last_mutable() {
     assert_evals_to!(
         indoc!(
@@ -1101,7 +1101,7 @@ fn list_keep_if_one() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_if_str_is_hello() {
     assert_evals_to!(
         indoc!(
