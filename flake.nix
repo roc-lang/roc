@@ -16,9 +16,15 @@
       url = "github:guibou/nixGL";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # to build the roc binary with nix
+    crane = {
+      url = "github:ipetkov/crane";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, crane }:
     let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
@@ -29,8 +35,10 @@
 
         # get current working directory
         cwd = builtins.toString ./.;
-        rust =
+        customRust =
           pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
+
+        craneLib = (crane.mkLib pkgs).overrideToolchain customRust;
 
         linuxInputs = with pkgs;
           lib.optionals stdenv.isLinux [
@@ -99,15 +107,24 @@
           zlib
           libiconv
 
-          # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
-          llvmPkgs.lld
+          llvmPkgs.lld # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           debugir
-          rust
+          customRust
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm
           jq
         ]);
+
+        rocBin = craneLib.buildPackage {
+          src = craneLib.cleanCargoSource (craneLib.path ./.);
+
+          cargoExtraArgs = "--bin roc";
+          pname = "roc";
+
+          # TODO don't use deps that are only used by devShell
+          buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs;
+        };
       in {
 
         devShell = pkgs.mkShell {
@@ -132,6 +149,10 @@
         formatter = pkgs.nixpkgs-fmt;
 
         # You can build this package (the roc CLI) with the `nix build` command.
-        packages.default = import ./. { inherit pkgs; };
+        packages.default = rocBin;
+
+        apps.default = flake-utils.lib.mkApp {
+          drv = rocBin;
+        };
       });
 }
