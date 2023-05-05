@@ -95,6 +95,24 @@ pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
+pub fn exportIsNan(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) bool {
+            return std.math.isNan(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportIsInfinite(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) bool {
+            return std.math.isInf(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
 pub fn exportIsFinite(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(input: T) callconv(.C) bool {

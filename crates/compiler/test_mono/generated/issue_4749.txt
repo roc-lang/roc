@@ -320,16 +320,16 @@ procedure List.72 (#Attr.2, #Attr.3, #Attr.4):
     ret List.505;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.279 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.279;
+    let Num.282 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.282;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.281 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.284 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.286 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.286;
 
 procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
     let Str.307 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;

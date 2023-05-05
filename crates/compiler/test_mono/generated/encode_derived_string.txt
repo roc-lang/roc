@@ -53,8 +53,8 @@ procedure List.8 (#Attr.2, #Attr.3):
     ret List.504;
 
 procedure Num.127 (#Attr.2):
-    let Num.279 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.279;
+    let Num.282 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.282;
 
 procedure Str.12 (#Attr.2):
     let Str.312 : List U8 = lowlevel StrToUtf8 #Attr.2;

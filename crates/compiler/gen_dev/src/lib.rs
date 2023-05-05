@@ -830,6 +830,48 @@ trait Backend<'a> {
                 );
                 self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout)
             }
+            LowLevel::NumIsNan => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsNan: expected to have exactly one argument"
+                );
+
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumIsNan: expected to have return layout of type Bool"
+                );
+                self.build_num_is_nan(sym, &args[0], &arg_layouts[0])
+            }
+            LowLevel::NumIsInfinite => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsInfinite: expected to have exactly one argument"
+                );
+
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumIsInfinite: expected to have return layout of type Bool"
+                );
+                self.build_num_is_infinite(sym, &args[0], &arg_layouts[0])
+            }
+            LowLevel::NumIsFinite => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsFinite: expected to have exactly one argument"
+                );
+
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumIsFinite: expected to have return layout of type Bool"
+                );
+                self.build_num_is_finite(sym, &args[0], &arg_layouts[0])
+            }
             LowLevel::NumLte => {
                 debug_assert_eq!(
                     2,
@@ -1476,6 +1518,15 @@ trait Backend<'a> {
         arg_layout: &InLayout<'a>,
         ret_layout: &InLayout<'a>,
     );
+
+    /// build_num_is_nan check is a Frac is NaN
+    fn build_num_is_nan(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
+
+    /// build_num_is_infinite check is a Frac is infinite
+    fn build_num_is_infinite(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
+
+    /// build_num_is_finite check is a Frac is finite
+    fn build_num_is_finite(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
 
     /// build_num_lte stores the result of `src1 <= src2` into dst.
     fn build_num_lte(

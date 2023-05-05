@@ -885,6 +885,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         | NumCeiling
         | NumFloor
         | NumToFrac
+        | NumIsNan
+        | NumIsInfinite
         | NumIsFinite
         | NumAtan
         | NumAcos
@@ -2350,6 +2352,10 @@ fn build_float_unary_op<'a, 'ctx>(
                 return_type,
                 "num_round",
             )
+        }
+        NumIsNan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_NAN[float_width]),
+        NumIsInfinite => {
+            call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_INFINITE[float_width])
         }
         NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE[float_width]),
 

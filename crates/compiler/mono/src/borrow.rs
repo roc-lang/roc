@@ -1002,6 +1002,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         | NumFloor
         | NumToFrac
         | Not
+        | NumIsNan
+        | NumIsInfinite
         | NumIsFinite
         | NumAtan
         | NumAcos

@@ -86,6 +86,8 @@ pub enum LowLevel {
     NumCeiling,
     NumPowInt,
     NumFloor,
+    NumIsNan,
+    NumIsInfinite,
     NumIsFinite,
     NumAtan,
     NumAcos,
@@ -234,7 +236,6 @@ macro_rules! map_symbol_to_lowlevel {
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),
                 LowLevel::StrFromFloat => unimplemented!(),
-                LowLevel::NumIsFinite => unimplemented!(),
             }
         }
     };
@@ -314,6 +315,9 @@ map_symbol_to_lowlevel! {
     NumLogUnchecked <= NUM_LOG,
     NumRound <= NUM_ROUND,
     NumToFrac <= NUM_TO_FRAC,
+    NumIsNan <= NUM_IS_NAN,
+    NumIsInfinite <= NUM_IS_INFINITE,
+    NumIsFinite <= NUM_IS_FINITE,
     NumPow <= NUM_POW,
     NumCeiling <= NUM_CEILING,
     NumPowInt <= NUM_POW_INT,

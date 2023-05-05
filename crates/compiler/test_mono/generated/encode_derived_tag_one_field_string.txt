@@ -179,24 +179,24 @@ procedure List.92 (List.430, List.431, List.432):
     ret List.531;
 
 procedure Num.127 (#Attr.2):
-    let Num.287 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.287;
-
-procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.290 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    let Num.290 : U8 = lowlevel NumIntCast #Attr.2;
     ret Num.290;
 
-procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.288 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.288;
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.293 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.293;
 
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.291 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.291 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
     ret Num.291;
 
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.294 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.294;
+
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.289 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.289;
+    let Num.292 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Str.12 (#Attr.2):
     let Str.313 : List U8 = lowlevel StrToUtf8 #Attr.2;

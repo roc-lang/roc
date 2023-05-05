@@ -79,12 +79,12 @@ procedure List.82 (List.526, List.527, List.528):
     jump List.508 List.526 List.527 List.528;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.279 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.279;
+    let Num.282 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.282;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.281 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.284 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Test.0 ():
     let Test.3 : {} = Struct {};
