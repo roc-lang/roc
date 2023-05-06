@@ -97,6 +97,7 @@ impl_space_problem! {
     EPattern<'a>,
     EProvides<'a>,
     ERecord<'a>,
+    ERecordBuilder<'a>,
     ERequires<'a>,
     EString<'a>,
     EType<'a>,
@@ -358,6 +359,7 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
+    RecordBuilder(ERecordBuilder<'a>, Position),
 
     // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
@@ -413,6 +415,20 @@ pub enum ERecord<'a> {
     Ampersand(Position),
 
     // TODO remove
+    Expr(&'a EExpr<'a>, Position),
+
+    Space(BadInputError, Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ERecordBuilder<'a> {
+    End(Position),
+    Open(Position),
+
+    Field(Position),
+    Colon(Position),
+    Arrow(Position),
+
     Expr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),

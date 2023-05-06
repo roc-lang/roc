@@ -1,6 +1,6 @@
 use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Has, HasAbilities,
-    Pattern, Spaceable, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -11,8 +11,8 @@ use crate::keyword;
 use crate::parser::{
     self, backtrackable, increment_min_indent, line_min_indent, optional, reset_min_indent,
     sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, word1, word1_indent,
-    word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString,
-    EType, EWhen, Either, ParseResult, Parser,
+    word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord,
+    ERecordBuilder, EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_has_parser};
 use crate::state::State;
@@ -168,7 +168,8 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc!(specialize(EExpr::Closure, closure_help(options))),
         loc!(crash_kw()),
         loc!(underscore_expression()),
-        loc!(record_literal_help()),
+        loc!(backtrackable(record_literal_help())),
+        loc!(specialize(EExpr::RecordBuilder, record_builder())),
         loc!(specialize(EExpr::List, list_literal_help())),
         loc!(map_with_arena!(
             assign_or_destructure_identifier(),
@@ -188,7 +189,8 @@ fn loc_term_or_underscore<'a>(
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Closure, closure_help(options))),
         loc!(underscore_expression()),
-        loc!(record_literal_help()),
+        loc!(backtrackable(record_literal_help())),
+        loc!(specialize(EExpr::RecordBuilder, record_builder())),
         loc!(specialize(EExpr::List, list_literal_help())),
         loc!(map_with_arena!(
             assign_or_destructure_identifier(),
@@ -203,7 +205,8 @@ fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EEx
         loc!(specialize(EExpr::Str, string_like_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Closure, closure_help(options))),
-        loc!(record_literal_help()),
+        loc!(backtrackable(record_literal_help())),
+        loc!(specialize(EExpr::RecordBuilder, record_builder())),
         loc!(specialize(EExpr::List, list_literal_help())),
         loc!(map_with_arena!(
             assign_or_destructure_identifier(),
@@ -1876,7 +1879,10 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             pattern
         }
 
-        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
+        Expr::SpaceBefore(..)
+        | Expr::SpaceAfter(..)
+        | Expr::ParensAround(..)
+        | Expr::RecordBuilder(..) => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -2627,6 +2633,60 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
             Ok((MadeProgress, value, state))
         },
+    )
+}
+
+fn record_builder<'a>() -> impl Parser<'a, Expr<'a>, ERecordBuilder<'a>> {
+    map!(
+        between!(
+            word1(b'{', ERecordBuilder::Open),
+            reset_min_indent(collection_inner!(
+                loc!(record_builder_field()),
+                word1(b',', ERecordBuilder::End),
+                RecordBuilderField::SpaceBefore
+            ),),
+            word1(b'}', ERecordBuilder::End)
+        ),
+        Expr::RecordBuilder
+    )
+}
+
+pub fn record_builder_field<'a>() -> impl Parser<'a, RecordBuilderField<'a>, ERecordBuilder<'a>> {
+    use RecordBuilderField::*;
+
+    map_with_arena!(
+        and!(
+            specialize(|_, pos| ERecordBuilder::Field(pos), loc!(lowercase_ident())),
+            and!(
+                spaces(),
+                optional(and!(
+                    either!(
+                        word1(b':', ERecordBuilder::Colon),
+                        word2(b'<', b'-', ERecordBuilder::Arrow)
+                    ),
+                    spaces_before(specialize_ref(ERecordBuilder::Expr, loc_expr(false)))
+                ))
+            )
+        ),
+        |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
+            match opt_loc_val {
+                Some((Either::First(_), loc_val)) => Value(loc_label, spaces, arena.alloc(loc_val)),
+
+                Some((Either::Second(_), loc_val)) => {
+                    ApplyValue(loc_label, spaces, arena.alloc(loc_val))
+                }
+
+                // If no value was provided, record it as a Var.
+                // Canonicalize will know what to do with a Var later.
+                None => {
+                    if !spaces.is_empty() {
+                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                    } else {
+                        LabelOnly(loc_label)
+                    }
+                }
+            }
+        }
     )
 }
 

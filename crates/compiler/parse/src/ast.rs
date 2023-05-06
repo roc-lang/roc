@@ -264,6 +264,9 @@ pub enum Expr<'a> {
 
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
+    // Record Builders
+    RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
+
     // The name of a file to be ingested directly into a variable.
     IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
 
@@ -679,6 +682,25 @@ pub enum AssignedField<'a, Val> {
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
+
+    /// A malformed assigned field, which will code gen to a runtime error
+    Malformed(&'a str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RecordBuilderField<'a> {
+    // A field with a value, e.g. `{ name: "blah" }`
+    Value(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+
+    // A field with a function we can apply to build part of the record, e.g. `{ name <- apply getName }`
+    ApplyValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+
+    // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
+    LabelOnly(Loc<&'a str>),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
 
     /// A malformed assigned field, which will code gen to a runtime error
     Malformed(&'a str),
@@ -1198,6 +1220,15 @@ impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
     }
 }
 
+impl<'a> Spaceable<'a> for RecordBuilderField<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordBuilderField::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordBuilderField::SpaceAfter(self, spaces)
+    }
+}
+
 impl<'a> Spaceable<'a> for Tag<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Tag::SpaceBefore(self, spaces)
@@ -1483,6 +1514,8 @@ impl<'a> Malformed for Expr<'a> {
             Record(items) => items.is_malformed(),
             Tuple(items) => items.is_malformed(),
 
+            RecordBuilder(items) => items.is_malformed(),
+
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
             Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
@@ -1571,6 +1604,20 @@ impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
                 field.is_malformed()
             }
             AssignedField::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for RecordBuilderField<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            RecordBuilderField::Value(_, _, expr) | RecordBuilderField::ApplyValue(_, _, expr) => {
+                expr.is_malformed()
+            }
+            RecordBuilderField::LabelOnly(_) => false,
+            RecordBuilderField::SpaceBefore(field, _)
+            | RecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),
+            RecordBuilderField::Malformed(_) => true,
         }
     }
 }
