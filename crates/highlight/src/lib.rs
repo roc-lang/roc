@@ -86,7 +86,7 @@ pub fn highlight(code: &str) -> Vec<String> {
             Token::LowerIdent | Token::Underscore => {
                 buf = push_html_span(buf, current_text, "lowerident");
             }
-            // Anyting else that wasn't tokenised
+            // Anything else that wasn't tokenized
             Token::Error | Token::Other => {
                 buf = push_html(buf, current_text);
             }

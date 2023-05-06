@@ -357,7 +357,7 @@ fn object_matches_target<'a>(target: &Triple, object: &object::File<'a, &'a [u8]
 
 /// Checks whether the stub `.dll/.so` is up to date, in other words that it exports exactly the
 /// symbols that it is supposed to export, and is built for the right target. If this is the case,
-/// we can skip rebuildingthe stub lib.
+/// we can skip rebuilding　the stub lib.
 fn stub_lib_is_up_to_date(target: &Triple, stub_lib_path: &Path, custom_names: &[String]) -> bool {
     if !std::path::Path::exists(stub_lib_path) {
         return false;
