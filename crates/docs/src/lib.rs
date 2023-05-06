@@ -47,7 +47,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
     }
 
     #[cfg(not(debug_assertions))]
-    let assets = (|| {
+    let assets = {
         let search_js = include_str!("./static/search.js");
         let styles_css = include_str!("./static/styles.css");
         let favicon_svg = include_str!("./static/favicon.svg");
@@ -59,14 +59,15 @@ pub fn generate_docs_html(root_file: PathBuf) {
             favicon_svg,
             raw_template_html,
         }
-    })();
+    };
 
     #[cfg(debug_assertions)]
-    let assets = (|| {
+    let assets = {
         // Construct the absolute path to the static assets
         let workspace_dir = std::env!("ROC_WORKSPACE_DIR");
         let static_dir = Path::new(workspace_dir).join("crates/docs/src/static");
 
+        // Read the assets from the filesystem
         let search_js = fs::read_to_string(static_dir.join("search.js")).unwrap();
         let styles_css = fs::read_to_string(static_dir.join("styles.css")).unwrap();
         let favicon_svg = fs::read_to_string(static_dir.join("favicon.svg")).unwrap();
@@ -78,7 +79,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
             favicon_svg,
             raw_template_html,
         }
-    })();
+    };
 
     // Write CSS, JS, and favicon
     // (The HTML requires more work!)
