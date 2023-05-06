@@ -266,9 +266,9 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - [Github copilot](https://copilot.github.com/) AI autocomplete.
 - [Aroma](https://ai.facebook.com/blog/aroma-ml-for-code-recommendation) showing examples similar to current code.
 - [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
-- [Inquisitive code editor](https://web.eecs.utk.edu/~azh/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
+- [Inquisitive code editor](https://web.archive.org/web/20221206102415/https://austinhenley.com/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
 - [NextJournal](https://nextjournal.com/blog/command-bar) Discoverable commands and shortcuts.
-- [Code Ribbon](https://web.eecs.utk.edu/~azh/blog/coderibbon.html) fast navigation between files. Feature suggestion: top and down are filled with suggested files, whereas left and right are manually filled.
+- [Code Ribbon](https://web.archive.org/web/20230209062246/https://austinhenley.com/blog/coderibbon.html) fast navigation between files. Feature suggestion: top and down are filled with suggested files, whereas left and right are manually filled.
 - [Automatic data transformation based on examples](https://youtu.be/Ej91F1fpmEw). Feature suggestion: use in combination with voice commands: e.g. "only keep time from list of datetimes".
 - [Codesee](https://www.codesee.io/) code base visualization.
 - [Loopy](https://dl.acm.org/doi/10.1145/3485530?sid=SCITRUS) interactive program synthesis.
