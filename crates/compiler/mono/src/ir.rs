@@ -403,34 +403,6 @@ impl<'a> Proc<'a> {
         w.push(b'\n');
         String::from_utf8(w).unwrap()
     }
-
-    fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
-        let mut args = Vec::with_capacity_in(self.args.len(), env.arena);
-        let mut proc_args = Vec::with_capacity_in(self.args.len(), env.arena);
-
-        for (layout, symbol) in self.args {
-            let new = env.unique_symbol();
-            args.push((*layout, *symbol, new));
-            proc_args.push((*layout, new));
-        }
-
-        use self::SelfRecursive::*;
-        if let SelfRecursive(id) = self.is_self_recursive {
-            let transformed = crate::tail_recursion::make_tail_recursive(
-                env.arena,
-                id,
-                self.name,
-                self.body.clone(),
-                args.into_bump_slice(),
-                self.ret_layout,
-            );
-
-            if let Some(with_tco) = transformed {
-                self.body = with_tco;
-                self.args = proc_args.into_bump_slice();
-            }
-        }
-    }
 }
 
 /// A host-exposed function must be specialized; it's a seed for subsequent specializations
@@ -1018,14 +990,12 @@ impl<'a> Procs<'a> {
 
     pub fn get_specialized_procs_without_rc(
         self,
-        env: &mut Env<'a, '_>,
+        _env: &mut Env<'a, '_>,
     ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
         let mut specialized_procs =
             MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
-        for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
-            proc.make_tail_recursive(env);
-
+        for (symbol, layout, proc) in self.specialized.into_iter_assert_done() {
             let key = (symbol, layout);
             specialized_procs.insert(key, proc);
         }

@@ -1,11 +1,12 @@
 #![allow(clippy::manual_map)]
 
 use crate::borrow::Ownership;
-use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
+use crate::ir::{CallType, Expr, JoinPointId, Param, Proc, ProcLayout, SelfRecursive, Stmt};
 use crate::layout::{InLayout, LambdaName};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_module::symbol::Symbol;
+use roc_collections::MutMap;
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 /// Make tail calls into loops (using join points)
 ///
@@ -29,7 +30,41 @@ use roc_module::symbol::Symbol;
 ///
 /// This will effectively compile into a loop in llvm, and
 /// won't grow the call stack for each iteration
-pub fn make_tail_recursive<'a>(
+pub fn make_tail_recursive<'a, 'i>(
+    arena: &'a Bump,
+    module_id: ModuleId,
+    ident_ids: &'i mut IdentIds,
+    procedures: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+) {
+    for (_, proc) in procedures.iter_mut() {
+        if let SelfRecursive::SelfRecursive(id) = proc.is_self_recursive {
+            let mut args = Vec::with_capacity_in(proc.args.len(), arena);
+            let mut proc_args = Vec::with_capacity_in(proc.args.len(), arena);
+
+            for (layout, symbol) in proc.args {
+                let new = Symbol::new(module_id, ident_ids.gen_unique());
+                args.push((*layout, *symbol, new));
+                proc_args.push((*layout, new));
+            }
+
+            let transformed = make_proc_tail_recursive(
+                arena,
+                id,
+                proc.name,
+                proc.body.clone(),
+                args.into_bump_slice(),
+                proc.ret_layout,
+            );
+
+            if let Some(with_tco) = transformed {
+                proc.body = with_tco;
+                proc.args = proc_args.into_bump_slice();
+            }
+        }
+    }
+}
+
+pub fn make_proc_tail_recursive<'a>(
     arena: &'a Bump,
     id: JoinPointId,
     needle: LambdaName,

@@ -1599,6 +1599,37 @@ fn tail_call_with_different_layout() {
     )
 }
 
+/*
+#[mono_test]
+fn tail_call_mod_cons_basic() {
+    indoc!(
+        r#"
+        ConsList a : [Cons a (ConsList a), Nil]
+
+        map = \f, l ->
+            when l is
+                Nil -> Nil
+                Cons x xs -> Cons (f x) (map f xs)
+        map (\x -> x + 1) (Cons 1 (Cons 2 (Cons 3 Nil)))
+        "#
+    )
+}
+
+#[mono_test]
+fn tail_call_mod_cons_non_null() {
+    indoc!(
+        r#"
+        ConsList a : [Cons a (ConsList a), NilVal a]
+
+        map = \f, l ->
+            when l is
+                NilVal x -> NilVal (f x)
+                Cons x xs -> Cons (f x) (map f xs)
+        map (\x -> x + 1) (Cons 1 (Cons 2 (Cons 3 (NilVal 4))))
+        "#
+    )
+}
+*/
 #[mono_test]
 fn lambda_capture_niche_u8_vs_u64() {
     indoc!(

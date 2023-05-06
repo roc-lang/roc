@@ -48,7 +48,7 @@ procedure List.66 (#Attr.2, #Attr.3):
     let List.522 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
     ret List.522;
 
-procedure List.80 (List.534, List.535, List.536, List.537, List.538):
+procedure List.80 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
     joinpoint List.510 List.433 List.434 List.435 List.436 List.437:
         let List.512 : Int1 = CallByName Num.22 List.436 List.437;
         if List.512 then
@@ -73,7 +73,7 @@ procedure List.80 (List.534, List.535, List.536, List.537, List.538):
             let List.511 : [C {}, C {}] = TagId(1) List.434;
             ret List.511;
     in
-    jump List.510 List.534 List.535 List.536 List.537 List.538;
+    jump List.510 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
 
 procedure List.92 (List.430, List.431, List.432):
     let List.508 : U64 = 0i64;
@@ -93,7 +93,7 @@ procedure Num.22 (#Attr.2, #Attr.3):
     let Num.284 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
     ret Num.284;
 
-procedure Test.1 (Test.77):
+procedure Test.1 (#Derived_gen.16):
     joinpoint Test.26 Test.6:
         let Test.65 : [<r>C I64, C List *self] = StructAtIndex 1 Test.6;
         let Test.66 : U8 = 0i64;
@@ -182,7 +182,7 @@ procedure Test.1 (Test.77):
                 let Test.44 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = Struct {Test.45, Test.46};
                 jump Test.26 Test.44;
     in
-    jump Test.26 Test.77;
+    jump Test.26 #Derived_gen.16;
 
 procedure Test.15 (Test.16, Test.17):
     let Test.36 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = Struct {Test.16, Test.17};

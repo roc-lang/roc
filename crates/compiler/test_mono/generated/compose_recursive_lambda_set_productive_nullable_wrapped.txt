@@ -18,7 +18,7 @@ procedure List.66 (#Attr.2, #Attr.3):
     let List.510 : Int1 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
     ret List.510;
 
-procedure List.80 (List.517, List.518, List.519, List.520, List.521):
+procedure List.80 (#Derived_gen.9, #Derived_gen.10, #Derived_gen.11, #Derived_gen.12, #Derived_gen.13):
     joinpoint List.500 List.433 List.434 List.435 List.436 List.437:
         let List.502 : Int1 = CallByName Num.22 List.436 List.437;
         if List.502 then
@@ -31,7 +31,7 @@ procedure List.80 (List.517, List.518, List.519, List.520, List.521):
             dec List.433;
             ret List.434;
     in
-    jump List.500 List.517 List.518 List.519 List.520 List.521;
+    jump List.500 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13;
 
 procedure List.92 (List.430, List.431, List.432):
     let List.498 : U64 = 0i64;
@@ -54,7 +54,7 @@ procedure Str.3 (#Attr.2, #Attr.3):
 procedure Test.1 (Test.5):
     ret Test.5;
 
-procedure Test.11 (Test.53, Test.54):
+procedure Test.11 (#Derived_gen.14, #Derived_gen.15):
     joinpoint Test.27 Test.12 #Attr.12:
         let Test.8 : Int1 = UnionAtIndex (Id 2) (Index 1) #Attr.12;
         let Test.7 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 2) (Index 0) #Attr.12;
@@ -94,7 +94,7 @@ procedure Test.11 (Test.53, Test.54):
             decref #Attr.12;
             jump #Derived_gen.5;
     in
-    jump Test.27 Test.53 Test.54;
+    jump Test.27 #Derived_gen.14 #Derived_gen.15;
 
 procedure Test.2 (Test.13):
     ret Test.13;
