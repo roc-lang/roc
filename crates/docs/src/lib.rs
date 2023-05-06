@@ -80,13 +80,22 @@ pub fn generate_docs_html(root_file: PathBuf) {
         }
     })();
 
-    fs::write(build_dir.join("search.js"), assets.search_js).unwrap();
-    fs::write(build_dir.join("styles.css"), assets.styles_css).unwrap();
-    fs::write(build_dir.join("favicon.svg"), assets.favicon_svg).unwrap();
-
-    // Get the html template
-    // For debug builds, read from fs to speed up build
-    // Otherwise, include as string literal
+    // Write CSS, JS, and favicon
+    // (The HTML requires more work!)
+    for (file, contents) in [
+        ("search.js", assets.search_js),
+        ("styles.css", assets.styles_css),
+        ("favicon.svg", assets.favicon_svg),
+    ] {
+        let dir = build_dir.join(file);
+        fs::write(&dir, contents).unwrap_or_else(|error| {
+            panic!(
+                "Attempted to write {} but failed with this error: {}",
+                dir.display(),
+                error
+            )
+        })
+    }
 
     // Insert asset urls & sidebar links
     let template_html = assets
