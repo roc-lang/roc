@@ -2923,3 +2923,35 @@ fn error_on_erroneous_condition() {
         "#
     )
 }
+
+#[mono_test]
+fn binary_tree_fbip() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            tree = Node (Node (Node (Node Tip Tip) Tip) (Node Tip Tip)) (Node Tip Tip)
+            checkFbip tree
+
+        Tree : [Node Tree Tree, Tip]
+
+        check : Tree -> Num a
+        check = \t -> when t is
+            Node l r -> check l + check r + 1
+            Tip -> 0
+
+        Visit : [NodeR Tree Visit, Done]
+
+        checkFbip : Tree -> Num a
+        checkFbip = \t -> checkFbipHelper t Done 0
+
+        checkFbipHelper : Tree, Visit, Num a-> Num a
+        checkFbipHelper = \t, v, a -> when t is
+            Node l r -> checkFbipHelper l (NodeR r v) (a + 1)
+            Tip -> when v is
+                NodeR r v2 -> checkFbipHelper r v2 a
+                Done -> a
+        "#
+    )
+}
