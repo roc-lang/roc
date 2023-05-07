@@ -891,7 +891,6 @@ fn refcount_str<'a>(
     // Modify Refcount
     //
 
-    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
     let alignment = root.target_info.ptr_width() as u32;
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_rc_stmt = modify_refcount(
@@ -902,17 +901,6 @@ fn refcount_str<'a>(
         alignment,
         arena.alloc(ret_stmt),
     );
-    let addr = root.create_symbol(ident_ids, "addr");
-    let get_and_modify_rc_stmt = rc_ptr_from_data_ptr_help(
-        root,
-        ident_ids,
-        chars,
-        rc_ptr,
-        false,
-        arena.alloc(modify_rc_stmt),
-        addr,
-        Layout::OPAQUE_PTR,
-    );
 
     //
     // JoinPoint for slice vs list
@@ -921,7 +909,7 @@ fn refcount_str<'a>(
     let joinpoint_elems = Stmt::Join {
         id: jp_chars,
         parameters: arena.alloc([param_elems]),
-        body: arena.alloc(get_and_modify_rc_stmt),
+        body: arena.alloc(modify_rc_stmt),
         remainder: arena.alloc(
             //
             length_stmt(arena.alloc(
