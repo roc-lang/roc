@@ -660,8 +660,7 @@ fn eq_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(root.arena.alloc([elem_layout]));
-    let box_layout = layout_interner.insert(Layout::Union(box_union_layout));
+    let box_layout = layout_interner.insert(Layout::Boxed(elem_layout));
 
     // Compare lengths
 
@@ -764,18 +763,8 @@ fn eq_list<'a>(
     // Dereference the box pointers to get the current elements
     let elem1 = root.create_symbol(ident_ids, "elem1");
     let elem2 = root.create_symbol(ident_ids, "elem2");
-    let elem1_expr = Expr::UnionAtIndex {
-        structure: box1,
-        union_layout: box_union_layout,
-        tag_id: 0,
-        index: 0,
-    };
-    let elem2_expr = Expr::UnionAtIndex {
-        structure: box2,
-        union_layout: box_union_layout,
-        tag_id: 0,
-        index: 0,
-    };
+    let elem1_expr = Expr::ExprUnbox { symbol: box1 };
+    let elem2_expr = Expr::ExprUnbox { symbol: box2 };
     let elem1_stmt = |next| Stmt::Let(elem1, elem1_expr, elem_layout, next);
     let elem2_stmt = |next| Stmt::Let(elem2, elem2_expr, elem_layout, next);
 
@@ -874,23 +863,17 @@ fn eq_list<'a>(
         // else
         root.arena.alloc(
             //
-            elements_1_stmt(root.arena.alloc(
+            start_1_stmt(root.arena.alloc(
                 //
-                elements_2_stmt(root.arena.alloc(
+                start_2_stmt(root.arena.alloc(
                     //
-                    start_1_stmt(root.arena.alloc(
+                    size_stmt(root.arena.alloc(
                         //
-                        start_2_stmt(root.arena.alloc(
+                        list_size_stmt(root.arena.alloc(
                             //
-                            size_stmt(root.arena.alloc(
+                            end_1_stmt(root.arena.alloc(
                                 //
-                                list_size_stmt(root.arena.alloc(
-                                    //
-                                    end_1_stmt(root.arena.alloc(
-                                        //
-                                        joinpoint_loop,
-                                    )),
-                                )),
+                                joinpoint_loop,
                             )),
                         )),
                     )),
@@ -910,10 +893,16 @@ fn eq_list<'a>(
         )),
     ));
 
-    if_pointers_equal_return_true(
-        root,
-        ident_ids,
-        [ARG_1, ARG_2],
-        root.arena.alloc(pointers_else),
-    )
+    elements_1_stmt(root.arena.alloc(
+        //
+        elements_2_stmt(root.arena.alloc(
+            //
+            if_pointers_equal_return_true(
+                root,
+                ident_ids,
+                [elements_1, elements_2],
+                root.arena.alloc(pointers_else),
+            ),
+        )),
+    ))
 }
