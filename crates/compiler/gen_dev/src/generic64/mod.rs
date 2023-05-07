@@ -1107,6 +1107,38 @@ impl<
         }
     }
 
+    fn build_num_add_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    ) {
+        match self.layout_interner.get(layout) {
+            Layout::Builtin(Builtin::Int(width @ quadword_and_smaller!())) => {
+                let intrinsic = bitcode::NUM_ADD_SATURATED_INT[width].to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
+                ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
+                ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Decimal) => {
+                let intrinsic = bitcode::DEC_ADD_SATURATED.to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            x => todo!("NumAddSaturated: layout, {:?}", x),
+        }
+    }
+
     fn build_num_add_checked(
         &mut self,
         dst: &Symbol,
