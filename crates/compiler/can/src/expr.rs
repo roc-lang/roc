@@ -1052,6 +1052,9 @@ pub fn canonicalize_expr<'a>(
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
+        ast::Expr::RecordBuilder(_) => {
+            unreachable!("RecordBuilder should have been desugared by now")
+        }
         ast::Expr::Backpassing(_, _, _) => {
             unreachable!("Backpassing should have been desugared by now")
         }
