@@ -44,6 +44,7 @@
             xorg.libXrandr
             xorg.libXi
             xorg.libxcb
+            glibc libxkbcommon # To run example/gui/hello.roc in Wayland
           ];
 
         darwinInputs = with pkgs;
