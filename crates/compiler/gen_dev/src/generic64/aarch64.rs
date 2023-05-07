@@ -1245,6 +1245,24 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         };
         cset_reg64_cond(buf, dst, cond);
     }
+
+    fn mov_freg64_mem64_offset32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64GeneralReg,
+        _offset: i32,
+    ) {
+        todo!()
+    }
+
+    fn mov_freg32_mem32_offset32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64GeneralReg,
+        _offset: i32,
+    ) {
+        todo!()
+    }
 }
 
 impl AArch64Assembler {}

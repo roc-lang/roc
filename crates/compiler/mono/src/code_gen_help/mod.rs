@@ -31,6 +31,8 @@ pub const REFCOUNT_MAX: usize = 0;
 pub enum HelperOp {
     Inc,
     Dec,
+    IndirectInc,
+    IndirectDec,
     DecRef(JoinPointId),
     Reset,
     ResetRef,
@@ -44,6 +46,10 @@ impl HelperOp {
 
     fn is_dec(&self) -> bool {
         matches!(self, Self::Dec)
+    }
+
+    fn is_inc(&self) -> bool {
+        matches!(self, Self::Inc)
     }
 }
 
@@ -289,14 +295,19 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         if layout_needs_helper_proc(layout_interner, layout, ctx.op) {
+            let arena = self.arena;
             let proc_name = self.find_or_create_proc(ident_ids, ctx, layout_interner, layout);
 
             let (ret_layout, arg_layouts): (InLayout<'a>, &'a [InLayout<'a>]) = {
                 let arg = self.replace_rec_ptr(ctx, layout_interner, layout);
+                let box_arg = layout_interner.insert(Layout::Boxed(arg));
+
                 match ctx.op {
                     Dec | DecRef(_) => (LAYOUT_UNIT, self.arena.alloc([arg])),
                     Reset | ResetRef => (layout, self.arena.alloc([layout])),
                     Inc => (LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
+                    IndirectDec => (LAYOUT_UNIT, arena.alloc([box_arg])),
+                    IndirectInc => (LAYOUT_UNIT, arena.alloc([box_arg, self.layout_isize])),
                     Eq => (LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
             };
@@ -346,7 +357,8 @@ impl<'a> CodeGenHelp<'a> {
         // Procs can be recursive, so we need to create the symbol before the body is complete
         // But with nested recursion, that means Symbols and Procs can end up in different orders.
         // We want the same order, especially for function indices in Wasm. So create an empty slot and fill it in later.
-        let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, layout);
+        let (proc_symbol, proc_layout) =
+            self.create_proc_symbol(ident_ids, layout_interner, ctx, layout);
         ctx.new_linker_data.push((proc_symbol, proc_layout));
         let spec_index = self.specializations.len();
         self.specializations.push(Specialization {
@@ -361,6 +373,17 @@ impl<'a> CodeGenHelp<'a> {
             Inc | Dec | DecRef(_) => (
                 LAYOUT_UNIT,
                 refcount::refcount_generic(
+                    self,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    layout,
+                    Symbol::ARG_1,
+                ),
+            ),
+            IndirectInc | IndirectDec => (
+                LAYOUT_UNIT,
+                refcount::refcount_indirect(
                     self,
                     ident_ids,
                     ctx,
@@ -405,6 +428,15 @@ impl<'a> CodeGenHelp<'a> {
                     self.arena.alloc([roc_value, inc_amount])
                 }
                 Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
+                IndirectInc => {
+                    let box_layout = layout_interner.insert(Layout::Boxed(layout));
+                    let inc_amount = (self.layout_isize, ARG_2);
+                    self.arena.alloc([(box_layout, ARG_1), inc_amount])
+                }
+                IndirectDec => {
+                    let box_layout = layout_interner.insert(Layout::Boxed(layout));
+                    self.arena.alloc([(box_layout, ARG_1)])
+                }
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
             }
         };
@@ -425,6 +457,7 @@ impl<'a> CodeGenHelp<'a> {
     fn create_proc_symbol(
         &self,
         ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
         ctx: &mut Context<'a>,
         layout: InLayout<'a>,
     ) -> (Symbol, ProcLayout<'a>) {
@@ -448,6 +481,24 @@ impl<'a> CodeGenHelp<'a> {
                 result: LAYOUT_UNIT,
                 niche: Niche::NONE,
             },
+            HelperOp::IndirectInc => {
+                let box_layout = layout_interner.insert(Layout::Boxed(layout));
+
+                ProcLayout {
+                    arguments: self.arena.alloc([box_layout, self.layout_isize]),
+                    result: LAYOUT_UNIT,
+                    niche: Niche::NONE,
+                }
+            }
+            HelperOp::IndirectDec => {
+                let box_layout = layout_interner.insert(Layout::Boxed(layout));
+
+                ProcLayout {
+                    arguments: self.arena.alloc([box_layout]),
+                    result: LAYOUT_UNIT,
+                    niche: Niche::NONE,
+                }
+            }
             HelperOp::Reset => ProcLayout {
                 arguments: self.arena.alloc([layout]),
                 result: layout,

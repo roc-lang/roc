@@ -598,22 +598,20 @@ impl X64_64SystemVStoreArgs {
         storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
-        if self.general_i < Self::GENERAL_PARAM_REGS.len() {
-            storage_manager.load_to_specified_general_reg(
-                buf,
-                &sym,
-                Self::GENERAL_PARAM_REGS[self.general_i],
-            );
-            self.general_i += 1;
-        } else {
-            // Copy to stack using return reg as buffer.
-            storage_manager.load_to_specified_general_reg(buf, &sym, Self::GENERAL_RETURN_REGS[0]);
-            X86_64Assembler::mov_stack32_reg64(
-                buf,
-                self.tmp_stack_offset,
-                Self::GENERAL_RETURN_REGS[0],
-            );
-            self.tmp_stack_offset += 8;
+        match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+            Some(reg) => {
+                storage_manager.load_to_specified_general_reg(buf, &sym, *reg);
+                self.general_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let tmp = Self::GENERAL_RETURN_REGS[0];
+
+                storage_manager.load_to_specified_general_reg(buf, &sym, tmp);
+                X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, tmp);
+
+                self.tmp_stack_offset += 8;
+            }
         }
     }
 
@@ -623,22 +621,20 @@ impl X64_64SystemVStoreArgs {
         storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
-        if self.float_i < Self::FLOAT_PARAM_REGS.len() {
-            storage_manager.load_to_specified_float_reg(
-                buf,
-                &sym,
-                Self::FLOAT_PARAM_REGS[self.float_i],
-            );
-            self.float_i += 1;
-        } else {
-            // Copy to stack using return reg as buffer.
-            storage_manager.load_to_specified_float_reg(buf, &sym, Self::FLOAT_RETURN_REGS[0]);
-            X86_64Assembler::mov_stack32_freg64(
-                buf,
-                self.tmp_stack_offset,
-                Self::FLOAT_RETURN_REGS[0],
-            );
-            self.tmp_stack_offset += 8;
+        match Self::FLOAT_PARAM_REGS.get(self.float_i) {
+            Some(reg) => {
+                storage_manager.load_to_specified_float_reg(buf, &sym, *reg);
+                self.float_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let tmp = Self::FLOAT_RETURN_REGS[0];
+
+                storage_manager.load_to_specified_float_reg(buf, &sym, tmp);
+                X86_64Assembler::mov_stack32_freg64(buf, self.tmp_stack_offset, tmp);
+
+                self.tmp_stack_offset += 8;
+            }
         }
     }
 }
@@ -724,8 +720,8 @@ impl X64_64SystemVLoadArgs {
         storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
-        if self.general_i < X86_64SystemV::GENERAL_PARAM_REGS.len() {
-            let reg = X86_64SystemV::FLOAT_PARAM_REGS[self.general_i];
+        if self.float_i < X86_64SystemV::FLOAT_PARAM_REGS.len() {
+            let reg = X86_64SystemV::FLOAT_PARAM_REGS[self.float_i];
             storage_manager.float_reg_arg(&sym, reg);
             self.float_i += 1;
         } else {
@@ -884,37 +880,45 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         ret_layout: &InLayout<'a>,
     ) {
         let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
-        let mut i = 0;
+
+        let mut general_registers_used = 0;
+        let mut float_registers_used = 0;
+
         if X86_64WindowsFastcall::returns_via_arg_pointer(layout_interner, ret_layout) {
-            storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[i]);
-            i += 1;
+            storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
+            general_registers_used += 1;
         }
+
         for (layout, sym) in args.iter() {
-            if i < Self::GENERAL_PARAM_REGS.len() {
-                match *layout {
-                    single_register_integers!() => {
-                        storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[i]);
-                        i += 1;
-                    }
-                    single_register_floats!() => {
-                        storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[i]);
-                        i += 1;
-                    }
-                    x if layout_interner.stack_size(x) == 0 => {}
-                    x => {
-                        todo!("Loading args with layout {:?}", x);
+            match *layout {
+                single_register_integers!() => {
+                    match Self::GENERAL_PARAM_REGS.get(general_registers_used) {
+                        Some(reg) => {
+                            storage_manager.general_reg_arg(sym, *reg);
+                            general_registers_used += 1;
+                        }
+                        None => {
+                            storage_manager.primitive_stack_arg(sym, arg_offset);
+                            arg_offset += 8;
+                        }
                     }
                 }
-            } else {
-                match *layout {
-                    single_register_layouts!() => {
-                        storage_manager.primitive_stack_arg(sym, arg_offset);
-                        arg_offset += 8;
+                single_register_floats!() => {
+                    match Self::FLOAT_PARAM_REGS.get(float_registers_used) {
+                        Some(reg) => {
+                            storage_manager.float_reg_arg(sym, *reg);
+                            float_registers_used += 1;
+                        }
+                        None => {
+                            storage_manager.primitive_stack_arg(sym, arg_offset);
+                            arg_offset += 8;
+                        }
                     }
-                    x => {
-                        todo!("Loading args with layout {:?}", x);
-                    }
-                };
+                }
+                x if layout_interner.stack_size(x) == 0 => {}
+                x => {
+                    todo!("Loading args with layout {:?}", x);
+                }
             }
         }
     }
@@ -942,50 +946,44 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
             storage_manager.claim_stack_area(dst, layout_interner.stack_size(*ret_layout));
             todo!("claim first parama reg for the address");
         }
-        for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
+
+        let mut general_registers_used = 0;
+        let mut float_registers_used = 0;
+
+        for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
             match *layout {
                 single_register_integers!() => {
-                    if i < Self::GENERAL_PARAM_REGS.len() {
-                        storage_manager.load_to_specified_general_reg(
-                            buf,
-                            sym,
-                            Self::GENERAL_PARAM_REGS[i],
-                        );
-                    } else {
-                        // Copy to stack using return reg as buffer.
-                        storage_manager.load_to_specified_general_reg(
-                            buf,
-                            sym,
-                            Self::GENERAL_RETURN_REGS[0],
-                        );
-                        X86_64Assembler::mov_stack32_reg64(
-                            buf,
-                            tmp_stack_offset,
-                            Self::GENERAL_RETURN_REGS[0],
-                        );
-                        tmp_stack_offset += 8;
+                    match Self::GENERAL_PARAM_REGS.get(general_registers_used) {
+                        Some(reg) => {
+                            storage_manager.load_to_specified_general_reg(buf, sym, *reg);
+                            general_registers_used += 1;
+                        }
+                        None => {
+                            // Copy to stack using return reg as buffer.
+                            let tmp = Self::GENERAL_RETURN_REGS[0];
+
+                            storage_manager.load_to_specified_general_reg(buf, sym, tmp);
+                            X86_64Assembler::mov_stack32_reg64(buf, tmp_stack_offset, tmp);
+
+                            tmp_stack_offset += 8;
+                        }
                     }
                 }
                 single_register_floats!() => {
-                    if i < Self::FLOAT_PARAM_REGS.len() {
-                        storage_manager.load_to_specified_float_reg(
-                            buf,
-                            sym,
-                            Self::FLOAT_PARAM_REGS[i],
-                        );
-                    } else {
-                        // Copy to stack using return reg as buffer.
-                        storage_manager.load_to_specified_float_reg(
-                            buf,
-                            sym,
-                            Self::FLOAT_RETURN_REGS[0],
-                        );
-                        X86_64Assembler::mov_stack32_freg64(
-                            buf,
-                            tmp_stack_offset,
-                            Self::FLOAT_RETURN_REGS[0],
-                        );
-                        tmp_stack_offset += 8;
+                    match Self::FLOAT_PARAM_REGS.get(float_registers_used) {
+                        Some(reg) => {
+                            storage_manager.load_to_specified_float_reg(buf, sym, *reg);
+                            float_registers_used += 1;
+                        }
+                        None => {
+                            // Copy to stack using return reg as buffer.
+                            let tmp = Self::FLOAT_RETURN_REGS[0];
+
+                            storage_manager.load_to_specified_float_reg(buf, sym, tmp);
+                            X86_64Assembler::mov_stack32_freg64(buf, tmp_stack_offset, tmp);
+
+                            tmp_stack_offset += 8;
+                        }
                     }
                 }
                 x if layout_interner.stack_size(x) == 0 => {}
@@ -1510,6 +1508,26 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src: X86_64GeneralReg,
     ) {
         raw_movsx_reg_reg(buf, input_width, dst, src);
+    }
+
+    #[inline(always)]
+    fn mov_freg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        movsd_freg64_base64_offset32(buf, dst, src, offset)
+    }
+
+    #[inline(always)]
+    fn mov_freg32_mem32_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        movss_freg32_base32_offset32(buf, dst, src, offset)
     }
 
     #[inline(always)]
@@ -3041,7 +3059,7 @@ fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset:
     buf.extend(offset.to_le_bytes());
 }
 
-/// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pointer.
+// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pointer.
 #[inline(always)]
 fn movsd_base64_offset32_freg64(
     buf: &mut Vec<'_, u8>,
@@ -3080,6 +3098,31 @@ fn movsd_freg64_base64_offset32(
     let base_mod = base as u8 % 8;
     buf.reserve(10);
     buf.push(0xF2);
+    if dst as u8 > 7 || base as u8 > 7 {
+        buf.push(rex);
+    }
+    buf.extend([0x0F, 0x10, 0x80 | dst_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOVSS xmm1,r/m32` -> Move r/m32 to xmm1. where m64 references the base pointer.
+#[inline(always)]
+fn movss_freg32_base32_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64FloatReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(10);
+    buf.push(0xF3);
     if dst as u8 > 7 || base as u8 > 7 {
         buf.push(rex);
     }
@@ -3773,6 +3816,17 @@ mod tests {
         disassembler_test!(
             movsd_freg64_base64_offset32,
             |reg1, reg2, imm| format!("movsd {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movss_freg32_base32_offset32() {
+        disassembler_test!(
+            movss_freg32_base32_offset32,
+            |reg1, reg2, imm| format!("movss {}, dword ptr [{} + 0x{:x}]", reg1, reg2, imm),
             ALL_FLOAT_REGS,
             ALL_GENERAL_REGS,
             [TEST_I32]

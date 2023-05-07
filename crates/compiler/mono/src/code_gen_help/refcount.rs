@@ -120,6 +120,59 @@ pub fn refcount_stmt<'a>(
     }
 }
 
+pub fn refcount_indirect<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    element_layout: InLayout<'a>,
+    structure: Symbol,
+) -> Stmt<'a> {
+    let arena = root.arena;
+
+    let unit = root.create_symbol(ident_ids, "unit");
+    let unboxed = root.create_symbol(ident_ids, "unboxed");
+
+    let indirect_op = ctx.op;
+    let direct_op = match ctx.op {
+        HelperOp::IndirectInc => HelperOp::Inc,
+        HelperOp::IndirectDec => HelperOp::Dec,
+        _ => unreachable!(),
+    };
+
+    // we've done the indirection, the inner value shoud be inc- or decremented directly
+    ctx.op = direct_op;
+
+    let mod_args = refcount_args(root, ctx, unboxed);
+    let opt_mod_expr =
+        root.call_specialized_op(ident_ids, ctx, layout_interner, element_layout, mod_args);
+
+    // set the op back to indirect ; this is important for correct layout generation
+    ctx.op = indirect_op;
+
+    if let Some(mod_expr) = opt_mod_expr {
+        Stmt::Let(
+            unboxed,
+            Expr::ExprUnbox { symbol: structure },
+            element_layout,
+            arena.alloc(
+                //
+                Stmt::Let(
+                    unit,
+                    mod_expr,
+                    Layout::UNIT,
+                    arena.alloc(
+                        //
+                        Stmt::Ret(unit),
+                    ),
+                ),
+            ),
+        )
+    } else {
+        rc_return_stmt(root, ident_ids, ctx)
+    }
+}
+
 pub fn refcount_generic<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -860,23 +913,23 @@ fn refcount_list<'a>(
         arena.alloc(ret_stmt),
     );
 
-    let modify_elems_and_list =
-        if layout_interner.get(elem_layout).is_refcounted() && ctx.op.is_dec() {
-            refcount_list_elems(
-                root,
-                ident_ids,
-                ctx,
-                layout_interner,
-                elem_layout,
-                LAYOUT_UNIT,
-                box_layout,
-                len,
-                elements,
-                modify_list,
-            )
-        } else {
-            modify_list
-        };
+    let relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
+    let modify_elems_and_list = if relevant_op && layout_interner.get(elem_layout).is_refcounted() {
+        refcount_list_elems(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            elem_layout,
+            LAYOUT_UNIT,
+            box_layout,
+            len,
+            elements,
+            modify_list,
+        )
+    } else {
+        modify_list
+    };
 
     //
     // Do nothing if the list is empty
@@ -1280,24 +1333,28 @@ fn refcount_union_nonrec<'a>(
 
     let continuation = rc_return_stmt(root, ident_ids, ctx);
 
-    let switch_stmt = refcount_union_contents(
-        root,
-        ident_ids,
-        ctx,
-        layout_interner,
-        union_layout,
-        tag_layouts,
-        None,
-        structure,
-        tag_id_sym,
-        tag_id_layout,
-        continuation,
-    );
+    if tag_layouts.is_empty() {
+        continuation
+    } else {
+        let switch_stmt = refcount_union_contents(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            union_layout,
+            tag_layouts,
+            None,
+            structure,
+            tag_id_sym,
+            tag_id_layout,
+            continuation,
+        );
 
-    tag_id_stmt(root.arena.alloc(
-        //
-        switch_stmt,
-    ))
+        tag_id_stmt(root.arena.alloc(
+            //
+            switch_stmt,
+        ))
+    }
 }
 
 fn refcount_union_contents<'a>(

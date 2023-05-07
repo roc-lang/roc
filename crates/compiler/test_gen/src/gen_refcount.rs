@@ -96,7 +96,7 @@ fn list_str_inc() {
         ),
         RocList<RocList<RocStr>>,
         &[
-            Live(3), // s
+            Live(6), // s
             Live(2), // list
             Live(1)  // result
         ]

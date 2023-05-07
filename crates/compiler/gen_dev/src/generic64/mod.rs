@@ -13,7 +13,8 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
+    UnionLayout,
 };
 use roc_mono::low_level::HigherOrder;
 use roc_target::TargetInfo;
@@ -334,6 +335,19 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         offset: i32,
     );
     fn mov_reg8_mem8_offset32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg, offset: i32);
+
+    fn mov_freg64_mem64_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src: GeneralReg,
+        offset: i32,
+    );
+    fn mov_freg32_mem32_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src: GeneralReg,
+        offset: i32,
+    );
 
     // move from register to memory
     fn mov_mem64_offset32_reg64(
@@ -688,6 +702,9 @@ impl<
     fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)> {
         &self.helper_proc_symbols
     }
+    fn caller_procs(&self) -> &Vec<'a, CallerProc<'a>> {
+        &self.caller_procs
+    }
 
     fn reset(&mut self, name: String, is_self_recursive: SelfRecursive) {
         self.proc_name = Some(name);
@@ -913,6 +930,7 @@ impl<
 
     fn build_switch(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         cond_symbol: &Symbol,
         _cond_layout: &InLayout<'a>, // cond_layout must be a integer due to potential jump table optimizations.
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
@@ -945,7 +963,7 @@ impl<
             // Build all statements in this branch. Using storage as from before any branch.
             self.storage_manager = base_storage.clone();
             self.literal_map = base_literal_map.clone();
-            self.build_stmt(stmt, ret_layout);
+            self.build_stmt(layout_ids, stmt, ret_layout);
 
             // Build unconditional jump to the end of this switch.
             // Since we don't know the offset yet, set it to 0 and overwrite later.
@@ -971,7 +989,7 @@ impl<
         self.storage_manager
             .update_stack_size(max_branch_stack_size);
         let (_branch_info, stmt) = default_branch;
-        self.build_stmt(stmt, ret_layout);
+        self.build_stmt(layout_ids, stmt, ret_layout);
 
         // Update all return jumps to jump past the default case.
         let ret_offset = self.buf.len();
@@ -987,6 +1005,7 @@ impl<
 
     fn build_join(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         id: &JoinPointId,
         parameters: &'a [Param<'a>],
         body: &'a Stmt<'a>,
@@ -1005,12 +1024,12 @@ impl<
         self.join_map.insert(*id, bumpalo::vec![in self.env.arena]);
 
         // Build remainder of function first. It is what gets run and jumps to join.
-        self.build_stmt(remainder, ret_layout);
+        self.build_stmt(layout_ids, remainder, ret_layout);
 
         let join_location = self.buf.len() as u64;
 
         // Build all statements in body.
-        self.build_stmt(body, ret_layout);
+        self.build_stmt(layout_ids, body, ret_layout);
 
         // Overwrite the all jumps to the joinpoint with the correct offset.
         let mut tmp = bumpalo::vec![in self.env.arena];
@@ -1725,6 +1744,44 @@ impl<
         )
     }
 
+    fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, linker_data) = self.helper_proc_gen.gen_refcount_proc(
+            ident_ids,
+            self.layout_interner,
+            layout,
+            HelperOp::IndirectInc,
+        );
+
+        self.helper_proc_symbols_mut().extend(linker_data);
+
+        refcount_proc_name
+    }
+
+    fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, linker_data) = self.helper_proc_gen.gen_refcount_proc(
+            ident_ids,
+            self.layout_interner,
+            layout,
+            HelperOp::IndirectDec,
+        );
+
+        self.helper_proc_symbols_mut().extend(linker_data);
+
+        refcount_proc_name
+    }
+
     fn build_higher_order_lowlevel(
         &mut self,
         dst: &Symbol,
@@ -1736,13 +1793,6 @@ impl<
             .all_ident_ids
             .get_mut(&self.env.module_id)
             .unwrap();
-
-        let (inc_n_data_symbol, inc_n_data_linker_data) = self.helper_proc_gen.gen_refcount_proc(
-            ident_ids,
-            self.layout_interner,
-            Layout::UNIT,
-            HelperOp::Inc,
-        );
 
         let caller_proc = CallerProc::new(
             self.env.arena,
@@ -1772,17 +1822,6 @@ impl<
                 self.load_layout_stack_size(old_element_layout, old_element_width);
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                self.helper_proc_symbols.extend(inc_n_data_linker_data);
-                self.helper_proc_symbols
-                    .extend([(caller_proc.proc_symbol, caller_proc.proc_layout)]);
-
-                let inc_n_data_string = self.function_symbol_to_string(
-                    inc_n_data_symbol,
-                    std::iter::empty(),
-                    None,
-                    Layout::UNIT,
-                );
-
                 let caller_string = self.function_symbol_to_string(
                     caller_proc.proc_symbol,
                     std::iter::empty(),
@@ -1790,10 +1829,17 @@ impl<
                     Layout::UNIT,
                 );
 
+                // self.helper_proc_symbols .extend([(caller_proc.proc_symbol, caller_proc.proc_layout)]);
                 self.caller_procs.push(caller_proc);
 
-                let inc_n_data = Symbol::DEV_TMP;
-                self.build_fn_pointer(&inc_n_data, inc_n_data_string);
+                // function pointer to a function that takes a pointer, and increments
+                let inc_n_data = if let Some(closure_env_layout) = higher_order.closure_env_layout {
+                    self.increment_fn_pointer(closure_env_layout)
+                } else {
+                    // null pointer
+                    self.load_literal_i64(&Symbol::DEV_TMP, 0);
+                    Symbol::DEV_TMP
+                };
 
                 self.build_fn_pointer(&caller, caller_string);
 
@@ -1817,10 +1863,14 @@ impl<
                     self.load_literal(&data, &Layout::U64, &Literal::Int(0u128.to_be_bytes()));
                 }
 
+                // we pass a null pointer when the data is not owned. the zig code must not call this!
+                let data_is_owned = higher_order.closure_env_layout.is_some()
+                    && higher_order.passed_function.owns_captured_environment;
+
                 self.load_literal(
                     &Symbol::DEV_TMP2,
                     &Layout::BOOL,
-                    &Literal::Bool(higher_order.passed_function.owns_captured_environment),
+                    &Literal::Bool(data_is_owned),
                 );
 
                 //    list: RocList,
@@ -2424,7 +2474,10 @@ impl<
             // Refactor this and switch to one external match.
             // We also could make loadining indivitual literals much faster
             let element_symbol = match elem {
-                ListLiteralElement::Symbol(sym) => *sym,
+                ListLiteralElement::Symbol(sym) => {
+                    self.load_literal_symbols(&[*sym]);
+                    *sym
+                }
                 ListLiteralElement::Literal(lit) => {
                     self.load_literal(&Symbol::DEV_TMP, element_in_layout, lit);
                     Symbol::DEV_TMP
@@ -3218,6 +3271,11 @@ impl<
         let mut copied = 0;
         let size = stack_size as i32;
 
+        if size == 0 {
+            storage_manager.no_data(&dst);
+            return;
+        }
+
         let base_offset = storage_manager.claim_stack_area(&dst, stack_size);
 
         if size - copied >= 8 {
@@ -3289,9 +3347,13 @@ impl<
                         ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, 0);
                     }
                 },
-                Builtin::Float(_) => {
+                Builtin::Float(FloatWidth::F64) => {
                     let dst_reg = storage_manager.claim_float_reg(buf, &dst);
-                    ASM::mov_freg64_freg64(buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
+                    ASM::mov_freg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                }
+                Builtin::Float(FloatWidth::F32) => {
+                    let dst_reg = storage_manager.claim_float_reg(buf, &dst);
+                    ASM::mov_freg32_mem32_offset32(buf, dst_reg, ptr_reg, 0);
                 }
                 Builtin::Bool => {
                     // the same as an 8-bit integer
@@ -3330,6 +3392,17 @@ impl<
                 storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
                     Self::unbox_to_stack(buf, storage_manager, dst, stack_size, ptr_reg, tmp_reg);
                 });
+            }
+
+            Layout::LambdaSet(lambda_set) => {
+                Self::ptr_read(
+                    buf,
+                    storage_manager,
+                    layout_interner,
+                    ptr_reg,
+                    lambda_set.runtime_representation(),
+                    dst,
+                );
             }
 
             _ => todo!("unboxing of {:?}", layout_interner.dbg(element_in_layout)),
