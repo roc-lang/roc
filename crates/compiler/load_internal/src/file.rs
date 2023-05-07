@@ -3110,18 +3110,6 @@ fn update<'a>(
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
 
-                    reset_reuse::insert_reset_reuse_operations(
-                        arena,
-                        &layout_interner,
-                        module_id,
-                        ident_ids,
-                        state.target_info,
-                        &mut update_mode_ids,
-                        &mut state.procedures,
-                    );
-
-                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
-
                     drop_specialization::specialize_drops(
                         arena,
                         &mut layout_interner,
@@ -3136,6 +3124,18 @@ fn update<'a>(
                         &layout_interner,
                         ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION
                     );
+
+                    reset_reuse::insert_reset_reuse_operations(
+                        arena,
+                        &layout_interner,
+                        module_id,
+                        ident_ids,
+                        state.target_info,
+                        &mut update_mode_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                     // This is not safe with the new non-recursive RC updates that we do for tag unions
                     //

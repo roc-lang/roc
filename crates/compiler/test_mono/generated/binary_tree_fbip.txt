@@ -15,15 +15,23 @@ procedure Test.5 (Test.67, Test.68, Test.69):
         let Test.53 : Int1 = lowlevel Eq Test.51 Test.52;
         if Test.53 then
             let Test.32 : [<rnu><null>, C *self *self] = UnionAtIndex (Id 0) (Index 0) Test.29;
-            inc Test.32;
             let Test.33 : [<rnu><null>, C *self *self] = UnionAtIndex (Id 0) (Index 1) Test.29;
-            inc Test.33;
-            let #Derived_gen.0 : [<rnu><null>, C *self *self] = Reset { symbol: Test.29, id: UpdateModeId { id: 0 } };
-            let #Derived_gen.1 : [<rnu>C [<rnu><null>, C *self *self] *self, <null>] = lowlevel PtrCast #Derived_gen.0;
-            let Test.43 : [<rnu>C [<rnu><null>, C *self *self] *self, <null>] = Reuse #Derived_gen.1 UpdateModeId { id: 0 } TagId(1) Test.33 Test.30;
-            let Test.45 : I64 = 1i64;
-            let Test.44 : I64 = CallByName Num.19 Test.31 Test.45;
-            jump Test.41 Test.32 Test.43 Test.44;
+            joinpoint #Derived_gen.0 #Derived_gen.5:
+                let #Derived_gen.6 : [<rnu>C [<rnu><null>, C *self *self] *self, <null>] = lowlevel PtrCast #Derived_gen.5;
+                let Test.43 : [<rnu>C [<rnu><null>, C *self *self] *self, <null>] = Reuse #Derived_gen.6 UpdateModeId { id: 2 } TagId(1) Test.33 Test.30;
+                let Test.45 : I64 = 1i64;
+                let Test.44 : I64 = CallByName Num.19 Test.31 Test.45;
+                jump Test.41 Test.32 Test.43 Test.44;
+            in
+            let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.29;
+            if #Derived_gen.1 then
+                let #Derived_gen.7 : [<rnu><null>, C *self *self] = ResetRef { symbol: Test.29, id: UpdateModeId { id: 3 } };
+                jump #Derived_gen.0 #Derived_gen.7;
+            else
+                inc Test.32;
+                inc Test.33;
+                let #Derived_gen.8 : [<rnu><null>, C *self *self] = ResetRef { symbol: Test.29, id: UpdateModeId { id: 4 } };
+                jump #Derived_gen.0 #Derived_gen.8;
         else
             let Test.48 : U8 = 1i64;
             let Test.49 : U8 = GetTagId Test.30;
@@ -31,8 +39,8 @@ procedure Test.5 (Test.67, Test.68, Test.69):
             if Test.50 then
                 let Test.35 : [<rnu><null>, C *self *self] = UnionAtIndex (Id 1) (Index 0) Test.30;
                 let Test.36 : [<rnu>C [<rnu><null>, C *self *self] *self, <null>] = UnionAtIndex (Id 1) (Index 1) Test.30;
-                let #Derived_gen.3 : Int1 = lowlevel RefCountIsUnique Test.30;
-                if #Derived_gen.3 then
+                let #Derived_gen.2 : Int1 = lowlevel RefCountIsUnique Test.30;
+                if #Derived_gen.2 then
                     decref Test.30;
                     jump Test.41 Test.35 Test.36 Test.31;
                 else
