@@ -3289,7 +3289,7 @@ fn list_find_index_empty_typed_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_ends_with_empty() {
     assert_evals_to!(
         indoc!(
@@ -3323,7 +3323,7 @@ fn list_ends_with_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_ends_with_nonempty() {
     assert_evals_to!(
         indoc!(
@@ -3367,7 +3367,7 @@ fn list_ends_with_nonempty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_starts_with_empty() {
     assert_evals_to!(
         indoc!(
@@ -3401,7 +3401,7 @@ fn list_starts_with_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_starts_with_nonempty() {
     assert_evals_to!(
         indoc!(

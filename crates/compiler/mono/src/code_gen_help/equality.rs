@@ -204,6 +204,10 @@ fn eq_tag_union<'a>(
     }
 
     let body = match union_layout {
+        NonRecursive(&[]) => {
+            // cannot be reached at runtime, but we need to generate valid code
+            Stmt::Ret(Symbol::BOOL_TRUE)
+        }
         NonRecursive(tags) => eq_tag_union_help(
             root,
             ident_ids,
