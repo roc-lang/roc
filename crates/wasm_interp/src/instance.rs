@@ -398,7 +398,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let _alignment = self.fetch_immediate_u32(module);
         let offset = self.fetch_immediate_u32(module);
         let base_addr = self.value_store.pop_u32()?;
-        Ok(base_addr + offset)
+        let addr = base_addr + offset;
+        let memory_size = self.memory.len() as u32;
+        if addr >= memory_size {
+            Err(Error::MemoryAccessOutOfBounds(addr, memory_size))
+        } else {
+            Ok(addr)
+        }
     }
 
     fn get_store_addr_value(&mut self, module: &WasmModule<'a>) -> Result<(usize, Value), Error> {
@@ -409,8 +415,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let offset = self.fetch_immediate_u32(module);
         let value = self.value_store.pop();
         let base_addr = self.value_store.pop_u32()?;
-        let addr = (base_addr + offset) as usize;
-        Ok((addr, value))
+        let addr = base_addr + offset;
+        let memory_size = self.memory.len() as u32;
+        if addr >= memory_size {
+            Err(Error::MemoryAccessOutOfBounds(addr, memory_size))
+        } else {
+            Ok((addr as usize, value))
+        }
     }
 
     fn write_debug<T: fmt::Debug>(&mut self, value: T) {
