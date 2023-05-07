@@ -124,17 +124,15 @@ fn if_pointers_equal_return_true<'a>(
 fn if_false_return_false<'a>(
     root: &CodeGenHelp<'a>,
     symbol: Symbol,
-    following: &'a Stmt<'a>,
+    following: Stmt<'a>,
 ) -> Stmt<'a> {
-    Stmt::Switch {
-        cond_symbol: symbol,
-        cond_layout: LAYOUT_BOOL,
-        branches: root
-            .arena
-            .alloc([(0, BranchInfo::None, Stmt::Ret(Symbol::BOOL_FALSE))]),
-        default_branch: (BranchInfo::None, following),
-        ret_layout: LAYOUT_BOOL,
-    }
+    Stmt::if_then_else(
+        root.arena,
+        symbol,
+        Layout::BOOL,
+        following,
+        root.arena.alloc(Stmt::Ret(Symbol::BOOL_FALSE)),
+    )
 }
 
 fn eq_struct<'a>(
@@ -182,7 +180,7 @@ fn eq_struct<'a>(
                 //
                 eq_call_stmt(root.arena.alloc(
                     //
-                    if_false_return_false(root, eq_call_sym, root.arena.alloc(else_stmt)),
+                    if_false_return_false(root, eq_call_sym, else_stmt),
                 )),
             )),
         ))
@@ -579,10 +577,8 @@ fn eq_tag_fields<'a>(
                                 if_false_return_false(
                                     root,
                                     eq_call_sym,
-                                    root.arena.alloc(
-                                        //
-                                        stmt,
-                                    ),
+                                    // else
+                                    stmt,
                                 ),
                             ),
                         ),
@@ -799,48 +795,40 @@ fn eq_list<'a>(
         root,
         eq_elems,
         // else
-        root.arena.alloc(
+        next_1_stmt(root.arena.alloc(
             //
-            next_1_stmt(root.arena.alloc(
+            next_2_stmt(root.arena.alloc(
                 //
-                next_2_stmt(root.arena.alloc(
-                    //
-                    jump_back,
-                )),
+                jump_back,
             )),
-        ),
+        )),
     );
 
-    let if_end_of_list = Stmt::Switch {
-        cond_symbol: is_end,
-        cond_layout: LAYOUT_BOOL,
-        ret_layout: LAYOUT_BOOL,
-        branches: root
-            .arena
-            .alloc([(1, BranchInfo::None, Stmt::Ret(Symbol::BOOL_TRUE))]),
-        default_branch: (
-            BranchInfo::None,
-            root.arena.alloc(
+    let if_end_of_list = Stmt::if_then_else(
+        arena,
+        is_end,
+        Layout::BOOL,
+        Stmt::Ret(Symbol::BOOL_TRUE),
+        root.arena.alloc(
+            //
+            box1_stmt(root.arena.alloc(
                 //
-                box1_stmt(root.arena.alloc(
+                box2_stmt(root.arena.alloc(
                     //
-                    box2_stmt(root.arena.alloc(
+                    elem1_stmt(root.arena.alloc(
                         //
-                        elem1_stmt(root.arena.alloc(
+                        elem2_stmt(root.arena.alloc(
                             //
-                            elem2_stmt(root.arena.alloc(
+                            eq_elems_stmt(root.arena.alloc(
                                 //
-                                eq_elems_stmt(root.arena.alloc(
-                                    //
-                                    if_elems_not_equal,
-                                )),
+                                if_elems_not_equal,
                             )),
                         )),
                     )),
                 )),
-            ),
+            )),
         ),
-    };
+    );
 
     let joinpoint_loop = Stmt::Join {
         id: elems_loop,
@@ -861,28 +849,39 @@ fn eq_list<'a>(
         root,
         eq_len,
         // else
-        root.arena.alloc(
+        elements_1_stmt(root.arena.alloc(
             //
-            start_1_stmt(root.arena.alloc(
+            elements_2_stmt(root.arena.alloc(
                 //
-                start_2_stmt(root.arena.alloc(
-                    //
-                    size_stmt(root.arena.alloc(
+                if_pointers_equal_return_true(
+                    root,
+                    ident_ids,
+                    [elements_1, elements_2],
+                    root.arena.alloc(
                         //
-                        list_size_stmt(root.arena.alloc(
+                        start_1_stmt(root.arena.alloc(
                             //
-                            end_1_stmt(root.arena.alloc(
+                            start_2_stmt(root.arena.alloc(
                                 //
-                                joinpoint_loop,
+                                size_stmt(root.arena.alloc(
+                                    //
+                                    list_size_stmt(root.arena.alloc(
+                                        //
+                                        end_1_stmt(root.arena.alloc(
+                                            //
+                                            joinpoint_loop,
+                                        )),
+                                    )),
+                                )),
                             )),
                         )),
-                    )),
-                )),
+                    ),
+                ),
             )),
-        ),
+        )),
     );
 
-    let pointers_else = len_1_stmt(root.arena.alloc(
+    len_1_stmt(root.arena.alloc(
         //
         len_2_stmt(root.arena.alloc(
             //
@@ -890,19 +889,6 @@ fn eq_list<'a>(
                 //
                 if_different_lengths,
             )),
-        )),
-    ));
-
-    elements_1_stmt(root.arena.alloc(
-        //
-        elements_2_stmt(root.arena.alloc(
-            //
-            if_pointers_equal_return_true(
-                root,
-                ident_ids,
-                [elements_1, elements_2],
-                root.arena.alloc(pointers_else),
-            ),
         )),
     ))
 }
