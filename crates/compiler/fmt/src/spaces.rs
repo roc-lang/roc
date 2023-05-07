@@ -4,8 +4,9 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Header, Module, Pattern, Spaced, Spaces, StrLiteral,
-        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        HasAbility, HasClause, HasImpls, Header, Module, Pattern, RecordBuilderField, Spaced,
+        Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -614,6 +615,29 @@ impl<'a, T: RemoveSpaces<'a> + Copy + std::fmt::Debug> RemoveSpaces<'a> for Assi
     }
 }
 
+impl<'a> RemoveSpaces<'a> for RecordBuilderField<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            RecordBuilderField::Value(a, _, c) => RecordBuilderField::Value(
+                a.remove_spaces(arena),
+                arena.alloc([]),
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            RecordBuilderField::ApplyValue(a, _, c) => RecordBuilderField::ApplyValue(
+                a.remove_spaces(arena),
+                arena.alloc([]),
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            RecordBuilderField::LabelOnly(a) => {
+                RecordBuilderField::LabelOnly(a.remove_spaces(arena))
+            }
+            RecordBuilderField::Malformed(a) => RecordBuilderField::Malformed(a),
+            RecordBuilderField::SpaceBefore(a, _) => a.remove_spaces(arena),
+            RecordBuilderField::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for StrLiteral<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -660,6 +684,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 fields: fields.remove_spaces(arena),
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
+            Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),

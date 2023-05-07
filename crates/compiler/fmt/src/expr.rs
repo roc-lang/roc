@@ -9,7 +9,8 @@ use crate::spaces::{
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
+    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern,
+    RecordBuilderField, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::ident::Accessor;
@@ -100,6 +101,7 @@ impl<'a> Formattable for Expr<'a> {
             Record(fields) => is_collection_multiline(fields),
             Tuple(fields) => is_collection_multiline(fields),
             RecordUpdate { fields, .. } => is_collection_multiline(fields),
+            RecordBuilder(fields) => is_collection_multiline(fields),
         }
     }
 
@@ -340,10 +342,34 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str(string);
             }
             Record(fields) => {
-                fmt_record(buf, None, *fields, indent);
+                fmt_record_like(
+                    buf,
+                    None,
+                    *fields,
+                    indent,
+                    format_assigned_field_multiline,
+                    assigned_field_to_space_before,
+                );
             }
             RecordUpdate { update, fields } => {
-                fmt_record(buf, Some(*update), *fields, indent);
+                fmt_record_like(
+                    buf,
+                    Some(*update),
+                    *fields,
+                    indent,
+                    format_assigned_field_multiline,
+                    assigned_field_to_space_before,
+                );
+            }
+            RecordBuilder(fields) => {
+                fmt_record_like(
+                    buf,
+                    None,
+                    *fields,
+                    indent,
+                    format_record_builder_field_multiline,
+                    record_builder_field_to_space_before,
+                );
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -1301,12 +1327,18 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
     }
 }
 
-fn fmt_record<'a>(
+fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
     buf: &mut Buf,
     update: Option<&'a Loc<Expr<'a>>>,
-    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    fields: Collection<'a, Loc<Field>>,
     indent: u16,
-) {
+    format_field_multiline: Format,
+    to_space_before: ToSpaceBefore,
+) where
+    Field: Formattable,
+    Format: Fn(&mut Buf, &Field, u16, &str),
+    ToSpaceBefore: Fn(&'a Field) -> Option<(&'a Field, &'a [CommentOrNewline<'a>])>,
+{
     let loc_fields = fields.items;
     let final_comments = fields.final_comments();
     buf.indent(indent);
@@ -1342,7 +1374,7 @@ fn fmt_record<'a>(
                 // In this case, we have to move the comma before the comment.
 
                 let is_first_item = index == 0;
-                if let AssignedField::SpaceBefore(_sub_field, spaces) = &field.value {
+                if let Some((_sub_field, spaces)) = to_space_before(&field.value) {
                     let is_only_newlines = spaces.iter().all(|s| s.is_newline());
                     if !is_first_item
                         && !is_only_newlines
@@ -1393,7 +1425,7 @@ fn fmt_record<'a>(
     }
 }
 
-fn format_field_multiline<T>(
+fn format_assigned_field_multiline<T>(
     buf: &mut Buf,
     field: &AssignedField<T>,
     indent: u16,
@@ -1449,7 +1481,7 @@ fn format_field_multiline<T>(
             // ```
             // we'd like to preserve this
 
-            format_field_multiline(buf, sub_field, indent, separator_prefix);
+            format_assigned_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
             // We have something like that:
@@ -1463,12 +1495,108 @@ fn format_field_multiline<T>(
             // # comment
             // otherfield
             // ```
-            format_field_multiline(buf, sub_field, indent, separator_prefix);
+            format_assigned_field_multiline(buf, sub_field, indent, separator_prefix);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
         }
         Malformed(raw) => {
             buf.push_str(raw);
         }
+    }
+}
+
+fn assigned_field_to_space_before<'a, T>(
+    field: &'a AssignedField<'a, T>,
+) -> Option<(&AssignedField<'a, T>, &'a [CommentOrNewline<'a>])> {
+    match field {
+        AssignedField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
+        _ => None,
+    }
+}
+
+fn format_record_builder_field_multiline(
+    buf: &mut Buf,
+    field: &RecordBuilderField,
+    indent: u16,
+    separator_prefix: &str,
+) {
+    use self::RecordBuilderField::*;
+    match field {
+        Value(name, spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push_str(":");
+            buf.spaces(1);
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
+        ApplyValue(name, spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.spaces(1);
+            buf.push_str("<-");
+            buf.spaces(1);
+            ann.value.format(buf, indent);
+            buf.push(',');
+        }
+        LabelOnly(name) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push_str(name.value);
+            buf.push(',');
+        }
+        SpaceBefore(sub_field, _spaces) => {
+            // We have something like that:
+            // ```
+            // # comment
+            // field,
+            // ```
+            // we'd like to preserve this
+
+            format_record_builder_field_multiline(buf, sub_field, indent, separator_prefix);
+        }
+        SpaceAfter(sub_field, spaces) => {
+            // We have something like that:
+            // ```
+            // field # comment
+            // , otherfield
+            // ```
+            // we'd like to transform it into:
+            // ```
+            // field,
+            // # comment
+            // otherfield
+            // ```
+            format_record_builder_field_multiline(buf, sub_field, indent, separator_prefix);
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
+        }
+        Malformed(raw) => {
+            buf.push_str(raw);
+        }
+    }
+}
+
+fn record_builder_field_to_space_before<'a>(
+    field: &'a RecordBuilderField<'a>,
+) -> Option<(&RecordBuilderField<'a>, &'a [CommentOrNewline<'a>])> {
+    match field {
+        RecordBuilderField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
+        _ => None,
     }
 }
 
