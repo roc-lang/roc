@@ -777,6 +777,13 @@ fn refcount_str<'a>(
     let layout_isize = root.layout_isize;
     let field_layouts = arena.alloc([Layout::OPAQUE_PTR, layout_isize, layout_isize]);
 
+    let is_increment = matches!(ctx.op, HelperOp::Inc);
+
+    let (modify_rc_ptr, modify_data_ptr) = match is_increment {
+        true => (LowLevel::RefCountIncRcPtr, LowLevel::RefCountIncDataPtr),
+        false => (LowLevel::RefCountDecRcPtr, LowLevel::RefCountDecDataPtr),
+    };
+
     // Get the last word as a signed int
     let last_word = root.create_symbol(ident_ids, "last_word");
     let last_word_expr = Expr::StructAtIndex {
@@ -819,6 +826,11 @@ fn refcount_str<'a>(
     };
     let length_stmt = |next| Stmt::Let(length, length_expr, layout_isize, next);
 
+    let alignment = root.create_symbol(ident_ids, "alignment");
+    let alignment_int = root.target_info.ptr_width() as u32;
+    let alignment_expr = Expr::Literal(Literal::Int((alignment_int as u128).to_ne_bytes()));
+    let alignment_stmt = |next| Stmt::Let(alignment, alignment_expr, layout_isize, next);
+
     // let is_slice = lowlevel NumLt length zero
     let is_slice = root.create_symbol(ident_ids, "is_slice");
     let is_slice_stmt =
@@ -828,39 +840,24 @@ fn refcount_str<'a>(
     // Branch on seamless slice vs "real" string
     //
 
-    let jp_chars = JoinPointId(root.create_symbol(ident_ids, "jp_chars"));
-    let chars = root.create_symbol(ident_ids, "chars");
-    let param_elems = Param {
-        symbol: chars,
-        ownership: Ownership::Owned,
-        layout: Layout::OPAQUE_PTR,
+    let second_argument = match is_increment {
+        true => Symbol::ARG_2,
+        false => alignment,
     };
 
-    // one = 1
-    let one = root.create_symbol(ident_ids, "one");
-    let one_expr = Expr::Literal(Literal::Int(1i128.to_ne_bytes()));
-    let one_stmt = |next| Stmt::Let(one, one_expr, layout_isize, next);
-
-    // slice_elems = lowlevel NumShiftLeftBy length one
-    let slice_chars = root.create_symbol(ident_ids, "slice_chars");
-    let slice_chars_stmt = |next| {
-        let_lowlevel(
-            arena,
-            layout_isize,
-            slice_chars,
-            NumShiftLeftBy,
-            &[length, one],
-            next,
-        )
-    };
-
-    let slice_branch = one_stmt(arena.alloc(
-        //
-        slice_chars_stmt(arena.alloc(
+    // when the string is a slice, the capacity field is a pointer to the refcount
+    let unit = root.create_symbol(ident_ids, "unit");
+    let slice_branch = let_lowlevel(
+        arena,
+        Layout::UNIT,
+        unit,
+        modify_rc_ptr,
+        &[last_word, second_argument],
+        arena.alloc(
             //
-            Stmt::Jump(jp_chars, arena.alloc([slice_chars])),
-        )),
-    ));
+            Stmt::Ret(unit),
+        ),
+    );
 
     // Characters pointer for a real string
     let string_chars = root.create_symbol(ident_ids, "string_chars");
@@ -871,11 +868,23 @@ fn refcount_str<'a>(
     };
     let string_chars_stmt = |next| Stmt::Let(string_chars, string_chars_expr, layout_isize, next);
 
+    let modify_rc_stmt = let_lowlevel(
+        arena,
+        Layout::UNIT,
+        unit,
+        modify_data_ptr,
+        &[string_chars, second_argument],
+        arena.alloc(
+            //
+            Stmt::Ret(unit),
+        ),
+    );
+
     let string_branch = arena.alloc(
         //
         string_chars_stmt(arena.alloc(
             //
-            Stmt::Jump(jp_chars, arena.alloc([string_chars])),
+            modify_rc_stmt,
         )),
     );
 
@@ -884,49 +893,30 @@ fn refcount_str<'a>(
         is_slice,
         Layout::UNIT,
         slice_branch,
-        root.arena.alloc(string_branch),
-    );
-
-    //
-    // Modify Refcount
-    //
-
-    let alignment = root.target_info.ptr_width() as u32;
-    let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
-    let modify_rc_stmt = modify_refcount(
-        root,
-        ident_ids,
-        ctx,
-        chars,
-        alignment,
-        arena.alloc(ret_stmt),
+        string_branch,
     );
 
     //
     // JoinPoint for slice vs list
     //
 
-    let joinpoint_elems = Stmt::Join {
-        id: jp_chars,
-        parameters: arena.alloc([param_elems]),
-        body: arena.alloc(modify_rc_stmt),
-        remainder: arena.alloc(
+    let modify_stmt = length_stmt(arena.alloc(
+        //
+        is_slice_stmt(arena.alloc(
             //
-            length_stmt(arena.alloc(
-                //
-                is_slice_stmt(arena.alloc(
-                    //
-                    if_slice,
-                )),
-            )),
-        ),
-    };
+            if_slice,
+        )),
+    ));
 
     let if_big_stmt = Stmt::if_then_else(
         root.arena,
         is_big_str,
         Layout::UNIT,
-        joinpoint_elems,
+        if is_increment {
+            modify_stmt
+        } else {
+            alignment_stmt(arena.alloc(modify_stmt))
+        },
         root.arena.alloc(rc_return_stmt(root, ident_ids, ctx)),
     );
 
