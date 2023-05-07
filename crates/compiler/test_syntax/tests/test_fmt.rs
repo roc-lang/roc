@@ -1979,6 +1979,27 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_record_builder_func_arg() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                succeed {  a: get "a" |> batch,
+                    b: get "b" |> batch, 
+                }
+                "#
+            ),
+            indoc!(
+                r#"
+                succeed {
+                    a: get "a" |> batch,
+                    b: get "b" |> batch,
+                }
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn final_comments_in_records() {
         expr_formats_same(indoc!(
             r#"
