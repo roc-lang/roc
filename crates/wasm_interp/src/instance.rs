@@ -1808,8 +1808,17 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.module.types.look_up(signature_index).0.len()
             };
 
+            let fn_name = self
+                .module
+                .names
+                .function_names
+                .iter()
+                .find(|(idx, _)| *idx == *fn_index as u32)
+                .map(|(_, name)| *name)
+                .unwrap_or("");
+
             // Function and address match wasm-objdump formatting, for easy copy & find
-            writeln!(buffer, "func[{}]", fn_index)?;
+            writeln!(buffer, "func[{}]  {}", fn_index, fn_name)?;
             writeln!(buffer, "  address  {:06x}", execution_addrs.next().unwrap())?;
 
             write!(buffer, "  args     ")?;
