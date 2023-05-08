@@ -2133,6 +2133,20 @@ fn pretty_runtime_error<'b>(
 
             title = "DEGENERATE BRANCH";
         }
+        RuntimeError::MultipleRecordBuilders(region) => {
+            let tip = alloc
+                .tip()
+                .append(alloc.reflow("You can combine them or apply them separately."));
+
+            doc = alloc.stack([
+                alloc.reflow("This function is applied to multiple record builders:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.note("Functions can only take at most one record builder!"),
+                tip,
+            ]);
+
+            title = "MULTIPLE RECORD BUILDERS";
+        }
     }
 
     (doc, title)

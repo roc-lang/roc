@@ -137,6 +137,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | MalformedIdent(_, _)
         | MalformedClosure
         | PrecedenceConflict { .. }
+        | MultipleRecordBuilders { .. }
         | Tag(_)
         | OpaqueRef(_)
         | IngestedFile(_, _)
@@ -253,7 +254,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             }
         }
         RecordBuilder(_) => {
-            todo!("Compiler error: Record builders must be applied to functions");
+            todo!("Compiler error: Record builders must be applied to functions")
         }
         BinOps(lefts, right) => desugar_bin_ops(arena, loc_expr.region, lefts, right),
         Defs(defs, loc_ret) => {
@@ -274,7 +275,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                     match current {
                         RecordBuilder(fields) => {
                             if builder_apply_exprs.is_some() {
-                                todo!("Compiler error: A function application can only be passed one record builder")
+                                return arena.alloc(Loc {
+                                    value: MultipleRecordBuilders(loc_expr),
+                                    region: loc_expr.region,
+                                });
                             }
 
                             let builder_arg = record_builder_arg(arena, loc_arg.region, fields);

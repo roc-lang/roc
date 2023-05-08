@@ -78,7 +78,8 @@ impl<'a> Formattable for Expr<'a> {
             UnaryOp(loc_subexpr, _)
             | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
                 expr: loc_subexpr, ..
-            }) => loc_subexpr.is_multiline(),
+            })
+            | MultipleRecordBuilders(loc_subexpr) => loc_subexpr.is_multiline(),
 
             ParensAround(subexpr) => subexpr.is_multiline(),
 
@@ -498,6 +499,9 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
+            MultipleRecordBuilders(sub_expr) => {
+                sub_expr.format_with_options(buf, parens, newlines, indent)
+            }
             IngestedFile(_, _) => {}
         }
     }

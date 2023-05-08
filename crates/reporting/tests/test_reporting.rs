@@ -10177,6 +10177,33 @@ I recommend using camelCase. It's the standard style in Roc code!
         )
     );
 
+    // Record Builders
+
+    test_report!(
+        multiple_record_builders,
+        indoc!(
+            r#"
+            succeed
+                { a <- apply "a" }
+                { b <- apply "b" }
+            "#
+        ),
+        @r###"
+    ── MULTIPLE RECORD BUILDERS ────────────────────────────── /code/proj/Main.roc ─
+
+    This function is applied to multiple record builders:
+
+    4│>      succeed
+    5│>          { a <- apply "a" }
+    6│>          { b <- apply "b" }
+
+    Note: Functions can only take at most one record builder!
+
+    Tip: You can combine them or apply them separately.
+
+    "###
+    );
+
     test_report!(
         destructure_assignment_introduces_no_variables_nested,
         indoc!(

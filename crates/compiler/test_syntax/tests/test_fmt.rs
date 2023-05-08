@@ -2000,6 +2000,25 @@ mod test_fmt {
     }
 
     #[test]
+    fn can_format_multiple_record_builders() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                succeed { a <- get "a" } 
+                    { b <- get "b" }
+                "#
+            ),
+            indoc!(
+                r#"
+                succeed
+                    { a <- get "a" }
+                    { b <- get "b" }
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn final_comments_in_records() {
         expr_formats_same(indoc!(
             r#"

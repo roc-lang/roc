@@ -773,6 +773,32 @@ mod test_can {
         }
     }
 
+    #[test]
+    fn multiple_record_builders_error() {
+        let src = indoc!(
+            r#"
+                succeed 
+                    { a <- apply "a" }
+                    { b <- apply "b" }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, loc_expr, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
+        )));
+
+        assert!(matches!(
+            loc_expr.value,
+            Expr::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
+        ));
+    }
+
     // TAIL CALLS
     fn get_closure(expr: &Expr, i: usize) -> roc_can::expr::Recursive {
         match expr {

@@ -1359,6 +1359,14 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
+        ast::Expr::MultipleRecordBuilders(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = MultipleRecordBuilders(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
         &ast::Expr::NonBase10Int {
             string,
             base,
