@@ -10205,6 +10205,27 @@ I recommend using camelCase. It's the standard style in Roc code!
     );
 
     test_report!(
+        unapplied_record_builder,
+        indoc!(
+            r#"
+            { a <- apply "a" }
+            "#
+        ),
+        @r###"
+    ── UNAPPLIED RECORD BUILDER ────────────────────────────── /code/proj/Main.roc ─
+
+    This record builder was not applied to a function:
+
+    4│      { a <- apply "a" }
+            ^^^^^^^^^^^^^^^^^^
+
+    However, we need a function to construct the record.
+
+    Note: Functions must be applied directly. The pipe operator (|>) cannot be used.
+    "###
+    );
+
+    test_report!(
         destructure_assignment_introduces_no_variables_nested,
         indoc!(
             r#"

@@ -362,6 +362,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
             | Problem::RuntimeError(RuntimeError::MultipleRecordBuilders(region))
+            | Problem::RuntimeError(RuntimeError::UnappliedRecordBuilder(region))
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
             | Problem::InvalidHexadecimal(region)
@@ -591,6 +592,7 @@ pub enum RuntimeError {
     DegenerateBranch(Region),
 
     MultipleRecordBuilders(Region),
+    UnappliedRecordBuilder(Region),
 }
 
 impl RuntimeError {

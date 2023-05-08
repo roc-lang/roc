@@ -747,9 +747,8 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
-            Expr::MultipleRecordBuilders(a) => {
-                Expr::MultipleRecordBuilders(arena.alloc(a.remove_spaces(arena)))
-            }
+            Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
+            Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),

@@ -1929,6 +1929,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
         | Expr::MultipleRecordBuilders { .. }
+        | Expr::UnappliedRecordBuilder { .. }
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
         | Expr::Crash => return Err(()),

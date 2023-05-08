@@ -138,6 +138,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | MalformedClosure
         | PrecedenceConflict { .. }
         | MultipleRecordBuilders { .. }
+        | UnappliedRecordBuilder { .. }
         | Tag(_)
         | OpaqueRef(_)
         | IngestedFile(_, _)
@@ -253,9 +254,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 }
             }
         }
-        RecordBuilder(_) => {
-            todo!("Compiler error: Record builders must be applied to functions")
-        }
+        RecordBuilder(_) => arena.alloc(Loc {
+            value: UnappliedRecordBuilder(loc_expr),
+            region: loc_expr.region,
+        }),
         BinOps(lefts, right) => desugar_bin_ops(arena, loc_expr.region, lefts, right),
         Defs(defs, loc_ret) => {
             let mut defs = (*defs).clone();

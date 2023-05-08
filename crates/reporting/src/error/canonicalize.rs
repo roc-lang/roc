@@ -2147,6 +2147,18 @@ fn pretty_runtime_error<'b>(
 
             title = "MULTIPLE RECORD BUILDERS";
         }
+        RuntimeError::UnappliedRecordBuilder(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This record builder was not applied to a function:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("However, we need a function to construct the record."),
+                alloc.note(
+                    "Functions must be applied directly. The pipe operator (|>) cannot be used.",
+                ),
+            ]);
+
+            title = "UNAPPLIED RECORD BUILDER";
+        }
     }
 
     (doc, title)

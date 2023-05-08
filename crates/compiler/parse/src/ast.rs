@@ -328,6 +328,7 @@ pub enum Expr<'a> {
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
     MultipleRecordBuilders(&'a Loc<Expr<'a>>),
+    UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1535,7 +1536,8 @@ impl<'a> Malformed for Expr<'a> {
             MalformedIdent(_, _) |
             MalformedClosure |
             PrecedenceConflict(_) |
-            MultipleRecordBuilders(_) => true,
+            MultipleRecordBuilders(_) |
+            UnappliedRecordBuilder(_) => true,
         }
     }
 }

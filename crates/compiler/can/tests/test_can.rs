@@ -799,6 +799,30 @@ mod test_can {
         ));
     }
 
+    #[test]
+    fn hanging_record_builder() {
+        let src = indoc!(
+            r#"
+                { a <- apply "a" }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, loc_expr, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
+        )));
+
+        assert!(matches!(
+            loc_expr.value,
+            Expr::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
+        ));
+    }
+
     // TAIL CALLS
     fn get_closure(expr: &Expr, i: usize) -> roc_can::expr::Recursive {
         match expr {
