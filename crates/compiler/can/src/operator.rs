@@ -269,17 +269,24 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             let mut builder_apply_exprs = None;
 
             for loc_arg in loc_args.iter() {
-                let arg = match loc_arg.value {
-                    RecordBuilder(fields) => {
-                        if builder_apply_exprs.is_some() {
-                            todo!("Compiler error: A function application can only be passed one record builder")
-                        }
+                let mut current = loc_arg.value;
+                let arg = loop {
+                    match current {
+                        RecordBuilder(fields) => {
+                            if builder_apply_exprs.is_some() {
+                                todo!("Compiler error: A function application can only be passed one record builder")
+                            }
 
-                        let builder_arg = record_builder_arg(arena, loc_arg.region, fields);
-                        builder_apply_exprs = Some(builder_arg.apply_exprs);
-                        builder_arg.closure
+                            let builder_arg = record_builder_arg(arena, loc_arg.region, fields);
+                            builder_apply_exprs = Some(builder_arg.apply_exprs);
+
+                            break builder_arg.closure;
+                        }
+                        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+                            current = *expr;
+                        }
+                        _ => break loc_arg,
                     }
-                    _ => loc_arg,
                 };
 
                 desugared_args.push(desugar_expr(arena, arg));
