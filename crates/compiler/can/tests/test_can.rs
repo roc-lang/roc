@@ -735,7 +735,7 @@ mod test_can {
     fn assert_apply_call(expr: &Expr, expected: &str, interns: &roc_module::symbol::Interns) {
         match simplify_curried_call(expr) {
             (Var(sym, _), Str(val)) => {
-                assert_eq!(sym.as_str(&interns), "apply");
+                assert_eq!(sym.as_str(interns), "apply");
                 assert_eq!(val.to_string(), expected);
             }
             call => panic!("Not a valid (get {}) call: {:?}", expected, call),
