@@ -1593,7 +1593,7 @@ mod insert_recursive_layout {
         };
         let repr = LayoutRepr::Union(UnionLayout::Recursive(&*arena.alloc([
             &*arena.alloc([interner.insert(list_rec)]),
-            &*arena.alloc_slice_fill_iter([interner.insert(Layout::struct_no_name_order(
+            &*arena.alloc_slice_fill_iter([interner.insert_no_semantic(LayoutRepr::struct_(
                 &*arena.alloc([Layout::NAKED_RECURSIVE_PTR]),
             ))]),
         ])));

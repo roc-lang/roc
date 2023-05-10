@@ -5941,8 +5941,10 @@ where
                 Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
 
             debug_assert_eq!(
-                Layout::struct_no_name_order(field_layouts),
-                layout_cache.get_in(lambda_set.runtime_representation())
+                LayoutRepr::struct_(field_layouts),
+                layout_cache
+                    .get_in(lambda_set.runtime_representation())
+                    .repr
             );
 
             let expr = Expr::Struct(symbols);

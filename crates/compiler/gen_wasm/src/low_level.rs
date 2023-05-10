@@ -2389,9 +2389,12 @@ pub fn call_higher_order_lowlevel<'a>(
         // If there is closure data, make sure we put in a struct it before passing it to the
         // external builtin impl. That way it's always an `i32` pointer.
         let wrapped_closure_data_sym = backend.create_symbol("wrapped_captures");
-        let wrapped_captures_layout = backend.layout_interner.insert(Layout::struct_no_name_order(
-            backend.env.arena.alloc([closure_data_layout]),
-        ));
+        let wrapped_captures_layout =
+            backend
+                .layout_interner
+                .insert_no_semantic(LayoutRepr::struct_(
+                    backend.env.arena.alloc([closure_data_layout]),
+                ));
 
         // make sure that the wrapping struct is available in stack memory, so we can hand out a
         // pointer to it.

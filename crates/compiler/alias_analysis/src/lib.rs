@@ -403,7 +403,7 @@ fn build_entry_point<'a>(
 
         let block = builder.add_block();
 
-        let struct_layout = interner.insert(Layout::struct_no_name_order(layouts));
+        let struct_layout = interner.insert_no_semantic(LayoutRepr::struct_(layouts));
         let type_id = layout_spec(env, &mut builder, interner, struct_layout)?;
 
         let argument = builder.add_unknown_with(block, &[], type_id)?;
@@ -460,9 +460,8 @@ fn proc_spec<'a>(
     )?;
 
     let root = BlockExpr(block, value_id);
-    let args_struct_layout = interner.insert(Layout::struct_no_name_order(
-        argument_layouts.into_bump_slice(),
-    ));
+    let args_struct_layout =
+        interner.insert_no_semantic(LayoutRepr::struct_(argument_layouts.into_bump_slice()));
     let arg_type_id = layout_spec(&mut env, &mut builder, interner, args_struct_layout)?;
     let ret_type_id = layout_spec(&mut env, &mut builder, interner, proc.ret_layout)?;
 

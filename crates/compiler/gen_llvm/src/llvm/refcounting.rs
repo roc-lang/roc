@@ -19,7 +19,7 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::build::{cast_if_necessary_for_opaque_recursive_pointers, load_roc_value, FunctionSpec};
@@ -267,7 +267,7 @@ fn modify_refcount_struct<'a, 'ctx>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let layout = layout_interner.insert(Layout::struct_no_name_order(layouts));
+    let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(layouts));
 
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
@@ -1274,7 +1274,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
 
         env.builder.position_at_end(block);
 
-        let fields_struct = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+        let fields_struct = layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
         let wrapper_type = basic_type_from_layout(env, layout_interner, fields_struct);
 
         // cast the opaque pointer to a pointer of the correct shape
@@ -1744,7 +1744,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
         let block = env.context.append_basic_block(parent, "tag_id_modify");
         env.builder.position_at_end(block);
 
-        let fields_struct = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+        let fields_struct = layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
         let data_struct_type = basic_type_from_layout(env, layout_interner, fields_struct);
 
         debug_assert!(data_struct_type.is_struct_type());

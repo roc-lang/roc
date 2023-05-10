@@ -1208,7 +1208,7 @@ fn store_pattern_help<'a>(
                 fields.extend(arguments.iter().map(|x| x.1));
 
                 let layout =
-                    layout_cache.put_in(Layout::struct_no_name_order(fields.into_bump_slice()));
+                    layout_cache.put_in_no_semantic(LayoutRepr::struct_(fields.into_bump_slice()));
 
                 return store_newtype_pattern(
                     env,

@@ -973,7 +973,7 @@ impl<'a> UnionLayout<'a> {
     {
         tags.iter()
             .map(|field_layouts| {
-                Layout::struct_no_name_order(field_layouts).alignment_bytes(interner, target_info)
+                LayoutRepr::struct_(field_layouts).alignment_bytes(interner, target_info)
             })
             .max()
             .unwrap_or(0)
@@ -989,13 +989,13 @@ impl<'a> UnionLayout<'a> {
             }
             UnionLayout::Recursive(tags) => Self::tags_alignment_bytes(interner, tags, target_info),
             UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                Layout::struct_no_name_order(field_layouts).alignment_bytes(interner, target_info)
+                LayoutRepr::struct_(field_layouts).alignment_bytes(interner, target_info)
             }
             UnionLayout::NullableWrapped { other_tags, .. } => {
                 Self::tags_alignment_bytes(interner, other_tags, target_info)
             }
             UnionLayout::NullableUnwrapped { other_fields, .. } => {
-                Layout::struct_no_name_order(other_fields).alignment_bytes(interner, target_info)
+                LayoutRepr::struct_(other_fields).alignment_bytes(interner, target_info)
             }
         };
 
@@ -2458,19 +2458,6 @@ impl<'a> Layout<'a> {
         (data_width, data_align)
     }
 
-    /// Used to build a `Layout::Struct` where the field name order is irrelevant.
-    // TODO: to be eliminated once we have SemanticRepr playing a role.
-    pub fn struct_no_name_order(field_layouts: &'a [InLayout]) -> Self {
-        if field_layouts.is_empty() {
-            Self::UNIT_NAKED
-        } else {
-            Self {
-                repr: LayoutRepr::Struct { field_layouts },
-                semantic: SemanticRepr::None,
-            }
-        }
-    }
-
     pub fn runtime_representation<I>(&self, interner: &I) -> Self
     where
         I: LayoutInterner<'a>,
@@ -2503,6 +2490,10 @@ impl<'a> std::ops::Deref for Layout<'a> {
 }
 
 impl<'a> LayoutRepr<'a> {
+    pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
+        Self::Struct { field_layouts }
+    }
+
     pub fn safe_to_memcpy<I>(&self, interner: &I) -> bool
     where
         I: LayoutInterner<'a>,
@@ -4091,9 +4082,8 @@ where
             let answer1 = if field_layouts.len() == 1 {
                 field_layouts[0]
             } else {
-                env.cache.put_in(Layout::struct_no_name_order(
-                    field_layouts.into_bump_slice(),
-                ))
+                env.cache
+                    .put_in_no_semantic(LayoutRepr::struct_(field_layouts.into_bump_slice()))
             };
 
             answer1
@@ -4104,9 +4094,8 @@ where
             if data_tag_arguments.len() == 1 {
                 data_tag_arguments[0]
             } else {
-                env.cache.put_in(Layout::struct_no_name_order(
-                    data_tag_arguments.into_bump_slice(),
-                ))
+                env.cache
+                    .put_in_no_semantic(LayoutRepr::struct_(data_tag_arguments.into_bump_slice()))
             }
         }
         Wrapped(variant) => {

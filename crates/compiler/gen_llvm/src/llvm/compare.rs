@@ -11,7 +11,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::build::{load_roc_value, use_roc_value, BuilderExt};
@@ -973,7 +973,7 @@ fn build_tag_eq_help<'a, 'ctx>(
                 env.builder.position_at_end(block);
 
                 let struct_layout =
-                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                    layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
                 let answer = eq_ptr_to_struct(
                     env,
@@ -1046,7 +1046,7 @@ fn build_tag_eq_help<'a, 'ctx>(
                 env.builder.position_at_end(block);
 
                 let struct_layout =
-                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                    layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
                 let answer = eq_ptr_to_struct(
                     env,
@@ -1108,7 +1108,8 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             env.builder.position_at_end(compare_other);
 
-            let struct_layout = layout_interner.insert(Layout::struct_no_name_order(other_fields));
+            let struct_layout =
+                layout_interner.insert_no_semantic(LayoutRepr::struct_(other_fields));
 
             let answer = eq_ptr_to_struct(
                 env,
@@ -1208,7 +1209,7 @@ fn build_tag_eq_help<'a, 'ctx>(
                 env.builder.position_at_end(block);
 
                 let struct_layout =
-                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                    layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
                 let answer = eq_ptr_to_struct(
                     env,
@@ -1248,7 +1249,8 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             env.builder.position_at_end(compare_fields);
 
-            let struct_layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+            let struct_layout =
+                layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
             let answer = eq_ptr_to_struct(
                 env,

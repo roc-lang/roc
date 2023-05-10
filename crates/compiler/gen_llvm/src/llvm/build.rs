@@ -1348,7 +1348,7 @@ pub fn build_exp_expr<'a, 'ctx>(
                     let field_layouts = tag_layouts[*tag_id as usize];
 
                     let struct_layout =
-                        layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                        layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
                     let opaque_data_ptr = env
@@ -1405,7 +1405,7 @@ pub fn build_exp_expr<'a, 'ctx>(
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
                     let struct_layout =
-                        layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                        layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
@@ -1456,7 +1456,7 @@ pub fn build_exp_expr<'a, 'ctx>(
 
                     let field_layouts = other_fields;
                     let struct_layout =
-                        layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                        layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
@@ -2095,7 +2095,7 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let struct_layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+    let struct_layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
     let struct_type =
         basic_type_from_layout(env, layout_interner, struct_layout).into_struct_type();
 
@@ -3718,7 +3718,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
 
         builder.position_at_end(entry);
 
-        let wrapped_layout = layout_interner.insert(roc_call_result_layout(
+        let wrapped_layout = layout_interner.insert_no_semantic(roc_call_result_layout(
             env.arena,
             return_layout,
             env.target_info,
@@ -3859,7 +3859,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
         builder.position_at_end(last_block);
 
-        let wrapper_result = layout_interner.insert(Layout::struct_no_name_order(
+        let wrapper_result = layout_interner.insert_no_semantic(LayoutRepr::struct_(
             env.arena.alloc([Layout::U64, return_layout]),
         ));
 
@@ -4473,10 +4473,10 @@ fn roc_call_result_layout<'a>(
     arena: &'a Bump,
     return_layout: InLayout<'a>,
     target_info: TargetInfo,
-) -> Layout<'a> {
+) -> LayoutRepr<'a> {
     let elements = [Layout::U64, Layout::usize(target_info), return_layout];
 
-    Layout::struct_no_name_order(arena.alloc(elements))
+    LayoutRepr::struct_(arena.alloc(elements))
 }
 
 fn roc_call_result_type<'ctx>(
