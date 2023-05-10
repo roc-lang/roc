@@ -8,8 +8,8 @@ procedure Str.3 (#Attr.2, #Attr.3):
 
 procedure Test.11 (Test.29, #Attr.12):
     let Test.10 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let #Derived_gen.0 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.0 then
+    let #Derived_gen.2 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.2 then
         decref #Attr.12;
         ret Test.10;
     else
@@ -23,7 +23,7 @@ procedure Test.14 (Test.62, Test.63):
     joinpoint Test.37 Test.36 #Attr.12:
         let Test.12 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
         let Test.13 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-        joinpoint #Derived_gen.1:
+        joinpoint #Derived_gen.0:
             let Test.43 : {} = Struct {};
             let Test.42 : {} = CallByName Test.11 Test.43 Test.12;
             let Test.38 : [<r>C {}, C I64 {}] = CallByName Test.9 Test.42 Test.13;
@@ -38,13 +38,13 @@ procedure Test.14 (Test.62, Test.63):
                     jump Test.37 Test.40 Test.38;
             
         in
-        let #Derived_gen.2 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-        if #Derived_gen.2 then
+        let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if #Derived_gen.1 then
             decref #Attr.12;
-            jump #Derived_gen.1;
+            jump #Derived_gen.0;
         else
             decref #Attr.12;
-            jump #Derived_gen.1;
+            jump #Derived_gen.0;
     in
     jump Test.37 Test.62 Test.63;
 
