@@ -533,7 +533,8 @@ impl<'a> CodeGenHelp<'a> {
         layout_interner: &mut STLayoutInterner<'a>,
         layout: InLayout<'a>,
     ) -> InLayout<'a> {
-        let repr = match layout_interner.get(layout).repr {
+        let lay = layout_interner.get(layout);
+        let repr = match lay.repr {
             LayoutRepr::Builtin(Builtin::List(v)) => {
                 let v = self.replace_rec_ptr(ctx, layout_interner, v);
                 LayoutRepr::Builtin(Builtin::List(v))
@@ -581,7 +582,8 @@ impl<'a> CodeGenHelp<'a> {
             // This line is the whole point of the function
             LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
         };
-        layout_interner.insert_no_semantic(repr)
+
+        layout_interner.insert(Layout::new(repr, lay.semantic()))
     }
 
     fn union_tail_recursion_fields(
