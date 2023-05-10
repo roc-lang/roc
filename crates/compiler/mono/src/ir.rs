@@ -5,7 +5,7 @@ use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
     LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche,
-    RawFunctionLayout, SemanticRepr, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
