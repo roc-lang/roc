@@ -58,7 +58,7 @@ procedure Test.11 (Test.53, Test.54):
     joinpoint Test.27 Test.12 #Attr.12:
         let Test.8 : Int1 = UnionAtIndex (Id 2) (Index 1) #Attr.12;
         let Test.7 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-        joinpoint #Derived_gen.5:
+        joinpoint #Derived_gen.3:
             joinpoint Test.31 Test.29:
                 let Test.30 : U8 = GetTagId Test.7;
                 switch Test.30:
@@ -85,14 +85,14 @@ procedure Test.11 (Test.53, Test.54):
                     jump Test.31 Test.32;
             
         in
-        let #Derived_gen.6 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-        if #Derived_gen.6 then
+        let #Derived_gen.4 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if #Derived_gen.4 then
             decref #Attr.12;
-            jump #Derived_gen.5;
+            jump #Derived_gen.3;
         else
             inc Test.7;
             decref #Attr.12;
-            jump #Derived_gen.5;
+            jump #Derived_gen.3;
     in
     jump Test.27 Test.53 Test.54;
 
@@ -125,7 +125,7 @@ procedure Test.6 (Test.7, Test.8, Test.5):
 procedure Test.9 (Test.10, #Attr.12):
     let Test.8 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
     let Test.7 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    joinpoint #Derived_gen.3:
+    joinpoint #Derived_gen.5:
         let Test.37 : U8 = GetTagId Test.7;
         joinpoint Test.38 Test.36:
             switch Test.8:
@@ -153,14 +153,14 @@ procedure Test.9 (Test.10, #Attr.12):
                 jump Test.38 Test.39;
         
     in
-    let #Derived_gen.4 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.4 then
+    let #Derived_gen.6 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.6 then
         decref #Attr.12;
-        jump #Derived_gen.3;
+        jump #Derived_gen.5;
     else
         inc Test.7;
         decref #Attr.12;
-        jump #Derived_gen.3;
+        jump #Derived_gen.5;
 
 procedure Test.0 ():
     let Test.41 : Int1 = false;

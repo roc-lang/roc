@@ -13,8 +13,8 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, TagExt,
-    TupleElems, UnsortedUnionLabels, Variable, VariableSubsSlice,
+    self, Content, FlatType, GetSubsSlice, OptVariable, RecordFields, Subs, TagExt, TupleElems,
+    UnsortedUnionLabels, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, gather_tuple_elems_unsorted_iter, RecordField, RecordFieldsError,
@@ -2505,6 +2505,10 @@ impl<'a> std::ops::Deref for Layout<'a> {
 }
 
 impl<'a> LayoutRepr<'a> {
+    const UNIT: Self = LayoutRepr::struct_(&[]);
+    const BOOL: Self = LayoutRepr::Builtin(Builtin::Bool);
+    const U8: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U8));
+
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
         Self::Struct { field_layouts }
     }
@@ -3630,9 +3634,38 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
+trait Label: subs::Label + Ord + Clone + Into<TagOrClosure> {
+    fn semantic_repr<'a, 'r>(
+        arena: &'a Bump,
+        labels: impl ExactSizeIterator<Item = &'r Self>,
+    ) -> SemanticRepr<'a>
+    where
+        Self: 'r;
+}
+
+impl Label for TagName {
+    fn semantic_repr<'a, 'r>(
+        arena: &'a Bump,
+        labels: impl ExactSizeIterator<Item = &'r Self>,
+    ) -> SemanticRepr<'a> {
+        SemanticRepr::tag_union(
+            arena.alloc_slice_fill_iter(labels.map(|x| &*arena.alloc_str(x.0.as_str()))),
+        )
+    }
+}
+
+impl Label for Symbol {
+    fn semantic_repr<'a, 'r>(
+        arena: &'a Bump,
+        labels: impl ExactSizeIterator<Item = &'r Self>,
+    ) -> SemanticRepr<'a> {
+        SemanticRepr::lambdas(arena.alloc_slice_fill_iter(labels.copied()))
+    }
+}
+
 fn union_sorted_non_recursive_tags_help<'a, L>(
     env: &mut Env<'a, '_>,
-    tags_list: &[(&'_ L, &[Variable])],
+    tags_list: &mut Vec<'_, &'_ (&'_ L, &[Variable])>,
 ) -> Cacheable<UnionVariant<'a>>
 where
     L: Label + Ord + Clone + Into<TagOrClosure>,
@@ -3640,7 +3673,6 @@ where
     let mut cache_criteria = CACHEABLE;
 
     // sort up front; make sure the ordering stays intact!
-    let mut tags_list = Vec::from_iter_in(tags_list.iter(), env.arena);
     tags_list.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     match tags_list.len() {
@@ -3649,7 +3681,7 @@ where
             Cacheable(UnionVariant::Never, cache_criteria)
         }
         1 => {
-            let &(tag_name, arguments) = tags_list.remove(0);
+            let &&(tag_name, arguments) = &tags_list[0];
             let tag_name = tag_name.clone().into();
 
             // just one tag in the union (but with arguments) can be a struct
@@ -3708,7 +3740,7 @@ where
 
             let mut inhabited_tag_ids = BitVec::<usize>::repeat(true, num_tags);
 
-            for &(tag_name, arguments) in tags_list.into_iter() {
+            for &&(tag_name, arguments) in tags_list.iter() {
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, env.arena);
 
                 for &var in arguments {
@@ -4078,18 +4110,26 @@ where
         return layout_from_newtype(env, tags);
     }
 
-    let tags_vec = &tags.tags;
+    let mut tags_vec = Vec::from_iter_in(tags.tags.iter(), env.arena);
 
     let mut criteria = CACHEABLE;
 
     let variant =
-        union_sorted_non_recursive_tags_help(env, tags_vec).decompose(&mut criteria, env.subs);
+        union_sorted_non_recursive_tags_help(env, &mut tags_vec).decompose(&mut criteria, env.subs);
+
+    let compute_semantic = || L::semantic_repr(env.arena, tags_vec.iter().map(|(l, _)| *l));
 
     let result = match variant {
         Never => Layout::VOID,
-        Unit => Layout::UNIT,
-        BoolUnion { .. } => Layout::BOOL,
-        ByteUnion(_) => Layout::U8,
+        Unit => env
+            .cache
+            .put_in(Layout::new(LayoutRepr::UNIT, compute_semantic())),
+        BoolUnion { .. } => env
+            .cache
+            .put_in(Layout::new(LayoutRepr::BOOL, compute_semantic())),
+        ByteUnion(_) => env
+            .cache
+            .put_in(Layout::new(LayoutRepr::U8, compute_semantic())),
         Newtype {
             arguments: field_layouts,
             ..

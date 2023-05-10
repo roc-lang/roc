@@ -212,8 +212,8 @@ procedure Json.42 (Json.298):
             let Json.496 : U64 = 1i64;
             let Json.495 : {List U8, List U8} = CallByName List.52 Json.304 Json.496;
             let Json.309 : List U8 = StructAtIndex 1 Json.495;
-            let #Derived_gen.0 : List U8 = StructAtIndex 0 Json.495;
-            dec #Derived_gen.0;
+            let #Derived_gen.1 : List U8 = StructAtIndex 0 Json.495;
+            dec #Derived_gen.1;
             let Json.494 : [C {}, C Str] = TagId(1) Json.307;
             let Json.493 : {List U8, [C {}, C Str]} = Struct {Json.309, Json.494};
             ret Json.493;
@@ -347,8 +347,8 @@ procedure Str.9 (Str.79):
     else
         let Str.300 : U8 = StructAtIndex 3 Str.80;
         let Str.301 : U64 = StructAtIndex 0 Str.80;
-        let #Derived_gen.1 : Str = StructAtIndex 1 Str.80;
-        dec #Derived_gen.1;
+        let #Derived_gen.0 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.0;
         let Str.299 : {U64, U8} = Struct {Str.301, Str.300};
         let Str.298 : [C {U64, U8}, C Str] = TagId(0) Str.299;
         ret Str.298;
