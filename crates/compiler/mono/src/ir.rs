@@ -9059,10 +9059,7 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
-        ClosureCallOptions::Struct {
-            field_layouts,
-            field_order_hash: _,
-        } => {
+        ClosureCallOptions::Struct { field_layouts } => {
             let function_symbol = match lambda_set.iter_set().next() {
                 Some(function_symbol) => function_symbol,
                 None => {

@@ -6,10 +6,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
 use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
-use roc_mono::layout::{
-    Builtin, FieldOrderHash, InLayout, Layout, LayoutInterner, LayoutRepr, SemanticRepr,
-    UnionLayout,
-};
+use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
@@ -700,7 +697,6 @@ impl<'a> LowLevelCall<'a> {
                     backend
                         .layout_interner
                         .insert_no_semantic(LayoutRepr::Struct {
-                            field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
                             field_layouts: backend.env.arena.alloc([elem_layout]),
                         });
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
@@ -749,7 +745,6 @@ impl<'a> LowLevelCall<'a> {
                     backend
                         .layout_interner
                         .insert_no_semantic(LayoutRepr::Struct {
-                            field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
                             field_layouts: backend.env.arena.alloc([elem_layout]),
                         });
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
@@ -2677,7 +2672,6 @@ fn list_map_n<'a>(
             let el_ptr = backend
                 .layout_interner
                 .insert_no_semantic(LayoutRepr::Struct {
-                    field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
                     field_layouts: backend.env.arena.alloc([*el]),
                 });
             let idx = backend.get_refcount_fn_index(el_ptr, HelperOp::Dec);
@@ -2719,7 +2713,6 @@ fn ensure_symbol_is_in_memory<'a>(
             let in_memory_layout = backend
                 .layout_interner
                 .insert_no_semantic(LayoutRepr::Struct {
-                    field_order_hash: FieldOrderHash::from_ordered_fields(&[]), // don't care
                     field_layouts: arena.alloc([layout]),
                 });
             (frame_ptr, offset, in_memory_layout)

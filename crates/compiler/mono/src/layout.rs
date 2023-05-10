@@ -21,9 +21,9 @@ use roc_types::types::{
     TupleElemsError,
 };
 use std::cmp::Ordering;
-use std::collections::hash_map::{DefaultHasher, Entry};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use ven_pretty::{DocAllocator, DocBuilder};
 
 mod intern;
@@ -37,17 +37,17 @@ pub use semantic::SemanticRepr;
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 roc_error_macros::assert_sizeof_aarch64!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Layout, 8 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Layout, 9 * 8);
 roc_error_macros::assert_sizeof_aarch64!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 5 * 8);
 
 roc_error_macros::assert_sizeof_wasm!(Builtin, 2 * 4);
-roc_error_macros::assert_sizeof_wasm!(Layout, 8 * 4);
+roc_error_macros::assert_sizeof_wasm!(Layout, 9 * 4);
 roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
 roc_error_macros::assert_sizeof_wasm!(LambdaSet, 5 * 4);
 
 roc_error_macros::assert_sizeof_default!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_default!(Layout, 8 * 8);
+roc_error_macros::assert_sizeof_default!(Layout, 9 * 8);
 roc_error_macros::assert_sizeof_default!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_default!(LambdaSet, 5 * 8);
 
@@ -655,38 +655,6 @@ impl<'a> RawFunctionLayout<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FieldOrderHash(u64);
-
-impl FieldOrderHash {
-    // NB: This should really be a proper "zero" hash via `DefaultHasher::new().finish()`, but Rust
-    // stdlib hashers are not (yet) compile-time-computable.
-    const ZERO_FIELD_HASH: Self = Self(0);
-    const IRRELEVANT_NON_ZERO_FIELD_HASH: Self = Self(1);
-
-    pub fn from_ordered_fields(fields: &[&str]) -> Self {
-        if fields.is_empty() {
-            // HACK: we must make sure this is always equivalent to a `ZERO_FIELD_HASH`.
-            return Self::ZERO_FIELD_HASH;
-        }
-
-        let mut hasher = DefaultHasher::new();
-        fields.iter().for_each(|field| field.hash(&mut hasher));
-        Self(hasher.finish())
-    }
-
-    pub fn from_ordered_tuple_elems(elems: &[usize]) -> Self {
-        if elems.is_empty() {
-            // HACK: we must make sure this is always equivalent to a `ZERO_FIELD_HASH`.
-            return Self::ZERO_FIELD_HASH;
-        }
-
-        let mut hasher = DefaultHasher::new();
-        elems.iter().for_each(|elem| elem.hash(&mut hasher));
-        Self(hasher.finish())
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Layout<'a> {
     pub repr: LayoutRepr<'a>,
     pub semantic: SemanticRepr<'a>,
@@ -696,19 +664,7 @@ pub struct Layout<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LayoutRepr<'a> {
     Builtin(Builtin<'a>),
-    Struct {
-        /// Two different struct types can have the same layout, for example
-        ///   { a: U8,  b: I64 }
-        ///   { a: I64, b: U8 }
-        /// both have the layout {I64, U8}. Not distinguishing the order of record fields can cause
-        /// us problems during monomorphization when we specialize the same type in different ways,
-        /// so keep a hash of the record order for disambiguation. This still of course may result
-        /// in collisions, but it's unlikely.
-        ///
-        /// See also https://github.com/roc-lang/roc/issues/2535.
-        field_order_hash: FieldOrderHash,
-        field_layouts: &'a [InLayout<'a>],
-    },
+    Struct { field_layouts: &'a [InLayout<'a>] },
     Boxed(InLayout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
@@ -1433,10 +1389,7 @@ pub enum ClosureCallOptions<'a> {
     /// One of a few capturing functions can be called to
     Union(UnionLayout<'a>),
     /// The closure is one function, whose captures are represented as a struct.
-    Struct {
-        field_layouts: &'a [InLayout<'a>],
-        field_order_hash: FieldOrderHash,
-    },
+    Struct { field_layouts: &'a [InLayout<'a>] },
     /// The closure is one function that captures a single identifier, whose value is unwrapped.
     UnwrappedCapture(InLayout<'a>),
     /// The closure dispatches to multiple possible functions, none of which capture.
@@ -1717,15 +1670,9 @@ impl<'a> LambdaSet<'a> {
                 }
                 ClosureCallOptions::Union(union_layout)
             }
-            LayoutRepr::Struct {
-                field_layouts,
-                field_order_hash,
-            } => {
+            LayoutRepr::Struct { field_layouts } => {
                 debug_assert_eq!(self.set.len(), 1);
-                ClosureCallOptions::Struct {
-                    field_layouts,
-                    field_order_hash,
-                }
+                ClosureCallOptions::Struct { field_layouts }
             }
             layout => {
                 debug_assert!(self.has_enum_dispatch_repr());
@@ -2518,10 +2465,7 @@ impl<'a> Layout<'a> {
             Self::UNIT_NAKED
         } else {
             Self {
-                repr: LayoutRepr::Struct {
-                    field_layouts,
-                    field_order_hash: FieldOrderHash::IRRELEVANT_NON_ZERO_FIELD_HASH,
-                },
+                repr: LayoutRepr::Struct { field_layouts },
                 semantic: SemanticRepr::None,
             }
         }
@@ -3268,8 +3212,6 @@ fn layout_from_flat_type<'a>(
                     .map(|(label, _)| &*arena.alloc_str(label.as_str())),
                 arena,
             );
-            let field_order_hash =
-                FieldOrderHash::from_ordered_fields(ordered_field_names.as_slice());
 
             let result = if sortables.len() == 1 {
                 // If the record has only one field that isn't zero-sized,
@@ -3279,7 +3221,6 @@ fn layout_from_flat_type<'a>(
                 let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
                 let struct_layout = Layout {
                     repr: LayoutRepr::Struct {
-                        field_order_hash,
                         field_layouts: layouts.into_bump_slice(),
                     },
                     semantic: SemanticRepr::record(ordered_field_names.into_bump_slice()),
@@ -3316,23 +3257,16 @@ fn layout_from_flat_type<'a>(
                 )
             });
 
-            let ordered_field_names =
-                Vec::from_iter_in(sortables.iter().map(|(index, _)| *index), arena);
-            let field_order_hash =
-                FieldOrderHash::from_ordered_tuple_elems(ordered_field_names.as_slice());
-
             let result = if sortables.len() == 1 {
                 // If the tuple has only one field that isn't zero-sized,
                 // unwrap it.
                 Ok(sortables.pop().unwrap().1)
             } else {
-                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
+                let field_layouts =
+                    Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena).into_bump_slice();
                 let struct_layout = Layout {
-                    repr: LayoutRepr::Struct {
-                        field_order_hash,
-                        field_layouts: layouts.into_bump_slice(),
-                    },
-                    semantic: SemanticRepr::tuple(layouts.len()),
+                    repr: LayoutRepr::Struct { field_layouts },
+                    semantic: SemanticRepr::tuple(field_layouts.len()),
                 };
 
                 Ok(env.cache.put_in(struct_layout))

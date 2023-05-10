@@ -14,7 +14,7 @@ use roc_target::TargetInfo;
 
 use crate::layout::LayoutRepr;
 
-use super::{Builtin, FieldOrderHash, LambdaSet, Layout, SeenRecPtrs, SemanticRepr, UnionLayout};
+use super::{Builtin, LambdaSet, Layout, SeenRecPtrs, SemanticRepr, UnionLayout};
 
 macro_rules! cache_interned_layouts {
     ($($i:literal, $name:ident, $vis:vis, $layout:expr)*; $total_constants:literal) => {
@@ -123,10 +123,7 @@ impl<'a> Layout<'a> {
         semantic: SemanticRepr::None,
     };
     pub(super) const UNIT_NAKED: Self = Layout {
-        repr: LayoutRepr::Struct {
-            field_layouts: &[],
-            field_order_hash: FieldOrderHash::ZERO_FIELD_HASH,
-        },
+        repr: LayoutRepr::Struct { field_layouts: &[] },
         semantic: SemanticRepr::EMPTY_RECORD,
     };
 
@@ -1052,11 +1049,7 @@ mod reify {
             LayoutRepr::Builtin(builtin) => {
                 LayoutRepr::Builtin(reify_builtin(arena, interner, slot, builtin))
             }
-            LayoutRepr::Struct {
-                field_order_hash,
-                field_layouts,
-            } => LayoutRepr::Struct {
-                field_order_hash,
+            LayoutRepr::Struct { field_layouts } => LayoutRepr::Struct {
                 field_layouts: reify_layout_slice(arena, interner, slot, field_layouts),
             },
             LayoutRepr::Boxed(lay) => LayoutRepr::Boxed(reify_layout(arena, interner, slot, lay)),
@@ -1264,19 +1257,7 @@ mod equiv {
                         }
                     }
                 }
-                (
-                    Struct {
-                        field_order_hash: foh1,
-                        field_layouts: fl1,
-                    },
-                    Struct {
-                        field_order_hash: foh2,
-                        field_layouts: fl2,
-                    },
-                ) => {
-                    if foh1 != foh2 {
-                        return false;
-                    }
+                (Struct { field_layouts: fl1 }, Struct { field_layouts: fl2 }) => {
                     equiv_fields!(fl1, fl2)
                 }
                 (Boxed(b1), Boxed(b2)) => stack.push((b1, b2)),
@@ -1371,12 +1352,8 @@ pub mod dbg {
                     .debug_tuple("Builtin")
                     .field(&DbgBuiltin(self.0, b))
                     .finish(),
-                LayoutRepr::Struct {
-                    field_order_hash,
-                    field_layouts,
-                } => f
+                LayoutRepr::Struct { field_layouts } => f
                     .debug_struct("Struct")
-                    .field("hash", &field_order_hash)
                     .field("fields", &DbgFields(self.0, field_layouts))
                     .finish(),
                 LayoutRepr::Boxed(b) => f.debug_tuple("Boxed").field(&Dbg(self.0, b)).finish(),
@@ -1633,7 +1610,6 @@ mod insert_recursive_layout {
                     (
                         LayoutRepr::Builtin(Builtin::List(l1)),
                         LayoutRepr::Struct {
-                            field_order_hash: _,
                             field_layouts: &[l2],
                         },
                     ) => match (interner.get(l1).repr, interner.get(l2).repr) {
