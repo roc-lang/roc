@@ -7,7 +7,9 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{
+    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+};
 
 use super::{CompareOperation, RegisterWidth};
 
@@ -507,19 +509,19 @@ impl X64_64SystemVStoreArgs {
             }
             other => {
                 // look at the layout in more detail
-                match layout_interner.get(other) {
-                    Layout::Boxed(_) => {
+                match layout_interner.get(other).repr {
+                    LayoutRepr::Boxed(_) => {
                         // treat boxed like a 64-bit integer
                         self.store_arg_general(buf, storage_manager, sym)
                     }
-                    Layout::LambdaSet(lambda_set) => self.store_arg(
+                    LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
                         buf,
                         storage_manager,
                         layout_interner,
                         sym,
                         lambda_set.runtime_representation(),
                     ),
-                    Layout::Struct { .. } => {
+                    LayoutRepr::Struct { .. } => {
                         // for now, just also store this on the stack
                         let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
                         debug_assert_eq!(base_offset % 8, 0);
@@ -537,7 +539,7 @@ impl X64_64SystemVStoreArgs {
                         }
                         self.tmp_stack_offset += size as i32;
                     }
-                    Layout::Union(UnionLayout::NonRecursive(_)) => {
+                    LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                         type ASM = X86_64Assembler;
 
                         let tmp_reg = Self::GENERAL_RETURN_REGS[0];
@@ -668,27 +670,27 @@ impl X64_64SystemVLoadArgs {
                 storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                 self.argument_offset += stack_size as i32;
             }
-            other => match layout_interner.get(other) {
-                Layout::Boxed(_) => {
+            other => match layout_interner.get(other).repr {
+                LayoutRepr::Boxed(_) => {
                     // boxed layouts are pointers, which we treat as 64-bit integers
                     self.load_arg_general(storage_manager, sym)
                 }
-                Layout::LambdaSet(lambda_set) => self.load_arg(
+                LayoutRepr::LambdaSet(lambda_set) => self.load_arg(
                     storage_manager,
                     layout_interner,
                     sym,
                     lambda_set.runtime_representation(),
                 ),
-                Layout::Struct { .. } => {
+                LayoutRepr::Struct { .. } => {
                     // for now, just also store this on the stack
                     storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                     self.argument_offset += stack_size as i32;
                 }
-                Layout::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
+                LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
                     storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                     self.argument_offset += stack_size as i32;
                 }
-                Layout::Union(UnionLayout::NonRecursive(_)) => {
+                LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                     // for now, just also store this on the stack
                     storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                     self.argument_offset += stack_size as i32;

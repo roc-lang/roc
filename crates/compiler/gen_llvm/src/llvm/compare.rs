@@ -11,7 +11,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::build::{load_roc_value, use_roc_value, BuilderExt};
@@ -154,8 +154,8 @@ fn build_eq<'a, 'ctx>(
         );
     }
 
-    match layout_interner.get(*lhs_layout) {
-        Layout::Builtin(builtin) => build_eq_builtin(
+    match layout_interner.get(*lhs_layout).repr {
+        LayoutRepr::Builtin(builtin) => build_eq_builtin(
             env,
             layout_interner,
             layout_ids,
@@ -165,7 +165,7 @@ fn build_eq<'a, 'ctx>(
             &builtin,
         ),
 
-        Layout::Struct { field_layouts, .. } => build_struct_eq(
+        LayoutRepr::Struct { field_layouts, .. } => build_struct_eq(
             env,
             layout_interner,
             layout_ids,
@@ -175,9 +175,9 @@ fn build_eq<'a, 'ctx>(
             rhs_val.into_struct_value(),
         ),
 
-        Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
+        LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closures"),
 
-        Layout::Union(union_layout) => build_tag_eq(
+        LayoutRepr::Union(union_layout) => build_tag_eq(
             env,
             layout_interner,
             layout_ids,
@@ -187,7 +187,7 @@ fn build_eq<'a, 'ctx>(
             rhs_val,
         ),
 
-        Layout::Boxed(inner_layout) => build_box_eq(
+        LayoutRepr::Boxed(inner_layout) => build_box_eq(
             env,
             layout_interner,
             layout_ids,
@@ -197,7 +197,7 @@ fn build_eq<'a, 'ctx>(
             rhs_val,
         ),
 
-        Layout::RecursivePointer(rec_layout) => {
+        LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
             let bt = basic_type_from_layout(env, layout_interner, layout);
@@ -215,8 +215,8 @@ fn build_eq<'a, 'ctx>(
                 "i64_to_opaque",
             );
 
-            let union_layout = match layout_interner.get(rec_layout) {
-                Layout::Union(union_layout) => {
+            let union_layout = match layout_interner.get(rec_layout).repr {
+                LayoutRepr::Union(union_layout) => {
                     debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                     union_layout
                 }
@@ -342,8 +342,8 @@ fn build_neq<'a, 'ctx>(
         );
     }
 
-    match layout_interner.get(lhs_layout) {
-        Layout::Builtin(builtin) => build_neq_builtin(
+    match layout_interner.get(lhs_layout).repr {
+        LayoutRepr::Builtin(builtin) => build_neq_builtin(
             env,
             layout_interner,
             layout_ids,
@@ -353,7 +353,7 @@ fn build_neq<'a, 'ctx>(
             &builtin,
         ),
 
-        Layout::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct { field_layouts, .. } => {
             let is_equal = build_struct_eq(
                 env,
                 layout_interner,
@@ -370,7 +370,7 @@ fn build_neq<'a, 'ctx>(
             result.into()
         }
 
-        Layout::Union(union_layout) => {
+        LayoutRepr::Union(union_layout) => {
             let is_equal = build_tag_eq(
                 env,
                 layout_interner,
@@ -387,7 +387,7 @@ fn build_neq<'a, 'ctx>(
             result.into()
         }
 
-        Layout::Boxed(inner_layout) => {
+        LayoutRepr::Boxed(inner_layout) => {
             let is_equal = build_box_eq(
                 env,
                 layout_interner,
@@ -404,10 +404,10 @@ fn build_neq<'a, 'ctx>(
             result.into()
         }
 
-        Layout::RecursivePointer(_) => {
+        LayoutRepr::RecursivePointer(_) => {
             unreachable!("recursion pointers should never be compared directly")
         }
-        Layout::LambdaSet(_) => unreachable!("cannot compare closure"),
+        LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closure"),
     }
 }
 
@@ -424,12 +424,12 @@ fn build_list_eq<'a, 'ctx>(
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::LIST_EQ;
-    let element_layout = if let Layout::RecursivePointer(rec) = layout_interner.get(element_layout)
-    {
-        rec
-    } else {
-        element_layout
-    };
+    let element_layout =
+        if let LayoutRepr::RecursivePointer(rec) = layout_interner.get(element_layout).repr {
+            rec
+        } else {
+            element_layout
+        };
     let fn_name = layout_ids
         .get(symbol, &element_layout)
         .to_symbol_string(symbol, &env.interns);
@@ -741,11 +741,11 @@ fn build_struct_eq_help<'a, 'ctx>(
             .build_extract_value(struct2, index as u32, "eq_field")
             .unwrap();
 
-        let are_equal = if let Layout::RecursivePointer(rec_layout) =
-            layout_interner.get(*field_layout)
+        let are_equal = if let LayoutRepr::RecursivePointer(rec_layout) =
+            layout_interner.get(*field_layout).repr
         {
             debug_assert!(
-                matches!(layout_interner.get(rec_layout), Layout::Union(union_layout) if !matches!(union_layout, UnionLayout::NonRecursive(..)))
+                matches!(layout_interner.get(rec_layout).repr, LayoutRepr::Union(union_layout) if !matches!(union_layout, UnionLayout::NonRecursive(..)))
             );
 
             let field_layout = rec_layout;

@@ -6,7 +6,9 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
 use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
-use roc_mono::layout::{Builtin, FieldOrderHash, InLayout, Layout, LayoutInterner, UnionLayout};
+use roc_mono::layout::{
+    Builtin, FieldOrderHash, InLayout, Layout, LayoutInterner, LayoutRepr, UnionLayout,
+};
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
@@ -237,19 +239,19 @@ impl<'a> LowLevelCall<'a> {
             }
             StrGetCapacity => self.load_args_and_call_zig(backend, bitcode::STR_CAPACITY),
             StrToNum => {
-                let number_layout = match backend.layout_interner.get(self.ret_layout) {
-                    Layout::Struct { field_layouts, .. } => field_layouts[0],
+                let number_layout = match backend.layout_interner.get(self.ret_layout).repr {
+                    LayoutRepr::Struct { field_layouts, .. } => field_layouts[0],
                     _ => {
                         internal_error!("Unexpected mono layout {:?} for StrToNum", self.ret_layout)
                     }
                 };
                 // match on the return layout to figure out which zig builtin we need
-                let intrinsic = match backend.layout_interner.get(number_layout) {
-                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
-                    Layout::Builtin(Builtin::Float(float_width)) => {
+                let intrinsic = match backend.layout_interner.get(number_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    LayoutRepr::Builtin(Builtin::Float(float_width)) => {
                         &bitcode::STR_TO_FLOAT[float_width]
                     }
-                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                    LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
                     rest => internal_error!("Unexpected layout {:?} for StrToNum", rest),
                 };
 
@@ -388,32 +390,36 @@ impl<'a> LowLevelCall<'a> {
                 };
 
                 // Byte offsets of each field in the return struct
-                let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout_raw {
-                    Layout::Struct {
+                let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout_raw.repr
+                {
+                    LayoutRepr::Struct {
                         field_layouts: &[f1, f2],
                         ..
-                    } => match (
-                        backend.layout_interner.get(f1),
-                        backend.layout_interner.get(f2),
-                    ) {
-                        (Layout::Builtin(Builtin::List(list_elem)), value_layout)
-                            if value_layout == backend.layout_interner.get(list_elem) =>
-                        {
-                            let list_offset = 0;
-                            let elem_offset = Layout::Builtin(Builtin::List(list_elem))
+                    } => {
+                        let l1 = backend.layout_interner.get(f1);
+                        let l2 = backend.layout_interner.get(f2);
+                        match (l1.repr, l2.repr) {
+                            (LayoutRepr::Builtin(Builtin::List(list_elem)), _)
+                                if l2.repr == backend.layout_interner.get(list_elem).repr =>
+                            {
+                                let list_offset = 0;
+                                let elem_offset = Layout {
+                                    repr: LayoutRepr::Builtin(Builtin::List(list_elem)),
+                                }
                                 .stack_size(backend.layout_interner, TARGET_INFO);
-                            (list_offset, elem_offset, f2)
+                                (list_offset, elem_offset, f2)
+                            }
+                            (_, LayoutRepr::Builtin(Builtin::List(list_elem)))
+                                if l1.repr == backend.layout_interner.get(list_elem).repr =>
+                            {
+                                let list_offset =
+                                    l1.stack_size(backend.layout_interner, TARGET_INFO);
+                                let elem_offset = 0;
+                                (list_offset, elem_offset, f1)
+                            }
+                            _ => internal_error!("Invalid return layout for ListReplaceUnsafe"),
                         }
-                        (value_layout, Layout::Builtin(Builtin::List(list_elem)))
-                            if value_layout == backend.layout_interner.get(list_elem) =>
-                        {
-                            let list_offset =
-                                value_layout.stack_size(backend.layout_interner, TARGET_INFO);
-                            let elem_offset = 0;
-                            (list_offset, elem_offset, f1)
-                        }
-                        _ => internal_error!("Invalid return layout for ListReplaceUnsafe"),
-                    },
+                    }
                     _ => internal_error!("Invalid return layout for ListReplaceUnsafe"),
                 };
 
@@ -691,9 +697,11 @@ impl<'a> LowLevelCall<'a> {
 
                 // The refcount function receives a pointer to an element in the list
                 // This is the same as a Struct containing the element
-                let in_memory_layout = backend.layout_interner.insert(Layout::Struct {
-                    field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
-                    field_layouts: backend.env.arena.alloc([elem_layout]),
+                let in_memory_layout = backend.layout_interner.insert(Layout {
+                    repr: LayoutRepr::Struct {
+                        field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                        field_layouts: backend.env.arena.alloc([elem_layout]),
+                    },
                 });
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
                 let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
@@ -737,9 +745,11 @@ impl<'a> LowLevelCall<'a> {
 
                 // The refcount function receives a pointer to an element in the list
                 // This is the same as a Struct containing the element
-                let in_memory_layout = backend.layout_interner.insert(Layout::Struct {
-                    field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
-                    field_layouts: backend.env.arena.alloc([elem_layout]),
+                let in_memory_layout = backend.layout_interner.insert(Layout {
+                    repr: LayoutRepr::Struct {
+                        field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                        field_layouts: backend.env.arena.alloc([elem_layout]),
+                    },
                 });
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
                 let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
@@ -812,11 +822,11 @@ impl<'a> LowLevelCall<'a> {
             }
 
             // Num
-            NumAdd => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => {
+            NumAdd => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_OR_PANIC_INT[width])
                 }
-                Layout::Builtin(Builtin::Float(width)) => match width {
+                LayoutRepr::Builtin(Builtin::Float(width)) => match width {
                     FloatWidth::F32 => {
                         self.load_args(backend);
                         backend.code_builder.f32_add()
@@ -826,14 +836,14 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.f64_add()
                     }
                 },
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_ADD_OR_PANIC)
                 }
                 _ => panic_ret_type(),
             },
 
-            NumAddWrap => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => match width {
+            NumAddWrap => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => match width {
                     IntWidth::I128 | IntWidth::U128 => {
                         // TODO: don't panic
                         self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_OR_PANIC_INT[width])
@@ -852,7 +862,7 @@ impl<'a> LowLevelCall<'a> {
                         self.wrap_small_int(backend, width);
                     }
                 },
-                Layout::Builtin(Builtin::Float(width)) => match width {
+                LayoutRepr::Builtin(Builtin::Float(width)) => match width {
                     FloatWidth::F32 => {
                         self.load_args(backend);
                         backend.code_builder.f32_add()
@@ -862,7 +872,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.f64_add()
                     }
                 },
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     // TODO: don't panic
                     self.load_args_and_call_zig(backend, bitcode::DEC_ADD_OR_PANIC)
                 }
@@ -872,42 +882,42 @@ impl<'a> LowLevelCall<'a> {
             NumToStr => self.num_to_str(backend),
             NumAddChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-                match backend.layout_interner.get(arg_layout) {
-                    Layout::Builtin(Builtin::Int(width)) => {
+                match backend.layout_interner.get(arg_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => {
                         self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_CHECKED_INT[width])
                     }
-                    Layout::Builtin(Builtin::Float(width)) => {
+                    LayoutRepr::Builtin(Builtin::Float(width)) => {
                         self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_CHECKED_FLOAT[width])
                     }
-                    Layout::Builtin(Builtin::Decimal) => {
+                    LayoutRepr::Builtin(Builtin::Decimal) => {
                         self.load_args_and_call_zig(backend, bitcode::DEC_ADD_WITH_OVERFLOW)
                     }
                     x => internal_error!("NumAddChecked is not defined for {:?}", x),
                 }
             }
-            NumAddSaturated => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => {
+            NumAddSaturated => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_SATURATED_INT[width])
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
                     self.load_args(backend);
                     backend.code_builder.f32_add()
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                     self.load_args(backend);
                     backend.code_builder.f64_add()
                 }
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_ADD_SATURATED)
                 }
                 _ => panic_ret_type(),
             },
 
-            NumSub => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => {
+            NumSub => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_OR_PANIC_INT[width])
                 }
-                Layout::Builtin(Builtin::Float(width)) => match width {
+                LayoutRepr::Builtin(Builtin::Float(width)) => match width {
                     FloatWidth::F32 => {
                         self.load_args(backend);
                         backend.code_builder.f32_sub()
@@ -917,14 +927,14 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.f64_sub()
                     }
                 },
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_SUB_OR_PANIC)
                 }
                 _ => panic_ret_type(),
             },
 
-            NumSubWrap => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => match width {
+            NumSubWrap => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => match width {
                     IntWidth::I128 | IntWidth::U128 => {
                         // TODO: don't panic
                         self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_OR_PANIC_INT[width])
@@ -943,7 +953,7 @@ impl<'a> LowLevelCall<'a> {
                         self.wrap_small_int(backend, width);
                     }
                 },
-                Layout::Builtin(Builtin::Float(width)) => match width {
+                LayoutRepr::Builtin(Builtin::Float(width)) => match width {
                     FloatWidth::F32 => {
                         self.load_args(backend);
                         backend.code_builder.f32_sub()
@@ -953,7 +963,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.f64_sub()
                     }
                 },
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     // TODO: don't panic
                     self.load_args_and_call_zig(backend, bitcode::DEC_SUB_OR_PANIC)
                 }
@@ -961,42 +971,42 @@ impl<'a> LowLevelCall<'a> {
             },
             NumSubChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-                match backend.layout_interner.get(arg_layout) {
-                    Layout::Builtin(Builtin::Int(width)) => {
+                match backend.layout_interner.get(arg_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => {
                         self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_CHECKED_INT[width])
                     }
-                    Layout::Builtin(Builtin::Float(width)) => {
+                    LayoutRepr::Builtin(Builtin::Float(width)) => {
                         self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_CHECKED_FLOAT[width])
                     }
-                    Layout::Builtin(Builtin::Decimal) => {
+                    LayoutRepr::Builtin(Builtin::Decimal) => {
                         self.load_args_and_call_zig(backend, bitcode::DEC_SUB_WITH_OVERFLOW)
                     }
                     x => internal_error!("NumSubChecked is not defined for {:?}", x),
                 }
             }
-            NumSubSaturated => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => {
+            NumSubSaturated => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_SATURATED_INT[width])
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
                     self.load_args(backend);
                     backend.code_builder.f32_sub()
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                     self.load_args(backend);
                     backend.code_builder.f64_sub()
                 }
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_SUB_SATURATED)
                 }
                 _ => panic_ret_type(),
             },
 
-            NumMul => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => {
+            NumMul => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_OR_PANIC_INT[width])
                 }
-                Layout::Builtin(Builtin::Float(width)) => match width {
+                LayoutRepr::Builtin(Builtin::Float(width)) => match width {
                     FloatWidth::F32 => {
                         self.load_args(backend);
                         backend.code_builder.f32_mul()
@@ -1006,13 +1016,13 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.f64_mul()
                     }
                 },
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_MUL_OR_PANIC)
                 }
                 _ => panic_ret_type(),
             },
-            NumMulWrap => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => match width {
+            NumMulWrap => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => match width {
                     IntWidth::I128 | IntWidth::U128 => {
                         self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_WRAP_INT[width])
                     }
@@ -1030,7 +1040,7 @@ impl<'a> LowLevelCall<'a> {
                         self.wrap_small_int(backend, width);
                     }
                 },
-                Layout::Builtin(Builtin::Float(width)) => match width {
+                LayoutRepr::Builtin(Builtin::Float(width)) => match width {
                     FloatWidth::F32 => {
                         self.load_args(backend);
                         backend.code_builder.f32_mul()
@@ -1040,25 +1050,25 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.f64_mul()
                     }
                 },
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     // TODO: don't panic
                     self.load_args_and_call_zig(backend, bitcode::DEC_MUL_OR_PANIC)
                 }
                 _ => panic_ret_type(),
             },
-            NumMulSaturated => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => {
+            NumMulSaturated => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_SATURATED_INT[width])
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
                     self.load_args(backend);
                     backend.code_builder.f32_mul()
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                     self.load_args(backend);
                     backend.code_builder.f64_mul()
                 }
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_MUL_SATURATED)
                 }
                 _ => panic_ret_type(),
@@ -1066,14 +1076,14 @@ impl<'a> LowLevelCall<'a> {
 
             NumMulChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-                match backend.layout_interner.get(arg_layout) {
-                    Layout::Builtin(Builtin::Int(width)) => {
+                match backend.layout_interner.get(arg_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => {
                         self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_CHECKED_INT[width])
                     }
-                    Layout::Builtin(Builtin::Float(width)) => {
+                    LayoutRepr::Builtin(Builtin::Float(width)) => {
                         self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_CHECKED_FLOAT[width])
                     }
-                    Layout::Builtin(Builtin::Decimal) => {
+                    LayoutRepr::Builtin(Builtin::Decimal) => {
                         self.load_args_and_call_zig(backend, bitcode::DEC_MUL_WITH_OVERFLOW)
                     }
                     x => internal_error!("NumMulChecked is not defined for {:?}", x),
@@ -1248,8 +1258,8 @@ impl<'a> LowLevelCall<'a> {
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
                 }
             }
-            NumDivCeilUnchecked => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Int(width)) => {
+            NumDivCeilUnchecked => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_DIV_CEIL[width])
                 }
                 _ => panic_ret_type(),
@@ -1459,32 +1469,32 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
                 }
             }
-            NumSin => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Float(width)) => {
+            NumSin => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_SIN[width]);
                 }
                 _ => panic_ret_type(),
             },
-            NumCos => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Float(width)) => {
+            NumCos => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_COS[width]);
                 }
                 _ => panic_ret_type(),
             },
             NumSqrtUnchecked => {
                 self.load_args(backend);
-                match self.ret_layout_raw {
-                    Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                match self.ret_layout_raw.repr {
+                    LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
                         backend.code_builder.f32_sqrt()
                     }
-                    Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                    LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                         backend.code_builder.f64_sqrt()
                     }
                     _ => panic_ret_type(),
                 }
             }
-            NumLogUnchecked => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Float(width)) => {
+            NumLogUnchecked => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_LOG[width]);
                 }
                 _ => panic_ret_type(),
@@ -1507,8 +1517,8 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
-            NumPow => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Float(width)) => {
+            NumPow => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_POW[width]);
                 }
                 _ => panic_ret_type(),
@@ -1517,8 +1527,9 @@ impl<'a> LowLevelCall<'a> {
             NumCountLeadingZeroBits => match backend
                 .layout_interner
                 .get(backend.storage.symbol_layouts[&self.arguments[0]])
+                .repr
             {
-                Layout::Builtin(Builtin::Int(width)) => {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(
                         backend,
                         &bitcode::NUM_COUNT_LEADING_ZERO_BITS[width],
@@ -1529,8 +1540,9 @@ impl<'a> LowLevelCall<'a> {
             NumCountTrailingZeroBits => match backend
                 .layout_interner
                 .get(backend.storage.symbol_layouts[&self.arguments[0]])
+                .repr
             {
-                Layout::Builtin(Builtin::Int(width)) => {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(
                         backend,
                         &bitcode::NUM_COUNT_TRAILING_ZERO_BITS[width],
@@ -1541,8 +1553,9 @@ impl<'a> LowLevelCall<'a> {
             NumCountOneBits => match backend
                 .layout_interner
                 .get(backend.storage.symbol_layouts[&self.arguments[0]])
+                .repr
             {
-                Layout::Builtin(Builtin::Int(width)) => {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_COUNT_ONE_BITS[width]);
                 }
                 _ => panic_ret_type(),
@@ -1617,20 +1630,20 @@ impl<'a> LowLevelCall<'a> {
             NumIsInfinite => num_is_infinite(backend, self.arguments[0]),
             NumIsFinite => num_is_finite(backend, self.arguments[0]),
 
-            NumAtan => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Float(width)) => {
+            NumAtan => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ATAN[width]);
                 }
                 _ => panic_ret_type(),
             },
-            NumAcos => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Float(width)) => {
+            NumAcos => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ACOS[width]);
                 }
                 _ => panic_ret_type(),
             },
-            NumAsin => match self.ret_layout_raw {
-                Layout::Builtin(Builtin::Float(width)) => {
+            NumAsin => match self.ret_layout_raw.repr {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ASIN[width]);
                 }
                 _ => panic_ret_type(),
@@ -1777,15 +1790,15 @@ impl<'a> LowLevelCall<'a> {
             NumIntCast => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
                 let arg_type = CodeGenNumType::from(arg_layout);
-                let arg_width = match backend.layout_interner.get(arg_layout) {
-                    Layout::Builtin(Builtin::Int(w)) => w,
-                    Layout::Builtin(Builtin::Bool) => IntWidth::U8,
+                let arg_width = match backend.layout_interner.get(arg_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(w)) => w,
+                    LayoutRepr::Builtin(Builtin::Bool) => IntWidth::U8,
                     x => internal_error!("Num.intCast is not defined for {:?}", x),
                 };
 
                 let ret_type = CodeGenNumType::from(self.ret_layout);
-                let ret_width = match self.ret_layout_raw {
-                    Layout::Builtin(Builtin::Int(w)) => w,
+                let ret_width = match self.ret_layout_raw.repr {
+                    LayoutRepr::Builtin(Builtin::Int(w)) => w,
                     x => internal_error!("Num.intCast is not defined for {:?}", x),
                 };
 
@@ -1847,10 +1860,10 @@ impl<'a> LowLevelCall<'a> {
             NumToFloatCast => {
                 self.load_args(backend);
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-                let arg_signed = match backend.layout_interner.get(arg_layout) {
-                    Layout::Builtin(Builtin::Int(w)) => w.is_signed(),
-                    Layout::Builtin(Builtin::Float(_)) => true, // unused
-                    Layout::Builtin(Builtin::Decimal) => true,
+                let arg_signed = match backend.layout_interner.get(arg_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(w)) => w.is_signed(),
+                    LayoutRepr::Builtin(Builtin::Float(_)) => true, // unused
+                    LayoutRepr::Builtin(Builtin::Decimal) => true,
                     x => internal_error!("Num.intCast is not defined for {:?}", x),
                 };
                 let ret_type = CodeGenNumType::from(self.ret_layout);
@@ -1894,24 +1907,18 @@ impl<'a> LowLevelCall<'a> {
             NumToIntChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
 
-                let (arg_width, ret_width) =
-                    match (backend.layout_interner.get(arg_layout), self.ret_layout_raw) {
-                        (
-                            Layout::Builtin(Builtin::Int(arg_width)),
-                            Layout::Struct {
-                                field_layouts: &[ret, ..],
-                                ..
-                            },
-                        ) => match backend.layout_interner.get(ret) {
-                            Layout::Builtin(Builtin::Int(ret_width)) => (arg_width, ret_width),
-                            _ => {
-                                internal_error!(
-                                    "NumToIntChecked is not defined for signature {:?} -> {:?}",
-                                    arg_layout,
-                                    self.ret_layout
-                                );
-                            }
+                let (arg_width, ret_width) = match (
+                    backend.layout_interner.get(arg_layout).repr,
+                    self.ret_layout_raw.repr,
+                ) {
+                    (
+                        LayoutRepr::Builtin(Builtin::Int(arg_width)),
+                        LayoutRepr::Struct {
+                            field_layouts: &[ret, ..],
+                            ..
                         },
+                    ) => match backend.layout_interner.get(ret).repr {
+                        LayoutRepr::Builtin(Builtin::Int(ret_width)) => (arg_width, ret_width),
                         _ => {
                             internal_error!(
                                 "NumToIntChecked is not defined for signature {:?} -> {:?}",
@@ -1919,7 +1926,15 @@ impl<'a> LowLevelCall<'a> {
                                 self.ret_layout
                             );
                         }
-                    };
+                    },
+                    _ => {
+                        internal_error!(
+                            "NumToIntChecked is not defined for signature {:?} -> {:?}",
+                            arg_layout,
+                            self.ret_layout
+                        );
+                    }
+                };
 
                 if arg_width.is_signed() {
                     self.load_args_and_call_zig(
@@ -2005,12 +2020,12 @@ impl<'a> LowLevelCall<'a> {
 
         let invert_result = matches!(self.lowlevel, LowLevel::NotEq);
 
-        match arg_layout_raw {
-            Layout::Builtin(
+        match arg_layout_raw.repr {
+            LayoutRepr::Builtin(
                 Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
             ) => self.eq_or_neq_number(backend),
 
-            Layout::Builtin(Builtin::Str) => {
+            LayoutRepr::Builtin(Builtin::Str) => {
                 self.load_args_and_call_zig(backend, bitcode::STR_EQUAL);
                 if invert_result {
                     backend.code_builder.i32_eqz();
@@ -2019,21 +2034,21 @@ impl<'a> LowLevelCall<'a> {
 
             // Empty record is always equal to empty record.
             // There are no runtime arguments to check, so just emit true or false.
-            Layout::Struct { field_layouts, .. } if field_layouts.is_empty() => {
+            LayoutRepr::Struct { field_layouts, .. } if field_layouts.is_empty() => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
             // Void is always equal to void. This is the type for the contents of the empty list in `[] == []`
             // This instruction will never execute, but we need an i32 for module validation
-            Layout::Union(UnionLayout::NonRecursive(tags)) if tags.is_empty() => {
+            LayoutRepr::Union(UnionLayout::NonRecursive(tags)) if tags.is_empty() => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
-            Layout::Builtin(Builtin::List(_))
-            | Layout::Struct { .. }
-            | Layout::Union(_)
-            | Layout::LambdaSet(_)
-            | Layout::Boxed(_) => {
+            LayoutRepr::Builtin(Builtin::List(_))
+            | LayoutRepr::Struct { .. }
+            | LayoutRepr::Union(_)
+            | LayoutRepr::LambdaSet(_)
+            | LayoutRepr::Boxed(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions
                 backend
                     .storage
@@ -2051,7 +2066,7 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
 
-            Layout::RecursivePointer(_) => {
+            LayoutRepr::RecursivePointer(_) => {
                 internal_error!(
                     "Tried to apply `==` to RecursivePointer values {:?}",
                     self.arguments,
@@ -2147,11 +2162,11 @@ impl<'a> LowLevelCall<'a> {
 
     fn num_to_str(&self, backend: &mut WasmBackend<'a, '_>) {
         let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-        match backend.layout_interner.get(arg_layout) {
-            Layout::Builtin(Builtin::Int(width)) => {
+        match backend.layout_interner.get(arg_layout).repr {
+            LayoutRepr::Builtin(Builtin::Int(width)) => {
                 self.load_args_and_call_zig(backend, &bitcode::STR_FROM_INT[width])
             }
-            Layout::Builtin(Builtin::Float(width)) => match width {
+            LayoutRepr::Builtin(Builtin::Float(width)) => match width {
                 FloatWidth::F32 => {
                     self.load_args(backend);
                     backend.code_builder.f64_promote_f32();
@@ -2161,7 +2176,7 @@ impl<'a> LowLevelCall<'a> {
                     self.load_args_and_call_zig(backend, &bitcode::STR_FROM_FLOAT[width]);
                 }
             },
-            Layout::Builtin(Builtin::Decimal) => {
+            LayoutRepr::Builtin(Builtin::Decimal) => {
                 self.load_args_and_call_zig(backend, bitcode::DEC_TO_STR)
             }
             x => internal_error!("NumToStr is not defined for {:?}", x),
@@ -2356,8 +2371,9 @@ pub fn call_higher_order_lowlevel<'a>(
     let (closure_data_layout, closure_data_exists) = match backend
         .layout_interner
         .get(backend.storage.symbol_layouts[captured_environment])
+        .repr
     {
-        Layout::LambdaSet(lambda_set) => {
+        LayoutRepr::LambdaSet(lambda_set) => {
             if lambda_set.is_represented(backend.layout_interner).is_some() {
                 (lambda_set.runtime_representation(), true)
             } else {
@@ -2367,7 +2383,7 @@ pub fn call_higher_order_lowlevel<'a>(
                 (Layout::UNIT, false)
             }
         }
-        Layout::Struct {
+        LayoutRepr::Struct {
             field_layouts: &[], ..
         } => (Layout::UNIT, false),
         x => internal_error!("Closure data has an invalid layout\n{:?}", x),
@@ -2448,10 +2464,12 @@ pub fn call_higher_order_lowlevel<'a>(
             argument_layouts.len()
         };
 
-        let boxed_closure_arg_layouts = argument_layouts
-            .iter()
-            .take(n_non_closure_args)
-            .map(|lay| backend.layout_interner.insert(Layout::Boxed(*lay)));
+        let boxed_closure_arg_layouts =
+            argument_layouts.iter().take(n_non_closure_args).map(|lay| {
+                backend.layout_interner.insert(Layout {
+                    repr: LayoutRepr::Boxed(*lay),
+                })
+            });
 
         wrapper_arg_layouts.push(wrapped_captures_layout);
         wrapper_arg_layouts.extend(boxed_closure_arg_layouts);
@@ -2459,11 +2477,9 @@ pub fn call_higher_order_lowlevel<'a>(
         match helper_proc_source {
             ProcSource::HigherOrderMapper(_) => {
                 // Our convention for mappers is that they write to the heap via the last argument
-                wrapper_arg_layouts.push(
-                    backend
-                        .layout_interner
-                        .insert(Layout::Boxed(*result_layout)),
-                );
+                wrapper_arg_layouts.push(backend.layout_interner.insert(Layout {
+                    repr: LayoutRepr::Boxed(*result_layout),
+                }));
                 ProcLayout {
                     arguments: wrapper_arg_layouts.into_bump_slice(),
                     result: Layout::UNIT,
@@ -2592,8 +2608,8 @@ pub fn call_higher_order_lowlevel<'a>(
 }
 
 fn unwrap_list_elem_layout(list_layout: Layout) -> InLayout {
-    match list_layout {
-        Layout::Builtin(Builtin::List(x)) => x,
+    match list_layout.repr {
+        LayoutRepr::Builtin(Builtin::List(x)) => x,
         e => internal_error!("expected List layout, got {:?}", e),
     }
 }
@@ -2655,9 +2671,11 @@ fn list_map_n<'a>(
         for el in arg_elem_layouts.iter() {
             // The dec function will be passed a pointer to the element within the list, not the element itself!
             // Here we wrap the layout in a Struct to ensure we get the right code gen
-            let el_ptr = backend.layout_interner.insert(Layout::Struct {
-                field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
-                field_layouts: backend.env.arena.alloc([*el]),
+            let el_ptr = backend.layout_interner.insert(Layout {
+                repr: LayoutRepr::Struct {
+                    field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                    field_layouts: backend.env.arena.alloc([*el]),
+                },
             });
             let idx = backend.get_refcount_fn_index(el_ptr, HelperOp::Dec);
             let ptr = backend.get_fn_ptr(idx);
@@ -2695,9 +2713,11 @@ fn ensure_symbol_is_in_memory<'a>(
                 offset,
                 symbol,
             );
-            let in_memory_layout = backend.layout_interner.insert(Layout::Struct {
-                field_order_hash: FieldOrderHash::from_ordered_fields(&[]), // don't care
-                field_layouts: arena.alloc([layout]),
+            let in_memory_layout = backend.layout_interner.insert(Layout {
+                repr: LayoutRepr::Struct {
+                    field_order_hash: FieldOrderHash::from_ordered_fields(&[]), // don't care
+                    field_layouts: arena.alloc([layout]),
+                },
             });
             (frame_ptr, offset, in_memory_layout)
         }

@@ -1,5 +1,5 @@
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout};
 
 use crate::{PTR_SIZE, PTR_TYPE};
 use roc_wasm_module::ValueType;
@@ -47,8 +47,8 @@ impl WasmLayout {
 
         let (size, alignment_bytes) = interner.stack_size_and_alignment(layout);
 
-        match interner.get(layout) {
-            Layout::Builtin(Int(int_width)) => {
+        match interner.get(layout).repr {
+            LayoutRepr::Builtin(Int(int_width)) => {
                 use IntWidth::*;
 
                 match int_width {
@@ -62,9 +62,9 @@ impl WasmLayout {
                 }
             }
 
-            Layout::Builtin(Bool) => Self::Primitive(I32, size),
+            LayoutRepr::Builtin(Bool) => Self::Primitive(I32, size),
 
-            Layout::Builtin(Float(float_width)) => {
+            LayoutRepr::Builtin(Float(float_width)) => {
                 use FloatWidth::*;
 
                 match float_width {
@@ -73,32 +73,32 @@ impl WasmLayout {
                 }
             }
 
-            Layout::Builtin(Decimal) => Self::StackMemory {
+            LayoutRepr::Builtin(Decimal) => Self::StackMemory {
                 size,
                 alignment_bytes,
                 format: StackMemoryFormat::Decimal,
             },
 
-            Layout::LambdaSet(lambda_set) => {
+            LayoutRepr::LambdaSet(lambda_set) => {
                 WasmLayout::new(interner, lambda_set.runtime_representation())
             }
 
-            Layout::Builtin(Str | List(_))
-            | Layout::Struct { .. }
-            | Layout::Union(NonRecursive(_)) => Self::StackMemory {
+            LayoutRepr::Builtin(Str | List(_))
+            | LayoutRepr::Struct { .. }
+            | LayoutRepr::Union(NonRecursive(_)) => Self::StackMemory {
                 size,
                 alignment_bytes,
                 format: StackMemoryFormat::DataStructure,
             },
 
-            Layout::Union(
+            LayoutRepr::Union(
                 Recursive(_)
                 | NonNullableUnwrapped(_)
                 | NullableWrapped { .. }
                 | NullableUnwrapped { .. },
             )
-            | Layout::Boxed(_)
-            | Layout::RecursivePointer(_) => Self::Primitive(PTR_TYPE, PTR_SIZE),
+            | LayoutRepr::Boxed(_)
+            | LayoutRepr::RecursivePointer(_) => Self::Primitive(PTR_TYPE, PTR_SIZE),
         }
     }
 

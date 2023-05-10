@@ -43,7 +43,7 @@ use roc_mono::ir::{
     ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, LambdaName, LambdaSet, Layout, LayoutIds, LayoutInterner, Niche,
+    Builtin, InLayout, LambdaName, LambdaSet, Layout, LayoutIds, LayoutInterner, LayoutRepr, Niche,
     RawFunctionLayout, STLayoutInterner, TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
@@ -783,13 +783,13 @@ pub fn build_exp_literal<'a, 'ctx>(
     use roc_mono::ir::Literal::*;
 
     match literal {
-        Int(bytes) => match layout_interner.get(layout) {
-            Layout::Builtin(Builtin::Bool) => env
+        Int(bytes) => match layout_interner.get(layout).repr {
+            LayoutRepr::Builtin(Builtin::Bool) => env
                 .context
                 .bool_type()
                 .const_int(i128::from_ne_bytes(*bytes) as u64, false)
                 .into(),
-            Layout::Builtin(Builtin::Int(int_width)) => {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
                 int_with_precision(env, i128::from_ne_bytes(*bytes), int_width).into()
             }
             _ => panic!("Invalid layout for int literal = {:?}", layout),
@@ -797,8 +797,8 @@ pub fn build_exp_literal<'a, 'ctx>(
 
         U128(bytes) => const_u128(env, u128::from_ne_bytes(*bytes)).into(),
 
-        Float(float) => match layout_interner.get(layout) {
-            Layout::Builtin(Builtin::Float(float_width)) => {
+        Float(float) => match layout_interner.get(layout).repr {
+            LayoutRepr::Builtin(Builtin::Float(float_width)) => {
                 float_with_precision(env, *float, float_width)
             }
             _ => panic!("Invalid layout for float literal = {:?}", layout),
@@ -1178,8 +1178,8 @@ pub fn build_exp_expr<'a, 'ctx>(
             let tag_ptr = tag_ptr.into_pointer_value();
 
             // reset is only generated for union values
-            let union_layout = match layout_interner.get(layout) {
-                Layout::Union(ul) => ul,
+            let union_layout = match layout_interner.get(layout).repr {
+                LayoutRepr::Union(ul) => ul,
                 _ => unreachable!(),
             };
 
@@ -1285,15 +1285,16 @@ pub fn build_exp_expr<'a, 'ctx>(
         } => {
             let (value, layout) = load_symbol_and_layout(scope, structure);
 
-            let layout = if let Layout::LambdaSet(lambda_set) = layout_interner.get(layout) {
+            let layout = if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get(layout).repr
+            {
                 lambda_set.runtime_representation()
             } else {
                 layout
             };
 
             // extract field from a record
-            match (value, layout_interner.get(layout)) {
-                (StructValue(argument), Layout::Struct { field_layouts, .. }) => {
+            match (value, layout_interner.get(layout).repr) {
+                (StructValue(argument), LayoutRepr::Struct { field_layouts, .. }) => {
                     debug_assert!(!field_layouts.is_empty());
 
                     let field_value = env
@@ -1586,7 +1587,7 @@ fn build_tag_field_value<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
     tag_field_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    if let Layout::RecursivePointer(_) = layout_interner.get(tag_field_layout) {
+    if let LayoutRepr::RecursivePointer(_) = layout_interner.get(tag_field_layout).repr {
         debug_assert!(value.is_pointer_value());
 
         // we store recursive pointers as `i64*`
@@ -1741,7 +1742,9 @@ fn build_tag<'a, 'ctx>(
                 use std::cmp::Ordering::*;
                 match tag_id.cmp(&(*nullable_id as _)) {
                     Equal => {
-                        let layout = layout_interner.insert(Layout::Union(*union_layout));
+                        let layout = layout_interner.insert(Layout {
+                            repr: LayoutRepr::Union(*union_layout),
+                        });
 
                         return basic_type_from_layout(env, layout_interner, layout)
                             .into_pointer_type()
@@ -2505,8 +2508,8 @@ pub fn build_exp_stmt<'a, 'ctx>(
 
             for (symbol, expr, layout) in queue {
                 debug_assert!(!matches!(
-                    layout_interner.get(*layout),
-                    Layout::RecursivePointer(_)
+                    layout_interner.get(*layout).repr,
+                    LayoutRepr::RecursivePointer(_)
                 ));
 
                 let val = build_exp_expr(
@@ -2805,9 +2808,10 @@ pub fn build_exp_stmt<'a, 'ctx>(
                 DecRef(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
-                    match layout_interner.get(layout) {
-                        Layout::Builtin(Builtin::Str) => todo!(),
-                        Layout::Builtin(Builtin::List(element_layout)) => {
+                    let lay = layout_interner.get(layout);
+                    match lay.repr {
+                        LayoutRepr::Builtin(Builtin::Str) => todo!(),
+                        LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
                             let element_layout = layout_interner.get(element_layout);
                             let alignment =
@@ -2816,7 +2820,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
 
-                        lay if lay.is_refcounted() => {
+                        _ if lay.is_refcounted() => {
                             if value.is_pointer_value() {
                                 let value_ptr = value.into_pointer_value();
 
@@ -3388,8 +3392,8 @@ fn build_switch_ir<'a, 'ctx>(
     let cont_block = context.append_basic_block(parent, "cont");
 
     // Build the condition
-    let cond = match layout_interner.get(cond_layout) {
-        Layout::Builtin(Builtin::Float(float_width)) => {
+    let cond = match layout_interner.get(cond_layout).repr {
+        LayoutRepr::Builtin(Builtin::Float(float_width)) => {
             // float matches are done on the bit pattern
             cond_layout = Layout::float_width(float_width);
 
@@ -3402,19 +3406,19 @@ fn build_switch_ir<'a, 'ctx>(
                 .build_bitcast(cond_value, int_type, "")
                 .into_int_value()
         }
-        Layout::Union(variant) => {
+        LayoutRepr::Union(variant) => {
             cond_layout = variant.tag_id_layout();
 
             get_tag_id(env, layout_interner, parent, &variant, cond_value)
         }
-        Layout::Builtin(_) => cond_value.into_int_value(),
+        LayoutRepr::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
     };
 
     // Build the cases
     let mut incoming = Vec::with_capacity_in(branches.len(), arena);
 
-    if let Layout::Builtin(Builtin::Bool) = layout_interner.get(cond_layout) {
+    if let LayoutRepr::Builtin(Builtin::Bool) = layout_interner.get(cond_layout).repr {
         match (branches, default_branch) {
             ([(0, _, false_branch)], true_branch) | ([(1, _, true_branch)], false_branch) => {
                 let then_block = context.append_basic_block(parent, "then_block");
@@ -3822,8 +3826,8 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
             // the C and Fast calling conventions agree
             arguments_for_call.push(*arg);
         } else {
-            match layout_interner.get(*layout) {
-                Layout::Builtin(Builtin::List(_)) => {
+            match layout_interner.get(*layout).repr {
+                LayoutRepr::Builtin(Builtin::List(_)) => {
                     let list_type = arg_type
                         .into_pointer_type()
                         .get_element_type()
@@ -3961,7 +3965,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
         };
 
         for (i, layout) in arguments.iter().enumerate() {
-            if let Layout::Builtin(Builtin::Str) = layout_interner.get(*layout) {
+            if let LayoutRepr::Builtin(Builtin::Str) = layout_interner.get(*layout).repr {
                 // Indicate to LLVM that this argument is semantically passed by-value
                 // even though technically (because of its size) it is passed by-reference
                 let byval_attribute_id = Attribute::get_named_enum_kind_id("byval");
@@ -4061,8 +4065,10 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
                         env.target_info.architecture,
                         roc_target::Architecture::X86_32 | roc_target::Architecture::X86_64
                     ) {
-                        let c_abi_type = match layout_interner.get(*layout) {
-                            Layout::Builtin(Builtin::Str | Builtin::List(_)) => c_abi_roc_str_type,
+                        let c_abi_type = match layout_interner.get(*layout).repr {
+                            LayoutRepr::Builtin(Builtin::Str | Builtin::List(_)) => {
+                                c_abi_roc_str_type
+                            }
                             _ => todo!("figure out what the C type is"),
                         };
 
@@ -5628,8 +5634,8 @@ fn to_cc_type<'a, 'ctx>(
     layout_interner: &mut STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> BasicTypeEnum<'ctx> {
-    match layout_interner.runtime_representation(layout) {
-        Layout::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
+    match layout_interner.runtime_representation(layout).repr {
+        LayoutRepr::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
         _ => {
             // TODO this is almost certainly incorrect for bigger structs
             basic_type_from_layout(env, layout_interner, layout)
@@ -5675,8 +5681,8 @@ impl RocReturn {
         target_info: TargetInfo,
         layout: InLayout,
     ) -> bool {
-        match interner.get(layout) {
-            Layout::Builtin(builtin) => {
+        match interner.get(layout).repr {
+            LayoutRepr::Builtin(builtin) => {
                 use Builtin::*;
 
                 match target_info.ptr_width() {
@@ -5688,8 +5694,8 @@ impl RocReturn {
                     }
                 }
             }
-            Layout::Union(UnionLayout::NonRecursive(_)) => true,
-            Layout::LambdaSet(lambda_set) => RocReturn::roc_return_by_pointer(
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => true,
+            LayoutRepr::LambdaSet(lambda_set) => RocReturn::roc_return_by_pointer(
                 interner,
                 target_info,
                 lambda_set.runtime_representation(),

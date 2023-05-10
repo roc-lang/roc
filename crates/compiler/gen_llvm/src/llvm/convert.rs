@@ -6,7 +6,8 @@ use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{
-    round_up_to_alignment, Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout,
+    round_up_to_alignment, Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner,
+    UnionLayout,
 };
 use roc_target::TargetInfo;
 
@@ -33,9 +34,9 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     layout_interner: &'env mut STLayoutInterner<'a>,
     layout: InLayout<'_>,
 ) -> BasicTypeEnum<'ctx> {
-    use Layout::*;
+    use LayoutRepr::*;
 
-    match layout_interner.get(layout) {
+    match layout_interner.get(layout).repr {
         Struct {
             field_layouts: sorted_fields,
             ..
@@ -150,9 +151,9 @@ pub fn argument_type_from_layout<'a, 'ctx>(
     layout_interner: &mut STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> BasicTypeEnum<'ctx> {
-    use Layout::*;
+    use LayoutRepr::*;
 
-    match layout_interner.get(layout) {
+    match layout_interner.get(layout).repr {
         LambdaSet(lambda_set) => {
             argument_type_from_layout(env, layout_interner, lambda_set.runtime_representation())
         }

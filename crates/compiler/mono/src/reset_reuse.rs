@@ -10,7 +10,7 @@ use crate::ir::{
     BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt, UpdateModeId,
     UpdateModeIds,
 };
-use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
+use crate::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout};
 
 use bumpalo::Bump;
 
@@ -1133,8 +1133,8 @@ fn symbol_layout_reusability<'a>(
     symbol: &Symbol,
     layout: &InLayout<'a>,
 ) -> Reuse {
-    match layout_interner.get(*layout) {
-        Layout::Union(union_layout) => {
+    match layout_interner.get(*layout).repr {
+        LayoutRepr::Union(union_layout) => {
             can_reuse_union_layout_tag(&union_layout, environment.get_symbol_tag(symbol))
         }
         // Strings literals are constants.

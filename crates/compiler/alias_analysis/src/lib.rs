@@ -18,8 +18,8 @@ use roc_mono::ir::{
     Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, Niche, RawFunctionLayout, STLayoutInterner,
-    UnionLayout,
+    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, Niche, RawFunctionLayout,
+    STLayoutInterner, UnionLayout,
 };
 
 // just using one module for now
@@ -852,8 +852,9 @@ fn call_spec<'a>(
 
                     let output_element_type = layout_spec(env, builder, interner, *return_layout)?;
 
-                    let state_layout =
-                        interner.insert(Layout::Builtin(Builtin::List(*return_layout)));
+                    let state_layout = interner.insert(Layout {
+                        repr: LayoutRepr::Builtin(Builtin::List(*return_layout)),
+                    });
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -880,7 +881,9 @@ fn call_spec<'a>(
 
                     let arg0_layout = argument_layouts[0];
 
-                    let state_layout = interner.insert(Layout::Builtin(Builtin::List(arg0_layout)));
+                    let state_layout = interner.insert(Layout {
+                        repr: LayoutRepr::Builtin(Builtin::List(arg0_layout)),
+                    });
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
                     let init_state = list;
 
@@ -907,8 +910,9 @@ fn call_spec<'a>(
 
                     let output_element_type = layout_spec(env, builder, interner, *return_layout)?;
 
-                    let state_layout =
-                        interner.insert(Layout::Builtin(Builtin::List(*return_layout)));
+                    let state_layout = interner.insert(Layout {
+                        repr: LayoutRepr::Builtin(Builtin::List(*return_layout)),
+                    });
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -941,8 +945,9 @@ fn call_spec<'a>(
 
                     let output_element_type = layout_spec(env, builder, interner, *return_layout)?;
 
-                    let state_layout =
-                        interner.insert(Layout::Builtin(Builtin::List(*return_layout)));
+                    let state_layout = interner.insert(Layout {
+                        repr: LayoutRepr::Builtin(Builtin::List(*return_layout)),
+                    });
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -981,8 +986,9 @@ fn call_spec<'a>(
 
                     let output_element_type = layout_spec(env, builder, interner, *return_layout)?;
 
-                    let state_layout =
-                        interner.insert(Layout::Builtin(Builtin::List(*return_layout)));
+                    let state_layout = interner.insert(Layout {
+                        repr: LayoutRepr::Builtin(Builtin::List(*return_layout)),
+                    });
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -1111,21 +1117,21 @@ fn lowlevel_spec<'a>(
             let new_list = with_new_heap_cell(builder, block, bag)?;
 
             // depending on the types, the list or value will come first in the struct
-            let fields = match interner.get(layout) {
-                Layout::Struct { field_layouts, .. } => field_layouts,
+            let fields = match interner.get(layout).repr {
+                LayoutRepr::Struct { field_layouts, .. } => field_layouts,
                 _ => unreachable!(),
             };
 
-            match (interner.get(fields[0]), interner.get(fields[1])) {
-                (Layout::Builtin(Builtin::List(_)), Layout::Builtin(Builtin::List(_))) => {
+            match (interner.get(fields[0]).repr, interner.get(fields[1]).repr) {
+                (LayoutRepr::Builtin(Builtin::List(_)), LayoutRepr::Builtin(Builtin::List(_))) => {
                     // field name is the tie breaker, list is first in
                     // { list : List a, value : a }
                     builder.add_make_tuple(block, &[new_list, old_value])
                 }
-                (Layout::Builtin(Builtin::List(_)), _) => {
+                (LayoutRepr::Builtin(Builtin::List(_)), _) => {
                     builder.add_make_tuple(block, &[new_list, old_value])
                 }
-                (_, Layout::Builtin(Builtin::List(_))) => {
+                (_, LayoutRepr::Builtin(Builtin::List(_))) => {
                     builder.add_make_tuple(block, &[old_value, new_list])
                 }
                 _ => unreachable!(),
@@ -1144,8 +1150,8 @@ fn lowlevel_spec<'a>(
         ListWithCapacity => {
             // essentially an empty list, capacity is not relevant for morphic
 
-            match interner.get(layout) {
-                Layout::Builtin(Builtin::List(element_layout)) => {
+            match interner.get(layout).repr {
+                LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                     let type_id = layout_spec(env, builder, interner, element_layout)?;
                     new_list(builder, block, type_id)
                 }
@@ -1440,8 +1446,8 @@ fn expr_spec<'a>(
             }
         }
 
-        EmptyArray => match interner.get(layout) {
-            Layout::Builtin(Builtin::List(element_layout)) => {
+        EmptyArray => match interner.get(layout).repr {
+            LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                 let type_id = layout_spec(env, builder, interner, element_layout)?;
                 new_list(builder, block, type_id)
             }
@@ -1457,8 +1463,8 @@ fn expr_spec<'a>(
         } => {
             let tag_value_id = env.symbols[symbol];
 
-            let union_layout = match interner.get(layout) {
-                Layout::Union(ul) => ul,
+            let union_layout = match interner.get(layout).repr {
+                LayoutRepr::Union(ul) => ul,
                 _ => unreachable!(),
             };
 
@@ -1537,9 +1543,9 @@ fn layout_spec_help<'a>(
     interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> Result<TypeId> {
-    use Layout::*;
+    use LayoutRepr::*;
 
-    match interner.get(layout) {
+    match interner.get(layout).repr {
         Builtin(builtin) => builtin_spec(env, builder, interner, &builtin),
         Struct { field_layouts, .. } => {
             build_recursive_tuple_type(env, builder, interner, field_layouts)
@@ -1580,8 +1586,8 @@ fn layout_spec_help<'a>(
             builder.add_tuple_type(&[cell_type, inner_type])
         }
         // TODO(recursive-layouts): update once we have recursive pointer loops
-        RecursivePointer(union_layout) => match interner.get(union_layout) {
-            Layout::Union(union_layout) => {
+        RecursivePointer(union_layout) => match interner.get(union_layout).repr {
+            LayoutRepr::Union(union_layout) => {
                 assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                 let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
                 let type_name = TypeName(&type_name_bytes);

@@ -13,7 +13,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 use roc_region::all::Region;
 
@@ -296,8 +296,8 @@ fn build_clone<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
     layout: InLayout<'a>,
 ) -> IntValue<'ctx> {
-    match layout_interner.get(layout) {
-        Layout::Builtin(builtin) => build_clone_builtin(
+    match layout_interner.get(layout).repr {
+        LayoutRepr::Builtin(builtin) => build_clone_builtin(
             env,
             layout_interner,
             layout_ids,
@@ -307,7 +307,7 @@ fn build_clone<'a, 'ctx>(
             builtin,
         ),
 
-        Layout::Struct { field_layouts, .. } => build_clone_struct(
+        LayoutRepr::Struct { field_layouts, .. } => build_clone_struct(
             env,
             layout_interner,
             layout_ids,
@@ -319,9 +319,9 @@ fn build_clone<'a, 'ctx>(
 
         // Since we will never actually display functions (and hence lambda sets)
         // we just write nothing to the buffer
-        Layout::LambdaSet(_) => cursors.extra_offset,
+        LayoutRepr::LambdaSet(_) => cursors.extra_offset,
 
-        Layout::Union(union_layout) => {
+        LayoutRepr::Union(union_layout) => {
             if layout_interner.safe_to_memcpy(layout) {
                 let ptr = unsafe {
                     env.builder.new_build_in_bounds_gep(
@@ -353,7 +353,7 @@ fn build_clone<'a, 'ctx>(
             }
         }
 
-        Layout::Boxed(inner_layout) => {
+        LayoutRepr::Boxed(inner_layout) => {
             // write the offset
             build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
 
@@ -384,7 +384,7 @@ fn build_clone<'a, 'ctx>(
             )
         }
 
-        Layout::RecursivePointer(rec_layout) => {
+        LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
             let bt = basic_type_from_layout(env, layout_interner, layout);
@@ -396,8 +396,8 @@ fn build_clone<'a, 'ctx>(
                 "i64_to_opaque",
             );
 
-            let union_layout = match layout_interner.get(rec_layout) {
-                Layout::Union(union_layout) => {
+            let union_layout = match layout_interner.get(rec_layout).repr {
+                LayoutRepr::Union(union_layout) => {
                     debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                     union_layout
                 }
@@ -476,7 +476,9 @@ fn build_clone_tag<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
     union_layout: UnionLayout<'a>,
 ) -> IntValue<'ctx> {
-    let layout = layout_interner.insert(Layout::Union(union_layout));
+    let layout = layout_interner.insert(Layout {
+        repr: LayoutRepr::Union(union_layout),
+    });
     let layout_id = layout_ids.get(Symbol::CLONE, &layout);
     let fn_name = layout_id.to_symbol_string(Symbol::CLONE, &env.interns);
 

@@ -21,7 +21,9 @@ use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Proc, ProcLayout, Stmt,
     UpdateModeId,
 };
-use crate::layout::{Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
+use crate::layout::{
+    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+};
 
 use bumpalo::Bump;
 
@@ -338,9 +340,9 @@ fn specialize_drops_stmt<'a, 'i>(
                     let in_layout = environment.get_symbol_layout(symbol);
                     let runtime_layout = layout_interner.runtime_representation(*in_layout);
 
-                    let new_dec = match runtime_layout {
+                    let new_dec = match runtime_layout.repr {
                         // Layout has children, try to inline them.
-                        Layout::Struct { field_layouts, .. } => specialize_struct(
+                        LayoutRepr::Struct { field_layouts, .. } => specialize_struct(
                             arena,
                             layout_interner,
                             ident_ids,
@@ -350,7 +352,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             &mut incremented_children,
                             continuation,
                         ),
-                        Layout::Union(union_layout) => specialize_union(
+                        LayoutRepr::Union(union_layout) => specialize_union(
                             arena,
                             layout_interner,
                             ident_ids,
@@ -360,7 +362,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             &mut incremented_children,
                             continuation,
                         ),
-                        Layout::Boxed(_layout) => specialize_boxed(
+                        LayoutRepr::Boxed(_layout) => specialize_boxed(
                             arena,
                             layout_interner,
                             ident_ids,
@@ -369,7 +371,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             symbol,
                             continuation,
                         ),
-                        Layout::Builtin(Builtin::List(layout)) => specialize_list(
+                        LayoutRepr::Builtin(Builtin::List(layout)) => specialize_list(
                             arena,
                             layout_interner,
                             ident_ids,

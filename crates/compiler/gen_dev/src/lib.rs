@@ -18,8 +18,8 @@ use roc_mono::ir::{
     Literal, Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
-    UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+    TagIdIntType, UnionLayout,
 };
 use roc_mono::list_element_layout;
 
@@ -174,8 +174,8 @@ trait Backend<'a> {
     }
 
     fn list_argument(&mut self, list_layout: InLayout<'a>) -> ListArgument<'a> {
-        let element_layout = match self.interner().get(list_layout) {
-            Layout::Builtin(Builtin::List(e)) => e,
+        let element_layout = match self.interner().get(list_layout).repr {
+            LayoutRepr::Builtin(Builtin::List(e)) => e,
             _ => unreachable!(),
         };
 
@@ -196,7 +196,9 @@ trait Backend<'a> {
     }
 
     fn increment_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
-        let box_layout = self.interner_mut().insert(Layout::Boxed(layout));
+        let box_layout = self.interner_mut().insert(Layout {
+            repr: LayoutRepr::Boxed(layout),
+        });
 
         let element_increment = self.debug_symbol("element_increment");
         let element_increment_symbol = self.build_indirect_inc(layout);
@@ -214,7 +216,9 @@ trait Backend<'a> {
     }
 
     fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
-        let box_layout = self.interner_mut().insert(Layout::Boxed(layout));
+        let box_layout = self.interner_mut().insert(Layout {
+            repr: LayoutRepr::Boxed(layout),
+        });
 
         let element_decrement = self.debug_symbol("element_decrement");
         let element_decrement_symbol = self.build_indirect_dec(layout);
@@ -609,8 +613,8 @@ trait Backend<'a> {
                 self.tag(sym, arguments, tag_layout, *tag_id);
             }
             Expr::ExprBox { symbol: value } => {
-                let element_layout = match self.interner().get(*layout) {
-                    Layout::Boxed(boxed) => boxed,
+                let element_layout = match self.interner().get(*layout).repr {
+                    LayoutRepr::Boxed(boxed) => boxed,
                     _ => unreachable!("{:?}", self.interner().dbg(*layout)),
                 };
 
@@ -782,78 +786,90 @@ trait Backend<'a> {
                 );
                 self.build_num_sub_wrap(sym, &args[0], &args[1], ret_layout)
             }
-            LowLevel::NumSubSaturated => match self.interner().get(*ret_layout) {
-                Layout::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+            LowLevel::NumSubSaturated => match self.interner().get(*ret_layout).repr {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
                     sym,
                     bitcode::NUM_SUB_SATURATED_INT[int_width].to_string(),
                     args,
                     arg_layouts,
                     ret_layout,
                 ),
-                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
                     self.build_num_sub(sym, &args[0], &args[1], ret_layout)
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                     // saturated sub is just normal sub
                     self.build_num_sub(sym, &args[0], &args[1], ret_layout)
                 }
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     // self.load_args_and_call_zig(backend, bitcode::DEC_SUB_SATURATED)
                     todo!()
                 }
                 _ => internal_error!("invalid return type"),
             },
             LowLevel::NumBitwiseAnd => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_bitwise_and(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise and on a non-integer")
                 }
             }
             LowLevel::NumBitwiseOr => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_bitwise_or(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise or on a non-integer")
                 }
             }
             LowLevel::NumBitwiseXor => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_bitwise_xor(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise xor on a non-integer")
                 }
             }
             LowLevel::And => {
-                if let Layout::Builtin(Builtin::Bool) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Bool) = self.interner().get(*ret_layout).repr {
                     self.build_int_bitwise_and(sym, &args[0], &args[1], IntWidth::U8)
                 } else {
                     internal_error!("bitwise and on a non-integer")
                 }
             }
             LowLevel::Or => {
-                if let Layout::Builtin(Builtin::Bool) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Bool) = self.interner().get(*ret_layout).repr {
                     self.build_int_bitwise_or(sym, &args[0], &args[1], IntWidth::U8)
                 } else {
                     internal_error!("bitwise or on a non-integer")
                 }
             }
             LowLevel::NumShiftLeftBy => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_shift_left(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("shift left on a non-integer")
                 }
             }
             LowLevel::NumShiftRightBy => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_shift_right(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("shift right on a non-integer")
                 }
             }
             LowLevel::NumShiftRightZfBy => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_shift_right_zero_fill(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("shift right zero-fill on a non-integer")
@@ -1273,18 +1289,18 @@ trait Backend<'a> {
                 ret_layout,
             ),
             LowLevel::StrToNum => {
-                let number_layout = match self.interner().get(*ret_layout) {
-                    Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
+                let number_layout = match self.interner().get(*ret_layout).repr {
+                    LayoutRepr::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
                     _ => unreachable!(),
                 };
 
                 // match on the return layout to figure out which zig builtin we need
-                let intrinsic = match self.interner().get(number_layout) {
-                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
-                    Layout::Builtin(Builtin::Float(float_width)) => {
+                let intrinsic = match self.interner().get(number_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    LayoutRepr::Builtin(Builtin::Float(float_width)) => {
                         &bitcode::STR_TO_FLOAT[float_width]
                     }
-                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                    LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
                     _ => unreachable!(),
                 };
 
@@ -1299,8 +1315,8 @@ trait Backend<'a> {
                 self.build_ptr_cast(sym, &args[0])
             }
             LowLevel::PtrWrite => {
-                let element_layout = match self.interner().get(*ret_layout) {
-                    Layout::Boxed(boxed) => boxed,
+                let element_layout = match self.interner().get(*ret_layout).repr {
+                    LayoutRepr::Boxed(boxed) => boxed,
                     _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 
@@ -1343,10 +1359,10 @@ trait Backend<'a> {
             ),
             LowLevel::NumToStr => {
                 let arg_layout = arg_layouts[0];
-                let intrinsic = match self.interner().get(arg_layout) {
-                    Layout::Builtin(Builtin::Int(width)) => &bitcode::STR_FROM_INT[width],
-                    Layout::Builtin(Builtin::Float(width)) => &bitcode::STR_FROM_FLOAT[width],
-                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_TO_STR,
+                let intrinsic = match self.interner().get(arg_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::STR_FROM_INT[width],
+                    LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::STR_FROM_FLOAT[width],
+                    LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_TO_STR,
                     x => internal_error!("NumToStr is not defined for {:?}", x),
                 };
 
@@ -1357,13 +1373,13 @@ trait Backend<'a> {
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
             }
             LowLevel::NumIntCast => {
-                let source_width = match self.interner().get(arg_layouts[0]) {
-                    Layout::Builtin(Builtin::Int(width)) => width,
+                let source_width = match self.interner().get(arg_layouts[0]).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => width,
                     _ => unreachable!(),
                 };
 
-                let target_width = match self.interner().get(*ret_layout) {
-                    Layout::Builtin(Builtin::Int(width)) => width,
+                let target_width = match self.interner().get(*ret_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => width,
                     _ => unreachable!(),
                 };
 
