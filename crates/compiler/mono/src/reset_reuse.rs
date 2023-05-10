@@ -397,11 +397,11 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
         }
         Stmt::Refcounting(rc, continuation) => {
             let reuse_pair = match rc {
-                ModifyRc::Inc(_, _) | ModifyRc::DecRef(_) => {
+                ModifyRc::Inc(_, _) => {
                     // We don't need to do anything for an inc.
                     None
                 }
-                ModifyRc::Dec(symbol) => {
+                ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol) => {
                     // Get the layout of the symbol from where it is defined.
                     let layout_option = environment.get_symbol_layout(*symbol);
 
