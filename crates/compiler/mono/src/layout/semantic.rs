@@ -8,6 +8,7 @@
 pub enum SemanticRepr<'a> {
     None,
     Record(SemaRecord<'a>),
+    Tuple(SemaTuple),
 }
 
 impl<'a> SemanticRepr<'a> {
@@ -16,9 +17,18 @@ impl<'a> SemanticRepr<'a> {
     pub(super) fn record(fields: &'a [&'a str]) -> Self {
         Self::Record(SemaRecord { fields })
     }
+
+    pub(super) fn tuple(size: usize) -> Self {
+        Self::Tuple(SemaTuple { size })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SemaRecord<'a> {
     pub fields: &'a [&'a str],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SemaTuple {
+    pub size: usize,
 }

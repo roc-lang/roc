@@ -3332,7 +3332,7 @@ fn layout_from_flat_type<'a>(
                         field_order_hash,
                         field_layouts: layouts.into_bump_slice(),
                     },
-                    semantic: SemanticRepr::None,
+                    semantic: SemanticRepr::tuple(layouts.len()),
                 };
 
                 Ok(env.cache.put_in(struct_layout))
