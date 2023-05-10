@@ -110,7 +110,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 .docs_by_module
                 .iter()
                 .map(|(_, module)| {
-                    let href = sidebar_link_url(module.name.as_str());
+                    let href = module_link_url(module.name.as_str());
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
                 })
@@ -133,7 +133,31 @@ pub fn generate_docs_html(root_file: PathBuf) {
         set
     };
 
-    // Write each package's module docs html file
+    // Write index.html for package (/index.html)
+    {
+        let rendered_package = template_html
+            .replace(
+                "<!-- Page title -->",
+                page_title(package_name.as_str(), "").as_str(),
+            )
+            .replace(
+                "<!-- Package Name and Version -->",
+                render_name_and_version(package_name.as_str(), version.as_str()).as_str(),
+            )
+            .replace(
+                "<!-- Module Docs -->",
+                render_package_index(&loaded_module).as_str(),
+            );
+
+        fs::write(build_dir.join("index.html"), rendered_package).unwrap_or_else(|error| {
+            panic!(
+                "Attempted to write index.html but failed with this error: {}",
+                error
+            )
+        });
+    }
+
+    // Write each package module's index.html file
     for module_docs in loaded_module.docs_by_module.values() {
         let module_name = module_docs.name.as_str();
         let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
@@ -163,12 +187,45 @@ pub fn generate_docs_html(root_file: PathBuf) {
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn sidebar_link_url(module_name: &str) -> String {
+fn module_link_url(module_name: &str) -> String {
     format!("{}{}", base_url(), module_name)
 }
 
 fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
+}
+
+fn render_package_index(root_module: &LoadedModule) -> String {
+    // The list items containing module links
+    let mut module_list_buf = String::new();
+
+    for module in root_module.docs_by_module.values() {
+        // The anchor tag containing the module link
+        let mut link_buf = String::new();
+        let href = module_link_url(module.name.as_str());
+
+        push_html(
+            &mut link_buf,
+            "a",
+            vec![("href", href.as_str())],
+            module.name.as_str(),
+        );
+
+        push_html(&mut module_list_buf, "li", vec![], link_buf.as_str());
+    }
+
+    // The HTML for the index page
+    let mut index_buf = String::new();
+
+    push_html(&mut index_buf, "h2", vec![], "Exposed Modules");
+    push_html(
+        &mut index_buf,
+        "ul",
+        vec![("class", "index-module-links")],
+        module_list_buf.as_str(),
+    );
+
+    index_buf
 }
 
 fn render_module_documentation(
@@ -342,7 +399,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     let mut buf = String::new();
 
     for module in modules {
-        let href = sidebar_link_url(module.name.as_str());
+        let href = module_link_url(module.name.as_str());
         let mut sidebar_entry_content = String::new();
 
         push_html(
