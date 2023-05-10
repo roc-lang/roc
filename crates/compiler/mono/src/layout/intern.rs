@@ -14,10 +14,7 @@ use roc_target::TargetInfo;
 
 use crate::layout::LayoutRepr;
 
-use super::{
-    semantic::SemaRecord, Builtin, FieldOrderHash, LambdaSet, Layout, SeenRecPtrs, SemanticRepr,
-    UnionLayout,
-};
+use super::{Builtin, FieldOrderHash, LambdaSet, Layout, SeenRecPtrs, SemanticRepr, UnionLayout};
 
 macro_rules! cache_interned_layouts {
     ($($i:literal, $name:ident, $vis:vis, $layout:expr)*; $total_constants:literal) => {
@@ -130,7 +127,7 @@ impl<'a> Layout<'a> {
             field_layouts: &[],
             field_order_hash: FieldOrderHash::ZERO_FIELD_HASH,
         },
-        semantic: SemanticRepr::Record(SemaRecord::new(&[])),
+        semantic: SemanticRepr::None,
     };
 
     pub const fn float_width(w: FloatWidth) -> InLayout<'static> {
