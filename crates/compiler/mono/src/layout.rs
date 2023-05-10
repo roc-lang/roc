@@ -657,7 +657,7 @@ impl<'a> RawFunctionLayout<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Layout<'a> {
     pub repr: LayoutRepr<'a>,
-    pub semantic: SemanticRepr<'a>,
+    semantic: SemanticRepr<'a>,
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
@@ -2328,6 +2328,21 @@ pub fn is_any_float_range(subs: &Subs, var: Variable) -> bool {
 }
 
 impl<'a> Layout<'a> {
+    pub const fn new(repr: LayoutRepr<'a>, semantic: SemanticRepr<'a>) -> Self {
+        Self { repr, semantic }
+    }
+
+    pub const fn no_semantic(repr: LayoutRepr<'a>) -> Self {
+        Self {
+            repr,
+            semantic: SemanticRepr::NONE,
+        }
+    }
+
+    pub const fn semantic(&self) -> SemanticRepr<'a> {
+        self.semantic
+    }
+
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
         _var: Variable,

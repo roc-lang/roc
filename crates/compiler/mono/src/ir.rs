@@ -9819,10 +9819,8 @@ where
     I: LayoutInterner<'a>,
 {
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout {
-        repr: LayoutRepr::Boxed(interned_unboxed_struct_layout),
-        semantic: SemanticRepr::NONE,
-    };
+    let boxed_struct_layout =
+        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout));
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -9933,10 +9931,7 @@ where
     I: LayoutInterner<'a>,
 {
     let interned = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout {
-        repr: LayoutRepr::Boxed(interned),
-        semantic: SemanticRepr::NONE,
-    };
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned));
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 

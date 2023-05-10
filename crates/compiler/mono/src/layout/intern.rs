@@ -155,10 +155,7 @@ pub trait LayoutInterner<'a>: Sized {
     /// Interns a value with no semantic representation, returning its interned representation.
     /// If the value has been interned before, the old interned representation will be re-used.
     fn insert_no_semantic(&mut self, repr: LayoutRepr<'a>) -> InLayout<'a> {
-        self.insert(Layout {
-            repr,
-            semantic: SemanticRepr::NONE,
-        })
+        self.insert(Layout::no_semantic(repr))
     }
 
     /// Creates a [LambdaSet], including caching the [LayoutRepr::LambdaSet] representation of the

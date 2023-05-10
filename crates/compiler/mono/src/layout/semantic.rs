@@ -21,7 +21,8 @@ enum Inner<'a> {
 }
 
 impl<'a> SemanticRepr<'a> {
-    pub const NONE: Self = Self(Inner::None);
+    pub(super) const NONE: Self = Self(Inner::None);
+    pub(super) const EMPTY_RECORD: Self = Self::record(&[]);
 
     pub(super) const fn record(fields: &'a [&'a str]) -> Self {
         Self(Inner::Record(SemaRecord { fields }))
