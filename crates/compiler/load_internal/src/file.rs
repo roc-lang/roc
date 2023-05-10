@@ -4329,10 +4329,14 @@ fn load_packages<'a>(
                 // TODO we should do this async; however, with the current
                 // architecture of file.rs (which doesn't use async/await),
                 // this would be very difficult!
-                let (package_dir, opt_root_module) = cache::install_package(roc_cache_dir, src)
-                    .unwrap_or_else(|err| {
-                        todo!("TODO gracefully handle package install error {:?}", err);
-                    });
+                let (package_dir, opt_root_module) =
+                    match cache::install_package(roc_cache_dir, src) {
+                    Ok((package_dir, opt_root_module)) => (package_dir, opt_root_module),
+                    Err(err) => {
+                        eprintln!("Failed to install package: {:?}", err);
+                        std::process::exit(1);
+                    }
+                };
 
                 // You can optionally specify the root module using the URL fragment,
                 // e.g. #foo.roc
