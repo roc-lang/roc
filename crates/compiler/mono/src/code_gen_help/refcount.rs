@@ -12,8 +12,8 @@ use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, SemanticRepr,
-    TagIdIntType, UnionLayout,
+    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
+    UnionLayout,
 };
 
 use super::{CodeGenHelp, Context, HelperOp};
@@ -1483,12 +1483,8 @@ fn refcount_union_rec<'a>(
     };
 
     let rc_structure_stmt = {
-        // TODO(deref-layout)
-        let alignment = Layout {
-            repr: LayoutRepr::Union(union_layout),
-            semantic: SemanticRepr::None,
-        }
-        .allocation_alignment_bytes(layout_interner, root.target_info);
+        let alignment = LayoutRepr::Union(union_layout)
+            .allocation_alignment_bytes(layout_interner, root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
 
         modify_refcount(

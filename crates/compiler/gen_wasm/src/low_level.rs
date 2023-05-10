@@ -404,12 +404,8 @@ impl<'a> LowLevelCall<'a> {
                                 if l2.repr == backend.layout_interner.get(list_elem).repr =>
                             {
                                 let list_offset = 0;
-                                // TODO(deref-layout)
-                                let elem_offset = Layout {
-                                    repr: LayoutRepr::Builtin(Builtin::List(list_elem)),
-                                    semantic: SemanticRepr::None,
-                                }
-                                .stack_size(backend.layout_interner, TARGET_INFO);
+                                let elem_offset = LayoutRepr::Builtin(Builtin::List(list_elem))
+                                    .stack_size(backend.layout_interner, TARGET_INFO);
                                 (list_offset, elem_offset, f2)
                             }
                             (_, LayoutRepr::Builtin(Builtin::List(list_elem)))

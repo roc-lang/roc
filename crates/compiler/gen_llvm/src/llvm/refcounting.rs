@@ -19,8 +19,7 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
-    SemanticRepr, UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::build::{cast_if_necessary_for_opaque_recursive_pointers, load_roc_value, FunctionSpec};
@@ -805,12 +804,8 @@ fn modify_refcount_str_help<'a, 'ctx>(
     let parent = fn_val;
 
     let str_type = zig_str_type(env);
-    // TODO(deref-layout)
-    let str_wrapper = if (Layout {
-        repr: LayoutRepr::Builtin(Builtin::Str),
-        semantic: SemanticRepr::None,
-    })
-    .is_passed_by_reference(layout_interner, env.target_info)
+    let str_wrapper = if LayoutRepr::Builtin(Builtin::Str)
+        .is_passed_by_reference(layout_interner, env.target_info)
     {
         env.builder
             .new_build_load(str_type, arg_val.into_pointer_value(), "load_str_to_stack")
