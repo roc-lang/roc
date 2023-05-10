@@ -663,7 +663,7 @@ impl FieldOrderHash {
     const ZERO_FIELD_HASH: Self = Self(0);
     const IRRELEVANT_NON_ZERO_FIELD_HASH: Self = Self(1);
 
-    pub fn from_ordered_fields(fields: &[&Lowercase]) -> Self {
+    pub fn from_ordered_fields(fields: &[&str]) -> Self {
         if fields.is_empty() {
             // HACK: we must make sure this is always equivalent to a `ZERO_FIELD_HASH`.
             return Self::ZERO_FIELD_HASH;
@@ -3262,8 +3262,12 @@ fn layout_from_flat_type<'a>(
                 )
             });
 
-            let ordered_field_names =
-                Vec::from_iter_in(sortables.iter().map(|(label, _)| *label), arena);
+            let ordered_field_names = Vec::from_iter_in(
+                sortables
+                    .iter()
+                    .map(|(label, _)| &*arena.alloc_str(label.as_str())),
+                arena,
+            );
             let field_order_hash =
                 FieldOrderHash::from_ordered_fields(ordered_field_names.as_slice());
 
@@ -3278,7 +3282,7 @@ fn layout_from_flat_type<'a>(
                         field_order_hash,
                         field_layouts: layouts.into_bump_slice(),
                     },
-                    semantic: SemanticRepr::None,
+                    semantic: SemanticRepr::record(ordered_field_names.into_bump_slice()),
                 };
 
                 Ok(env.cache.put_in(struct_layout))

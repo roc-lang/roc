@@ -127,7 +127,7 @@ impl<'a> Layout<'a> {
             field_layouts: &[],
             field_order_hash: FieldOrderHash::ZERO_FIELD_HASH,
         },
-        semantic: SemanticRepr::None,
+        semantic: SemanticRepr::EMPTY_RECORD,
     };
 
     pub const fn float_width(w: FloatWidth) -> InLayout<'static> {
