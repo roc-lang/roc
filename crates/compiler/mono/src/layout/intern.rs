@@ -1339,7 +1339,7 @@ mod equiv {
 pub mod dbg {
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, LayoutRepr, UnionLayout};
+    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, UnionLayout};
 
     use super::{InLayout, LayoutInterner};
 
@@ -1347,27 +1347,12 @@ pub mod dbg {
 
     impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for Dbg<'a, 'r, I> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self.0.get(self.1).repr {
-                LayoutRepr::Builtin(b) => f
-                    .debug_tuple("Builtin")
-                    .field(&DbgBuiltin(self.0, b))
-                    .finish(),
-                LayoutRepr::Struct { field_layouts } => f
-                    .debug_struct("Struct")
-                    .field("fields", &DbgFields(self.0, field_layouts))
-                    .finish(),
-                LayoutRepr::Boxed(b) => f.debug_tuple("Boxed").field(&Dbg(self.0, b)).finish(),
-                LayoutRepr::Union(un) => {
-                    f.debug_tuple("Union").field(&DbgUnion(self.0, un)).finish()
-                }
-                LayoutRepr::LambdaSet(ls) => f
-                    .debug_tuple("LambdaSet")
-                    .field(&DbgLambdaSet(self.0, ls))
-                    .finish(),
-                LayoutRepr::RecursivePointer(rp) => {
-                    f.debug_tuple("RecursivePointer").field(&rp.0).finish()
-                }
-            }
+            let Layout { repr, semantic } = self.0.get(self.1);
+
+            f.debug_struct("Layout")
+                .field("repr", &DbgRepr(self.0, &repr))
+                .field("semantic", &semantic)
+                .finish()
         }
     }
 
@@ -1378,6 +1363,35 @@ pub mod dbg {
             f.debug_list()
                 .entries(self.1.iter().map(|l| Dbg(self.0, *l)))
                 .finish()
+        }
+    }
+
+    struct DbgRepr<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'r LayoutRepr<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgRepr<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.1 {
+                LayoutRepr::Builtin(b) => f
+                    .debug_tuple("Builtin")
+                    .field(&DbgBuiltin(self.0, *b))
+                    .finish(),
+                LayoutRepr::Struct { field_layouts } => f
+                    .debug_struct("Struct")
+                    .field("fields", &DbgFields(self.0, field_layouts))
+                    .finish(),
+                LayoutRepr::Boxed(b) => f.debug_tuple("Boxed").field(&Dbg(self.0, *b)).finish(),
+                LayoutRepr::Union(un) => f
+                    .debug_tuple("Union")
+                    .field(&DbgUnion(self.0, *un))
+                    .finish(),
+                LayoutRepr::LambdaSet(ls) => f
+                    .debug_tuple("LambdaSet")
+                    .field(&DbgLambdaSet(self.0, *ls))
+                    .finish(),
+                LayoutRepr::RecursivePointer(rp) => {
+                    f.debug_tuple("RecursivePointer").field(&rp.0).finish()
+                }
+            }
         }
     }
 
