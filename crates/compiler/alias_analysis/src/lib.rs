@@ -852,9 +852,8 @@ fn call_spec<'a>(
 
                     let output_element_type = layout_spec(env, builder, interner, *return_layout)?;
 
-                    let state_layout = interner.insert(Layout {
-                        repr: LayoutRepr::Builtin(Builtin::List(*return_layout)),
-                    });
+                    let state_layout = interner
+                        .insert_no_semantic(LayoutRepr::Builtin(Builtin::List(*return_layout)));
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -881,9 +880,8 @@ fn call_spec<'a>(
 
                     let arg0_layout = argument_layouts[0];
 
-                    let state_layout = interner.insert(Layout {
-                        repr: LayoutRepr::Builtin(Builtin::List(arg0_layout)),
-                    });
+                    let state_layout = interner
+                        .insert_no_semantic(LayoutRepr::Builtin(Builtin::List(arg0_layout)));
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
                     let init_state = list;
 
@@ -910,9 +908,8 @@ fn call_spec<'a>(
 
                     let output_element_type = layout_spec(env, builder, interner, *return_layout)?;
 
-                    let state_layout = interner.insert(Layout {
-                        repr: LayoutRepr::Builtin(Builtin::List(*return_layout)),
-                    });
+                    let state_layout = interner
+                        .insert_no_semantic(LayoutRepr::Builtin(Builtin::List(*return_layout)));
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -945,9 +942,8 @@ fn call_spec<'a>(
 
                     let output_element_type = layout_spec(env, builder, interner, *return_layout)?;
 
-                    let state_layout = interner.insert(Layout {
-                        repr: LayoutRepr::Builtin(Builtin::List(*return_layout)),
-                    });
+                    let state_layout = interner
+                        .insert_no_semantic(LayoutRepr::Builtin(Builtin::List(*return_layout)));
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
@@ -986,9 +982,8 @@ fn call_spec<'a>(
 
                     let output_element_type = layout_spec(env, builder, interner, *return_layout)?;
 
-                    let state_layout = interner.insert(Layout {
-                        repr: LayoutRepr::Builtin(Builtin::List(*return_layout)),
-                    });
+                    let state_layout = interner
+                        .insert_no_semantic(LayoutRepr::Builtin(Builtin::List(*return_layout)));
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;

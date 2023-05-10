@@ -398,9 +398,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_id,
                 arguments,
             } => {
-                let interned_layout = self.interner.insert(Layout {
-                    repr: LayoutRepr::Union(tag_layout),
-                });
+                let interned_layout = self
+                    .interner
+                    .insert_no_semantic(LayoutRepr::Union(tag_layout));
                 self.check_tag_expr(interned_layout, tag_layout, tag_id, arguments);
                 Some(interned_layout)
             }
@@ -438,9 +438,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         }
                     }
                 }
-                Some(self.interner.insert(Layout {
-                    repr: LayoutRepr::Builtin(Builtin::List(*elem_layout)),
-                }))
+                Some(
+                    self.interner
+                        .insert_no_semantic(LayoutRepr::Builtin(Builtin::List(*elem_layout))),
+                )
             }
             Expr::EmptyArray => {
                 // TODO don't know what the element layout is
@@ -448,9 +449,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
             }
             &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
                 let inner = layout;
-                Some(ctx.interner.insert(Layout {
-                    repr: LayoutRepr::Boxed(inner),
-                }))
+                Some(ctx.interner.insert_no_semantic(LayoutRepr::Boxed(inner)))
             }),
             &Expr::ExprUnbox { symbol } => self.with_sym_layout(symbol, |ctx, def_line, layout| {
                 let layout = ctx.resolve(layout);
@@ -470,9 +469,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_id: _,
                 arguments: _,
             } => {
-                let union = self.interner.insert(Layout {
-                    repr: LayoutRepr::Union(tag_layout),
-                });
+                let union = self
+                    .interner
+                    .insert_no_semantic(LayoutRepr::Union(tag_layout));
                 self.check_sym_layout(symbol, union, UseKind::TagReuse);
                 // TODO also check update arguments
                 Some(union)
@@ -528,9 +527,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
         tag_id: u16,
         index: u64,
     ) -> Option<InLayout<'a>> {
-        let union = self.interner.insert(Layout {
-            repr: LayoutRepr::Union(union_layout),
-        });
+        let union = self
+            .interner
+            .insert_no_semantic(LayoutRepr::Union(union_layout));
         self.with_sym_layout(structure, |ctx, def_line, _layout| {
             ctx.check_sym_layout(structure, union, UseKind::TagExpr);
 

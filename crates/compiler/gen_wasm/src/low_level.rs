@@ -7,7 +7,8 @@ use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
 use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
 use roc_mono::layout::{
-    Builtin, FieldOrderHash, InLayout, Layout, LayoutInterner, LayoutRepr, UnionLayout,
+    Builtin, FieldOrderHash, InLayout, Layout, LayoutInterner, LayoutRepr, SemanticRepr,
+    UnionLayout,
 };
 use roc_mono::low_level::HigherOrder;
 
@@ -403,8 +404,10 @@ impl<'a> LowLevelCall<'a> {
                                 if l2.repr == backend.layout_interner.get(list_elem).repr =>
                             {
                                 let list_offset = 0;
+                                // TODO(deref-layout)
                                 let elem_offset = Layout {
                                     repr: LayoutRepr::Builtin(Builtin::List(list_elem)),
+                                    semantic: SemanticRepr::None,
                                 }
                                 .stack_size(backend.layout_interner, TARGET_INFO);
                                 (list_offset, elem_offset, f2)
@@ -697,12 +700,13 @@ impl<'a> LowLevelCall<'a> {
 
                 // The refcount function receives a pointer to an element in the list
                 // This is the same as a Struct containing the element
-                let in_memory_layout = backend.layout_interner.insert(Layout {
-                    repr: LayoutRepr::Struct {
-                        field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
-                        field_layouts: backend.env.arena.alloc([elem_layout]),
-                    },
-                });
+                let in_memory_layout =
+                    backend
+                        .layout_interner
+                        .insert_no_semantic(LayoutRepr::Struct {
+                            field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                            field_layouts: backend.env.arena.alloc([elem_layout]),
+                        });
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
                 let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
 
@@ -745,12 +749,13 @@ impl<'a> LowLevelCall<'a> {
 
                 // The refcount function receives a pointer to an element in the list
                 // This is the same as a Struct containing the element
-                let in_memory_layout = backend.layout_interner.insert(Layout {
-                    repr: LayoutRepr::Struct {
-                        field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
-                        field_layouts: backend.env.arena.alloc([elem_layout]),
-                    },
-                });
+                let in_memory_layout =
+                    backend
+                        .layout_interner
+                        .insert_no_semantic(LayoutRepr::Struct {
+                            field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                            field_layouts: backend.env.arena.alloc([elem_layout]),
+                        });
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
                 let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
 
@@ -2466,9 +2471,9 @@ pub fn call_higher_order_lowlevel<'a>(
 
         let boxed_closure_arg_layouts =
             argument_layouts.iter().take(n_non_closure_args).map(|lay| {
-                backend.layout_interner.insert(Layout {
-                    repr: LayoutRepr::Boxed(*lay),
-                })
+                backend
+                    .layout_interner
+                    .insert_no_semantic(LayoutRepr::Boxed(*lay))
             });
 
         wrapper_arg_layouts.push(wrapped_captures_layout);
@@ -2477,9 +2482,11 @@ pub fn call_higher_order_lowlevel<'a>(
         match helper_proc_source {
             ProcSource::HigherOrderMapper(_) => {
                 // Our convention for mappers is that they write to the heap via the last argument
-                wrapper_arg_layouts.push(backend.layout_interner.insert(Layout {
-                    repr: LayoutRepr::Boxed(*result_layout),
-                }));
+                wrapper_arg_layouts.push(
+                    backend
+                        .layout_interner
+                        .insert_no_semantic(LayoutRepr::Boxed(*result_layout)),
+                );
                 ProcLayout {
                     arguments: wrapper_arg_layouts.into_bump_slice(),
                     result: Layout::UNIT,
@@ -2671,12 +2678,12 @@ fn list_map_n<'a>(
         for el in arg_elem_layouts.iter() {
             // The dec function will be passed a pointer to the element within the list, not the element itself!
             // Here we wrap the layout in a Struct to ensure we get the right code gen
-            let el_ptr = backend.layout_interner.insert(Layout {
-                repr: LayoutRepr::Struct {
+            let el_ptr = backend
+                .layout_interner
+                .insert_no_semantic(LayoutRepr::Struct {
                     field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
                     field_layouts: backend.env.arena.alloc([*el]),
-                },
-            });
+                });
             let idx = backend.get_refcount_fn_index(el_ptr, HelperOp::Dec);
             let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
@@ -2713,12 +2720,12 @@ fn ensure_symbol_is_in_memory<'a>(
                 offset,
                 symbol,
             );
-            let in_memory_layout = backend.layout_interner.insert(Layout {
-                repr: LayoutRepr::Struct {
+            let in_memory_layout = backend
+                .layout_interner
+                .insert_no_semantic(LayoutRepr::Struct {
                     field_order_hash: FieldOrderHash::from_ordered_fields(&[]), // don't care
                     field_layouts: arena.alloc([layout]),
-                },
-            });
+                });
             (frame_ptr, offset, in_memory_layout)
         }
     }

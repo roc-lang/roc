@@ -10,7 +10,7 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
-use roc_mono::layout::{LayoutRepr, STLayoutInterner};
+use roc_mono::layout::{LayoutRepr, STLayoutInterner, SemanticRepr};
 #[cfg(test)]
 use roc_std::{RocList, RocStr, U128};
 
@@ -27,6 +27,7 @@ fn width_and_alignment_u8_u8() {
 
     let layout = Layout {
         repr: LayoutRepr::Union(UnionLayout::NonRecursive(&tt)),
+        semantic: SemanticRepr::None,
     };
 
     assert_eq!(layout.alignment_bytes(&interner, target_info), 1);

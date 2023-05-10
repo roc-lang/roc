@@ -1742,9 +1742,8 @@ fn build_tag<'a, 'ctx>(
                 use std::cmp::Ordering::*;
                 match tag_id.cmp(&(*nullable_id as _)) {
                     Equal => {
-                        let layout = layout_interner.insert(Layout {
-                            repr: LayoutRepr::Union(*union_layout),
-                        });
+                        let layout =
+                            layout_interner.insert_no_semantic(LayoutRepr::Union(*union_layout));
 
                         return basic_type_from_layout(env, layout_interner, layout)
                             .into_pointer_type()

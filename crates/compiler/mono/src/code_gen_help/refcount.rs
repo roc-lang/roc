@@ -12,8 +12,8 @@ use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
-    UnionLayout,
+    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, SemanticRepr,
+    TagIdIntType, UnionLayout,
 };
 
 use super::{CodeGenHelp, Context, HelperOp};
@@ -309,9 +309,7 @@ pub fn refcount_reset_proc_body<'a>(
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert(Layout {
-        repr: LayoutRepr::RecursivePointer(layout),
-    });
+    let recursion_ptr = layout_interner.insert_no_semantic(LayoutRepr::RecursivePointer(layout));
 
     // Reset structure is unique. Decrement its children and return a pointer to the allocation.
     let then_stmt = {
@@ -493,9 +491,7 @@ pub fn refcount_resetref_proc_body<'a>(
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert(Layout {
-        repr: LayoutRepr::RecursivePointer(layout),
-    });
+    let recursion_ptr = layout_interner.insert_no_semantic(LayoutRepr::RecursivePointer(layout));
 
     // Reset structure is unique. Return a pointer to the allocation.
     let then_stmt = Stmt::Ret(addr);
@@ -866,9 +862,7 @@ fn refcount_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_layout = layout_interner.insert(Layout {
-        repr: LayoutRepr::Boxed(elem_layout),
-    });
+    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(elem_layout));
 
     //
     // Check if the list is empty
@@ -1489,8 +1483,10 @@ fn refcount_union_rec<'a>(
     };
 
     let rc_structure_stmt = {
+        // TODO(deref-layout)
         let alignment = Layout {
             repr: LayoutRepr::Union(union_layout),
+            semantic: SemanticRepr::None,
         }
         .allocation_alignment_bytes(layout_interner, root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
@@ -1548,9 +1544,7 @@ fn refcount_union_tailrec<'a>(
     let tailrec_loop = JoinPointId(root.create_symbol(ident_ids, "tailrec_loop"));
     let current = root.create_symbol(ident_ids, "current");
     let next_ptr = root.create_symbol(ident_ids, "next_ptr");
-    let layout = layout_interner.insert(Layout {
-        repr: LayoutRepr::Union(union_layout),
-    });
+    let layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
 
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1695,9 +1689,7 @@ fn refcount_union_tailrec<'a>(
         let jump_with_null_ptr = Stmt::Let(
             null_pointer,
             Expr::NullPointer,
-            layout_interner.insert(Layout {
-                repr: LayoutRepr::Union(union_layout),
-            }),
+            layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout)),
             root.arena.alloc(Stmt::Jump(
                 jp_modify_union,
                 root.arena.alloc([null_pointer]),
@@ -1741,9 +1733,7 @@ fn refcount_union_tailrec<'a>(
     ));
 
     let loop_init = Stmt::Jump(tailrec_loop, root.arena.alloc([initial_structure]));
-    let union_layout = layout_interner.insert(Layout {
-        repr: LayoutRepr::Union(union_layout),
-    });
+    let union_layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
     let loop_param = Param {
         symbol: current,
         ownership: Ownership::Borrowed,

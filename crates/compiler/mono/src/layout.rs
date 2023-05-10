@@ -27,25 +27,27 @@ use std::hash::{Hash, Hasher};
 use ven_pretty::{DocAllocator, DocBuilder};
 
 mod intern;
+mod semantic;
 pub use intern::{
     GlobalLayoutInterner, InLayout, LayoutInterner, STLayoutInterner, TLLayoutInterner,
 };
+pub use semantic::SemanticRepr;
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 roc_error_macros::assert_sizeof_aarch64!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Layout, 6 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Layout, 8 * 8);
 roc_error_macros::assert_sizeof_aarch64!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 5 * 8);
 
 roc_error_macros::assert_sizeof_wasm!(Builtin, 2 * 4);
-roc_error_macros::assert_sizeof_wasm!(Layout, 6 * 4);
+roc_error_macros::assert_sizeof_wasm!(Layout, 8 * 4);
 roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
 roc_error_macros::assert_sizeof_wasm!(LambdaSet, 5 * 4);
 
 roc_error_macros::assert_sizeof_default!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_default!(Layout, 6 * 8);
+roc_error_macros::assert_sizeof_default!(Layout, 8 * 8);
 roc_error_macros::assert_sizeof_default!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_default!(LambdaSet, 5 * 8);
 
@@ -329,6 +331,9 @@ impl<'a> LayoutCache<'a> {
 
     pub fn put_in(&mut self, layout: Layout<'a>) -> InLayout<'a> {
         self.interner.insert(layout)
+    }
+    pub fn put_in_no_semantic(&mut self, repr: LayoutRepr<'a>) -> InLayout<'a> {
+        self.interner.insert_no_semantic(repr)
     }
 
     #[cfg(debug_assertions)]
@@ -684,6 +689,7 @@ impl FieldOrderHash {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Layout<'a> {
     pub repr: LayoutRepr<'a>,
+    pub semantic: SemanticRepr<'a>,
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
@@ -912,9 +918,7 @@ impl<'a> UnionLayout<'a> {
 
         // TODO(recursive-layouts): simplify after we have disjoint recursive pointers
         if let LayoutRepr::RecursivePointer(_) = interner.get(result).repr {
-            interner.insert(Layout {
-                repr: LayoutRepr::Union(self),
-            })
+            interner.insert_no_semantic(LayoutRepr::Union(self))
         } else {
             result
         }
@@ -2819,6 +2823,7 @@ impl<'a> Layout<'a> {
     }
 
     /// Used to build a `Layout::Struct` where the field name order is irrelevant.
+    // TODO: to be eliminated once we have SemanticRepr playing a role.
     pub fn struct_no_name_order(field_layouts: &'a [InLayout]) -> Self {
         if field_layouts.is_empty() {
             Self::UNIT_NAKED
@@ -2828,6 +2833,7 @@ impl<'a> Layout<'a> {
                     field_layouts,
                     field_order_hash: FieldOrderHash::IRRELEVANT_NON_ZERO_FIELD_HASH,
                 },
+                semantic: SemanticRepr::None,
             }
         }
     }
@@ -3170,6 +3176,7 @@ fn layout_from_flat_type<'a>(
                         cached!(Layout::from_var(env, inner_var), criteria, env.subs);
                     let boxed_layout = env.cache.put_in(Layout {
                         repr: LayoutRepr::Boxed(inner_layout),
+                        semantic: SemanticRepr::None,
                     });
 
                     Cacheable(Ok(boxed_layout), criteria)
@@ -3255,6 +3262,7 @@ fn layout_from_flat_type<'a>(
                         field_order_hash,
                         field_layouts: layouts.into_bump_slice(),
                     },
+                    semantic: SemanticRepr::None,
                 };
 
                 Ok(env.cache.put_in(struct_layout))
@@ -3304,6 +3312,7 @@ fn layout_from_flat_type<'a>(
                         field_order_hash,
                         field_layouts: layouts.into_bump_slice(),
                     },
+                    semantic: SemanticRepr::None,
                 };
 
                 Ok(env.cache.put_in(struct_layout))
@@ -4160,6 +4169,7 @@ where
                         repr: LayoutRepr::Union(UnionLayout::NonRecursive(
                             tag_layouts.into_bump_slice(),
                         )),
+                        semantic: SemanticRepr::None,
                     };
                     env.cache.put_in(layout)
                 }
@@ -4275,12 +4285,14 @@ where
             env.arena,
             Layout {
                 repr: LayoutRepr::Union(union_layout),
+                semantic: SemanticRepr::None,
             },
         )
     } else {
         // There are no naked recursion pointers, so we can insert the layout as-is.
         env.cache.interner.insert(Layout {
             repr: LayoutRepr::Union(union_layout),
+            semantic: SemanticRepr::None,
         })
     };
 
@@ -4416,6 +4428,7 @@ pub(crate) fn list_layout_from_elem<'a>(
 
     let list_layout = env.cache.put_in(Layout {
         repr: LayoutRepr::Builtin(Builtin::List(element_layout)),
+        semantic: SemanticRepr::None,
     });
 
     Cacheable(Ok(list_layout), criteria)
@@ -4593,11 +4606,13 @@ mod test {
         let a = &[Layout::UNIT] as &[_];
         let b = &[interner.insert(Layout {
             repr: LayoutRepr::LambdaSet(lambda_set),
+            semantic: SemanticRepr::None,
         })] as &[_];
         let tt = [a, b];
 
         let layout = Layout {
             repr: LayoutRepr::Union(UnionLayout::NonRecursive(&tt)),
+            semantic: SemanticRepr::None,
         };
 
         let target_info = TargetInfo::default_x86_64();
@@ -4611,12 +4626,14 @@ mod test {
 
         let ok_tag = &[interner.insert(Layout {
             repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U32)),
+            semantic: SemanticRepr::None,
         })];
         let err_tag = &[Layout::UNIT];
         let tags = [ok_tag as &[_], err_tag as &[_]];
         let union_layout = UnionLayout::NonRecursive(&tags as &[_]);
         let layout = Layout {
             repr: LayoutRepr::Union(union_layout),
+            semantic: SemanticRepr::None,
         };
 
         let target_info = TargetInfo::default_x86_64();

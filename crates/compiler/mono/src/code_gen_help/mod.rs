@@ -290,9 +290,7 @@ impl<'a> CodeGenHelp<'a> {
             LayoutRepr::RecursivePointer(_)
         ) {
             let union_layout = ctx.recursive_union.unwrap();
-            layout_interner.insert(Layout {
-                repr: LayoutRepr::Union(union_layout),
-            })
+            layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout))
         } else {
             called_layout
         };
@@ -303,9 +301,7 @@ impl<'a> CodeGenHelp<'a> {
 
             let (ret_layout, arg_layouts): (InLayout<'a>, &'a [InLayout<'a>]) = {
                 let arg = self.replace_rec_ptr(ctx, layout_interner, layout);
-                let box_arg = layout_interner.insert(Layout {
-                    repr: LayoutRepr::Boxed(arg),
-                });
+                let box_arg = layout_interner.insert_no_semantic(LayoutRepr::Boxed(arg));
 
                 match ctx.op {
                     Dec | DecRef(_) => (LAYOUT_UNIT, self.arena.alloc([arg])),
@@ -434,16 +430,12 @@ impl<'a> CodeGenHelp<'a> {
                 }
                 Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
                 IndirectInc => {
-                    let box_layout = layout_interner.insert(Layout {
-                        repr: LayoutRepr::Boxed(layout),
-                    });
+                    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([(box_layout, ARG_1), inc_amount])
                 }
                 IndirectDec => {
-                    let box_layout = layout_interner.insert(Layout {
-                        repr: LayoutRepr::Boxed(layout),
-                    });
+                    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
                     self.arena.alloc([(box_layout, ARG_1)])
                 }
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
@@ -491,9 +483,7 @@ impl<'a> CodeGenHelp<'a> {
                 niche: Niche::NONE,
             },
             HelperOp::IndirectInc => {
-                let box_layout = layout_interner.insert(Layout {
-                    repr: LayoutRepr::Boxed(layout),
-                });
+                let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
 
                 ProcLayout {
                     arguments: self.arena.alloc([box_layout, self.layout_isize]),
@@ -502,9 +492,7 @@ impl<'a> CodeGenHelp<'a> {
                 }
             }
             HelperOp::IndirectDec => {
-                let box_layout = layout_interner.insert(Layout {
-                    repr: LayoutRepr::Boxed(layout),
-                });
+                let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
 
                 ProcLayout {
                     arguments: self.arena.alloc([box_layout]),
@@ -597,7 +585,7 @@ impl<'a> CodeGenHelp<'a> {
             // This line is the whole point of the function
             LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
         };
-        layout_interner.insert(Layout { repr })
+        layout_interner.insert_no_semantic(repr)
     }
 
     fn union_tail_recursion_fields(
@@ -681,22 +669,16 @@ impl<'a> CallerProc<'a> {
         };
 
         let box_capture_layout = if let Some(capture_layout) = capture_layout {
-            layout_interner.insert(Layout {
-                repr: LayoutRepr::Boxed(capture_layout),
-            })
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(capture_layout))
         } else {
-            layout_interner.insert(Layout {
-                repr: LayoutRepr::Boxed(Layout::UNIT),
-            })
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(Layout::UNIT))
         };
 
-        let box_argument_layout = layout_interner.insert(Layout {
-            repr: LayoutRepr::Boxed(passed_function.argument_layouts[0]),
-        });
+        let box_argument_layout = layout_interner
+            .insert_no_semantic(LayoutRepr::Boxed(passed_function.argument_layouts[0]));
 
-        let box_return_layout = layout_interner.insert(Layout {
-            repr: LayoutRepr::Boxed(passed_function.return_layout),
-        });
+        let box_return_layout =
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(passed_function.return_layout));
 
         let proc_layout = ProcLayout {
             arguments: arena.alloc([box_capture_layout, box_argument_layout, box_return_layout]),

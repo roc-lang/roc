@@ -5,7 +5,7 @@ use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
     LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche,
-    RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    RawFunctionLayout, SemanticRepr, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -4624,16 +4624,14 @@ pub fn with_hole<'a>(
             match opt_elem_layout {
                 Ok(elem_layout) => {
                     let expr = Expr::EmptyArray;
-                    let list_layout = layout_cache.put_in(Layout {
-                        repr: LayoutRepr::Builtin(Builtin::List(elem_layout)),
-                    });
+                    let list_layout = layout_cache
+                        .put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
                     Stmt::Let(assigned, expr, list_layout, hole)
                 }
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
-                    let list_layout = layout_cache.put_in(Layout {
-                        repr: LayoutRepr::Builtin(Builtin::List(Layout::VOID)),
-                    });
+                    let list_layout = layout_cache
+                        .put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(Layout::VOID)));
                     Stmt::Let(assigned, expr, list_layout, hole)
                 }
                 Err(LayoutProblem::Erroneous) => panic!("list element is error type"),
@@ -4679,9 +4677,8 @@ pub fn with_hole<'a>(
                 elems: elements.into_bump_slice(),
             };
 
-            let list_layout = layout_cache.put_in(Layout {
-                repr: LayoutRepr::Builtin(Builtin::List(elem_layout)),
-            });
+            let list_layout =
+                layout_cache.put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
 
             let stmt = Stmt::Let(assigned, expr, list_layout, hole);
 
@@ -6277,9 +6274,7 @@ fn convert_tag_union<'a>(
                 }
             };
 
-            let union_layout = layout_cache.put_in(Layout {
-                repr: LayoutRepr::Union(union_layout),
-            });
+            let union_layout = layout_cache.put_in_no_semantic(LayoutRepr::Union(union_layout));
 
             let stmt = Stmt::Let(assigned, tag, union_layout, hole);
             let iter = field_symbols_temp
@@ -7818,9 +7813,7 @@ fn specialize_symbol<'a>(
                             let layout = match raw {
                                 RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
                                 RawFunctionLayout::Function(_, lambda_set, _) => layout_cache
-                                    .put_in(Layout {
-                                        repr: LayoutRepr::LambdaSet(lambda_set),
-                                    }),
+                                    .put_in_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
                             };
 
                             let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
@@ -9829,6 +9822,7 @@ where
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
     let boxed_struct_layout = Layout {
         repr: LayoutRepr::Boxed(interned_unboxed_struct_layout),
+        semantic: SemanticRepr::None,
     };
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
@@ -9942,6 +9936,7 @@ where
     let interned = layout_interner.insert(*unboxed_struct_layout);
     let boxed_struct_layout = Layout {
         repr: LayoutRepr::Boxed(interned),
+        semantic: SemanticRepr::None,
     };
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);

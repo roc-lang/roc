@@ -14,7 +14,10 @@ use roc_target::TargetInfo;
 
 use crate::layout::LayoutRepr;
 
-use super::{Builtin, FieldOrderHash, LambdaSet, Layout, SeenRecPtrs, UnionLayout};
+use super::{
+    semantic::SemaRecord, Builtin, FieldOrderHash, LambdaSet, Layout, SeenRecPtrs, SemanticRepr,
+    UnionLayout,
+};
 
 macro_rules! cache_interned_layouts {
     ($($i:literal, $name:ident, $vis:vis, $layout:expr)*; $total_constants:literal) => {
@@ -47,26 +50,35 @@ macro_rules! cache_interned_layouts {
     }
 }
 
+macro_rules! nosema {
+    ($r:expr) => {
+        Layout {
+            repr: $r,
+            semantic: SemanticRepr::None,
+        }
+    };
+}
+
 cache_interned_layouts! {
     0,  VOID, pub, Layout::VOID_NAKED
     1,  UNIT, pub, Layout::UNIT_NAKED
-    2,  BOOL, pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Bool) }
-    3,  U8,   pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U8)) }
-    4,  U16,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U16)) }
-    5,  U32,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U32)) }
-    6,  U64,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U64)) }
-    7,  U128, pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U128)) }
-    8,  I8,   pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::I8)) }
-    9,  I16,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::I16)) }
-    10, I32,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::I32)) }
-    11, I64,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::I64)) }
-    12, I128, pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::I128)) }
-    13, F32,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) }
-    14, F64,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) }
-    15, DEC,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Decimal) }
-    16, STR,  pub, Layout{ repr: LayoutRepr::Builtin(Builtin::Str) }
-    17, OPAQUE_PTR,  pub, Layout{ repr: LayoutRepr::Boxed(Layout::VOID) }
-    18, NAKED_RECURSIVE_PTR,  pub(super), Layout{ repr: LayoutRepr::RecursivePointer(Layout::VOID) }
+    2,  BOOL, pub, nosema!(LayoutRepr::Builtin(Builtin::Bool))
+    3,  U8,   pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U8)))
+    4,  U16,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U16)))
+    5,  U32,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U32)))
+    6,  U64,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U64)))
+    7,  U128, pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U128)))
+    8,  I8,   pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I8)))
+    9,  I16,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I16)))
+    10, I32,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I32)))
+    11, I64,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I64)))
+    12, I128, pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I128)))
+    13, F32,  pub, nosema!(LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)))
+    14, F64,  pub, nosema!(LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)))
+    15, DEC,  pub, nosema!(LayoutRepr::Builtin(Builtin::Decimal))
+    16, STR,  pub, nosema!(LayoutRepr::Builtin(Builtin::Str))
+    17, OPAQUE_PTR,  pub, nosema!(LayoutRepr::Boxed(Layout::VOID))
+    18, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
 
     ; 19
 }
@@ -111,12 +123,14 @@ impl_to_from_int_width! {
 impl<'a> Layout<'a> {
     pub(super) const VOID_NAKED: Self = Layout {
         repr: LayoutRepr::Union(UnionLayout::NonRecursive(&[])),
+        semantic: SemanticRepr::None,
     };
     pub(super) const UNIT_NAKED: Self = Layout {
         repr: LayoutRepr::Struct {
             field_layouts: &[],
             field_order_hash: FieldOrderHash::ZERO_FIELD_HASH,
         },
+        semantic: SemanticRepr::Record(SemaRecord::new(&[])),
     };
 
     pub const fn float_width(w: FloatWidth) -> InLayout<'static> {
@@ -143,6 +157,15 @@ pub trait LayoutInterner<'a>: Sized {
     // TODO: we should consider maintaining our own arena in the interner, to avoid redundant
     // allocations when values already have interned representations.
     fn insert(&mut self, value: Layout<'a>) -> InLayout<'a>;
+
+    /// Interns a value with no semantic representation, returning its interned representation.
+    /// If the value has been interned before, the old interned representation will be re-used.
+    fn insert_no_semantic(&mut self, repr: LayoutRepr<'a>) -> InLayout<'a> {
+        self.insert(Layout {
+            repr,
+            semantic: SemanticRepr::None,
+        })
+    }
 
     /// Creates a [LambdaSet], including caching the [LayoutRepr::LambdaSet] representation of the
     /// lambda set onto itself.
@@ -648,6 +671,7 @@ impl<'a> GlobalLayoutInterner<'a> {
         };
         let lambda_set_layout = Layout {
             repr: LayoutRepr::LambdaSet(full_lambda_set),
+            semantic: SemanticRepr::None,
         };
 
         vec[slot.0] = lambda_set_layout;
@@ -954,9 +978,13 @@ macro_rules! st_impl {
                     representation,
                     full_layout: slot,
                 };
-                self.vec[slot.0] = Layout { repr: LayoutRepr::LambdaSet(lambda_set) };
+                let lay = Layout {
+                    repr: LayoutRepr::LambdaSet(lambda_set),
+                    semantic: SemanticRepr::None
+                };
+                self.vec[slot.0] = lay;
 
-                let _old = self.map.insert(Layout { repr: LayoutRepr::LambdaSet(lambda_set) }, slot);
+                let _old = self.map.insert(lay, slot);
                 debug_assert!(_old.is_none());
 
                 let _old = self.normalized_lambda_set_map
@@ -1012,7 +1040,7 @@ mod reify {
     use bumpalo::{collections::Vec, Bump};
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, UnionLayout};
+    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, SemanticRepr, UnionLayout};
 
     use super::{InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
@@ -1045,7 +1073,10 @@ mod reify {
                 LayoutRepr::RecursivePointer(if l == Layout::VOID { slot } else { l })
             }
         };
-        Layout { repr }
+        Layout {
+            repr,
+            semantic: SemanticRepr::None,
+        }
     }
 
     fn reify_layout<'a>(
@@ -1481,7 +1512,7 @@ mod insert_lambda_set {
     use roc_module::symbol::Symbol;
     use roc_target::TargetInfo;
 
-    use crate::layout::{LambdaSet, Layout, LayoutRepr};
+    use crate::layout::{LambdaSet, Layout, LayoutRepr, SemanticRepr};
 
     use super::{GlobalLayoutInterner, InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
@@ -1525,6 +1556,7 @@ mod insert_lambda_set {
             interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, TEST_SET, FIXUP, Layout::UNIT);
         let lambda_set_layout_in = interner.insert(Layout {
             repr: LayoutRepr::LambdaSet(lambda_set),
+            semantic: SemanticRepr::None,
         });
         assert_eq!(lambda_set.full_layout, lambda_set_layout_in);
     }
@@ -1574,7 +1606,7 @@ mod insert_recursive_layout {
     use bumpalo::Bump;
     use roc_target::TargetInfo;
 
-    use crate::layout::{Builtin, InLayout, Layout, LayoutRepr, UnionLayout};
+    use crate::layout::{Builtin, InLayout, Layout, LayoutRepr, SemanticRepr, UnionLayout};
 
     use super::{GlobalLayoutInterner, LayoutInterner};
 
@@ -1583,6 +1615,7 @@ mod insert_recursive_layout {
     fn make_layout<'a>(arena: &'a Bump, interner: &mut impl LayoutInterner<'a>) -> Layout<'a> {
         let list_rec = Layout {
             repr: LayoutRepr::Builtin(Builtin::List(Layout::NAKED_RECURSIVE_PTR)),
+            semantic: SemanticRepr::None,
         };
         let repr = LayoutRepr::Union(UnionLayout::Recursive(&*arena.alloc([
             &*arena.alloc([interner.insert(list_rec)]),
@@ -1590,7 +1623,10 @@ mod insert_recursive_layout {
                 &*arena.alloc([Layout::NAKED_RECURSIVE_PTR]),
             ))]),
         ])));
-        Layout { repr }
+        Layout {
+            repr,
+            semantic: SemanticRepr::None,
+        }
     }
 
     fn get_rec_ptr_index<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> usize {

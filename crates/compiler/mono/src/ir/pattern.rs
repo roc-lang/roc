@@ -1554,9 +1554,7 @@ fn store_tag_pattern<'a>(
 
         if let LayoutRepr::RecursivePointer(_) = layout_cache.get_in(arg_layout).repr {
             // TODO(recursive-layouts): fix after disjoint rec ptrs
-            arg_layout = layout_cache.put_in(Layout {
-                repr: LayoutRepr::Union(union_layout),
-            });
+            arg_layout = layout_cache.put_in_no_semantic(LayoutRepr::Union(union_layout));
         }
 
         let load = Expr::UnionAtIndex {

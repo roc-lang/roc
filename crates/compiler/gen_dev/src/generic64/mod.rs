@@ -1817,9 +1817,8 @@ impl<
                 let new_element_layout = higher_order.passed_function.return_layout;
 
                 let input_list_layout = LayoutRepr::Builtin(Builtin::List(old_element_layout));
-                let input_list_in_layout = self.layout_interner.insert(Layout {
-                    repr: input_list_layout,
-                });
+                let input_list_in_layout =
+                    self.layout_interner.insert_no_semantic(input_list_layout);
 
                 let caller = self.debug_symbol("caller");
                 let data = self.debug_symbol("data");
@@ -2572,9 +2571,9 @@ impl<
                 );
             }
             _ => {
-                let union_in_layout = self.layout_interner.insert(Layout {
-                    repr: LayoutRepr::Union(*union_layout),
-                });
+                let union_in_layout = self
+                    .layout_interner
+                    .insert_no_semantic(LayoutRepr::Union(*union_layout));
                 todo!(
                     "loading from union type: {:?}",
                     self.layout_interner.dbg(union_in_layout)
