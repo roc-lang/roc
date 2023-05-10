@@ -35,9 +35,7 @@ pub fn eq_generic<'a>(
             unreachable!("No generated helper proc for `==` on Str. Use Zig function.")
         }
         Builtin(List(elem_layout)) => eq_list(root, ident_ids, ctx, layout_interner, elem_layout),
-        Struct { field_layouts, .. } => {
-            eq_struct(root, ident_ids, ctx, layout_interner, field_layouts)
-        }
+        Struct(field_layouts) => eq_struct(root, ident_ids, ctx, layout_interner, field_layouts),
         Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
         Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         LambdaSet(_) => unreachable!("`==` is not defined on functions"),

@@ -1691,7 +1691,7 @@ fn add_builtin_type<'a>(
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
-                    LayoutRepr::Struct { field_layouts, .. },
+                    LayoutRepr::Struct(field_layouts),
                     Content::Structure(FlatType::Apply(Symbol::LIST_LIST, args_subs_slice)),
                 ) => {
                     let (key_var, val_var) = {
@@ -1741,7 +1741,7 @@ fn add_builtin_type<'a>(
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
-                    LayoutRepr::Struct { field_layouts, .. },
+                    LayoutRepr::Struct(field_layouts),
                     Alias(Symbol::DICT_DICT, alias_args, _alias_var, AliasKind::Opaque),
                 ) => {
                     let dict_type_vars = env.subs.get_subs_slice(alias_args.type_variables());
@@ -2058,7 +2058,7 @@ fn tag_union_type_from_layout<'a>(
         LayoutRepr::Builtin(Builtin::Int(int_width)) => {
             add_int_enumeration(union_tags, subs, &name, int_width)
         }
-        LayoutRepr::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct(field_layouts) => {
             let (tag_name, payload) =
                 single_tag_payload_fields(env, union_tags, subs, layout, field_layouts, types);
 

@@ -37,10 +37,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     use LayoutRepr::*;
 
     match layout_interner.get(layout).repr {
-        Struct {
-            field_layouts: sorted_fields,
-            ..
-        } => basic_type_from_record(env, layout_interner, sorted_fields),
+        Struct(sorted_fields, ..) => basic_type_from_record(env, layout_interner, sorted_fields),
         LambdaSet(lambda_set) => {
             basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation())
         }

@@ -4981,7 +4981,7 @@ pub fn with_hole<'a>(
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_layouts = match layout_cache.get_in(record_layout).repr {
-                LayoutRepr::Struct { field_layouts, .. } => field_layouts,
+                LayoutRepr::Struct(field_layouts) => field_layouts,
                 _ => arena.alloc([record_layout]),
             };
 
@@ -9061,7 +9061,7 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
-        ClosureCallOptions::Struct { field_layouts } => {
+        ClosureCallOptions::Struct(field_layouts) => {
             let function_symbol = match lambda_set.iter_set().next() {
                 Some(function_symbol) => function_symbol,
                 None => {
@@ -9726,7 +9726,7 @@ where
                 | Builtin::Str => { /* do nothing */ }
                 Builtin::List(element) => stack.push(layout_interner.get(element)),
             },
-            LayoutRepr::Struct { field_layouts, .. } => {
+            LayoutRepr::Struct(field_layouts) => {
                 if field_layouts.iter().any(|l| {
                     layout_interner
                         .get(*l)
@@ -9825,7 +9825,7 @@ where
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
     let field_layouts = match layout_interner.get(interned_unboxed_struct_layout).repr {
-        LayoutRepr::Struct { field_layouts, .. } => field_layouts,
+        LayoutRepr::Struct(field_layouts) => field_layouts,
         other => {
             unreachable!(
                 "{:?} {:?}",

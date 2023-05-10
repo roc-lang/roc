@@ -1014,13 +1014,7 @@ fn to_relevant_branch_help<'a>(
                     // the test matches the constructor of this pattern
                     match layout {
                         UnionLayout::NonRecursive([[arg]])
-                            if matches!(
-                                interner.get(*arg).repr,
-                                LayoutRepr::Struct {
-                                    field_layouts: [_],
-                                    ..
-                                }
-                            ) =>
+                            if matches!(interner.get(*arg).repr, LayoutRepr::Struct([_],)) =>
                         {
                             // a one-element record equivalent
                             // Theory: Unbox doesn't have any value for us
@@ -1600,7 +1594,7 @@ fn path_to_expr_help<'a>(
                         layout = inner_layout;
                     }
 
-                    LayoutRepr::Struct { field_layouts, .. } => {
+                    LayoutRepr::Struct(field_layouts) => {
                         debug_assert!(field_layouts.len() > 1);
 
                         let inner_expr = Expr::StructAtIndex {

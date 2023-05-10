@@ -1332,7 +1332,7 @@ pub fn build_exp_expr<'a, 'ctx>(
 
             // extract field from a record
             match (value, layout_interner.get(layout).repr) {
-                (StructValue(argument), LayoutRepr::Struct { field_layouts, .. }) => {
+                (StructValue(argument), LayoutRepr::Struct(field_layouts)) => {
                     debug_assert!(!field_layouts.is_empty());
 
                     let field_value = env

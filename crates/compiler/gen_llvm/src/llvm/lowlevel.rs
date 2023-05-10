@@ -197,7 +197,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             arguments!(string);
 
             let number_layout = match layout_interner.get(layout).repr {
-                LayoutRepr::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
+                LayoutRepr::Struct(field_layouts) => field_layouts[0], // TODO: why is it sometimes a struct?
                 _ => unreachable!(),
             };
 
@@ -2013,7 +2013,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             // return_layout : Result N [OutOfBounds]* ~ { result: N, out_of_bounds: bool }
 
             let target_int_width = match layout_interner.get(return_layout).repr {
-                LayoutRepr::Struct { field_layouts, .. } if field_layouts.len() == 2 => {
+                LayoutRepr::Struct(field_layouts) if field_layouts.len() == 2 => {
                     debug_assert!(layout_interner.eq_repr(field_layouts[1], Layout::BOOL));
                     field_layouts[0].to_int_width()
                 }

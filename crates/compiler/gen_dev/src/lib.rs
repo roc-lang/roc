@@ -1481,7 +1481,7 @@ trait Backend<'a> {
             ),
             LowLevel::StrToNum => {
                 let number_layout = match self.interner().get(*ret_layout).repr {
-                    LayoutRepr::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
+                    LayoutRepr::Struct(field_layouts) => field_layouts[0], // TODO: why is it sometimes a struct?
                     _ => unreachable!(),
                 };
 

@@ -336,7 +336,7 @@ fn specialize_drops_stmt<'a, 'i>(
 
                     let new_dec = match runtime_layout.repr {
                         // Layout has children, try to inline them.
-                        LayoutRepr::Struct { field_layouts, .. } => specialize_struct(
+                        LayoutRepr::Struct(field_layouts) => specialize_struct(
                             arena,
                             layout_interner,
                             ident_ids,

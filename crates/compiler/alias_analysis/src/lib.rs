@@ -1112,7 +1112,7 @@ fn lowlevel_spec<'a>(
 
             // depending on the types, the list or value will come first in the struct
             let fields = match interner.get(layout).repr {
-                LayoutRepr::Struct { field_layouts, .. } => field_layouts,
+                LayoutRepr::Struct(field_layouts) => field_layouts,
                 _ => unreachable!(),
             };
 
@@ -1541,9 +1541,7 @@ fn layout_spec_help<'a>(
 
     match interner.get(layout).repr {
         Builtin(builtin) => builtin_spec(env, builder, interner, &builtin),
-        Struct { field_layouts, .. } => {
-            build_recursive_tuple_type(env, builder, interner, field_layouts)
-        }
+        Struct(field_layouts) => build_recursive_tuple_type(env, builder, interner, field_layouts),
         LambdaSet(lambda_set) => {
             layout_spec_help(env, builder, interner, lambda_set.runtime_representation())
         }

@@ -495,7 +495,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         self.with_sym_layout(structure, |ctx, def_line, layout| {
             let layout = ctx.resolve(layout);
             match ctx.interner.get(layout).repr {
-                LayoutRepr::Struct { field_layouts, .. } => {
+                LayoutRepr::Struct(field_layouts) => {
                     if index as usize >= field_layouts.len() {
                         ctx.problem(ProblemKind::StructIndexOOB {
                             structure,

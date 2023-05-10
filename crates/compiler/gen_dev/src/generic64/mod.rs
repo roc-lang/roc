@@ -2261,16 +2261,15 @@ impl<
             .storage_manager
             .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
 
-        let ret_fields = if let LayoutRepr::Struct { field_layouts, .. } =
-            self.layout_interner.get(*ret_layout).repr
-        {
-            field_layouts
-        } else {
-            internal_error!(
-                "Expected replace to return a struct instead found: {:?}",
-                ret_layout
-            )
-        };
+        let ret_fields =
+            if let LayoutRepr::Struct(field_layouts) = self.layout_interner.get(*ret_layout).repr {
+                field_layouts
+            } else {
+                internal_error!(
+                    "Expected replace to return a struct instead found: {:?}",
+                    ret_layout
+                )
+            };
 
         // Only return list and old element.
         debug_assert_eq!(ret_fields.len(), 2);

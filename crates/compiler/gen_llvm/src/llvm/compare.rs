@@ -165,7 +165,7 @@ fn build_eq<'a, 'ctx>(
             &builtin,
         ),
 
-        LayoutRepr::Struct { field_layouts, .. } => build_struct_eq(
+        LayoutRepr::Struct(field_layouts) => build_struct_eq(
             env,
             layout_interner,
             layout_ids,
@@ -353,7 +353,7 @@ fn build_neq<'a, 'ctx>(
             &builtin,
         ),
 
-        LayoutRepr::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct(field_layouts) => {
             let is_equal = build_struct_eq(
                 env,
                 layout_interner,
