@@ -2482,13 +2482,90 @@ impl<'a> Layout<'a> {
         })
     }
 
+    pub fn stack_size_and_alignment_slices<I>(
+        interner: &I,
+        slices: &[&[InLayout<'a>]],
+        target_info: TargetInfo,
+    ) -> (u32, u32)
+    where
+        I: LayoutInterner<'a>,
+    {
+        let mut data_align = 1;
+        let mut data_width = 0;
+
+        for tag in slices {
+            let mut total = 0;
+            for layout in tag.iter() {
+                let (stack_size, alignment) = interner
+                    .get(*layout)
+                    .stack_size_and_alignment(interner, target_info);
+                total += stack_size;
+                data_align = data_align.max(alignment);
+            }
+
+            data_width = data_width.max(total);
+        }
+
+        data_width = round_up_to_alignment(data_width, data_align);
+
+        (data_width, data_align)
+    }
+
+    /// Used to build a `Layout::Struct` where the field name order is irrelevant.
+    // TODO: to be eliminated once we have SemanticRepr playing a role.
+    pub fn struct_no_name_order(field_layouts: &'a [InLayout]) -> Self {
+        if field_layouts.is_empty() {
+            Self::UNIT_NAKED
+        } else {
+            Self {
+                repr: LayoutRepr::Struct {
+                    field_layouts,
+                    field_order_hash: FieldOrderHash::IRRELEVANT_NON_ZERO_FIELD_HASH,
+                },
+                semantic: SemanticRepr::None,
+            }
+        }
+    }
+
+    pub fn runtime_representation<I>(&self, interner: &I) -> Self
+    where
+        I: LayoutInterner<'a>,
+    {
+        use LayoutRepr::*;
+        match self.repr {
+            LambdaSet(lambda_set) => interner.get(lambda_set.runtime_representation()),
+            _ => *self,
+        }
+    }
+
+    pub fn runtime_representation_in<I>(layout: InLayout<'a>, interner: &I) -> InLayout<'a>
+    where
+        I: LayoutInterner<'a>,
+    {
+        use LayoutRepr::*;
+        match interner.get(layout).repr {
+            LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+            _ => layout,
+        }
+    }
+}
+
+impl<'a> std::ops::Deref for Layout<'a> {
+    type Target = LayoutRepr<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.repr
+    }
+}
+
+impl<'a> LayoutRepr<'a> {
     pub fn safe_to_memcpy<I>(&self, interner: &I) -> bool
     where
         I: LayoutInterner<'a>,
     {
         use LayoutRepr::*;
 
-        match self.repr {
+        match self {
             Builtin(builtin) => builtin.safe_to_memcpy(),
             Struct { field_layouts, .. } => field_layouts
                 .iter()
@@ -2532,7 +2609,7 @@ impl<'a> Layout<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        match self.repr {
+        match self {
             LayoutRepr::Builtin(builtin) => {
                 use Builtin::*;
 
@@ -2583,12 +2660,12 @@ impl<'a> Layout<'a> {
     {
         use LayoutRepr::*;
 
-        match self.repr {
+        match self {
             Builtin(builtin) => builtin.stack_size(target_info),
             Struct { field_layouts, .. } => {
                 let mut sum = 0;
 
-                for field_layout in field_layouts {
+                for field_layout in *field_layouts {
                     sum += interner
                         .get(*field_layout)
                         .stack_size(interner, target_info);
@@ -2610,7 +2687,7 @@ impl<'a> Layout<'a> {
         I: LayoutInterner<'a>,
     {
         use LayoutRepr::*;
-        match self.repr {
+        match self {
             Struct { field_layouts, .. } => field_layouts
                 .iter()
                 .map(|x| interner.get(*x).alignment_bytes(interner, target_info))
@@ -2665,7 +2742,7 @@ impl<'a> Layout<'a> {
         let ptr_width = target_info.ptr_width() as u32;
 
         use LayoutRepr::*;
-        match self.repr {
+        match self {
             Builtin(builtin) => builtin.allocation_alignment_bytes(interner, target_info),
             Struct { .. } => self.alignment_bytes(interner, target_info).max(ptr_width),
             Union(union_layout) => union_layout.allocation_alignment_bytes(interner, target_info),
@@ -2677,45 +2754,16 @@ impl<'a> Layout<'a> {
             }
             Boxed(inner) => Ord::max(
                 ptr_width,
-                interner.get(inner).alignment_bytes(interner, target_info),
+                interner.get(*inner).alignment_bytes(interner, target_info),
             ),
         }
-    }
-
-    pub fn stack_size_and_alignment_slices<I>(
-        interner: &I,
-        slices: &[&[InLayout<'a>]],
-        target_info: TargetInfo,
-    ) -> (u32, u32)
-    where
-        I: LayoutInterner<'a>,
-    {
-        let mut data_align = 1;
-        let mut data_width = 0;
-
-        for tag in slices {
-            let mut total = 0;
-            for layout in tag.iter() {
-                let (stack_size, alignment) = interner
-                    .get(*layout)
-                    .stack_size_and_alignment(interner, target_info);
-                total += stack_size;
-                data_align = data_align.max(alignment);
-            }
-
-            data_width = data_width.max(total);
-        }
-
-        data_width = round_up_to_alignment(data_width, data_align);
-
-        (data_width, data_align)
     }
 
     pub fn is_refcounted(&self) -> bool {
         use self::Builtin::*;
         use LayoutRepr::*;
 
-        match self.repr {
+        match self {
             Union(UnionLayout::NonRecursive(_)) => false,
 
             Union(_) => true,
@@ -2737,7 +2785,7 @@ impl<'a> Layout<'a> {
     {
         use LayoutRepr::*;
 
-        match self.repr {
+        match self {
             Builtin(builtin) => builtin.is_refcounted(),
             Struct { field_layouts, .. } => field_layouts
                 .iter()
@@ -2768,13 +2816,13 @@ impl<'a> Layout<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        let mut stack: Vec<Layout> = bumpalo::collections::Vec::new_in(arena);
+        let mut stack: Vec<LayoutRepr> = bumpalo::collections::Vec::new_in(arena);
 
         stack.push(self);
 
         use LayoutRepr::*;
         while let Some(layout) = stack.pop() {
-            match layout.repr {
+            match layout {
                 Builtin(builtin) => {
                     use self::Builtin::*;
                     match builtin {
@@ -2788,25 +2836,31 @@ impl<'a> Layout<'a> {
                 }
                 }
                 // If there's any layer of indirection (behind a pointer), then it doesn't vary!
-                Struct { field_layouts, .. } => {
-                    stack.extend(field_layouts.iter().map(|interned| interner.get(*interned)))
-                }
+                Struct { field_layouts, .. } => stack.extend(
+                    field_layouts
+                        .iter()
+                        .map(|interned| interner.get(*interned).repr),
+                ),
                 Union(tag_union) => match tag_union {
                     UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
                         for tag in tags {
-                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                            stack.extend(tag.iter().map(|interned| interner.get(*interned).repr));
                         }
                     }
                     UnionLayout::NonNullableUnwrapped(fields) => {
-                        stack.extend(fields.iter().map(|interned| interner.get(*interned)));
+                        stack.extend(fields.iter().map(|interned| interner.get(*interned).repr));
                     }
                     UnionLayout::NullableWrapped { other_tags, .. } => {
                         for tag in other_tags {
-                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                            stack.extend(tag.iter().map(|interned| interner.get(*interned).repr));
                         }
                     }
                     UnionLayout::NullableUnwrapped { other_fields, .. } => {
-                        stack.extend(other_fields.iter().map(|interned| interner.get(*interned)));
+                        stack.extend(
+                            other_fields
+                                .iter()
+                                .map(|interned| interner.get(*interned).repr),
+                        );
                     }
                 },
                 LambdaSet(_) => return true,
@@ -2820,44 +2874,6 @@ impl<'a> Layout<'a> {
         }
 
         false
-    }
-
-    /// Used to build a `Layout::Struct` where the field name order is irrelevant.
-    // TODO: to be eliminated once we have SemanticRepr playing a role.
-    pub fn struct_no_name_order(field_layouts: &'a [InLayout]) -> Self {
-        if field_layouts.is_empty() {
-            Self::UNIT_NAKED
-        } else {
-            Self {
-                repr: LayoutRepr::Struct {
-                    field_layouts,
-                    field_order_hash: FieldOrderHash::IRRELEVANT_NON_ZERO_FIELD_HASH,
-                },
-                semantic: SemanticRepr::None,
-            }
-        }
-    }
-
-    pub fn runtime_representation<I>(&self, interner: &I) -> Self
-    where
-        I: LayoutInterner<'a>,
-    {
-        use LayoutRepr::*;
-        match self.repr {
-            LambdaSet(lambda_set) => interner.get(lambda_set.runtime_representation()),
-            _ => *self,
-        }
-    }
-
-    pub fn runtime_representation_in<I>(layout: InLayout<'a>, interner: &I) -> InLayout<'a>
-    where
-        I: LayoutInterner<'a>,
-    {
-        use LayoutRepr::*;
-        match interner.get(layout).repr {
-            LambdaSet(lambda_set) => lambda_set.runtime_representation(),
-            _ => layout,
-        }
     }
 }
 
