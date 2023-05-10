@@ -3127,7 +3127,7 @@ fn layout_from_flat_type<'a>(
                         cached!(Layout::from_var(env, inner_var), criteria, env.subs);
                     let boxed_layout = env.cache.put_in(Layout {
                         repr: LayoutRepr::Boxed(inner_layout),
-                        semantic: SemanticRepr::None,
+                        semantic: SemanticRepr::NONE,
                     });
 
                     Cacheable(Ok(boxed_layout), criteria)
@@ -4112,7 +4112,7 @@ where
                         repr: LayoutRepr::Union(UnionLayout::NonRecursive(
                             tag_layouts.into_bump_slice(),
                         )),
-                        semantic: SemanticRepr::None,
+                        semantic: SemanticRepr::NONE,
                     };
                     env.cache.put_in(layout)
                 }
@@ -4228,14 +4228,14 @@ where
             env.arena,
             Layout {
                 repr: LayoutRepr::Union(union_layout),
-                semantic: SemanticRepr::None,
+                semantic: SemanticRepr::NONE,
             },
         )
     } else {
         // There are no naked recursion pointers, so we can insert the layout as-is.
         env.cache.interner.insert(Layout {
             repr: LayoutRepr::Union(union_layout),
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         })
     };
 
@@ -4371,7 +4371,7 @@ pub(crate) fn list_layout_from_elem<'a>(
 
     let list_layout = env.cache.put_in(Layout {
         repr: LayoutRepr::Builtin(Builtin::List(element_layout)),
-        semantic: SemanticRepr::None,
+        semantic: SemanticRepr::NONE,
     });
 
     Cacheable(Ok(list_layout), criteria)
@@ -4549,13 +4549,13 @@ mod test {
         let a = &[Layout::UNIT] as &[_];
         let b = &[interner.insert(Layout {
             repr: LayoutRepr::LambdaSet(lambda_set),
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         })] as &[_];
         let tt = [a, b];
 
         let layout = Layout {
             repr: LayoutRepr::Union(UnionLayout::NonRecursive(&tt)),
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         };
 
         let target_info = TargetInfo::default_x86_64();
@@ -4569,14 +4569,14 @@ mod test {
 
         let ok_tag = &[interner.insert(Layout {
             repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U32)),
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         })];
         let err_tag = &[Layout::UNIT];
         let tags = [ok_tag as &[_], err_tag as &[_]];
         let union_layout = UnionLayout::NonRecursive(&tags as &[_]);
         let layout = Layout {
             repr: LayoutRepr::Union(union_layout),
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         };
 
         let target_info = TargetInfo::default_x86_64();

@@ -51,7 +51,7 @@ macro_rules! nosema {
     ($r:expr) => {
         Layout {
             repr: $r,
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         }
     };
 }
@@ -120,7 +120,7 @@ impl_to_from_int_width! {
 impl<'a> Layout<'a> {
     pub(super) const VOID_NAKED: Self = Layout {
         repr: LayoutRepr::Union(UnionLayout::NonRecursive(&[])),
-        semantic: SemanticRepr::None,
+        semantic: SemanticRepr::NONE,
     };
     pub(super) const UNIT_NAKED: Self = Layout {
         repr: LayoutRepr::Struct { field_layouts: &[] },
@@ -157,7 +157,7 @@ pub trait LayoutInterner<'a>: Sized {
     fn insert_no_semantic(&mut self, repr: LayoutRepr<'a>) -> InLayout<'a> {
         self.insert(Layout {
             repr,
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         })
     }
 
@@ -665,7 +665,7 @@ impl<'a> GlobalLayoutInterner<'a> {
         };
         let lambda_set_layout = Layout {
             repr: LayoutRepr::LambdaSet(full_lambda_set),
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         };
 
         vec[slot.0] = lambda_set_layout;
@@ -974,7 +974,7 @@ macro_rules! st_impl {
                 };
                 let lay = Layout {
                     repr: LayoutRepr::LambdaSet(lambda_set),
-                    semantic: SemanticRepr::None
+                    semantic: SemanticRepr::NONE
                 };
                 self.vec[slot.0] = lay;
 
@@ -1065,7 +1065,7 @@ mod reify {
         };
         Layout {
             repr,
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         }
     }
 
@@ -1544,7 +1544,7 @@ mod insert_lambda_set {
             interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, TEST_SET, FIXUP, Layout::UNIT);
         let lambda_set_layout_in = interner.insert(Layout {
             repr: LayoutRepr::LambdaSet(lambda_set),
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         });
         assert_eq!(lambda_set.full_layout, lambda_set_layout_in);
     }
@@ -1603,7 +1603,7 @@ mod insert_recursive_layout {
     fn make_layout<'a>(arena: &'a Bump, interner: &mut impl LayoutInterner<'a>) -> Layout<'a> {
         let list_rec = Layout {
             repr: LayoutRepr::Builtin(Builtin::List(Layout::NAKED_RECURSIVE_PTR)),
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         };
         let repr = LayoutRepr::Union(UnionLayout::Recursive(&*arena.alloc([
             &*arena.alloc([interner.insert(list_rec)]),
@@ -1613,7 +1613,7 @@ mod insert_recursive_layout {
         ])));
         Layout {
             repr,
-            semantic: SemanticRepr::None,
+            semantic: SemanticRepr::NONE,
         }
     }
 
