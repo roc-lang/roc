@@ -419,12 +419,9 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         ),
         LayoutRepr::Struct { field_layouts, .. } => {
             let fields = [Layout::U64, layout];
-            // TODO: no need to intern here
-            let layout = env
-                .layout_cache
-                .put_in_no_semantic(LayoutRepr::struct_(env.arena.alloc(fields)));
 
-            let result_stack_size = env.layout_cache.interner.stack_size(layout);
+            let result_stack_size = LayoutRepr::struct_(env.arena.alloc(fields))
+                .stack_size(&env.layout_cache.interner, env.target_info);
 
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match env
                 .subs
