@@ -315,7 +315,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                         let args = std::slice::from_ref(arena.alloc(apply));
 
                         apply = arena.alloc(Loc {
-                            value: Apply(desugared_expr, args, *called_via),
+                            value: Apply(desugared_expr, args, CalledVia::RecordBuilder),
                             region: loc_expr.region,
                         });
                     }

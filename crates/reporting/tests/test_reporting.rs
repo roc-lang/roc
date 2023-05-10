@@ -10226,6 +10226,29 @@ I recommend using camelCase. It's the standard style in Roc code!
     );
 
     test_report!(
+        record_builder_apply_non_function,
+        indoc!(
+            r#"
+            succeed = \_ -> crash ""
+
+            succeed { 
+                a <- "a",
+            }
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value is not a function, but it was given 1 argument:
+
+    7│          a <- "a",
+                     ^^^
+
+    Tip: Replace `<-` with `:` to assign the field directly.
+    "###
+    );
+
+    test_report!(
         destructure_assignment_introduces_no_variables_nested,
         indoc!(
             r#"
