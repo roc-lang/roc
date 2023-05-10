@@ -1031,7 +1031,7 @@ mod reify {
     use bumpalo::{collections::Vec, Bump};
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, SemanticRepr, UnionLayout};
+    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, UnionLayout};
 
     use super::{InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
@@ -1062,7 +1062,7 @@ mod reify {
         };
         Layout {
             repr,
-            semantic: SemanticRepr::NONE,
+            semantic: normalized_layout.semantic,
         }
     }
 
