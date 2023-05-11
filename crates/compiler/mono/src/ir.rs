@@ -3509,10 +3509,10 @@ fn specialize_proc_help<'a>(
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout_cache
-                                    .get_in(**layout1)
+                                    .get_repr(**layout1)
                                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
                                 let size2 = layout_cache
-                                    .get_in(**layout2)
+                                    .get_repr(**layout2)
                                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
@@ -3557,10 +3557,10 @@ fn specialize_proc_help<'a>(
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout_cache
-                                    .get_in(**layout1)
+                                    .get_repr(**layout1)
                                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
                                 let size2 = layout_cache
-                                    .get_in(**layout2)
+                                    .get_repr(**layout2)
                                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
@@ -4627,13 +4627,14 @@ pub fn with_hole<'a>(
                 Ok(elem_layout) => {
                     let expr = Expr::EmptyArray;
                     let list_layout = layout_cache
-                        .put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
+                        .put_in_direct_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
                     Stmt::Let(assigned, expr, list_layout, hole)
                 }
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
-                    let list_layout = layout_cache
-                        .put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(Layout::VOID)));
+                    let list_layout = layout_cache.put_in_direct_no_semantic(LayoutRepr::Builtin(
+                        Builtin::List(Layout::VOID),
+                    ));
                     Stmt::Let(assigned, expr, list_layout, hole)
                 }
                 Err(LayoutProblem::Erroneous) => panic!("list element is error type"),
@@ -4679,8 +4680,8 @@ pub fn with_hole<'a>(
                 elems: elements.into_bump_slice(),
             };
 
-            let list_layout =
-                layout_cache.put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
+            let list_layout = layout_cache
+                .put_in_direct_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
 
             let stmt = Stmt::Let(assigned, expr, list_layout, hole);
 
@@ -5917,10 +5918,10 @@ where
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout_cache
-                    .get_in(**layout1)
+                    .get_repr(**layout1)
                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
                 let size2 = layout_cache
-                    .get_in(**layout2)
+                    .get_repr(**layout2)
                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
@@ -5951,10 +5952,10 @@ where
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout_cache
-                    .get_in(**layout1)
+                    .get_repr(**layout1)
                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
                 let size2 = layout_cache
-                    .get_in(**layout2)
+                    .get_repr(**layout2)
                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
@@ -6299,7 +6300,8 @@ fn convert_tag_union<'a>(
                 }
             };
 
-            let union_layout = layout_cache.put_in_no_semantic(LayoutRepr::Union(union_layout));
+            let union_layout =
+                layout_cache.put_in_direct_no_semantic(LayoutRepr::Union(union_layout));
 
             let stmt = Stmt::Let(assigned, tag, union_layout, hole);
             let iter = field_symbols_temp
@@ -6438,7 +6440,7 @@ fn sorted_field_symbols<'a>(
         };
 
         let alignment = layout_cache
-            .get_in(layout)
+            .get_repr(layout)
             .alignment_bytes(&layout_cache.interner, env.target_info);
 
         let symbol = possible_reuse_symbol_or_specialize(env, procs, layout_cache, &arg.value, var);
@@ -7885,7 +7887,7 @@ fn specialize_symbol<'a>(
                             let layout = match raw {
                                 RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
                                 RawFunctionLayout::Function(_, lambda_set, _) => layout_cache
-                                    .put_in_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
+                                    .put_in_direct_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
                             };
 
                             let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
@@ -9762,7 +9764,7 @@ where
         ($tag_id:expr, $layout:expr, $union_layout:expr, $field_layouts: expr) => {{
             if $field_layouts.iter().any(|l| {
                 layout_interner
-                    .get(*l)
+                    .get_repr(*l)
                     .has_varying_stack_size(layout_interner, arena)
             }) {
                 let procs = generate_glue_procs_for_tag_fields(
@@ -9799,7 +9801,7 @@ where
             LayoutRepr::Struct(field_layouts) => {
                 if field_layouts.iter().any(|l| {
                     layout_interner
-                        .get(*l)
+                        .get_repr(*l)
                         .has_varying_stack_size(layout_interner, arena)
                 }) {
                     let procs = generate_glue_procs_for_struct_fields(
@@ -9890,7 +9892,7 @@ where
 {
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
     let boxed_struct_layout =
-        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout));
+        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10001,7 +10003,7 @@ where
     I: LayoutInterner<'a>,
 {
     let interned = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 

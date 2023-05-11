@@ -434,7 +434,8 @@ fn eq_tag_union_help<'a>(
     if is_non_recursive {
         compare_ptr_or_value
     } else {
-        let union_layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
+        let union_layout =
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
         let loop_params_iter = operands.iter().map(|arg| Param {
             symbol: *arg,
             ownership: Ownership::Borrowed,
@@ -657,7 +658,7 @@ fn eq_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(elem_layout));
+    let box_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(elem_layout));
 
     // Compare lengths
 
@@ -703,7 +704,7 @@ fn eq_list<'a>(
     let size = root.create_symbol(ident_ids, "size");
     let size_expr = Expr::Literal(Literal::Int(
         (layout_interner
-            .get(elem_layout)
+            .get_repr(elem_layout)
             .stack_size(layout_interner, root.target_info) as i128)
             .to_ne_bytes(),
     ));

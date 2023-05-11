@@ -1840,7 +1840,10 @@ where
     let layout = env.layout_cache.interner.get(in_layout);
     let struct_fields = match env.glue_procs_by_layout.get(&layout) {
         Some(&glue_procs) => {
-            debug_assert!(layout.has_varying_stack_size(&env.layout_cache.interner, arena));
+            debug_assert!(env
+                .layout_cache
+                .interner
+                .has_varying_stack_size(in_layout, arena));
 
             let fields: Vec<(String, TypeId, Accessors)> = sortables
                 .into_iter()
@@ -2226,7 +2229,9 @@ fn single_tag_payload_fields<'a, 'b>(
     // anyway just so we have some warning in case that relationship somehow didn't hold!
     debug_assert_eq!(
         env.glue_procs_by_layout.get(&layout).is_some(),
-        layout.has_varying_stack_size(&env.layout_cache.interner, env.arena)
+        env.layout_cache
+            .interner
+            .has_varying_stack_size(in_layout, env.arena)
     );
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
@@ -2307,7 +2312,7 @@ fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, var
     vars.into_iter().fold(0, |count, var| {
         let layout = env.layout_cache.from_var(arena, var, subs).unwrap();
 
-        if env.layout_cache.get_in(layout).is_dropped_because_empty() {
+        if env.layout_cache.get_repr(layout).is_dropped_because_empty() {
             count
         } else {
             count + 1

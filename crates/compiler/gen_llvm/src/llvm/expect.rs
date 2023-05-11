@@ -476,7 +476,7 @@ fn build_clone_tag<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
     union_layout: UnionLayout<'a>,
 ) -> IntValue<'ctx> {
-    let layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
+    let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
     let layout_id = layout_ids.get(Symbol::CLONE, &layout);
     let fn_name = layout_id.to_symbol_string(Symbol::CLONE, &env.interns);
 
@@ -690,7 +690,7 @@ fn build_clone_tag_help<'a, 'ctx>(
 
                 // load the tag payload (if any)
                 let payload_layout = LayoutRepr::struct_(field_layouts);
-                let payload_in_layout = layout_interner.insert_no_semantic(payload_layout);
+                let payload_in_layout = layout_interner.insert_direct_no_semantic(payload_layout);
 
                 let opaque_payload_ptr = env
                     .builder
@@ -748,11 +748,12 @@ fn build_clone_tag_help<'a, 'ctx>(
 
                 let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
 
-                let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
+                let layout =
+                    layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
                 let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
                     layout
                 } else {
-                    layout_interner.insert_no_semantic(LayoutRepr::struct_(
+                    layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(
                         env.arena.alloc([layout, union_layout.tag_id_layout()]),
                     ))
                 };
@@ -797,7 +798,7 @@ fn build_clone_tag_help<'a, 'ctx>(
 
             build_copy(env, ptr, offset, extra_offset.into());
 
-            let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(fields));
+            let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(fields));
             let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
             let (width, _) = union_layout.data_size_and_alignment(layout_interner, env.target_info);
@@ -853,7 +854,8 @@ fn build_clone_tag_help<'a, 'ctx>(
                         other_tags[i]
                     };
 
-                    let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(fields));
+                    let layout =
+                        layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(fields));
                     let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
                     let (width, _) =
@@ -928,7 +930,8 @@ fn build_clone_tag_help<'a, 'ctx>(
                 // write the "pointer" af the current offset
                 build_copy(env, ptr, offset, extra_offset.into());
 
-                let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(other_fields));
+                let layout =
+                    layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(other_fields));
                 let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
                 let cursors = Cursors {

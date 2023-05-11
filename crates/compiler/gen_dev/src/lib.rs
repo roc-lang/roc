@@ -384,7 +384,7 @@ trait Backend<'a> {
     fn increment_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
-            .insert_no_semantic(LayoutRepr::Boxed(layout));
+            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
 
         let element_increment = self.debug_symbol("element_increment");
         let element_increment_symbol = self.build_indirect_inc(layout);
@@ -404,7 +404,7 @@ trait Backend<'a> {
     fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
-            .insert_no_semantic(LayoutRepr::Boxed(layout));
+            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
 
         let element_decrement = self.debug_symbol("element_decrement");
         let element_decrement_symbol = self.build_indirect_dec(layout);

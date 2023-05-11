@@ -309,7 +309,8 @@ pub fn refcount_reset_proc_body<'a>(
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert_no_semantic(LayoutRepr::RecursivePointer(layout));
+    let recursion_ptr =
+        layout_interner.insert_direct_no_semantic(LayoutRepr::RecursivePointer(layout));
 
     // Reset structure is unique. Decrement its children and return a pointer to the allocation.
     let then_stmt = {
@@ -491,7 +492,8 @@ pub fn refcount_resetref_proc_body<'a>(
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert_no_semantic(LayoutRepr::RecursivePointer(layout));
+    let recursion_ptr =
+        layout_interner.insert_direct_no_semantic(LayoutRepr::RecursivePointer(layout));
 
     // Reset structure is unique. Return a pointer to the allocation.
     let then_stmt = Stmt::Ret(addr);
@@ -979,7 +981,7 @@ fn refcount_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(elem_layout));
+    let box_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(elem_layout));
 
     //
     // Check if the list is empty
@@ -1106,7 +1108,7 @@ fn refcount_list<'a>(
 
     let is_relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
     let modify_elems_and_list =
-        if is_relevant_op && layout_interner.get(elem_layout).is_refcounted() {
+        if is_relevant_op && layout_interner.get_repr(elem_layout).is_refcounted() {
             refcount_list_elems(
                 root,
                 ident_ids,
@@ -1742,7 +1744,7 @@ fn refcount_union_tailrec<'a>(
     let tailrec_loop = JoinPointId(root.create_symbol(ident_ids, "tailrec_loop"));
     let current = root.create_symbol(ident_ids, "current");
     let next_ptr = root.create_symbol(ident_ids, "next_ptr");
-    let layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
+    let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
 
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1887,7 +1889,7 @@ fn refcount_union_tailrec<'a>(
         let jump_with_null_ptr = Stmt::Let(
             null_pointer,
             Expr::NullPointer,
-            layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout)),
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout)),
             root.arena.alloc(Stmt::Jump(
                 jp_modify_union,
                 root.arena.alloc([null_pointer]),
@@ -1931,7 +1933,7 @@ fn refcount_union_tailrec<'a>(
     ));
 
     let loop_init = Stmt::Jump(tailrec_loop, root.arena.alloc([initial_structure]));
-    let union_layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
+    let union_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
     let loop_param = Param {
         symbol: current,
         ownership: Ownership::Borrowed,

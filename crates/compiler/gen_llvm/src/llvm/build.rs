@@ -1385,8 +1385,8 @@ pub fn build_exp_expr<'a, 'ctx>(
 
                     let field_layouts = tag_layouts[*tag_id as usize];
 
-                    let struct_layout =
-                        layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
+                    let struct_layout = layout_interner
+                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
                     let opaque_data_ptr = env
@@ -1442,8 +1442,8 @@ pub fn build_exp_expr<'a, 'ctx>(
                     )
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout =
-                        layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
+                    let struct_layout = layout_interner
+                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
 
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
@@ -1493,8 +1493,8 @@ pub fn build_exp_expr<'a, 'ctx>(
                     debug_assert_ne!(*tag_id != 0, *nullable_id);
 
                     let field_layouts = other_fields;
-                    let struct_layout =
-                        layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
+                    let struct_layout = layout_interner
+                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
 
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
@@ -1696,7 +1696,10 @@ fn build_struct<'a, 'ctx>(
         // Zero-sized fields have no runtime representation.
         // The layout of the struct expects them to be dropped!
         let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
-        if !layout_interner.get(field_layout).is_dropped_because_empty() {
+        if !layout_interner
+            .get_repr(field_layout)
+            .is_dropped_because_empty()
+        {
             let field_type = basic_type_from_layout(env, layout_interner, field_layout);
             field_types.push(field_type);
 
@@ -1780,8 +1783,8 @@ fn build_tag<'a, 'ctx>(
                 use std::cmp::Ordering::*;
                 match tag_id.cmp(&(*nullable_id as _)) {
                     Equal => {
-                        let layout =
-                            layout_interner.insert_no_semantic(LayoutRepr::Union(*union_layout));
+                        let layout = layout_interner
+                            .insert_direct_no_semantic(LayoutRepr::Union(*union_layout));
 
                         return basic_type_from_layout(env, layout_interner, layout)
                             .into_pointer_type()
@@ -2133,7 +2136,8 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let struct_layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
+    let struct_layout =
+        layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
     let struct_type =
         basic_type_from_layout(env, layout_interner, struct_layout).into_struct_type();
 
@@ -2850,7 +2854,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
                         LayoutRepr::Builtin(Builtin::Str) => todo!(),
                         LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
-                            let element_layout = layout_interner.get(element_layout);
+                            let element_layout = layout_interner.get_repr(element_layout);
                             let alignment =
                                 element_layout.alignment_bytes(layout_interner, env.target_info);
 
@@ -3764,7 +3768,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
 
         builder.position_at_end(entry);
 
-        let wrapped_layout = layout_interner.insert_no_semantic(roc_call_result_layout(
+        let wrapped_layout = layout_interner.insert_direct_no_semantic(roc_call_result_layout(
             env.arena,
             return_layout,
             env.target_info,
@@ -3905,7 +3909,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
         builder.position_at_end(last_block);
 
-        let wrapper_result = layout_interner.insert_no_semantic(LayoutRepr::struct_(
+        let wrapper_result = layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(
             env.arena.alloc([Layout::U64, return_layout]),
         ));
 
