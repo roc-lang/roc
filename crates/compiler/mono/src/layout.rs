@@ -2505,9 +2505,23 @@ impl<'a> std::ops::Deref for Layout<'a> {
 }
 
 impl<'a> LayoutRepr<'a> {
-    const UNIT: Self = LayoutRepr::struct_(&[]);
-    const BOOL: Self = LayoutRepr::Builtin(Builtin::Bool);
-    const U8: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U8));
+    pub const UNIT: Self = LayoutRepr::struct_(&[]);
+    pub const BOOL: Self = LayoutRepr::Builtin(Builtin::Bool);
+    pub const U8: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U8));
+    pub const U16: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U16));
+    pub const U32: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U32));
+    pub const U64: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U64));
+    pub const U128: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U128));
+    pub const I8: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I8));
+    pub const I16: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I16));
+    pub const I32: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I32));
+    pub const I64: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I64));
+    pub const I128: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I128));
+    pub const F32: Self = LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32));
+    pub const F64: Self = LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64));
+    pub const DEC: Self = LayoutRepr::Builtin(Builtin::Decimal);
+    pub const STR: Self = LayoutRepr::Builtin(Builtin::Str);
+    pub const OPAQUE_PTR: Self = LayoutRepr::Boxed(Layout::VOID);
 
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
         Self::Struct { field_layouts }

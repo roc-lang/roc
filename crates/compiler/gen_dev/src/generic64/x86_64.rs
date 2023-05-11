@@ -8,7 +8,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::{CompareOperation, RegisterWidth};
@@ -346,12 +346,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         sym: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match *layout {
+        match layout_interner.get(*layout).repr {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if layout_interner.stack_size(x) == 0 => {}
-            x if !Self::returns_via_arg_pointer(layout_interner, &x) => {
+            x if layout_interner.stack_size(*layout) == 0 => {}
+            x if !Self::returns_via_arg_pointer(layout_interner, layout) => {
                 let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
                 if size <= 8 {
@@ -404,14 +404,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         sym: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match *layout {
+        match layout_interner.get(*layout).repr {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if layout_interner.stack_size(x) == 0 => {
+            x if layout_interner.stack_size(*layout) == 0 => {
                 storage_manager.no_data(sym);
             }
-            x if !Self::returns_via_arg_pointer(layout_interner, &x) => {
+            x if !Self::returns_via_arg_pointer(layout_interner, layout) => {
                 let size = layout_interner.stack_size(*layout);
                 let offset = storage_manager.claim_stack_area(sym, size);
                 if size <= 8 {
@@ -459,10 +459,10 @@ impl X64_64SystemVStoreArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
-        match in_layout {
+        match layout_interner.get(in_layout).repr {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
-            Layout::I128 | Layout::U128 => {
+            LayoutRepr::I128 | LayoutRepr::U128 => {
                 let (offset, _) = storage_manager.stack_offset_and_size(&sym);
 
                 if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
@@ -486,8 +486,8 @@ impl X64_64SystemVStoreArgs {
                     self.tmp_stack_offset += 16;
                 }
             }
-            x if layout_interner.stack_size(x) == 0 => {}
-            x if layout_interner.stack_size(x) > 16 => {
+            x if layout_interner.stack_size(in_layout) == 0 => {}
+            x if layout_interner.stack_size(in_layout) > 16 => {
                 // TODO: Double check this.
                 // Just copy onto the stack.
                 // Use return reg as buffer because it will be empty right now.
@@ -509,7 +509,7 @@ impl X64_64SystemVStoreArgs {
             }
             other => {
                 // look at the layout in more detail
-                match layout_interner.get(other).repr {
+                match other {
                     LayoutRepr::Boxed(_) => {
                         // treat boxed like a 64-bit integer
                         self.store_arg_general(buf, storage_manager, sym)
@@ -587,7 +587,10 @@ impl X64_64SystemVStoreArgs {
                         self.tmp_stack_offset += size as i32;
                     }
                     _ => {
-                        todo!("calling with arg type, {:?}", layout_interner.dbg(other));
+                        todo!(
+                            "calling with arg type, {:?}",
+                            layout_interner.dbg(in_layout)
+                        );
                     }
                 }
             }
@@ -659,7 +662,7 @@ impl X64_64SystemVLoadArgs {
         in_layout: InLayout<'a>,
     ) {
         let stack_size = layout_interner.stack_size(in_layout);
-        match in_layout {
+        match layout_interner.get(in_layout).repr {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
             single_register_floats!() => self.load_arg_float(storage_manager, sym),
             _ if stack_size == 0 => {
@@ -670,7 +673,7 @@ impl X64_64SystemVLoadArgs {
                 storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                 self.argument_offset += stack_size as i32;
             }
-            other => match layout_interner.get(other).repr {
+            other => match other {
                 LayoutRepr::Boxed(_) => {
                     // boxed layouts are pointers, which we treat as 64-bit integers
                     self.load_arg_general(storage_manager, sym)
@@ -696,7 +699,10 @@ impl X64_64SystemVLoadArgs {
                     self.argument_offset += stack_size as i32;
                 }
                 _ => {
-                    todo!("Loading args with layout {:?}", layout_interner.dbg(other));
+                    todo!(
+                        "Loading args with layout {:?}",
+                        layout_interner.dbg(in_layout)
+                    );
                 }
             },
         }
@@ -892,7 +898,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         }
 
         for (layout, sym) in args.iter() {
-            match *layout {
+            match layout_interner.get(*layout).repr {
                 single_register_integers!() => {
                     match Self::GENERAL_PARAM_REGS.get(general_registers_used) {
                         Some(reg) => {
@@ -917,7 +923,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         }
                     }
                 }
-                x if layout_interner.stack_size(x) == 0 => {}
+                x if layout_interner.stack_size(*layout) == 0 => {}
                 x => {
                     todo!("Loading args with layout {:?}", x);
                 }
@@ -953,7 +959,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         let mut float_registers_used = 0;
 
         for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
-            match *layout {
+            match layout_interner.get(*layout).repr {
                 single_register_integers!() => {
                     match Self::GENERAL_PARAM_REGS.get(general_registers_used) {
                         Some(reg) => {
@@ -988,7 +994,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         }
                     }
                 }
-                x if layout_interner.stack_size(x) == 0 => {}
+                x if layout_interner.stack_size(*layout) == 0 => {}
                 x => {
                     todo!("calling with arg type, {:?}", x);
                 }

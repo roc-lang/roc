@@ -1159,7 +1159,7 @@ impl<
         symbol: Symbol,
         layout: InLayout<'a>,
     ) {
-        match layout {
+        match layout_interner.get(layout).repr {
             single_register_layouts!() => {
                 let base_offset = self.claim_stack_size(8);
                 self.symbol_storage_map.insert(
@@ -1227,7 +1227,7 @@ impl<
         layout: InLayout<'a>,
         base_offset: i32,
     ) {
-        match layout {
+        match layout_interner.get(layout).repr {
             single_register_integers!() => {
                 let reg = self.load_to_general_reg(buf, &symbol);
                 ASM::mov_base32_reg64(buf, base_offset, reg);
@@ -1534,7 +1534,7 @@ impl<
 }
 
 fn is_primitive(layout_interner: &mut STLayoutInterner<'_>, layout: InLayout<'_>) -> bool {
-    match layout {
+    match layout_interner.get(layout).repr {
         single_register_layouts!() => true,
         _ => match layout_interner.get(layout).repr {
             LayoutRepr::Boxed(_) => true,
