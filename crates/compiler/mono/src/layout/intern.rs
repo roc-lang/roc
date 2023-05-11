@@ -195,7 +195,7 @@ pub trait LayoutInterner<'a>: Sized {
     }
 
     fn eq_repr(&self, a: InLayout<'a>, b: InLayout<'a>) -> bool {
-        self.get(a).repr == self.get(b).repr
+        self.get_repr(a) == self.get_repr(b)
     }
 
     fn target_info(&self) -> TargetInfo;
@@ -471,6 +471,10 @@ impl<'a> InLayout<'a> {
     /// ```
     pub(crate) const unsafe fn from_index(index: usize) -> Self {
         Self(index, PhantomData)
+    }
+
+    pub(crate) const fn newtype(self) -> LayoutWrapper<'a> {
+        LayoutWrapper::Newtype(self)
     }
 
     pub fn index(&self) -> usize {
