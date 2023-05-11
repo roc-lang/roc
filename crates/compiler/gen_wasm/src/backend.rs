@@ -507,7 +507,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
         let inner_ret_layout = match wrapper_arg_layouts
             .last()
-            .map(|l| self.layout_interner.get(*l).repr)
+            .map(|l| self.layout_interner.get_repr(*l))
         {
             Some(LayoutRepr::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
@@ -539,7 +539,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 continue;
             }
 
-            let inner_layout = match self.layout_interner.get(*wrapper_arg).repr {
+            let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
                 LayoutRepr::Boxed(inner) => inner,
                 x => internal_error!("Expected a Boxed layout, got {:?}", x),
             };
@@ -558,7 +558,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if self.layout_interner.stack_size(closure_data_layout) > 0 {
             // The closure data exists, and will have been passed in to the wrapper as a
             // one-element struct.
-            let inner_closure_data_layout = match self.layout_interner.get(closure_data_layout).repr
+            let inner_closure_data_layout = match self.layout_interner.get_repr(closure_data_layout)
             {
                 LayoutRepr::Struct([inner]) => inner,
                 other => internal_error!(
@@ -633,7 +633,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             n_inner_args += 1;
         }
 
-        let inner_layout = match self.layout_interner.get(value_layout).repr {
+        let inner_layout = match self.layout_interner.get_repr(value_layout) {
             LayoutRepr::Boxed(inner) => inner,
             x => internal_error!("Expected a Boxed layout, got {:?}", x),
         };
@@ -662,7 +662,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     fn dereference_boxed_value(&mut self, inner: InLayout) {
         use Align::*;
 
-        match self.layout_interner.get(inner).repr {
+        match self.layout_interner.get_repr(inner) {
             LayoutRepr::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
                 self.code_builder.i32_load8_u(Bytes1, 0);
             }
@@ -1362,7 +1362,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             arguments,
             ret_symbol,
             ret_layout,
-            ret_layout_raw: self.layout_interner.get(ret_layout),
+            ret_layout_raw: self.layout_interner.get_repr(ret_layout),
             ret_storage: ret_storage.to_owned(),
         };
         low_level_call.generate(self);
@@ -1440,7 +1440,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         storage: &StoredValue,
         fields: &'a [Symbol],
     ) {
-        match self.layout_interner.get(layout).repr {
+        match self.layout_interner.get_repr(layout) {
             LayoutRepr::Struct { .. } => {
                 match storage {
                     StoredValue::StackMemory { location, size, .. } => {
@@ -1898,7 +1898,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         // allocate heap memory and load its data address onto the value stack
-        let arg_layout = match self.layout_interner.get(layout).repr {
+        let arg_layout = match self.layout_interner.get_repr(layout) {
             LayoutRepr::Boxed(arg) => arg,
             _ => internal_error!("ExprBox should always produce a Boxed layout"),
         };

@@ -1066,7 +1066,7 @@ impl<'a> Procs<'a> {
         let is_self_recursive = match top_level
             .arguments
             .last()
-            .map(|l| layout_cache.get_in(*l).repr)
+            .map(|l| layout_cache.get_repr(*l))
         {
             Some(LayoutRepr::LambdaSet(lambda_set)) => lambda_set.contains(name.name()),
             _ => false,
@@ -4145,9 +4145,9 @@ pub fn with_hole<'a>(
 
         IngestedFile(_, bytes, var) => {
             let interned = layout_cache.from_var(env.arena, var, env.subs).unwrap();
-            let layout = layout_cache.get_in(interned);
+            let layout = layout_cache.get_repr(interned);
 
-            match layout.repr {
+            match layout {
                 LayoutRepr::Builtin(Builtin::List(elem_layout)) if elem_layout == Layout::U8 => {
                     let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
                     for byte in bytes.iter() {
@@ -4994,7 +4994,7 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, record_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-            let field_layouts = match layout_cache.get_in(record_layout).repr {
+            let field_layouts = match layout_cache.get_repr(record_layout) {
                 LayoutRepr::Struct(field_layouts) => field_layouts,
                 _ => arena.alloc([record_layout]),
             };
@@ -5967,9 +5967,7 @@ where
 
             debug_assert_eq!(
                 LayoutRepr::struct_(field_layouts),
-                layout_cache
-                    .get_in(lambda_set.runtime_representation())
-                    .repr
+                layout_cache.get_repr(lambda_set.runtime_representation())
             );
 
             let expr = Expr::Struct(symbols);
@@ -6170,7 +6168,7 @@ fn convert_tag_union<'a>(
                 layout_cache.from_var(env.arena, variant_var, env.subs),
                 "Wrapped"
             );
-            let union_layout = match layout_cache.interner.chase_recursive(variant_layout).repr {
+            let union_layout = match layout_cache.interner.chase_recursive(variant_layout) {
                 LayoutRepr::Union(ul) => ul,
                 other => internal_error!(
                     "unexpected layout {:?} for {:?}",
@@ -9789,7 +9787,7 @@ where
     }
 
     while let Some(layout) = stack.pop() {
-        match layout.repr {
+        match layout.repr(layout_interner) {
             LayoutRepr::Builtin(builtin) => match builtin {
                 Builtin::Int(_)
                 | Builtin::Float(_)
@@ -9896,7 +9894,7 @@ where
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
-    let field_layouts = match layout_interner.get(interned_unboxed_struct_layout).repr {
+    let field_layouts = match layout_interner.get_repr(interned_unboxed_struct_layout) {
         LayoutRepr::Struct(field_layouts) => field_layouts,
         other => {
             unreachable!(

@@ -328,6 +328,9 @@ impl<'a> LayoutCache<'a> {
     pub fn get_in(&self, interned: InLayout<'a>) -> Layout<'a> {
         self.interner.get(interned)
     }
+    pub fn get_repr(&self, interned: InLayout<'a>) -> LayoutRepr<'a> {
+        self.interner.get_repr(interned)
+    }
 
     pub fn put_in(&mut self, layout: Layout<'a>) -> InLayout<'a> {
         self.interner.insert(layout)
@@ -656,7 +659,7 @@ impl<'a> RawFunctionLayout<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Layout<'a> {
-    pub repr: LayoutRepr<'a>,
+    repr: LayoutRepr<'a>,
     semantic: SemanticRepr<'a>,
 }
 
@@ -873,7 +876,7 @@ impl<'a> UnionLayout<'a> {
         };
 
         // TODO(recursive-layouts): simplify after we have disjoint recursive pointers
-        if let LayoutRepr::RecursivePointer(_) = interner.get(result).repr {
+        if let LayoutRepr::RecursivePointer(_) = interner.get_repr(result) {
             interner.insert_no_semantic(LayoutRepr::Union(self))
         } else {
             result
@@ -1417,7 +1420,7 @@ impl<'a> LambdaSet<'a> {
             None
         } else {
             let repr = self.representation;
-            match interner.get(repr).repr {
+            match interner.get_repr(repr) {
                 LayoutRepr::Struct(&[]) => None,
                 _ => Some(repr),
             }
@@ -1533,7 +1536,7 @@ impl<'a> LambdaSet<'a> {
 
         let repr_layout = interner.chase_recursive(self.representation);
 
-        match repr_layout.repr {
+        match repr_layout {
             LayoutRepr::Union(union) => {
                 // here we rely on the fact that a union in a closure would be stored in a one-element record.
                 // a closure representation that is itself union must be a of the shape `Closure1 ... | Closure2 ...`
@@ -1660,9 +1663,9 @@ impl<'a> LambdaSet<'a> {
 
         let repr_layout = interner.chase_recursive(self.representation);
 
-        match repr_layout.repr {
+        match repr_layout {
             LayoutRepr::Union(union_layout) => {
-                if repr_layout == Layout::VOID_NAKED {
+                if repr_layout == Layout::VOID_NAKED.repr(interner) {
                     debug_assert!(self.set.is_empty());
                     return ClosureCallOptions::Void;
                 }
@@ -1747,7 +1750,7 @@ impl<'a> LambdaSet<'a> {
             Cacheable(result, criteria)
         });
 
-        match result.map(|l| env.cache.interner.chase_recursive(l).repr) {
+        match result.map(|l| env.cache.interner.chase_recursive(l)) {
             Ok(LayoutRepr::LambdaSet(lambda_set)) => Cacheable(Ok(lambda_set), criteria),
             Err(err) => Cacheable(Err(err), criteria),
             Ok(layout) => internal_error!("other layout found for lambda set: {:?}", layout),
@@ -2125,7 +2128,7 @@ pub enum Builtin<'a> {
 #[macro_export]
 macro_rules! list_element_layout {
     ($interner:expr, $list_layout:expr) => {
-        match $interner.get($list_layout).repr {
+        match $interner.get_repr($list_layout) {
             LayoutRepr::Builtin(Builtin::List(list_layout)) => list_layout,
             _ => internal_error!("invalid list layout"),
         }
@@ -2337,8 +2340,11 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub const fn semantic(&self) -> SemanticRepr<'a> {
-        self.semantic
+    pub(crate) const fn repr<I>(&self, _interner: &I) -> LayoutRepr<'a>
+    where
+        I: LayoutInterner<'a>,
+    {
+        self.repr
     }
 
     fn new_help<'b>(
@@ -2487,7 +2493,7 @@ impl<'a> Layout<'a> {
         I: LayoutInterner<'a>,
     {
         use LayoutRepr::*;
-        match interner.get(layout).repr {
+        match interner.get_repr(layout) {
             LambdaSet(lambda_set) => lambda_set.runtime_representation(),
             _ => layout,
         }
@@ -2805,27 +2811,27 @@ impl<'a> LayoutRepr<'a> {
                 Struct(field_layouts) => stack.extend(
                     field_layouts
                         .iter()
-                        .map(|interned| interner.get(*interned).repr),
+                        .map(|interned| interner.get_repr(*interned)),
                 ),
                 Union(tag_union) => match tag_union {
                     UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
                         for tag in tags {
-                            stack.extend(tag.iter().map(|interned| interner.get(*interned).repr));
+                            stack.extend(tag.iter().map(|interned| interner.get_repr(*interned)));
                         }
                     }
                     UnionLayout::NonNullableUnwrapped(fields) => {
-                        stack.extend(fields.iter().map(|interned| interner.get(*interned).repr));
+                        stack.extend(fields.iter().map(|interned| interner.get_repr(*interned)));
                     }
                     UnionLayout::NullableWrapped { other_tags, .. } => {
                         for tag in other_tags {
-                            stack.extend(tag.iter().map(|interned| interner.get(*interned).repr));
+                            stack.extend(tag.iter().map(|interned| interner.get_repr(*interned)));
                         }
                     }
                     UnionLayout::NullableUnwrapped { other_fields, .. } => {
                         stack.extend(
                             other_fields
                                 .iter()
-                                .map(|interned| interner.get(*interned).repr),
+                                .map(|interned| interner.get_repr(*interned)),
                         );
                     }
                 },

@@ -888,7 +888,7 @@ impl<
 
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>) {
         // move return value to dst.
-        let ret_repr = self.interner().get(*ret_layout).repr;
+        let ret_repr = self.interner().get_repr(*ret_layout);
         match ret_repr {
             single_register_integers!() => {
                 let width = RegisterWidth::try_from_layout(ret_repr).unwrap();
@@ -1070,7 +1070,7 @@ impl<
     }
 
     fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>) {
-        match self.interner().get(*layout).repr {
+        match self.interner().get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
@@ -1086,7 +1086,7 @@ impl<
     }
 
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
-        match self.layout_interner.get(*layout).repr {
+        match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(quadword_and_smaller!())) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
@@ -1161,7 +1161,7 @@ impl<
 
         let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
 
-        match self.layout_interner.get(*num_layout).repr {
+        match self.layout_interner.get_repr(*num_layout) {
             LayoutRepr::Builtin(Int(
                 IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
             )) => {
@@ -1208,7 +1208,7 @@ impl<
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
     ) {
-        let function_name = match self.interner().get(*num_layout).repr {
+        let function_name = match self.interner().get_repr(*num_layout) {
             LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::NUM_SUB_CHECKED_INT[width],
             LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::NUM_SUB_CHECKED_FLOAT[width],
             LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_SUB_WITH_OVERFLOW,
@@ -1227,7 +1227,7 @@ impl<
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         use Builtin::Int;
 
-        match self.layout_interner.get(*layout).repr {
+        match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Int(
                 IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
             )) => {
@@ -1291,7 +1291,7 @@ impl<
     }
 
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
-        match self.layout_interner.get(*layout).repr {
+        match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(
                 IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
             )) => {
@@ -1347,7 +1347,7 @@ impl<
     }
 
     fn build_num_rem(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
-        match self.layout_interner.get(*layout).repr {
+        match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(
                 IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
             )) => {
@@ -1391,7 +1391,7 @@ impl<
     }
 
     fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>) {
-        match self.layout_interner.get(*layout).repr {
+        match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
@@ -1414,7 +1414,7 @@ impl<
         src2: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match self.layout_interner.get(*layout).repr {
+        match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(quadword_and_smaller!())) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
@@ -1430,7 +1430,7 @@ impl<
     }
 
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        let repr = self.interner().get(*arg_layout).repr;
+        let repr = self.interner().get_repr(*arg_layout);
         match repr {
             single_register_int_builtins!() | LayoutRepr::BOOL => {
                 let width = match repr {
@@ -1546,7 +1546,7 @@ impl<
     }
 
     fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        match self.interner().get(*arg_layout).repr {
+        match self.interner().get_repr(*arg_layout) {
             single_register_int_builtins!() | LayoutRepr::BOOL => {
                 let width = match *arg_layout {
                     Layout::BOOL | Layout::I8 | Layout::U8 => RegisterWidth::W8,
@@ -1588,7 +1588,7 @@ impl<
     }
 
     fn build_not(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        match self.interner().get(*arg_layout).repr {
+        match self.interner().get_repr(*arg_layout) {
             LayoutRepr::BOOL => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
@@ -1613,8 +1613,8 @@ impl<
     ) {
         let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
         match (
-            self.layout_interner.get(*arg_layout).repr,
-            self.layout_interner.get(*ret_layout).repr,
+            self.layout_interner.get_repr(*arg_layout),
+            self.layout_interner.get_repr(*ret_layout),
         ) {
             (
                 LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
@@ -2256,7 +2256,7 @@ impl<
             .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
 
         let ret_fields =
-            if let LayoutRepr::Struct(field_layouts) = self.layout_interner.get(*ret_layout).repr {
+            if let LayoutRepr::Struct(field_layouts) = self.layout_interner.get_repr(*ret_layout) {
                 field_layouts
             } else {
                 internal_error!(
@@ -2478,7 +2478,7 @@ impl<
         element_in_layout: &InLayout<'a>,
         elements: &[ListLiteralElement<'a>],
     ) {
-        let element_layout = self.layout_interner.get(*element_in_layout);
+        let element_layout = self.layout_interner.get_repr(*element_in_layout);
         let element_width = self.layout_interner.stack_size(*element_in_layout) as u64;
 
         // load the total size of the data we want to store (excludes refcount)
@@ -2700,7 +2700,7 @@ impl<
         let element_width = self.layout_interner.stack_size(element_layout) as u64;
         let element_offset = 0;
 
-        let layout = self.layout_interner.get(element_layout);
+        let layout = self.layout_interner.get_repr(element_layout);
 
         Self::ptr_write(
             &mut self.buf,
@@ -3042,13 +3042,13 @@ impl<
     }
 
     fn load_literal(&mut self, sym: &Symbol, layout: &InLayout<'a>, lit: &Literal<'a>) {
-        let layout = self.layout_interner.get(*layout);
+        let layout = self.layout_interner.get_repr(*layout);
 
-        if let LayoutRepr::LambdaSet(lambda_set) = layout.repr {
+        if let LayoutRepr::LambdaSet(lambda_set) = layout {
             return self.load_literal(sym, &lambda_set.runtime_representation(), lit);
         }
 
-        match (lit, layout.repr) {
+        match (lit, layout) {
             (
                 Literal::Int(x),
                 LayoutRepr::Builtin(Builtin::Int(
@@ -3176,7 +3176,7 @@ impl<
     }
 
     fn return_symbol(&mut self, sym: &Symbol, layout: &InLayout<'a>) {
-        let repr = self.layout_interner.get(*layout).repr;
+        let repr = self.layout_interner.get_repr(*layout);
         if self.storage_manager.is_stored_primitive(sym) {
             // Just load it to the correct type of reg as a stand alone value.
             match repr {
@@ -3547,7 +3547,7 @@ impl<
         src2: &Symbol,
         arg_layout: &InLayout<'a>,
     ) {
-        match self.interner().get(*arg_layout).repr {
+        match self.interner().get_repr(*arg_layout) {
             single_register_integers!() => {
                 let buf = &mut self.buf;
 
@@ -3749,7 +3749,7 @@ impl<
         element_in_layout: InLayout<'a>,
         dst: Symbol,
     ) {
-        match layout_interner.get(element_in_layout).repr {
+        match layout_interner.get_repr(element_in_layout) {
             LayoutRepr::Builtin(builtin) => match builtin {
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::I128 | IntWidth::U128 => {
@@ -3865,10 +3865,10 @@ impl<
         ptr_reg: GeneralReg,
         element_offset: i32,
         element_width: u64,
-        element_layout: Layout<'a>,
+        element_layout: LayoutRepr<'a>,
         value: Symbol,
     ) {
-        match element_layout.repr {
+        match element_layout {
             LayoutRepr::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let sym_reg = storage_manager.load_to_general_reg(buf, &value);
                 ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, sym_reg);
@@ -3894,7 +3894,7 @@ impl<
                 ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, sym_reg);
             }
             LayoutRepr::LambdaSet(lambda_set) => {
-                let layout = layout_interner.get(lambda_set.runtime_representation());
+                let repr = layout_interner.get_repr(lambda_set.runtime_representation());
 
                 Self::ptr_write(
                     buf,
@@ -3903,7 +3903,7 @@ impl<
                     ptr_reg,
                     element_offset,
                     element_width,
-                    layout,
+                    repr,
                     value,
                 );
             }

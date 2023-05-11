@@ -181,6 +181,14 @@ pub trait LayoutInterner<'a>: Sized {
     //
     // Convenience methods
 
+    fn get_repr(&self, key: InLayout<'a>) -> LayoutRepr<'a> {
+        self.get(key).repr
+    }
+
+    fn get_semantic(&self, key: InLayout<'a>) -> SemanticRepr<'a> {
+        self.get(key).semantic
+    }
+
     fn eq_repr(&self, a: InLayout<'a>, b: InLayout<'a>) -> bool {
         self.get(a).repr == self.get(b).repr
     }
@@ -223,18 +231,18 @@ pub trait LayoutInterner<'a>: Sized {
             .is_passed_by_reference(self, self.target_info())
     }
 
-    fn runtime_representation(&self, layout: InLayout<'a>) -> Layout<'a> {
-        self.get(layout).runtime_representation(self)
+    fn runtime_representation(&self, layout: InLayout<'a>) -> LayoutRepr<'a> {
+        self.get_repr(self.runtime_representation_in(layout))
     }
 
     fn runtime_representation_in(&self, layout: InLayout<'a>) -> InLayout<'a> {
         Layout::runtime_representation_in(layout, self)
     }
 
-    fn chase_recursive(&self, mut layout: InLayout<'a>) -> Layout<'a> {
+    fn chase_recursive(&self, mut layout: InLayout<'a>) -> LayoutRepr<'a> {
         loop {
-            let lay = self.get(layout);
-            match lay.repr {
+            let lay = self.get_repr(layout);
+            match lay {
                 LayoutRepr::RecursivePointer(l) => layout = l,
                 _ => return lay,
             }
@@ -1619,7 +1627,7 @@ mod insert_recursive_layout {
     }
 
     fn get_rec_ptr_index<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> usize {
-        match interner.chase_recursive(layout).repr {
+        match interner.chase_recursive(layout) {
             LayoutRepr::Union(UnionLayout::Recursive(&[&[l1], &[l2]])) => {
                 match (interner.get(l1).repr, interner.get(l2).repr) {
                     (LayoutRepr::Builtin(Builtin::List(l1)), LayoutRepr::Struct(&[l2])) => {

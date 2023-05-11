@@ -1111,12 +1111,12 @@ fn lowlevel_spec<'a>(
             let new_list = with_new_heap_cell(builder, block, bag)?;
 
             // depending on the types, the list or value will come first in the struct
-            let fields = match interner.get(layout).repr {
+            let fields = match interner.get_repr(layout) {
                 LayoutRepr::Struct(field_layouts) => field_layouts,
                 _ => unreachable!(),
             };
 
-            match (interner.get(fields[0]).repr, interner.get(fields[1]).repr) {
+            match (interner.get_repr(fields[0]), interner.get_repr(fields[1])) {
                 (LayoutRepr::Builtin(Builtin::List(_)), LayoutRepr::Builtin(Builtin::List(_))) => {
                     // field name is the tie breaker, list is first in
                     // { list : List a, value : a }
@@ -1144,7 +1144,7 @@ fn lowlevel_spec<'a>(
         ListWithCapacity => {
             // essentially an empty list, capacity is not relevant for morphic
 
-            match interner.get(layout).repr {
+            match interner.get_repr(layout) {
                 LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                     let type_id = layout_spec(env, builder, interner, element_layout)?;
                     new_list(builder, block, type_id)
@@ -1440,7 +1440,7 @@ fn expr_spec<'a>(
             }
         }
 
-        EmptyArray => match interner.get(layout).repr {
+        EmptyArray => match interner.get_repr(layout) {
             LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                 let type_id = layout_spec(env, builder, interner, element_layout)?;
                 new_list(builder, block, type_id)
@@ -1457,7 +1457,7 @@ fn expr_spec<'a>(
         } => {
             let tag_value_id = env.symbols[symbol];
 
-            let union_layout = match interner.get(layout).repr {
+            let union_layout = match interner.get_repr(layout) {
                 LayoutRepr::Union(ul) => ul,
                 _ => unreachable!(),
             };
@@ -1539,7 +1539,7 @@ fn layout_spec_help<'a>(
 ) -> Result<TypeId> {
     use LayoutRepr::*;
 
-    match interner.get(layout).repr {
+    match interner.get_repr(layout) {
         Builtin(builtin) => builtin_spec(env, builder, interner, &builtin),
         Struct(field_layouts) => build_recursive_tuple_type(env, builder, interner, field_layouts),
         LambdaSet(lambda_set) => {
@@ -1578,7 +1578,7 @@ fn layout_spec_help<'a>(
             builder.add_tuple_type(&[cell_type, inner_type])
         }
         // TODO(recursive-layouts): update once we have recursive pointer loops
-        RecursivePointer(union_layout) => match interner.get(union_layout).repr {
+        RecursivePointer(union_layout) => match interner.get_repr(union_layout) {
             LayoutRepr::Union(union_layout) => {
                 assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                 let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();

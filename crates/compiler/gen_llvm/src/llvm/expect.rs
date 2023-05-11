@@ -296,7 +296,7 @@ fn build_clone<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
     layout: InLayout<'a>,
 ) -> IntValue<'ctx> {
-    match layout_interner.get(layout).repr {
+    match layout_interner.get_repr(layout) {
         LayoutRepr::Builtin(builtin) => build_clone_builtin(
             env,
             layout_interner,
@@ -396,7 +396,7 @@ fn build_clone<'a, 'ctx>(
                 "i64_to_opaque",
             );
 
-            let union_layout = match layout_interner.get(rec_layout).repr {
+            let union_layout = match layout_interner.get_repr(rec_layout) {
                 LayoutRepr::Union(union_layout) => {
                     debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                     union_layout

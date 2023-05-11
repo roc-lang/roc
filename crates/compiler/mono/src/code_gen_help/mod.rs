@@ -286,7 +286,7 @@ impl<'a> CodeGenHelp<'a> {
         self.debug_recursion_depth += 1;
 
         let layout = if matches!(
-            layout_interner.get(called_layout).repr,
+            layout_interner.get_repr(called_layout),
             LayoutRepr::RecursivePointer(_)
         ) {
             let union_layout = ctx.recursive_union.unwrap();
@@ -532,8 +532,9 @@ impl<'a> CodeGenHelp<'a> {
         layout_interner: &mut STLayoutInterner<'a>,
         layout: InLayout<'a>,
     ) -> InLayout<'a> {
-        let lay = layout_interner.get(layout);
-        let repr = match lay.repr {
+        let lay = layout_interner.get_repr(layout);
+        let semantic = layout_interner.get_semantic(layout);
+        let repr = match lay {
             LayoutRepr::Builtin(Builtin::List(v)) => {
                 let v = self.replace_rec_ptr(ctx, layout_interner, v);
                 LayoutRepr::Builtin(Builtin::List(v))
@@ -580,7 +581,7 @@ impl<'a> CodeGenHelp<'a> {
             LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
         };
 
-        layout_interner.insert(Layout::new(repr, lay.semantic()))
+        layout_interner.insert(Layout::new(repr, semantic))
     }
 
     fn union_tail_recursion_fields(
@@ -822,7 +823,7 @@ fn layout_needs_helper_proc<'a>(
     layout: InLayout<'a>,
     op: HelperOp,
 ) -> bool {
-    match layout_interner.get(layout).repr {
+    match layout_interner.get_repr(layout) {
         LayoutRepr::Builtin(
             Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
         ) => false,

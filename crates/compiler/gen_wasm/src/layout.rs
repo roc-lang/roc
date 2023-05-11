@@ -47,7 +47,7 @@ impl WasmLayout {
 
         let (size, alignment_bytes) = interner.stack_size_and_alignment(layout);
 
-        match interner.get(layout).repr {
+        match interner.get_repr(layout) {
             LayoutRepr::Builtin(Int(int_width)) => {
                 use IntWidth::*;
 

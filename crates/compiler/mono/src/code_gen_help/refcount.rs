@@ -75,7 +75,7 @@ pub fn refcount_stmt<'a>(
         }
 
         ModifyRc::DecRef(structure) => {
-            match layout_interner.get(layout).repr {
+            match layout_interner.get_repr(layout) {
                 // Str has no children, so Dec is the same as DecRef.
                 LayoutRepr::Builtin(Builtin::Str) => {
                     ctx.op = HelperOp::Dec;
@@ -182,7 +182,7 @@ pub fn refcount_generic<'a>(
     layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-    match layout_interner.get(layout).repr {
+    match layout_interner.get_repr(layout) {
         LayoutRepr::Builtin(
             Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
         ) => {
@@ -301,7 +301,7 @@ pub fn refcount_reset_proc_body<'a>(
     let is_unique = root.create_symbol(ident_ids, "is_unique");
     let addr = root.create_symbol(ident_ids, "addr");
 
-    let union_layout = match layout_interner.get(layout).repr {
+    let union_layout = match layout_interner.get_repr(layout) {
         LayoutRepr::Union(u) => u,
         _ => unimplemented!("Reset is only implemented for UnionLayout"),
     };
@@ -483,7 +483,7 @@ pub fn refcount_resetref_proc_body<'a>(
     let is_unique = root.create_symbol(ident_ids, "is_unique");
     let addr = root.create_symbol(ident_ids, "addr");
 
-    let union_layout = match layout_interner.get(layout).repr {
+    let union_layout = match layout_interner.get_repr(layout) {
         LayoutRepr::Union(u) => u,
         _ => unimplemented!("Resetref is only implemented for UnionLayout"),
     };

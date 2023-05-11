@@ -346,7 +346,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         sym: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match layout_interner.get(*layout).repr {
+        match layout_interner.get_repr(*layout) {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
@@ -404,7 +404,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         sym: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match layout_interner.get(*layout).repr {
+        match layout_interner.get_repr(*layout) {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
@@ -459,7 +459,7 @@ impl X64_64SystemVStoreArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
-        match layout_interner.get(in_layout).repr {
+        match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
@@ -654,7 +654,7 @@ impl X64_64SystemVLoadArgs {
         in_layout: InLayout<'a>,
     ) {
         let stack_size = layout_interner.stack_size(in_layout);
-        match layout_interner.get(in_layout).repr {
+        match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
             pointer_layouts!() => self.load_arg_general(storage_manager, sym),
             single_register_floats!() => self.load_arg_float(storage_manager, sym),
@@ -885,7 +885,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         }
 
         for (layout, sym) in args.iter() {
-            match layout_interner.get(*layout).repr {
+            match layout_interner.get_repr(*layout) {
                 single_register_integers!() => {
                     match Self::GENERAL_PARAM_REGS.get(general_registers_used) {
                         Some(reg) => {
@@ -946,7 +946,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         let mut float_registers_used = 0;
 
         for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
-            match layout_interner.get(*layout).repr {
+            match layout_interner.get_repr(*layout) {
                 single_register_integers!() => {
                     match Self::GENERAL_PARAM_REGS.get(general_registers_used) {
                         Some(reg) => {

@@ -470,7 +470,7 @@ fn modify_refcount_layout_help<'a, 'ctx>(
             None => return,
         };
 
-    match layout_interner.get(layout).repr {
+    match layout_interner.get_repr(layout) {
         LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
@@ -527,7 +527,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
 ) -> Option<FunctionValue<'ctx>> {
     use LayoutRepr::*;
 
-    match layout_interner.get(layout).repr {
+    match layout_interner.get_repr(layout) {
         Builtin(builtin) => {
             modify_refcount_builtin(env, layout_interner, layout_ids, mode, layout, &builtin)
         }
@@ -603,7 +603,7 @@ fn modify_refcount_list<'a, 'ctx>(
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let element_layout =
-        if let LayoutRepr::RecursivePointer(rec) = layout_interner.get(element_layout).repr {
+        if let LayoutRepr::RecursivePointer(rec) = layout_interner.get_repr(element_layout) {
             rec
         } else {
             element_layout
@@ -1290,7 +1290,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
         let mut deferred_nonrec = Vec::new_in(env.arena);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
-            if let LayoutRepr::RecursivePointer(_) = layout_interner.get(*field_layout).repr {
+            if let LayoutRepr::RecursivePointer(_) = layout_interner.get_repr(*field_layout) {
                 // this field has type `*i64`, but is really a pointer to the data we want
                 let elem_pointer = env
                     .builder
@@ -1767,7 +1767,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let LayoutRepr::RecursivePointer(union_layout) =
-                layout_interner.get(*field_layout).repr
+                layout_interner.get_repr(*field_layout)
             {
                 // This field is a pointer to the recursive pointer.
                 let field_ptr = env

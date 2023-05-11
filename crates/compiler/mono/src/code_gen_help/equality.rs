@@ -24,7 +24,7 @@ pub fn eq_generic<'a>(
 ) -> Stmt<'a> {
     use crate::layout::Builtin::*;
     use LayoutRepr::*;
-    let main_body = match layout_interner.get(layout).repr {
+    let main_body = match layout_interner.get_repr(layout) {
         Builtin(Int(_) | Float(_) | Bool | Decimal) => {
             unreachable!(
                 "No generated proc for `==`. Use direct code gen for {:?}",
@@ -468,7 +468,7 @@ fn eq_tag_fields<'a>(
     // (If there are more than one, the others will use non-tail recursion)
     let rec_ptr_index = field_layouts.iter().position(|field| {
         matches!(
-            layout_interner.get(*field).repr,
+            layout_interner.get_repr(*field),
             LayoutRepr::RecursivePointer(_)
         )
     });

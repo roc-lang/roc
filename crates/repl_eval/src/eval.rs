@@ -353,7 +353,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         };
     }
 
-    let expr = match env.layout_cache.get_in(layout).repr {
+    let expr = match env.layout_cache.get_repr(layout) {
         LayoutRepr::Builtin(Builtin::Bool) => {
             app.call_function(main_fn_name, |_mem: &A::Memory, num: bool| {
                 bool_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
@@ -557,7 +557,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
     let (newtype_containers, _alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
     let raw_content = env.subs.get_content_without_compacting(raw_var);
 
-    let expr = match (raw_content, env.layout_cache.get_in(layout).repr) {
+    let expr = match (raw_content, env.layout_cache.get_repr(layout)) {
         (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_)) => {
             OPAQUE_FUNCTION
         }
@@ -665,7 +665,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 let union_layout = env.layout_cache
                     .from_var(env.arena, *structure, env.subs)
                     .expect("no layout for structure");
-                debug_assert!(matches!(env.layout_cache.get_in(union_layout).repr, LayoutRepr::Union(..)));
+                debug_assert!(matches!(env.layout_cache.get_repr(union_layout), LayoutRepr::Union(..)));
                 let when_recursive = WhenRecursive::Loop(union_layout);
                 addr_to_ast(env, mem, addr, union_layout, when_recursive, *structure)
             }

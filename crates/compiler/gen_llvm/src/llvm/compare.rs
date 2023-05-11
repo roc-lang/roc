@@ -154,7 +154,7 @@ fn build_eq<'a, 'ctx>(
         rhs_layout
     );
 
-    match layout_interner.get(*lhs_layout).repr {
+    match layout_interner.get_repr(*lhs_layout) {
         LayoutRepr::Builtin(builtin) => build_eq_builtin(
             env,
             layout_interner,
@@ -215,7 +215,7 @@ fn build_eq<'a, 'ctx>(
                 "i64_to_opaque",
             );
 
-            let union_layout = match layout_interner.get(rec_layout).repr {
+            let union_layout = match layout_interner.get_repr(rec_layout) {
                 LayoutRepr::Union(union_layout) => {
                     debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                     union_layout
@@ -342,7 +342,7 @@ fn build_neq<'a, 'ctx>(
         );
     }
 
-    match layout_interner.get(lhs_layout).repr {
+    match layout_interner.get_repr(lhs_layout) {
         LayoutRepr::Builtin(builtin) => build_neq_builtin(
             env,
             layout_interner,
@@ -425,7 +425,7 @@ fn build_list_eq<'a, 'ctx>(
 
     let symbol = Symbol::LIST_EQ;
     let element_layout =
-        if let LayoutRepr::RecursivePointer(rec) = layout_interner.get(element_layout).repr {
+        if let LayoutRepr::RecursivePointer(rec) = layout_interner.get_repr(element_layout) {
             rec
         } else {
             element_layout
@@ -742,10 +742,10 @@ fn build_struct_eq_help<'a, 'ctx>(
             .unwrap();
 
         let are_equal = if let LayoutRepr::RecursivePointer(rec_layout) =
-            layout_interner.get(*field_layout).repr
+            layout_interner.get_repr(*field_layout)
         {
             debug_assert!(
-                matches!(layout_interner.get(rec_layout).repr, LayoutRepr::Union(union_layout) if !matches!(union_layout, UnionLayout::NonRecursive(..)))
+                matches!(layout_interner.get_repr(rec_layout), LayoutRepr::Union(union_layout) if !matches!(union_layout, UnionLayout::NonRecursive(..)))
             );
 
             let field_layout = rec_layout;
