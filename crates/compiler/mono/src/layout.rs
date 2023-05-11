@@ -666,7 +666,6 @@ pub struct Layout<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum LayoutWrapper<'a> {
     Direct(LayoutRepr<'a>),
-    #[allow(unused)] // for now
     Newtype(InLayout<'a>),
 }
 
@@ -3259,21 +3258,24 @@ fn layout_from_flat_type<'a>(
                     .iter()
                     .map(|(label, _)| &*arena.alloc_str(label.as_str())),
                 arena,
-            );
+            )
+            .into_bump_slice();
+            let semantic = SemanticRepr::record(ordered_field_names);
 
-            let result = if sortables.len() == 1 {
+            let repr = if sortables.len() == 1 {
                 // If the record has only one field that isn't zero-sized,
                 // unwrap it.
-                Ok(sortables.pop().unwrap().1)
+                let inner_repr = sortables.pop().unwrap().1;
+                inner_repr.newtype()
             } else {
                 let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
-                let struct_layout = Layout {
-                    repr: LayoutRepr::Struct(layouts.into_bump_slice()).direct(),
-                    semantic: SemanticRepr::record(ordered_field_names.into_bump_slice()),
-                };
-
-                Ok(env.cache.put_in(struct_layout))
+                LayoutRepr::Struct {
+                    field_layouts: layouts.into_bump_slice(),
+                }
+                .direct()
             };
+
+            let result = Ok(env.cache.put_in(Layout { repr, semantic }));
 
             Cacheable(result, criteria)
         }
