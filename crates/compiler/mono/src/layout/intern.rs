@@ -1057,7 +1057,7 @@ mod reify {
     use bumpalo::{collections::Vec, Bump};
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, UnionLayout};
+    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, LayoutWrapper, UnionLayout};
 
     use super::{InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
@@ -1068,8 +1068,24 @@ mod reify {
         slot: InLayout<'a>,
         normalized_layout: Layout<'a>,
     ) -> Layout<'a> {
-        // TODO: what if the layout repr is a newtype - should we preserve all the links?
-        let repr = match normalized_layout.repr(interner) {
+        let Layout { repr, semantic } = normalized_layout;
+        let reified_repr = match repr {
+            LayoutWrapper::Direct(repr) => {
+                reify_recursive_layout_repr(arena, interner, slot, repr).direct()
+            }
+            LayoutWrapper::Newtype(inner) => reify_layout(arena, interner, slot, inner).newtype(),
+        };
+
+        Layout::new(reified_repr, semantic)
+    }
+
+    fn reify_recursive_layout_repr<'a>(
+        arena: &'a Bump,
+        interner: &mut impl LayoutInterner<'a>,
+        slot: InLayout<'a>,
+        repr: LayoutRepr<'a>,
+    ) -> LayoutRepr<'a> {
+        match repr {
             LayoutRepr::Builtin(builtin) => {
                 LayoutRepr::Builtin(reify_builtin(arena, interner, slot, builtin))
             }
@@ -1086,10 +1102,6 @@ mod reify {
                 // another recursive union's layout, do not change it.
                 LayoutRepr::RecursivePointer(if l == Layout::VOID { slot } else { l })
             }
-        };
-        Layout {
-            repr: repr.direct(),
-            semantic: normalized_layout.semantic,
         }
     }
 
