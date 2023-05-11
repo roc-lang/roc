@@ -2001,7 +2001,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 
             let target_int_width = match layout_interner.get(return_layout).repr {
                 LayoutRepr::Struct { field_layouts, .. } if field_layouts.len() == 2 => {
-                    debug_assert!(matches!(field_layouts[1], Layout::BOOL));
+                    debug_assert!(layout_interner.eq_repr(field_layouts[1], Layout::BOOL));
                     field_layouts[0].to_int_width()
                 }
                 layout => internal_error!(

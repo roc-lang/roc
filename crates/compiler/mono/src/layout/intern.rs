@@ -181,6 +181,10 @@ pub trait LayoutInterner<'a>: Sized {
     //
     // Convenience methods
 
+    fn eq_repr(&self, a: InLayout<'a>, b: InLayout<'a>) -> bool {
+        self.get(a).repr == self.get(b).repr
+    }
+
     fn target_info(&self) -> TargetInfo;
 
     fn alignment_bytes(&self, layout: InLayout<'a>) -> u32 {
