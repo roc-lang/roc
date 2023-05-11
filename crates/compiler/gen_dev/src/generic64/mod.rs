@@ -1393,13 +1393,14 @@ impl<
     }
 
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        match self.interner().get(*arg_layout).repr {
+        let repr = self.interner().get(*arg_layout).repr;
+        match repr {
             single_register_int_builtins!() | LayoutRepr::BOOL => {
-                let width = match *arg_layout {
-                    Layout::BOOL | Layout::I8 | Layout::U8 => RegisterWidth::W8,
-                    Layout::I16 | Layout::U16 => RegisterWidth::W16,
-                    Layout::U32 | Layout::I32 => RegisterWidth::W32,
-                    Layout::I64 | Layout::U64 => RegisterWidth::W64,
+                let width = match repr {
+                    LayoutRepr::BOOL | LayoutRepr::I8 | LayoutRepr::U8 => RegisterWidth::W8,
+                    LayoutRepr::I16 | LayoutRepr::U16 => RegisterWidth::W16,
+                    LayoutRepr::U32 | LayoutRepr::I32 => RegisterWidth::W32,
+                    LayoutRepr::I64 | LayoutRepr::U64 => RegisterWidth::W64,
                     _ => unreachable!(),
                 };
 
