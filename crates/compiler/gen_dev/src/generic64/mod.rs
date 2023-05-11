@@ -39,12 +39,12 @@ pub enum RegisterWidth {
 }
 
 impl RegisterWidth {
-    fn try_from_layout(layout: InLayout) -> Option<Self> {
+    fn try_from_layout(layout: LayoutRepr) -> Option<Self> {
         match layout {
-            Layout::BOOL | Layout::I8 | Layout::U8 => Some(RegisterWidth::W8),
-            Layout::I16 | Layout::U16 => Some(RegisterWidth::W16),
-            Layout::U32 | Layout::I32 => Some(RegisterWidth::W32),
-            Layout::I64 | Layout::U64 => Some(RegisterWidth::W64),
+            LayoutRepr::BOOL | LayoutRepr::I8 | LayoutRepr::U8 => Some(RegisterWidth::W8),
+            LayoutRepr::I16 | LayoutRepr::U16 => Some(RegisterWidth::W16),
+            LayoutRepr::U32 | LayoutRepr::I32 => Some(RegisterWidth::W32),
+            LayoutRepr::I64 | LayoutRepr::U64 => Some(RegisterWidth::W64),
             _ => None,
         }
     }
@@ -886,9 +886,10 @@ impl<
 
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>) {
         // move return value to dst.
-        match self.interner().get(*ret_layout).repr {
+        let ret_repr = self.interner().get(*ret_layout).repr;
+        match ret_repr {
             single_register_integers!() => {
-                let width = RegisterWidth::try_from_layout(*ret_layout).unwrap();
+                let width = RegisterWidth::try_from_layout(ret_repr).unwrap();
 
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 ASM::mov_reg_reg(&mut self.buf, width, dst_reg, CC::GENERAL_RETURN_REGS[0]);
