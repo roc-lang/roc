@@ -350,8 +350,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if layout_interner.stack_size(*layout) == 0 => {}
-            x if !Self::returns_via_arg_pointer(layout_interner, layout) => {
+            _ if layout_interner.stack_size(*layout) == 0 => {}
+            _ if !Self::returns_via_arg_pointer(layout_interner, layout) => {
                 let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
                 if size <= 8 {
@@ -408,10 +408,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if layout_interner.stack_size(*layout) == 0 => {
+            _ if layout_interner.stack_size(*layout) == 0 => {
                 storage_manager.no_data(sym);
             }
-            x if !Self::returns_via_arg_pointer(layout_interner, layout) => {
+            _ if !Self::returns_via_arg_pointer(layout_interner, layout) => {
                 let size = layout_interner.stack_size(*layout);
                 let offset = storage_manager.claim_stack_area(sym, size);
                 if size <= 8 {
@@ -486,8 +486,8 @@ impl X64_64SystemVStoreArgs {
                     self.tmp_stack_offset += 16;
                 }
             }
-            x if layout_interner.stack_size(in_layout) == 0 => {}
-            x if layout_interner.stack_size(in_layout) > 16 => {
+            _ if layout_interner.stack_size(in_layout) == 0 => {}
+            _ if layout_interner.stack_size(in_layout) > 16 => {
                 // TODO: Double check this.
                 // Just copy onto the stack.
                 // Use return reg as buffer because it will be empty right now.
@@ -923,7 +923,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         }
                     }
                 }
-                x if layout_interner.stack_size(*layout) == 0 => {}
+                _ if layout_interner.stack_size(*layout) == 0 => {}
                 x => {
                     todo!("Loading args with layout {:?}", x);
                 }
@@ -994,7 +994,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         }
                     }
                 }
-                x if layout_interner.stack_size(*layout) == 0 => {}
+                _ if layout_interner.stack_size(*layout) == 0 => {}
                 x => {
                     todo!("calling with arg type, {:?}", x);
                 }
