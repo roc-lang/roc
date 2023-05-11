@@ -10248,6 +10248,38 @@ I recommend using camelCase. It's the standard style in Roc code!
     "###
     );
 
+    // Skipping test because opaque types defined in the same module
+    // do not fail with the special opaque type error
+    //
+    // test_report!(
+    //     record_builder_apply_opaque,
+    //     indoc!(
+    //         r#"
+    //         succeed = \_ -> crash ""
+
+    //         Decode := {}
+
+    //         get : Str -> Decode
+    //         get = \_ -> @Decode {}
+
+    //         succeed {
+    //             a <- get "a",
+    //             # missing |> apply ^
+    //         }
+    //         "#
+    //     ),
+    //     @r###"
+    // ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    // This value is an opaque type, so it cannot be called with an argument:
+
+    // 12│          a <- get "a",
+    //                   ^^^^^^^
+
+    // Hint: Did you mean to apply it to a function first?
+    //     "###
+    // );
+
     test_report!(
         destructure_assignment_introduces_no_variables_nested,
         indoc!(

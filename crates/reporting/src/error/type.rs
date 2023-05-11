@@ -1163,7 +1163,14 @@ fn to_expr_report<'b>(
                                 ),
                             ]),
                             alloc.region(lines.convert_region(expr_region)),
-                            alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?"),
+                            match called_via {
+                                CalledVia::RecordBuilder => {
+                                    alloc.hint("Did you mean to apply it to a function first?")
+                                },
+                                _ => {
+                                    alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?")
+                                }
+                            }
                         ]),
                         Other => alloc.stack([
                             alloc.concat([
