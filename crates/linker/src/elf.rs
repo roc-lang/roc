@@ -1743,8 +1743,6 @@ mod tests {
                 "build-obj",
                 "app.zig",
                 "-fPIC",
-                "-target",
-                "x86_64-linux-gnu",
                 "-OReleaseFast",
             ])
             .output()
@@ -1785,8 +1783,6 @@ mod tests {
                 "host.zig",
                 "-fPIE",
                 "-lc",
-                "-target",
-                "x86_64-linux-gnu",
                 "-OReleaseFast",
             ])
             .output()

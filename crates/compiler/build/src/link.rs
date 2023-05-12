@@ -174,8 +174,8 @@ pub fn build_zig_host_native(
         // include libc
         "-lc",
         // cross-compile?
-        "-target",
-        target,
+        // "-target",
+        // target,
     ]);
 
     // some examples need the compiler-rt in the app object file.
@@ -400,6 +400,11 @@ pub fn build_c_host_native(
     clang_cmd
         .env_clear()
         .env("PATH", env_path)
+        .envs(
+            env::vars()
+                .filter(|&(ref k, _)| k.starts_with("NIX_") || k.starts_with("LIBRARY_PATH") || k.starts_with("C_INCLUDE_PATH"))
+                .collect::<HashMap<String, String>>(),
+        )
         .env("CPATH", env_cpath)
         .env("HOME", env_home)
         .args(sources)
@@ -947,18 +952,7 @@ fn link_linux(
             // &*crtn_path.to_string_lossy(),
         ])
         .args(&base_args)
-        .args(["-dynamic-linker", PathBuf::new()
-	       .join(&(env::var("NIX_GLIBC_PATH").unwrap_or_else(|_|"/lib64".to_string())))
-	       .join(match target.architecture {
-		   Architecture::X86_64 => "ld-linux-x86-64.so.2",
-		   Architecture::Aarch64(_) => "ld-linux-aarch64.so.1",
-		   _ => internal_error!("unknown arch"),
-	       })
-	       .to_str().unwrap()
-	])
         .args(input_paths)
-        // ld.lld requires this argument, and does not accept --arch
-        // .args(&["-L/usr/lib/x86_64-linux-gnu"])
         .args([
             // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496365925
             // for discussion and further references

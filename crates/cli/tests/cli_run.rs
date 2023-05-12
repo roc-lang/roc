@@ -391,7 +391,7 @@ mod cli_run {
         }
 
         // workaround for surgical linker issue, see PR #3990
-        let mut custom_flags: Vec<&str> = Vec::new();
+        let mut custom_flags: Vec<&str>;
 
         match executable_filename {
             "form" | "hello-gui" | "breakout" | "libhello" => {
@@ -424,7 +424,9 @@ mod cli_run {
             "args" => {
                 custom_flags = vec![LINKER_FLAG, "legacy"];
             }
-            _ => {}
+            _ => {
+//		custom_flags = vec![LINKER_FLAG, "legacy"];
+	    }
         }
 
         // Check with and without optimizations
@@ -1019,6 +1021,7 @@ mod cli_run {
             expected_ending: &str,
             use_valgrind: UseValgrind,
         ) {
+//	    use crate::cli_run::LINKER_FLAG;
             let mut ran_without_optimizations = false;
 
             BENCHMARKS_BUILD_PLATFORM.call_once(|| {
@@ -1027,7 +1030,9 @@ mod cli_run {
                     file_name,
                     stdin,
                     executable_filename,
-                    &[],
+                    &[
+			//LINKER_FLAG, "legacy"
+		    ],
                     &[],
                     &[],
                     expected_ending,
@@ -1047,7 +1052,9 @@ mod cli_run {
                     file_name,
                     stdin,
                     executable_filename,
-                    &[PREBUILT_PLATFORM],
+                    &[
+			//LINKER_FLAG, "legacy",
+			PREBUILT_PLATFORM],
                     &[],
                     &[],
                     expected_ending,
@@ -1060,7 +1067,10 @@ mod cli_run {
                 file_name,
                 stdin,
                 executable_filename,
-                &[PREBUILT_PLATFORM, OPTIMIZE_FLAG],
+                &[
+		    //LINKER_FLAG, "legacy",
+		    PREBUILT_PLATFORM, OPTIMIZE_FLAG
+		],
                 &[],
                 &[],
                 expected_ending,

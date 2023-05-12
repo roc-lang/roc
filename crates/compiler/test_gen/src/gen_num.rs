@@ -1269,7 +1269,7 @@ fn gen_is_even() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn sin() {
     assert_evals_to!("Num.sin 0", 0.0, f64);
-    // assert_evals_to!("Num.sin 1.41421356237", 0.9877659459922529, f64);
+    assert_evals_to!("Num.sin 1.41421356237", 0.9877659459922529, f64);
 }
 
 #[test]

@@ -176,7 +176,7 @@ pub fn decrefC(
     // this is of course unsafe, but we trust what we get from the llvm side
     var bytes = @ptrCast([*]isize, bytes_or_null);
 
-    return @call(.always_inline, decref_ptr_to_refcount, .{ bytes, alignment });
+    return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
 }
 
 pub fn decrefCheckNullC(
@@ -185,7 +185,7 @@ pub fn decrefCheckNullC(
 ) callconv(.C) void {
     if (bytes_or_null) |bytes| {
         const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
-        return @call(.always_inline, decref_ptr_to_refcount, .{ isizes - 1, alignment });
+        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, alignment });
     }
 }
 

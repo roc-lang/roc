@@ -1,4 +1,5 @@
 const std = @import("std");
+const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const math = std.math;
 const RocList = @import("list.zig").RocList;
 const RocStr = @import("str.zig").RocStr;
@@ -218,7 +219,7 @@ pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comp
 }
 
 pub fn bytesToU16C(arg: RocList, position: usize) callconv(.C) u16 {
-    return @call(.always_inline, bytesToU16, .{ arg, position });
+    return @call(.{ .modifier = always_inline }, bytesToU16, .{ arg, position });
 }
 
 fn bytesToU16(arg: RocList, position: usize) u16 {
@@ -227,7 +228,7 @@ fn bytesToU16(arg: RocList, position: usize) u16 {
 }
 
 pub fn bytesToU32C(arg: RocList, position: usize) callconv(.C) u32 {
-    return @call(.always_inline, bytesToU32, .{ arg, position });
+    return @call(.{ .modifier = always_inline }, bytesToU32, .{ arg, position });
 }
 
 fn bytesToU32(arg: RocList, position: usize) u32 {
@@ -236,7 +237,7 @@ fn bytesToU32(arg: RocList, position: usize) u32 {
 }
 
 pub fn bytesToU64C(arg: RocList, position: usize) callconv(.C) u64 {
-    return @call(.always_inline, bytesToU64, .{ arg, position });
+    return @call(.{ .modifier = always_inline }, bytesToU64, .{ arg, position });
 }
 
 fn bytesToU64(arg: RocList, position: usize) u64 {
@@ -245,7 +246,7 @@ fn bytesToU64(arg: RocList, position: usize) u64 {
 }
 
 pub fn bytesToU128C(arg: RocList, position: usize) callconv(.C) u128 {
-    return @call(.always_inline, bytesToU128, .{ arg, position });
+    return @call(.{ .modifier = always_inline }, bytesToU128, .{ arg, position });
 }
 
 fn bytesToU128(arg: RocList, position: usize) u128 {
@@ -256,8 +257,9 @@ fn bytesToU128(arg: RocList, position: usize) u128 {
 fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .Int => {
-            const res = @addWithOverflow(self, other);
-            return .{ .value = res[0], .has_overflowed = res[1] != 0 };
+            var answer: T = undefined;
+            const overflowed = @addWithOverflow(T, self, other, &answer);
+            return .{ .value = answer, .has_overflowed = overflowed };
         },
         else => {
             const answer = self + other;
@@ -270,7 +272,7 @@ fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
 pub fn exportAddWithOverflow(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
-            return @call(.always_inline, addWithOverflow, .{ T, self, other });
+            return @call(.{ .modifier = always_inline }, addWithOverflow, .{ T, self, other });
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
@@ -313,8 +315,9 @@ pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
 fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .Int => {
-            const res = @subWithOverflow(self, other);
-            return .{ .value = res[0], .has_overflowed = res[1] != 0 };
+            var answer: T = undefined;
+            const overflowed = @subWithOverflow(T, self, other, &answer);
+            return .{ .value = answer, .has_overflowed = overflowed };
         },
         else => {
             const answer = self - other;
@@ -327,7 +330,7 @@ fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
 pub fn exportSubWithOverflow(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
-            return @call(.always_inline, subWithOverflow, .{ T, self, other });
+            return @call(.{ .modifier = always_inline }, subWithOverflow, .{ T, self, other });
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
@@ -445,7 +448,7 @@ fn mulWithOverflow(comptime T: type, comptime W: type, self: T, other: T) WithOv
 pub fn exportMulWithOverflow(comptime T: type, comptime W: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
-            return @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
+            return @call(.{ .modifier = always_inline }, mulWithOverflow, .{ T, W, self, other });
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
@@ -454,7 +457,7 @@ pub fn exportMulWithOverflow(comptime T: type, comptime W: type, comptime name: 
 pub fn exportMulSaturatedInt(comptime T: type, comptime W: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) T {
-            const result = @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
+            const result = @call(.{ .modifier = always_inline }, mulWithOverflow, .{ T, W, self, other });
             return result.value;
         }
     }.func;
@@ -464,7 +467,7 @@ pub fn exportMulSaturatedInt(comptime T: type, comptime W: type, comptime name: 
 pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) T {
-            const result = @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
+            const result = @call(.{ .modifier = always_inline }, mulWithOverflow, .{ T, W, self, other });
             if (result.has_overflowed) {
                 roc_panic("integer multiplication overflowed!", 0);
                 unreachable;
