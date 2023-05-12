@@ -581,6 +581,32 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         udiv_reg64_reg64_reg64(buf, dst, src1, src2);
     }
 
+    fn irem_reg64_reg64_reg64<'a, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!()
+    }
+
+    fn urem_reg64_reg64_reg64<'a, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!()
+    }
+
     #[inline(always)]
     fn mul_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
@@ -724,9 +750,39 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
         fmov_freg_freg(buf, FloatWidth::F64, dst, src);
     }
+
     #[inline(always)]
-    fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
-        mov_reg64_reg64(buf, dst, src);
+    fn mov_reg32_freg32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64FloatReg) {
+        unimplemented!();
+    }
+    #[inline(always)]
+    fn mov_reg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64FloatReg) {
+        unimplemented!();
+    }
+
+    #[inline(always)]
+    fn mov_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
+    ) {
+        match register_width {
+            RegisterWidth::W8 => todo!(),
+            RegisterWidth::W16 => todo!(),
+            RegisterWidth::W32 => todo!(),
+            RegisterWidth::W64 => mov_reg64_reg64(buf, dst, src),
+        }
+    }
+
+    #[inline(always)]
+    fn movsx_reg_reg(
+        _buf: &mut Vec<'_, u8>,
+        _input_width: RegisterWidth,
+        _dst: AArch64GeneralReg,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!("move with sign extension");
     }
 
     #[inline(always)]
@@ -944,14 +1000,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("saving floating point reg to stack for AArch64");
     }
     #[inline(always)]
-    fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
-        if offset < 0 {
-            todo!("negative stack offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
-        } else {
-            todo!("stack offsets over 32k for AArch64");
+    fn mov_stack32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: AArch64GeneralReg,
+    ) {
+        match register_width {
+            RegisterWidth::W8 => todo!(),
+            RegisterWidth::W16 => todo!(),
+            RegisterWidth::W32 => todo!(),
+            RegisterWidth::W64 => {
+                if offset < 0 {
+                    todo!("negative stack offsets for AArch64");
+                } else if offset < (0xFFF << 8) {
+                    debug_assert!(offset % 8 == 0);
+                    str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
+                } else {
+                    todo!("stack offsets over 32k for AArch64");
+                }
+            }
         }
     }
     #[inline(always)]
@@ -985,7 +1053,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn eq_reg64_reg64_reg64(
+    fn eq_reg_reg_reg(
         buf: &mut Vec<'_, u8>,
         _register_width: RegisterWidth,
         dst: AArch64GeneralReg,
@@ -1026,6 +1094,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             CompareOperation::GreaterThanOrEqual => ConditionCode::GE,
         };
         cset_reg64_cond(buf, dst, cond);
+    }
+
+    #[inline(always)]
+    fn is_nan_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src: AArch64FloatReg,
+        width: FloatWidth,
+    ) {
+        fcmp_freg_freg(buf, width, src, src);
+        cset_reg64_cond(buf, dst, ConditionCode::NE);
     }
 
     #[inline(always)]
@@ -1165,6 +1244,24 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             CompareOperation::GreaterThanOrEqual => ConditionCode::CSHS,
         };
         cset_reg64_cond(buf, dst, cond);
+    }
+
+    fn mov_freg64_mem64_offset32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64GeneralReg,
+        _offset: i32,
+    ) {
+        todo!()
+    }
+
+    fn mov_freg32_mem32_offset32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64FloatReg,
+        _src: AArch64GeneralReg,
+        _offset: i32,
+    ) {
+        todo!()
     }
 }
 

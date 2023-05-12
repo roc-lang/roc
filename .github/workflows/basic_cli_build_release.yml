@@ -1,10 +1,15 @@
 on:
+  #pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+  
+# use .tar.gz for quick testing
+env:
+  ARCHIVE_FORMAT: .tar.br
 
 jobs:
   fetch-releases:
@@ -18,9 +23,9 @@ jobs:
         run: |
           ./ci/get_releases_json.sh
 
-      - run: curl -OL $(./ci/get_latest_release_url.sh linuxTESTING_x86_64)
-      - run: curl -OL $(./ci/get_latest_release_url.sh macosTESTING_x86_64)
-      - run: curl -OL $(./ci/get_latest_release_url.sh macosTESTING_apple_silicon)
+      - run: curl -OL $(./ci/get_latest_release_url.sh linux_x86_64)
+      - run: curl -OL $(./ci/get_latest_release_url.sh macos_x86_64)
+      - run: curl -OL $(./ci/get_latest_release_url.sh macos_apple_silicon)
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v3
@@ -39,7 +44,7 @@ jobs:
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
           CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
-        run: ./ci/build_basic_cli.sh linuxTESTING_x86_64 "--linker legacy"
+        run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
       - name: Save .rh, .rm and .o file 
         uses: actions/upload-artifact@v3
@@ -59,7 +64,7 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
 
-      - run: ./ci/build_basic_cli.sh macosTESTING_x86_64
+      - run: ./ci/build_basic_cli.sh macos_x86_64
 
       - name: Save .o files
         uses: actions/upload-artifact@v3
@@ -78,7 +83,7 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
 
-      - run: ./ci/build_basic_cli.sh macosTESTING_apple_silicon
+      - run: ./ci/build_basic_cli.sh macos_apple_silicon
 
       - name: Save macos-arm64.o file
         uses: actions/upload-artifact@v3
@@ -87,9 +92,9 @@ jobs:
           path: |
             basic-cli/src/macos-arm64.o
 
-  create-brotli-archive:
+  create-release-archive:
     needs: [build-linux-x86_64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
-    name: create brotli archive
+    name: create release archive
     runs-on: [ubuntu-20.04]
     steps:
       - uses: actions/checkout@v3
@@ -120,10 +125,6 @@ jobs:
 
       - run: cp macos-x86_64-files/* ./basic-cli/src
 
-      # change to tar.gz for fast test build
-      - run: |
-          echo "ARCHIVE_FORMAT='.tar.br'" >> "$GITHUB_ENV"
-
       - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
 
       - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
@@ -136,7 +137,7 @@ jobs:
             ${{ env.TAR_FILENAME }}
 
   test-release-ubuntu:
-    needs: [create-brotli-archive]
+    needs: [create-release-archive]
     runs-on: [ubuntu-20.04]
     steps:
 
@@ -155,7 +156,14 @@ jobs:
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
-      - run: cd basic-cli-platform && ls | grep "tar" | xargs tar -xzf
+      - if: contains(env.ARCHIVE_FORMAT, 'gz')
+        run: |
+          cd basic-cli-platform && ls | grep "tar" | xargs tar -xzf
+
+      - if: contains(env.ARCHIVE_FORMAT, 'br')
+        run: |
+          cd basic-cli-platform && ls | grep "tar" | xargs brotli -d
+          ls | grep "tar$" | xargs tar -xf
 
       - name: prep testing http-get.roc
         run: |

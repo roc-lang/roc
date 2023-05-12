@@ -5,7 +5,7 @@ Status: we invite you to try out abilities for beta use, and are working on reso
 This design idea addresses a variety of problems in Roc at once. It also unlocks some very exciting benefits that I didn't expect at the outset! It's a significant addition to the language, but it also means two other language features can be removed, and numbers can get a lot simpler.
 
 
-Thankfully it's a nonbreaking change for most Roc code, and in the few places where it actually is a breaking change, the fix should consist only of shifting a handful of characters around. Still, it feels like a big change because of all the implications it brings. Here we go!
+Thankfully it's a non-breaking change for most Roc code, and in the few places where it actually is a breaking change, the fix should consist only of shifting a handful of characters around. Still, it feels like a big change because of all the implications it brings. Here we go!
 
 ## Background
 Elm has a few specially constrained type variables: `number`, `comparable`, `appendable`, and the lesser-known `compappend`. Roc does not have these; it has no `appendable` or `compappend` equivalent, and instead of `number` and `comparable` it has:

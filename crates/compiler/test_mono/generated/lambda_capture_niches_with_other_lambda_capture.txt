@@ -12,20 +12,16 @@ procedure Test.2 (Test.7):
 
 procedure Test.6 (Test.17, #Attr.12):
     let Test.5 : U64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    dec #Attr.12;
     let Test.31 : Str = "";
     ret Test.31;
 
 procedure Test.6 (Test.17, #Attr.12):
     let Test.5 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    dec #Attr.12;
     let Test.19 : Str = "";
     ret Test.19;
 
 procedure Test.8 (Test.23, #Attr.12):
     let Test.7 : Str = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-    inc Test.7;
-    dec #Attr.12;
     ret Test.7;
 
 procedure Test.0 ():

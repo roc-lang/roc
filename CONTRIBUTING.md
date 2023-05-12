@@ -96,7 +96,7 @@ In case you have multiple commits, you can sign them in two ways:
        - Find the oldest commit you want to sign, using the `git log --show-signature` command. 
        - Run the command `git rebase --exec 'git commit --amend --no-edit -n -S' -i HASH` which would sign all commits up to commit `HASH`.
 
-If you already pushed unsigned commits, you mmay have to do a force push with `git push origin -f <branch_name>`.
+If you already pushed unsigned commits, you may have to do a force push with `git push origin -f <branch_name>`.
 
 ## Can we do better?
 

@@ -95,6 +95,24 @@ pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
+pub fn exportIsNan(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) bool {
+            return std.math.isNan(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportIsInfinite(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) bool {
+            return std.math.isInf(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
 pub fn exportIsFinite(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(input: T) callconv(.C) bool {
@@ -252,6 +270,30 @@ pub fn bytesToU128C(arg: RocList, position: usize) callconv(.C) u128 {
 fn bytesToU128(arg: RocList, position: usize) u128 {
     const bytes = @ptrCast([*]const u8, arg.bytes);
     return @bitCast(u128, [_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3], bytes[position + 4], bytes[position + 5], bytes[position + 6], bytes[position + 7], bytes[position + 8], bytes[position + 9], bytes[position + 10], bytes[position + 11], bytes[position + 12], bytes[position + 13], bytes[position + 14], bytes[position + 15] });
+}
+
+fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
+    if (rhs == 0 or rhs == -1) {
+        // lhs is a multiple of rhs iff
+        //
+        // - rhs == -1
+        // - both rhs and lhs are 0
+        //
+        // the -1 case is important for overflow reasons `isize::MIN % -1` crashes in rust
+        return (rhs == -1) or (lhs == 0);
+    } else {
+        const rem = @mod(lhs, rhs);
+        return rem == 0;
+    }
+}
+
+pub fn exportIsMultipleOf(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) bool {
+            return @call(.{ .modifier = always_inline }, isMultipleOf, .{ T, self, other });
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
 fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
@@ -462,6 +504,31 @@ pub fn exportMulSaturatedInt(comptime T: type, comptime W: type, comptime name: 
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportMulWrappedInt(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) T {
+            return self *% other;
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn shiftRightZeroFillI128(self: i128, other: u8) callconv(.C) i128 {
+    if (other & 0b1000_0000 > 0) {
+        return 0;
+    } else {
+        return self >> @intCast(u7, other);
+    }
+}
+
+pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.C) u128 {
+    if (other & 0b1000_0000 > 0) {
+        return 0;
+    } else {
+        return self >> @intCast(u7, other);
+    }
 }
 
 pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []const u8) void {

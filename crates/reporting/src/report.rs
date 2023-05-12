@@ -5,7 +5,7 @@ use roc_problem::Severity;
 use roc_region::all::LineColumnRegion;
 use std::path::{Path, PathBuf};
 use std::{fmt, io};
-use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
+use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
 pub use crate::error::canonicalize::can_problem;
 pub use crate::error::parse::parse_problem;
@@ -393,27 +393,28 @@ impl<'a> RocDocAllocator<'a> {
             self.text(symbol.as_str(self.interns))
                 .annotate(Annotation::Symbol)
         } else {
-            self.text(format!(
+            text!(
+                self,
                 "{}.{}",
                 symbol.module_string(self.interns),
                 symbol.as_str(self.interns),
-            ))
+            )
             .annotate(Annotation::Symbol)
         }
     }
     pub fn symbol_qualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!(
+        text!(
+            self,
             "{}.{}",
             symbol.module_string(self.interns),
             symbol.as_str(self.interns),
-        ))
+        )
         .annotate(Annotation::Symbol)
     }
 
     /// TODO: remove in favor of tag_name
     pub fn tag(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", uppercase))
-            .annotate(Annotation::Tag)
+        text!(self, "{}", uppercase).annotate(Annotation::Tag)
     }
 
     pub fn opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
@@ -434,18 +435,15 @@ impl<'a> RocDocAllocator<'a> {
     pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
         debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
 
-        self.text(format!("@{}", opaque.as_str(self.interns)))
-            .annotate(Annotation::Opaque)
+        text!(self, "@{}", opaque.as_str(self.interns)).annotate(Annotation::Opaque)
     }
 
     pub fn record_field(&'a self, lowercase: Lowercase) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!(".{}", lowercase))
-            .annotate(Annotation::RecordField)
+        text!(self, ".{}", lowercase).annotate(Annotation::RecordField)
     }
 
     pub fn tuple_field(&'a self, index: usize) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!(".{}", index))
-            .annotate(Annotation::TupleElem)
+        text!(self, ".{}", index).annotate(Annotation::TupleElem)
     }
 
     pub fn module(&'a self, module_id: ModuleId) -> DocBuilder<'a, Self, Annotation> {
@@ -779,8 +777,7 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn ident(&'a self, ident: Ident) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", ident.as_inline_str()))
-            .annotate(Annotation::Symbol)
+        text!(self, "{}", ident.as_inline_str()).annotate(Annotation::Symbol)
     }
 
     pub fn int_literal<I>(&'a self, int: I) -> DocBuilder<'a, Self, Annotation>

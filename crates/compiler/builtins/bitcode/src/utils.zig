@@ -1,6 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const Monotonic = std.builtin.AtomicOrder.Monotonic;
+
+const DEBUG_INCDEC = false;
 
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
@@ -41,7 +44,6 @@ fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int
 }
 
 comptime {
-    const builtin = @import("builtin");
     // During tests, use the testing allocators to satisfy these functions.
     if (builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
@@ -108,15 +110,16 @@ pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
-pub fn test_panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
     _ = c_ptr;
-    _ = alignment;
-    // const cstr = @ptrCast([*:0]u8, c_ptr);
+    _ = crash_tag;
 
-    // const stderr = std.io.getStdErr().writer();
-    // stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
-
-    // std.c.exit(1);
+    //    const cstr = @ptrCast([*:0]u8, c_ptr);
+    //
+    //    const stderr = std.io.getStdErr().writer();
+    //    stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
+    //
+    //    std.c.exit(1);
 }
 
 pub const Inc = fn (?[*]u8) callconv(.C) void;
@@ -148,7 +151,7 @@ const Refcount = enum {
 
 const RC_TYPE = Refcount.normal;
 
-pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
+pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == Refcount.none) return;
     // Ensure that the refcount is not whole program lifetime.
     if (ptr_to_refcount.* != REFCOUNT_MAX_ISIZE) {
@@ -156,7 +159,16 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             Refcount.normal => {
+                const old = @bitCast(usize, ptr_to_refcount.*);
                 ptr_to_refcount.* += amount;
+                const new = @bitCast(usize, ptr_to_refcount.*);
+
+                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const oldH = old - REFCOUNT_ONE + 1;
+                    const newH = new - REFCOUNT_ONE + 1;
+
+                    std.debug.print("| increment {*}: {} + {} = {}!\n", .{ ptr_to_refcount, oldH, amount, newH });
+                }
             },
             Refcount.atomic => {
                 _ = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, amount, Monotonic);
@@ -166,7 +178,7 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     }
 }
 
-pub fn decrefC(
+pub fn decrefRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
 ) callconv(.C) void {
@@ -187,6 +199,36 @@ pub fn decrefCheckNullC(
         const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
         return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, alignment });
     }
+}
+
+pub fn decrefDataPtrC(
+    bytes_or_null: ?[*]isize,
+    alignment: u32,
+) callconv(.C) void {
+    var bytes = bytes_or_null orelse return;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+
+    return decrefRcPtrC(isizes - 1, alignment);
+}
+
+pub fn increfDataPtrC(
+    bytes_or_null: ?[*]isize,
+    inc_amount: isize,
+) callconv(.C) void {
+    var bytes = bytes_or_null orelse return;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: *isize = @intToPtr(*isize, masked_ptr - @sizeOf(usize));
+
+    return increfRcPtrC(isizes, inc_amount);
 }
 
 pub fn decref(
@@ -216,7 +258,17 @@ inline fn decref_ptr_to_refcount(
     if (refcount != REFCOUNT_MAX_ISIZE) {
         switch (RC_TYPE) {
             Refcount.normal => {
+                const old = @bitCast(usize, refcount);
                 refcount_ptr[0] = refcount -% 1;
+                const new = @bitCast(usize, refcount -% 1);
+
+                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const oldH = old - REFCOUNT_ONE + 1;
+                    const newH = new - REFCOUNT_ONE + 1;
+
+                    std.debug.print("| decrement {*}: {} - 1 = {}!\n", .{ refcount_ptr, oldH, newH });
+                }
+
                 if (refcount == REFCOUNT_ONE_ISIZE) {
                     dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
                 }
@@ -230,6 +282,22 @@ inline fn decref_ptr_to_refcount(
             Refcount.none => unreachable,
         }
     }
+}
+
+pub fn isUnique(
+    bytes_or_null: ?[*]u8,
+) callconv(.C) bool {
+    var bytes = bytes_or_null orelse return true;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+
+    const refcount = (isizes - 1)[0];
+
+    return refcount == REFCOUNT_ONE_ISIZE;
 }
 
 // We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
@@ -348,13 +416,13 @@ pub const UpdateMode = enum(u8) {
 test "increfC, refcounted data" {
     var mock_rc: isize = REFCOUNT_ONE_ISIZE + 17;
     var ptr_to_refcount: *isize = &mock_rc;
-    increfC(ptr_to_refcount, 2);
+    increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_ONE_ISIZE + 19);
 }
 
 test "increfC, static data" {
     var mock_rc: isize = REFCOUNT_MAX_ISIZE;
     var ptr_to_refcount: *isize = &mock_rc;
-    increfC(ptr_to_refcount, 2);
+    increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
 }

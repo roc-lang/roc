@@ -17,21 +17,17 @@ procedure Test.0 ():
     let Test.19 : {I64, Str} = CallByName Test.1;
     let Test.5 : {{I64, Str}, {}} = Struct {Test.19, Test.18};
     let Test.14 : {I64, Str} = StructAtIndex 0 Test.5;
-    inc Test.14;
     let Test.15 : I64 = StructAtIndex 0 Test.14;
-    dec Test.14;
     let Test.16 : I64 = 42i64;
     let Test.17 : Int1 = lowlevel Eq Test.16 Test.15;
     if Test.17 then
         let Test.13 : {I64, Str} = StructAtIndex 0 Test.5;
-        inc Test.13;
-        dec Test.5;
         let Test.7 : {I64, Str} = CallByName Test.1;
         let Test.6 : Int1 = CallByName Bool.11 Test.7 Test.13;
         dec Test.13;
         dec Test.7;
         ret Test.6;
     else
-        dec Test.5;
+        dec Test.14;
         let Test.11 : Int1 = CallByName Bool.1;
         ret Test.11;

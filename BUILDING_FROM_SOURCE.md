@@ -4,7 +4,7 @@ If you run into any problems getting Roc built from source, please ask for help 
 
 ## Using Nix
 
-On Macos and Linux, we highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
+On MacOS and Linux, we highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
 
 :warning: If you tried to run `cargo` in the repo folder before installing nix, make sure to execute `cargo clean` first. To prevent you from executing `cargo` outside of nix, tools like [direnv](https://github.com/nix-community/nix-direnv) and [lorri](https://github.com/nix-community/lorri) can put you in a nix shell automatically when you `cd` into the directory.
 
@@ -177,7 +177,7 @@ error: No suitable version of LLVM was found system-wide or pointed
 
 Add `export LLVM_SYS_130_PREFIX=/usr/lib/llvm-13` to your `~/.bashrc` or equivalent file for your shell.
 
-### LLVM installation on macOS
+### LLVM installation on MacOS
 
 If installing LLVM fails, it might help to run `sudo xcode-select -r` before installing again.
 

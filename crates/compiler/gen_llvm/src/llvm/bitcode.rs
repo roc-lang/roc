@@ -33,8 +33,8 @@ pub fn always_inline(ctx : &Context) -> Attribute {
     attr
 }
 
-pub fn call_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn call_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
@@ -49,8 +49,8 @@ pub fn call_bitcode_fn<'a, 'ctx, 'env>(
         })
 }
 
-pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn call_void_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> InstructionValue<'ctx> {
@@ -60,8 +60,8 @@ pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
         .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
 }
 
-fn call_bitcode_fn_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn call_bitcode_fn_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> CallSiteValue<'ctx> {
@@ -174,8 +174,8 @@ const ARGUMENT_SYMBOLS: [Symbol; 8] = [
     Symbol::ARG_8,
 ];
 
-pub(crate) fn build_transform_caller<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn build_transform_caller<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
@@ -201,8 +201,8 @@ pub(crate) fn build_transform_caller<'a, 'ctx, 'env>(
     }
 }
 
-fn build_transform_caller_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_transform_caller_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
@@ -328,8 +328,8 @@ enum Mode {
 }
 
 /// a function that accepts two arguments: the value to increment, and an amount to increment by
-pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_inc_n_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
@@ -338,8 +338,8 @@ pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
 }
 
 /// a function that accepts two arguments: the value to increment; increments by 1
-pub fn build_inc_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_inc_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
@@ -347,8 +347,8 @@ pub fn build_inc_wrapper<'a, 'ctx, 'env>(
     build_rc_wrapper(env, layout_interner, layout_ids, layout, Mode::Inc)
 }
 
-pub fn build_dec_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_dec_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
@@ -356,8 +356,8 @@ pub fn build_dec_wrapper<'a, 'ctx, 'env>(
     build_rc_wrapper(env, layout_interner, layout_ids, layout, Mode::Dec)
 }
 
-fn build_rc_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_rc_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
@@ -456,8 +456,8 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
     function_value
 }
 
-pub fn build_eq_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_eq_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
@@ -536,8 +536,8 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
     function_value
 }
 
-pub fn build_compare_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_compare_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function: FunctionValue<'ctx>,
@@ -699,9 +699,9 @@ impl BitcodeReturns {
         }
     }
 
-    fn return_value_64bit<'a, 'ctx, 'env>(
+    fn return_value_64bit<'a, 'ctx>(
         &self,
-        env: &Env<'a, 'ctx, 'env>,
+        env: &Env<'a, 'ctx, '_>,
         arguments: &mut bumpalo::collections::Vec<'a, BasicValueEnum<'ctx>>,
     ) -> BitcodeReturnValue<'ctx> {
         match self {
@@ -740,9 +740,9 @@ impl BitcodeReturns {
         }
     }
 
-    fn call_and_load_32bit<'a, 'ctx, 'env>(
+    fn call_and_load_32bit<'ctx>(
         &self,
-        env: &Env<'a, 'ctx, 'env>,
+        env: &Env<'_, 'ctx, '_>,
         arguments: &[BasicValueEnum<'ctx>],
         fn_name: &str,
     ) -> BasicValueEnum<'ctx> {
@@ -758,8 +758,8 @@ impl BitcodeReturns {
     }
 }
 
-fn ptr_len_cap<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn ptr_len_cap<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: StructValue<'ctx>,
 ) -> (PointerValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>) {
     let ptr_and_len = env
@@ -802,8 +802,8 @@ fn ptr_len_cap<'a, 'ctx, 'env>(
 }
 
 /// Converts the { i64, i32 } struct that zig returns into `list.RocList = type { i8*, i32, i32 }`
-fn receive_zig_roc_list_32bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn receive_zig_roc_list_32bit<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: StructValue<'ctx>,
 ) -> StructValue<'ctx> {
     let list_type = super::convert::zig_list_type(env);
@@ -818,8 +818,8 @@ fn receive_zig_roc_list_32bit<'a, 'ctx, 'env>(
 }
 
 /// Converts the { i64, i32 } struct that zig returns into `list.RocList = type { i8*, i32, i32 }`
-fn receive_zig_roc_str_32bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn receive_zig_roc_str_32bit<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: StructValue<'ctx>,
 ) -> StructValue<'ctx> {
     let str_type = super::convert::zig_str_type(env);
@@ -833,8 +833,8 @@ fn receive_zig_roc_str_32bit<'a, 'ctx, 'env>(
     )
 }
 
-pub(crate) fn pass_list_to_zig_64bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn pass_list_to_zig_64bit<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     list: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
     let parent = env
@@ -851,16 +851,16 @@ pub(crate) fn pass_list_to_zig_64bit<'a, 'ctx, 'env>(
     list_alloca
 }
 
-fn pass_string_to_zig_64bit<'a, 'ctx, 'env>(
-    _env: &Env<'a, 'ctx, 'env>,
+fn pass_string_to_zig_64bit<'ctx>(
+    _env: &Env<'_, 'ctx, '_>,
     string: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
     // we must pass strings by-pointer, and that is already how they are stored
     string.into_pointer_value()
 }
 
-pub(crate) fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn pass_list_or_string_to_zig_32bit<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     list_or_string: StructValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
     let ptr = env
@@ -901,8 +901,8 @@ pub(crate) fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
     (ptr_len, cap)
 }
 
-pub(crate) fn call_str_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn call_str_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     strings: &[BasicValueEnum<'ctx>],
     other_arguments: &[BasicValueEnum<'ctx>],
     returns: BitcodeReturns,
@@ -942,8 +942,8 @@ pub(crate) fn call_str_bitcode_fn<'a, 'ctx, 'env>(
     }
 }
 
-pub(crate) fn call_list_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn call_list_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     lists: &[StructValue<'ctx>],
     other_arguments: &[BasicValueEnum<'ctx>],
     returns: BitcodeReturns,

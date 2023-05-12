@@ -17,15 +17,15 @@ use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
-    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
-    ROC_PRINT_RUNTIME_ERROR_GEN,
+    ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION, ROC_PRINT_IR_AFTER_REFCOUNT,
+    ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_RUNTIME_ERROR_GEN,
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
-use roc_module::low_level::LowLevel;
+use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -36,7 +36,7 @@ use roc_types::subs::{
     StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
-use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
+use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder};
 
 use pattern::{from_can_pattern, store_pattern, Pattern};
 
@@ -57,13 +57,15 @@ pub fn pretty_print_ir_symbols() -> bool {
     dbg_do!(ROC_PRINT_IR_AFTER_REFCOUNT, {
         return true;
     });
+    dbg_do!(ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION, {
+        return true;
+    });
     false
 }
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
 roc_error_macros::assert_sizeof_wasm!(Expr, 48);
 roc_error_macros::assert_sizeof_wasm!(Stmt, 64);
@@ -1596,6 +1598,10 @@ pub enum BranchInfo<'a> {
         layout: InLayout<'a>,
         tag_id: TagIdIntType,
     },
+    List {
+        scrutinee: Symbol,
+        len: u64,
+    },
 }
 
 impl<'a> BranchInfo<'a> {
@@ -1641,7 +1647,7 @@ impl ModifyRc {
                 .append(";"),
             Inc(symbol, n) => alloc
                 .text("inc ")
-                .append(alloc.text(format!("{} ", n)))
+                .append(text!(alloc, "{} ", n))
                 .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
             Dec(symbol) => alloc
@@ -1694,24 +1700,19 @@ impl<'a> Call<'a> {
             LowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
-                alloc
-                    .text(format!("lowlevel {:?} ", lowlevel))
-                    .append(alloc.intersperse(it, " "))
+                text!(alloc, "lowlevel {:?} ", lowlevel).append(alloc.intersperse(it, " "))
             }
             HigherOrder(higher_order) => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
-                alloc
-                    .text(format!("lowlevel {:?} ", higher_order.op))
-                    .append(alloc.intersperse(it, " "))
+                text!(alloc, "lowlevel {:?} ", higher_order.op).append(alloc.intersperse(it, " "))
             }
             Foreign {
                 ref foreign_symbol, ..
             } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
-                alloc
-                    .text(format!("foreign {:?} ", foreign_symbol.as_str()))
+                text!(alloc, "foreign {:?} ", foreign_symbol.as_str())
                     .append(alloc.intersperse(it, " "))
             }
         }
@@ -1782,6 +1783,24 @@ pub enum CallType<'a> {
         update_mode: UpdateModeId,
     },
     HigherOrder(&'a HigherOrderLowLevel<'a>),
+}
+
+impl<'a> CallType<'a> {
+    /**
+    Replace calls to wrappers of lowlevel functions with the lowlevel function itself
+    */
+    pub fn replace_lowlevel_wrapper(self) -> Self {
+        match self {
+            CallType::ByName { name, .. } => match LowLevelWrapperType::from_symbol(name.name()) {
+                LowLevelWrapperType::CanBeReplacedBy(lowlevel) => CallType::LowLevel {
+                    op: lowlevel,
+                    update_mode: UpdateModeId::BACKEND_DUMMY,
+                },
+                LowLevelWrapperType::NotALowLevelWrapper => self,
+            },
+            _ => self,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1896,13 +1915,13 @@ impl<'a> Literal<'a> {
         use Literal::*;
 
         match self {
-            Int(bytes) => alloc.text(format!("{}i64", i128::from_ne_bytes(*bytes))),
-            U128(bytes) => alloc.text(format!("{}u128", u128::from_ne_bytes(*bytes))),
-            Float(lit) => alloc.text(format!("{}f64", lit)),
-            Decimal(bytes) => alloc.text(format!("{}dec", RocDec::from_ne_bytes(*bytes))),
-            Bool(lit) => alloc.text(format!("{}", lit)),
-            Byte(lit) => alloc.text(format!("{}u8", lit)),
-            Str(lit) => alloc.text(format!("{:?}", lit)),
+            Int(bytes) => text!(alloc, "{}i64", i128::from_ne_bytes(*bytes)),
+            U128(bytes) => text!(alloc, "{}u128", u128::from_ne_bytes(*bytes)),
+            Float(lit) => text!(alloc, "{}f64", lit),
+            Decimal(bytes) => text!(alloc, "{}dec", RocDec::from_ne_bytes(*bytes)),
+            Bool(lit) => text!(alloc, "{}", lit),
+            Byte(lit) => text!(alloc, "{}u8", lit),
+            Str(lit) => text!(alloc, "{:?}", lit),
         }
     }
 }
@@ -2040,11 +2059,10 @@ impl<'a> Expr<'a> {
 
             StructAtIndex {
                 index, structure, ..
-            } => alloc
-                .text(format!("StructAtIndex {} ", index))
+            } => text!(alloc, "StructAtIndex {} ", index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
+            RuntimeErrorFunction(s) => text!(alloc, "ErrorFunction {}", s),
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
@@ -2063,8 +2081,7 @@ impl<'a> Expr<'a> {
                 structure,
                 index,
                 ..
-            } => alloc
-                .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
+            } => text!(alloc, "UnionAtIndex (Id {}) (Index {}) ", tag_id, index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
         }
     }
@@ -2192,8 +2209,7 @@ impl<'a> Stmt<'a> {
                         let branches_docs = branches
                             .iter()
                             .map(|(tag, _info, expr)| {
-                                alloc
-                                    .text(format!("case {}:", tag))
+                                text!(alloc, "case {}:", tag)
                                     .append(alloc.hardline())
                                     .append(expr.to_doc(alloc, interner, pretty).indent(4))
                                     .indent(4)
@@ -3024,6 +3040,7 @@ fn specialize_external_help<'a>(
                 host_exposed_layouts.sort();
                 host_exposed_layouts.dedup();
 
+                // Computer the getter procs for every host-exposed layout.
                 for in_layout in host_exposed_layouts {
                     let layout = layout_cache.interner.get(in_layout);
 
@@ -3035,10 +3052,9 @@ fn specialize_external_help<'a>(
                         env.arena.alloc(layout),
                     );
 
-                    // for now, getters are not processed here
                     let GlueProcs {
                         getters,
-                        extern_names,
+                        legacy_layout_based_extern_names: _,
                     } = all_glue_procs;
 
                     for (_layout, glue_procs) in getters {
@@ -3050,25 +3066,27 @@ fn specialize_external_help<'a>(
                             );
                         }
                     }
+                }
+
+                // Now, let's generate the host-exposed lambda set wrappers from the type of the
+                // host-exported function.
+                {
+                    let extern_names = {
+                        let mut layout_env = layout::Env::from_components(
+                            layout_cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
+
+                        find_lambda_sets(&mut layout_env, variable)
+                    };
 
                     let mut aliases = BumpMap::default();
 
-                    for (id, mut raw_function_layout) in extern_names {
+                    for (id, raw_function_layout) in extern_names {
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
-
-                        // fix the recursion in the rocLovesRust example
-                        if false {
-                            raw_function_layout = match raw_function_layout {
-                                RawFunctionLayout::Function(a, mut lambda_set, _) => {
-                                    lambda_set.ret = in_layout;
-                                    RawFunctionLayout::Function(a, lambda_set, in_layout)
-                                }
-                                RawFunctionLayout::ZeroArgumentThunk(x) => {
-                                    RawFunctionLayout::ZeroArgumentThunk(x)
-                                }
-                            };
-                        }
 
                         let (key, (top_level, proc)) = generate_host_exposed_function(
                             env,
@@ -6591,12 +6609,16 @@ pub fn from_can<'a>(
             branches,
             final_else,
         } => {
-            let ret_layout = layout_cache
-                .from_var(env.arena, branch_var, env.subs)
-                .expect("invalid ret_layout");
-            let cond_layout = layout_cache
-                .from_var(env.arena, cond_var, env.subs)
-                .expect("invalid cond_layout");
+            let ret_layout = return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, branch_var, env.subs),
+                "invalid return type in if expression"
+            );
+            let cond_layout = return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, cond_var, env.subs),
+                "invalid condition type in if expression"
+            );
 
             let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 
@@ -9507,7 +9529,9 @@ pub struct GlueProc<'a> {
 
 pub struct GlueProcs<'a> {
     pub getters: Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)>,
-    pub extern_names: Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)>,
+    /// Lambda set IDs computed from the layout of the lambda set. Should be replaced by
+    /// computation from type variable eventually.
+    pub legacy_layout_based_extern_names: Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -9519,6 +9543,126 @@ impl LambdaSetId {
         debug_assert!(self.0 < u32::MAX);
         Self(self.0 + 1)
     }
+}
+
+fn find_lambda_sets<'a>(
+    env: &mut crate::layout::Env<'a, '_>,
+    initial: Variable,
+) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
+    let mut stack = bumpalo::collections::Vec::new_in(env.arena);
+
+    // ignore the lambda set of top-level functions
+    match env.subs.get_without_compacting(initial).content {
+        Content::Structure(FlatType::Func(arguments, _, result)) => {
+            let arguments = &env.subs.variables[arguments.indices()];
+
+            stack.extend(arguments.iter().copied());
+            stack.push(result);
+        }
+        _ => {
+            stack.push(initial);
+        }
+    }
+
+    let lambda_set_variables = find_lambda_sets_help(env.subs, stack);
+    let mut answer =
+        bumpalo::collections::Vec::with_capacity_in(lambda_set_variables.len(), env.arena);
+
+    for (variable, lambda_set_id) in lambda_set_variables {
+        let lambda_set = env.subs.get_lambda_set(variable);
+        let raw_function_layout = RawFunctionLayout::from_var(env, lambda_set.ambient_function)
+            .value()
+            .unwrap();
+
+        let key = (lambda_set_id, raw_function_layout);
+        answer.push(key);
+    }
+
+    answer
+}
+
+pub fn find_lambda_sets_help(
+    subs: &Subs,
+    mut stack: Vec<'_, Variable>,
+) -> MutMap<Variable, LambdaSetId> {
+    use roc_types::subs::GetSubsSlice;
+
+    let mut lambda_set_id = LambdaSetId::default();
+
+    let mut result = MutMap::default();
+
+    while let Some(var) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            Content::RangedNumber(_)
+            | Content::Error
+            | Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _)
+            | Content::RecursionVar { .. } => {}
+            Content::Structure(flat_type) => match flat_type {
+                FlatType::Apply(_, arguments) => {
+                    stack.extend(subs.get_subs_slice(*arguments).iter().rev());
+                }
+                FlatType::Func(arguments, lambda_set_var, ret_var) => {
+                    result.insert(*lambda_set_var, lambda_set_id);
+                    lambda_set_id = lambda_set_id.next();
+
+                    let arguments = &subs.variables[arguments.indices()];
+
+                    stack.extend(arguments.iter().copied());
+                    stack.push(*lambda_set_var);
+                    stack.push(*ret_var);
+                }
+                FlatType::Record(fields, ext) => {
+                    stack.extend(subs.get_subs_slice(fields.variables()).iter().rev());
+                    stack.push(*ext);
+                }
+                FlatType::Tuple(elements, ext) => {
+                    stack.extend(subs.get_subs_slice(elements.variables()).iter().rev());
+                    stack.push(*ext);
+                }
+                FlatType::FunctionOrTagUnion(_, _, ext) => {
+                    // just the ext
+                    match ext {
+                        roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                        roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                    }
+                }
+                FlatType::TagUnion(union_tags, ext)
+                | FlatType::RecursiveTagUnion(_, union_tags, ext) => {
+                    for tag in union_tags.variables() {
+                        stack.extend(
+                            subs.get_subs_slice(subs.variable_slices[tag.index as usize])
+                                .iter()
+                                .rev(),
+                        );
+                    }
+
+                    match ext {
+                        roc_types::subs::TagExt::Openness(var) => stack.push(*var),
+                        roc_types::subs::TagExt::Any(_) => { /* ignore */ }
+                    }
+                }
+                FlatType::EmptyRecord => {}
+                FlatType::EmptyTuple => {}
+                FlatType::EmptyTagUnion => {}
+            },
+            Content::Alias(_, _, actual, _) => {
+                stack.push(*actual);
+            }
+            Content::LambdaSet(lambda_set) => {
+                // the lambda set itself should already be caught by Func above, but the
+                // capture can itself contain more lambda sets
+                for index in lambda_set.solved.variables() {
+                    let subs_slice = subs.variable_slices[index.index as usize];
+                    stack.extend(subs.variables[subs_slice.indices()].iter());
+                }
+            }
+        }
+    }
+
+    result
 }
 
 pub fn generate_glue_procs<'a, 'i, I>(
@@ -9533,7 +9677,7 @@ where
 {
     let mut answer = GlueProcs {
         getters: Vec::new_in(arena),
-        extern_names: Vec::new_in(arena),
+        legacy_layout_based_extern_names: Vec::new_in(arena),
     };
 
     let mut lambda_set_id = LambdaSetId(0);
@@ -9640,7 +9784,7 @@ where
                     RawFunctionLayout::Function(lambda_set.args, lambda_set, lambda_set.ret);
 
                 let key = (lambda_set_id, raw_function_layout);
-                answer.extern_names.push(key);
+                answer.legacy_layout_based_extern_names.push(key);
 
                 // this id is used, increment for the next one
                 lambda_set_id = lambda_set_id.next();

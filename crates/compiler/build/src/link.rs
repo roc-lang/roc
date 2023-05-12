@@ -334,21 +334,8 @@ pub fn build_zig_host_wasm32(
         unimplemented!("Linking a shared library to wasm not yet implemented");
     }
 
-    let zig_target = if matches!(opt_level, OptLevel::Development) {
-        "wasm32-wasi"
-    } else {
-        // For LLVM backend wasm we are emitting a .bc file anyway so this target is OK
-        "i386-linux-musl"
-    };
-
     // NOTE currently just to get compiler warnings if the host code is invalid.
     // the produced artifact is not used
-    //
-    // NOTE we're emitting LLVM IR here (again, it is not actually used)
-    //
-    // we'd like to compile with `-target wasm32-wasi` but that is blocked on
-    //
-    // https://github.com/ziglang/zig/issues/9414
     let mut zig_cmd = zig();
 
     zig_cmd
@@ -369,7 +356,7 @@ pub fn build_zig_host_wasm32(
             "--library",
             "c",
             "-target",
-            zig_target,
+            "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
             "-fPIC",
             "--strip",
@@ -613,7 +600,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2022-09-17", "cargo"]);
+            cmd.args(["run", "nightly-2022-10-30", "cargo"]);
 
             cmd
         } else {
@@ -649,7 +636,7 @@ pub fn rebuild_host(
             let mut exe_path = cargo_out_dir.join("host");
             exe_path.set_extension(executable_extension);
             if let Err(e) = std::fs::copy(&exe_path, &host_dest) {
-                panic!(
+                internal_error!(
                     "unable to copy {} => {}: {:?}\n\nIs the file used by another invocation of roc?",
                     exe_path.display(),
                     host_dest.display(),
@@ -815,7 +802,7 @@ fn find_used_target_sub_folder(opt_level: OptLevel, target_folder: PathBuf) -> P
 
     let mut out_folder = match matching_folders_iter.next() {
         Some(dir_entry) => dir_entry,
-        None => panic!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
+        None => internal_error!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
     };
 
     let mut out_folder_last_change = out_folder.metadata().unwrap().modified().unwrap();
@@ -987,7 +974,7 @@ fn link_macos(
 
             output_path.set_extension("dylib");
 
-            (vec!["-dylib"], output_path)
+            (vec!["-dylib", "-undefined", "dynamic_lookup"], output_path)
         }
         LinkType::None => internal_error!("link_macos should not be called with link type of none"),
     };
@@ -1109,8 +1096,6 @@ fn link_wasm32(
     input_paths: &[&str],
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let wasi_libc_path = find_wasi_libc_path();
-
     let child = zig()
         // .env_clear()
         // .env("PATH", &env_path)
@@ -1118,8 +1103,9 @@ fn link_wasm32(
         .args(input_paths)
         .args([
             // include wasi libc
+            // TOOD: This now compiles fine with `-lc`. That said, the output file doesn't work.
             // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
-            wasi_libc_path.to_str().unwrap(),
+            find_wasi_libc_path().to_str().unwrap(),
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",

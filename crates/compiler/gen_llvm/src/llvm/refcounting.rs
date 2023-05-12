@@ -195,8 +195,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
     }
 }
 
-fn incref_pointer<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn incref_pointer<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     pointer: PointerValue<'ctx>,
     amount: IntValue<'ctx>,
 ) {
@@ -212,15 +212,11 @@ fn incref_pointer<'a, 'ctx, 'env>(
                 .into(),
             amount.into(),
         ],
-        roc_builtins::bitcode::UTILS_INCREF,
+        roc_builtins::bitcode::UTILS_INCREF_RC_PTR,
     );
 }
 
-fn decref_pointer<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    pointer: PointerValue<'ctx>,
-    alignment: u32,
-) {
+fn decref_pointer<'ctx>(env: &Env<'_, 'ctx, '_>, pointer: PointerValue<'ctx>, alignment: u32) {
     let alignment = env.context.i32_type().const_int(alignment as _, false);
     call_void_bitcode_fn(
         env,
@@ -234,13 +230,13 @@ fn decref_pointer<'a, 'ctx, 'env>(
                 .into(),
             alignment.into(),
         ],
-        roc_builtins::bitcode::UTILS_DECREF,
+        roc_builtins::bitcode::UTILS_DECREF_RC_PTR,
     );
 }
 
 /// Assumes a pointer to the refcount
-pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn decref_pointer_check_null<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     pointer: PointerValue<'ctx>,
     alignment: u32,
 ) {
@@ -261,8 +257,8 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
     );
 }
 
-fn modify_refcount_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_struct<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layouts: &'a [InLayout<'a>],
@@ -308,8 +304,8 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn modify_refcount_struct_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_struct_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -363,8 +359,8 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
     builder.build_return(None);
 }
 
-pub fn increment_refcount_layout<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn increment_refcount_layout<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     inc_amount: u64,
@@ -375,8 +371,8 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
     increment_n_refcount_layout(env, layout_interner, layout_ids, amount, value, layout);
 }
 
-pub fn increment_n_refcount_layout<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn increment_n_refcount_layout<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     amount: IntValue<'ctx>,
@@ -393,8 +389,8 @@ pub fn increment_n_refcount_layout<'a, 'ctx, 'env>(
     );
 }
 
-pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn decrement_refcount_layout<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     value: BasicValueEnum<'ctx>,
@@ -410,8 +406,8 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     );
 }
 
-fn modify_refcount_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -443,8 +439,8 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
     }
 }
 
-fn modify_refcount_layout<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_layout<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     call_mode: CallMode<'ctx>,
@@ -454,8 +450,8 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
     modify_refcount_layout_help(env, layout_interner, layout_ids, call_mode, value, layout);
 }
 
-fn modify_refcount_layout_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_layout_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     call_mode: CallMode<'ctx>,
@@ -495,8 +491,8 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
     }
 }
 
-fn call_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn call_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     function: FunctionValue<'ctx>,
     call_mode: CallMode<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -522,8 +518,8 @@ fn call_help<'a, 'ctx, 'env>(
     call
 }
 
-fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_layout_build_function<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -596,8 +592,8 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
     }
 }
 
-fn modify_refcount_list<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_list<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -656,8 +652,8 @@ fn mode_to_call_mode(function: FunctionValue<'_>, mode: Mode) -> CallMode<'_> {
     }
 }
 
-fn modify_refcount_list_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_list_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -744,8 +740,8 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     builder.build_return(None);
 }
 
-fn modify_refcount_str<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_str<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -781,8 +777,8 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
     function
 }
 
-fn modify_refcount_str_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_str_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     mode: Mode,
     layout: InLayout<'a>,
@@ -851,8 +847,8 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     builder.build_return(None);
 }
 
-fn modify_refcount_boxed<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_boxed<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -878,7 +874,14 @@ fn modify_refcount_boxed<'a, 'ctx, 'env>(
             let basic_type = basic_type_from_layout(env, layout_interner, boxed_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
-            modify_refcount_box_help(env, layout_interner, mode, inner_layout, function_value);
+            modify_refcount_box_help(
+                env,
+                layout_interner,
+                layout_ids,
+                mode,
+                inner_layout,
+                function_value,
+            );
 
             function_value
         }
@@ -890,9 +893,10 @@ fn modify_refcount_boxed<'a, 'ctx, 'env>(
     function
 }
 
-fn modify_refcount_box_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_box_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     inner_layout: InLayout<'a>,
     fn_val: FunctionValue<'ctx>,
@@ -916,15 +920,54 @@ fn modify_refcount_box_help<'a, 'ctx, 'env>(
     let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, boxed);
     let call_mode = mode_to_call_mode(fn_val, mode);
     let boxed_layout = layout_interner.insert(Layout::Boxed(inner_layout));
-    refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
 
-    // this function returns void
-    builder.build_return(None);
+    match mode {
+        Mode::Inc => {
+            refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
+            builder.build_return(None);
+        }
+        Mode::Dec => {
+            // if the box is unique, also decrement its inner value
+            let do_recurse_block = env.context.append_basic_block(fn_val, "do_recurse");
+            let no_recurse_block = env.context.append_basic_block(fn_val, "no_recurse");
+
+            builder.build_conditional_branch(
+                refcount_ptr.is_1(env),
+                do_recurse_block,
+                no_recurse_block,
+            );
+
+            {
+                env.builder.position_at_end(do_recurse_block);
+
+                let inner = load_roc_value(env, layout_interner, inner_layout, boxed, "inner");
+
+                modify_refcount_layout(
+                    env,
+                    layout_interner,
+                    layout_ids,
+                    call_mode,
+                    inner,
+                    inner_layout,
+                );
+
+                refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
+                env.builder.build_return(None);
+            }
+
+            {
+                env.builder.position_at_end(no_recurse_block);
+
+                refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
+                env.builder.build_return(None);
+            }
+        }
+    }
 }
 
 /// Build an increment or decrement function for a specific layout
-fn build_header<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_header<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     arg_type: BasicTypeEnum<'ctx>,
     mode: Mode,
     fn_name: &str,
@@ -941,8 +984,8 @@ fn build_header<'a, 'ctx, 'env>(
 }
 
 /// Build an increment or decrement function for a specific layout
-pub fn build_header_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_header_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     fn_name: &str,
     return_type: AnyTypeEnum<'ctx>,
     arguments: &[BasicTypeEnum<'ctx>],
@@ -1013,8 +1056,8 @@ enum CallMode<'ctx> {
     Dec,
 }
 
-fn build_rec_union<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_rec_union<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -1060,8 +1103,8 @@ fn build_rec_union<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_rec_union_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_rec_union_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -1184,8 +1227,8 @@ fn fields_need_no_refcounting(interner: &STLayoutInterner, field_layouts: &[InLa
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_rec_union_recursive_decrement<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
@@ -1414,8 +1457,8 @@ fn union_layout_tags<'a>(
     }
 }
 
-pub fn build_reset<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_reset<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: UnionLayout<'a>,
@@ -1458,8 +1501,8 @@ pub fn build_reset<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_reuse_rec_union_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: UnionLayout<'a>,
@@ -1572,8 +1615,8 @@ fn function_name_from_mode<'a>(
     }
 }
 
-fn modify_refcount_nonrecursive<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_nonrecursive<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -1619,8 +1662,8 @@ fn modify_refcount_nonrecursive<'a, 'ctx, 'env>(
     function
 }
 
-fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn modify_refcount_nonrecursive_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,

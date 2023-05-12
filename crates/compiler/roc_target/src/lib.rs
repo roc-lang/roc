@@ -29,7 +29,7 @@ impl OperatingSystem {
         match self {
             OperatingSystem::Windows => "obj",
             OperatingSystem::Unix => "o",
-            OperatingSystem::Wasi => "o",
+            OperatingSystem::Wasi => "wasm",
         }
     }
 

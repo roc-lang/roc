@@ -818,7 +818,7 @@ dependencies = [
 [[package]]
 name = "criterion"
 version = "0.3.5"
-source = "git+https://github.com/Anton-4/criterion.rs#30ea0c592d7423ed79772234fab13108d1f8de77"
+source = "git+https://github.com/Anton-4/criterion.rs?rev=30ea0c5#30ea0c592d7423ed79772234fab13108d1f8de77"
 dependencies = [
  "atty",
  "cast",
@@ -843,7 +843,7 @@ dependencies = [
 [[package]]
 name = "criterion-plot"
 version = "0.4.3"
-source = "git+https://github.com/Anton-4/criterion.rs#30ea0c592d7423ed79772234fab13108d1f8de77"
+source = "git+https://github.com/Anton-4/criterion.rs?rev=30ea0c5#30ea0c592d7423ed79772234fab13108d1f8de77"
 dependencies = [
  "cast",
  "itertools 0.9.0",
@@ -3161,6 +3161,7 @@ version = "0.0.1"
 dependencies = [
  "dunce",
  "roc_command_utils",
+ "roc_error_macros",
  "tempfile",
 ]
 
@@ -3170,6 +3171,7 @@ version = "0.0.1"
 dependencies = [
  "dunce",
  "roc_command_utils",
+ "roc_error_macros",
  "tempfile",
 ]
 
@@ -3215,6 +3217,7 @@ name = "roc_builtins"
 version = "0.0.1"
 dependencies = [
  "roc_collections",
+ "roc_error_macros",
  "roc_module",
  "roc_region",
  "roc_target",
@@ -3268,6 +3271,7 @@ dependencies = [
  "roc_editor",
  "roc_error_macros",
  "roc_fmt",
+ "roc_gen_dev",
  "roc_gen_llvm",
  "roc_glue",
  "roc_linker",
@@ -3644,6 +3648,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_load_internal",
  "roc_module",
  "roc_packaging",

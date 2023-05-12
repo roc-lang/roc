@@ -10,7 +10,7 @@ Further steps:
 1. Copy the flake.nix and flake.lock file to a new folder outside of the roc repo folder.
 1. Run `git init` in the new folder.
 1. Execute `git add flake.nix`, nix will error if you don't do this.
-1. Change `roc.url = "path:/home/username/gitrepos/roc1/roc";` to the location of the roc folder on your machine.
+1. Change `roc.url = "path:/home/username/gitrepos/roc9/roc";` to the location of the roc folder on your machine.
 1. Follow instructions about vscode extensions [here](#extensions).
 1. add other dev tools you like in the `devInputs` list. You can search for those [here](https://search.nixos.org/packages).
 1. Run `nix develop`.

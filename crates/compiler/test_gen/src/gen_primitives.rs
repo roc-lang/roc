@@ -3290,13 +3290,31 @@ fn box_and_unbox_big_string() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_nonrecursive_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result U64 U64
+            result = Ok 42
+
+            result
+            |> Box.box
+            |> Box.unbox
+            "#
+        ),
+        roc_std::RocResult::ok(42),
+        roc_std::RocResult<u64, u64>
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_num() {
     assert_evals_to!("Box.box 123u64", RocBox::new(123), RocBox<u64>)
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-#[ignore = "triggers some UB somewhere in at least the llvm and dev backends"]
 fn box_str() {
     assert_evals_to!(
         "Box.box \"short\"",

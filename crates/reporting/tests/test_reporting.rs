@@ -2615,6 +2615,27 @@ mod test_reporting {
     I would have to crash if I saw one of those! So rather than pattern
     matching in function arguments, put a `when` in the function body to
     account for all possibilities.
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+     9│      f : Either -> {}
+    10│      f = \Left v -> v
+                 ^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        […] -> {}
+
+    But the type annotation on `f` says it should be:
+
+        [Right Str, …] -> {}
+
+    Tip: Looks like a closed tag union does not have the `Right` tag.
+
+    Tip: Closed tag unions can't grow, because that might change the size
+    in memory. Can you use an open tag union?
     "###
     );
 
@@ -13408,6 +13429,136 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't call an opaque type because I don't know what it is! Maybe you
     meant to unwrap it first?
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_too_few,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : U8, U8 -> U8
+            f = \x -> x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    3│  f : U8, U8 -> U8
+    4│  f = \x -> x
+            ^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too few arguments. I was expecting 1 more.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_too_many,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : U8, U8 -> U8
+            f = \x, y, z -> x + y + z
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    3│  f : U8, U8 -> U8
+    4│  f = \x, y, z -> x + y + z
+            ^^^^^^^^^^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8, U8, Int Unsigned8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_nested_too_few,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                f : U8, U8 -> U8
+                f = \x -> x
+
+                f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : U8, U8 -> U8
+    5│      f = \x -> x
+                ^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too few arguments. I was expecting 1 more.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_nested_too_many,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                f : U8, U8 -> U8
+                f = \x, y, z -> x + y + z
+
+                f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : U8, U8 -> U8
+    5│      f = \x, y, z -> x + y + z
+                ^^^^^^^^^^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8, U8, Int Unsigned8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
     "###
     );
 }

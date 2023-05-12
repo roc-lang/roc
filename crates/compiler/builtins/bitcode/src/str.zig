@@ -162,7 +162,7 @@ pub const RocStr = extern struct {
             const ref_ptr = self.getRefcountPtr();
             if (ref_ptr != null) {
                 const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@alignOf(isize), ref_ptr));
-                utils.increfC(@ptrCast(*isize, isizes - 1), @intCast(isize, n));
+                utils.increfRcPtrC(@ptrCast(*isize, isizes - 1), @intCast(isize, n));
             }
         }
     }

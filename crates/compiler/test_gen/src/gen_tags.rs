@@ -1512,6 +1512,7 @@ fn opaque_assign_to_symbol() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[ignore = "Blocked on https://github.com/roc-lang/roc/issues/5354"]
 fn issue_2777_default_branch_codegen() {
     assert_evals_to!(
         indoc!(
