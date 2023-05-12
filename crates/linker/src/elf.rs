@@ -772,7 +772,7 @@ fn gen_elf_le(
                 }
             } else if r_type == elf::R_X86_64_JUMP_SLOT {
                 // Also, if it is a jump slot relocation to a roc function, we need to remove it so the dynamic linker doesn't try to use it.
-                let r_sym = rel.r_sym(NativeEndian, false);
+                let r_sym = rel.r_sym(LE, false);
                 for index in app_sym_indices.iter() {
                     if *index as u32 == r_sym {
                         // Remove the dynamic relocation.
