@@ -10180,6 +10180,63 @@ I recommend using camelCase. It's the standard style in Roc code!
     // Record Builders
 
     test_report!(
+        optional_field_in_record_builder,
+        indoc!(
+            r#"
+            { 
+                a <- apply "a",
+                b,
+                c ? "optional"
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD BUILDER ────────── tmp/optional_field_in_record_builder/Test.roc ─
+
+    I am partway through parsing a record builder, and I found an optional
+    field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { 
+    5│          a <- apply "a",
+    6│          b,
+    7│          c ? "optional"
+                ^^^^^^^^^^^^^^
+
+    Optional fields can only appear when you destructure a record.
+    "###
+    );
+
+    test_report!(
+        record_update_builder,
+        indoc!(
+            r#"
+            { rec &
+                a <- apply "a",
+                b: 3
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD UPDATE ────────────────────── tmp/record_update_builder/Test.roc ─
+
+    I am partway through parsing a record update, and I found a record
+    builder field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { rec &
+    5│          a <- apply "a",
+                ^^^^^^^^^^^^^^
+
+    Record builders cannot be updated like records.
+    "###
+    );
+
+    test_report!(
         multiple_record_builders,
         indoc!(
             r#"
