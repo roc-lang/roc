@@ -33,7 +33,7 @@ you'll need to install one or more of these platform languages too.
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
 
-1. For Zig-based platforms: download zig 0.9.1, extract the archive and add export PATH=$PATH:~/path/to/zig to your shell startup script (.profile, .zshrc, …).
+1. For Zig-based platforms: [download zig 0.9.1](https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz), extract the archive and add export PATH=$PATH:~/path/to/zig to your shell startup script (.profile, .zshrc, …).
 
 1. Install a C compiler, for apps with C-based platforms:
 
