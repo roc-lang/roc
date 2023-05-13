@@ -19,6 +19,7 @@ use roc_target::TargetInfo;
 use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 use roc_types::subs::Subs;
 use target_lexicon::Triple;
+use roc_error_macros::internal_error;
 
 pub fn gen_and_eval_llvm<'a, I: Iterator<Item = &'a str>>(
     defs: I,
@@ -263,7 +264,7 @@ fn mono_module_to_dylib<'a>(
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
-        panic!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
+        internal_error!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
     }
 
     module_pass.run_on(env.module);
@@ -273,10 +274,7 @@ fn mono_module_to_dylib<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!(
-            "Errors defining module:\n{}\n\nUncomment things nearby to see more details.",
-            errors.to_string()
-        );
+        internal_error!("Errors defining module:\n{}", errors.to_string());
     }
 
     llvm_module_to_dylib(env.module, &target, opt_level)

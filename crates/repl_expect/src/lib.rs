@@ -98,6 +98,7 @@ mod test {
     use roc_packaging::cache::RocCacheDir;
     use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
     use target_lexicon::Triple;
+    use roc_error_macros::internal_error;
 
     use crate::run::expect_mono_module_to_dylib;
 
@@ -136,9 +137,9 @@ mod test {
         ) {
             Ok(m) => m,
             Err(LoadMonomorphizedError::ErrorModule(m)) => {
-                panic!("{:?}", (m.can_problems, m.type_problems))
+                internal_error!("{:?}", (m.can_problems, m.type_problems))
             }
-            Err(e) => panic!("{e:?}"),
+            Err(e) => internal_error!("{e:?}"),
         };
 
         let mut loaded = loaded;
