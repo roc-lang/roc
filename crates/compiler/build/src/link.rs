@@ -133,7 +133,7 @@ pub fn build_zig_host_native(
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
-    target: &str,
+    _target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
     builtins_host_path: &Path,
@@ -171,23 +171,14 @@ pub fn build_zig_host_native(
         "glue",
         find_zig_glue_path().to_str().unwrap(),
         "--pkg-end",
+        // include the zig runtime
+        "-fcompiler-rt",
         // include libc
         "-lc",
         // cross-compile?
         // "-target",
         // target,
     ]);
-
-    // some examples need the compiler-rt in the app object file.
-    // but including it on windows causes weird crashes, at least
-    // when we use zig 0.9. It looks like zig 0.10 is going to fix
-    // this problem for us, so this is a temporary workaround
-    if !target.contains("windows") {
-        zig_cmd.args([
-            // include the zig runtime
-            "-fcompiler-rt",
-        ]);
-    }
 
     // valgrind does not yet support avx512 instructions, see #1963.
     if env::var("NO_AVX512").is_ok() {
@@ -249,7 +240,7 @@ pub fn build_zig_host_native(
         find_zig_glue_path().to_str().unwrap(),
         "--pkg-end",
         // include the zig runtime
-        // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
+        "-fcompiler-rt",
         // include libc
         "-lc",
         "-rdynamic",
@@ -308,6 +299,7 @@ pub fn build_zig_host_native(
         "glue",
         find_zig_glue_path().to_str().unwrap(),
         "--pkg-end",
+        // include the zig runtime
         "-fcompiler-rt",
         // include libc
         "--library",
@@ -351,7 +343,7 @@ pub fn build_zig_host_wasm32(
             find_zig_glue_path().to_str().unwrap(),
             "--pkg-end",
             // include the zig runtime
-            // "-fcompiler-rt",
+            "-fcompiler-rt",
             // include libc
             "--library",
             "c",
@@ -369,6 +361,11 @@ pub fn build_zig_host_wasm32(
     }
 
     zig_cmd
+}
+
+fn allowed_env_var(p : &(String, String)) -> bool {
+    let (k,_v) = p;
+    k.starts_with("NIX_") || k.starts_with("LIBRARY_PATH") || k.starts_with("C_INCLUDE_PATH")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -389,7 +386,7 @@ pub fn build_c_host_native(
         .env("PATH", env_path)
         .envs(
             env::vars()
-                .filter(|&(ref k, _)| k.starts_with("NIX_") || k.starts_with("LIBRARY_PATH") || k.starts_with("C_INCLUDE_PATH"))
+                .filter(allowed_env_var)
                 .collect::<HashMap<String, String>>(),
         )
         .env("CPATH", env_cpath)
@@ -926,7 +923,7 @@ fn link_linux(
         // Keep NIX_ env vars
         .envs(
             env::vars()
-                .filter(|&(ref k, _)| k.starts_with("NIX_") || k.starts_with("LIBRARY_PATH"))
+                .filter(allowed_env_var)
                 .collect::<HashMap<String, String>>(),
         )
         .args([
