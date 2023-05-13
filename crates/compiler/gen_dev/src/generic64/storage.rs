@@ -11,7 +11,8 @@ use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
     layout::{
-        Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+        Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
+        UnionLayout,
     },
 };
 use roc_target::TargetInfo;
@@ -667,13 +668,13 @@ impl<
 
         let mut in_layout = *layout;
         let layout = loop {
-            match layout_interner.get(in_layout) {
-                Layout::LambdaSet(inner) => in_layout = inner.runtime_representation(),
+            match layout_interner.get(in_layout).repr {
+                LayoutRepr::LambdaSet(inner) => in_layout = inner.runtime_representation(),
                 other => break other,
             }
         };
 
-        if let Layout::Struct { field_layouts, .. } = layout {
+        if let LayoutRepr::Struct { field_layouts, .. } = layout {
             let mut current_offset = base_offset;
             for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
                 self.copy_symbol_to_stack_offset(
@@ -780,8 +781,8 @@ impl<
         sym: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match layout_interner.get(*layout) {
-            Layout::Builtin(builtin) => match builtin {
+        match layout_interner.get(*layout).repr {
+            LayoutRepr::Builtin(builtin) => match builtin {
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::I128 | IntWidth::U128 => {
                         let (from_offset, size) = self.stack_offset_and_size(sym);
@@ -844,13 +845,13 @@ impl<
                     self.copy_to_stack_offset(buf, size, from_offset, to_offset)
                 }
             },
-            Layout::Boxed(_) => {
+            LayoutRepr::Boxed(_) => {
                 // like a 64-bit integer
                 debug_assert_eq!(to_offset % 8, 0);
                 let reg = self.load_to_general_reg(buf, sym);
                 ASM::mov_base32_reg64(buf, to_offset, reg);
             }
-            Layout::LambdaSet(lambda_set) => {
+            LayoutRepr::LambdaSet(lambda_set) => {
                 // like its runtime representation
                 self.copy_symbol_to_stack_offset(
                     layout_interner,
@@ -861,7 +862,7 @@ impl<
                 )
             }
             _ if layout_interner.stack_size(*layout) == 0 => {}
-            Layout::Struct { .. } | Layout::Union(UnionLayout::NonRecursive(_)) => {
+            LayoutRepr::Struct { .. } | LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 let (from_offset, size) = self.stack_offset_and_size(sym);
                 debug_assert_eq!(size, layout_interner.stack_size(*layout));
 
@@ -1172,7 +1173,7 @@ impl<
                     .insert(symbol, Rc::new((base_offset, 8)));
             }
             _ => {
-                if let Layout::LambdaSet(lambda_set) = layout_interner.get(layout) {
+                if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get(layout).repr {
                     self.joinpoint_argument_stack_storage(
                         layout_interner,
                         symbol,
@@ -1236,7 +1237,7 @@ impl<
                 ASM::mov_base32_freg64(buf, base_offset, reg);
             }
             _ => {
-                if let Layout::LambdaSet(lambda_set) = layout_interner.get(layout) {
+                if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get(layout).repr {
                     self.jump_argument_stack_storage(
                         layout_interner,
                         buf,
@@ -1535,9 +1536,9 @@ impl<
 fn is_primitive(layout_interner: &mut STLayoutInterner<'_>, layout: InLayout<'_>) -> bool {
     match layout {
         single_register_layouts!() => true,
-        _ => match layout_interner.get(layout) {
-            Layout::Boxed(_) => true,
-            Layout::LambdaSet(lambda_set) => {
+        _ => match layout_interner.get(layout).repr {
+            LayoutRepr::Boxed(_) => true,
+            LayoutRepr::LambdaSet(lambda_set) => {
                 is_primitive(layout_interner, lambda_set.runtime_representation())
             }
             _ => false,

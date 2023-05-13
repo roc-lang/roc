@@ -13,7 +13,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 use roc_region::all::Region;
 
@@ -296,8 +296,8 @@ fn build_clone<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
     layout: InLayout<'a>,
 ) -> IntValue<'ctx> {
-    match layout_interner.get(layout) {
-        Layout::Builtin(builtin) => build_clone_builtin(
+    match layout_interner.get(layout).repr {
+        LayoutRepr::Builtin(builtin) => build_clone_builtin(
             env,
             layout_interner,
             layout_ids,
@@ -307,7 +307,7 @@ fn build_clone<'a, 'ctx>(
             builtin,
         ),
 
-        Layout::Struct { field_layouts, .. } => build_clone_struct(
+        LayoutRepr::Struct { field_layouts, .. } => build_clone_struct(
             env,
             layout_interner,
             layout_ids,
@@ -319,9 +319,9 @@ fn build_clone<'a, 'ctx>(
 
         // Since we will never actually display functions (and hence lambda sets)
         // we just write nothing to the buffer
-        Layout::LambdaSet(_) => cursors.extra_offset,
+        LayoutRepr::LambdaSet(_) => cursors.extra_offset,
 
-        Layout::Union(union_layout) => {
+        LayoutRepr::Union(union_layout) => {
             if layout_interner.safe_to_memcpy(layout) {
                 let ptr = unsafe {
                     env.builder.new_build_in_bounds_gep(
@@ -353,7 +353,7 @@ fn build_clone<'a, 'ctx>(
             }
         }
 
-        Layout::Boxed(inner_layout) => {
+        LayoutRepr::Boxed(inner_layout) => {
             // write the offset
             build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
 
@@ -384,7 +384,7 @@ fn build_clone<'a, 'ctx>(
             )
         }
 
-        Layout::RecursivePointer(rec_layout) => {
+        LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
             let bt = basic_type_from_layout(env, layout_interner, layout);
@@ -396,8 +396,8 @@ fn build_clone<'a, 'ctx>(
                 "i64_to_opaque",
             );
 
-            let union_layout = match layout_interner.get(rec_layout) {
-                Layout::Union(union_layout) => {
+            let union_layout = match layout_interner.get(rec_layout).repr {
+                LayoutRepr::Union(union_layout) => {
                     debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                     union_layout
                 }
@@ -426,7 +426,7 @@ fn build_clone_struct<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
     field_layouts: &[InLayout<'a>],
 ) -> IntValue<'ctx> {
-    let layout = Layout::struct_no_name_order(field_layouts);
+    let layout = LayoutRepr::struct_(field_layouts);
 
     if layout.safe_to_memcpy(layout_interner) {
         build_copy(env, ptr, cursors.offset, value)
@@ -476,7 +476,7 @@ fn build_clone_tag<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
     union_layout: UnionLayout<'a>,
 ) -> IntValue<'ctx> {
-    let layout = layout_interner.insert(Layout::Union(union_layout));
+    let layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
     let layout_id = layout_ids.get(Symbol::CLONE, &layout);
     let fn_name = layout_id.to_symbol_string(Symbol::CLONE, &env.interns);
 
@@ -689,8 +689,8 @@ fn build_clone_tag_help<'a, 'ctx>(
                 );
 
                 // load the tag payload (if any)
-                let payload_layout = Layout::struct_no_name_order(field_layouts);
-                let payload_in_layout = layout_interner.insert(payload_layout);
+                let payload_layout = LayoutRepr::struct_(field_layouts);
+                let payload_in_layout = layout_interner.insert_no_semantic(payload_layout);
 
                 let opaque_payload_ptr = env
                     .builder
@@ -748,11 +748,11 @@ fn build_clone_tag_help<'a, 'ctx>(
 
                 let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
 
-                let layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
                 let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
                     layout
                 } else {
-                    layout_interner.insert(Layout::struct_no_name_order(
+                    layout_interner.insert_no_semantic(LayoutRepr::struct_(
                         env.arena.alloc([layout, union_layout.tag_id_layout()]),
                     ))
                 };
@@ -797,7 +797,7 @@ fn build_clone_tag_help<'a, 'ctx>(
 
             build_copy(env, ptr, offset, extra_offset.into());
 
-            let layout = layout_interner.insert(Layout::struct_no_name_order(fields));
+            let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(fields));
             let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
             let (width, _) = union_layout.data_size_and_alignment(layout_interner, env.target_info);
@@ -853,7 +853,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                         other_tags[i]
                     };
 
-                    let layout = layout_interner.insert(Layout::struct_no_name_order(fields));
+                    let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(fields));
                     let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
                     let (width, _) =
@@ -928,7 +928,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                 // write the "pointer" af the current offset
                 build_copy(env, ptr, offset, extra_offset.into());
 
-                let layout = layout_interner.insert(Layout::struct_no_name_order(other_fields));
+                let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(other_fields));
                 let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
                 let cursors = Cursors {

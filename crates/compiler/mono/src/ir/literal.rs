@@ -4,7 +4,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_std::RocDec;
 
-use crate::layout::{Builtin, InLayout, Layout, LayoutInterner, TLLayoutInterner};
+use crate::layout::{Builtin, InLayout, LayoutInterner, LayoutRepr, TLLayoutInterner};
 
 use super::pattern::Pattern;
 
@@ -83,22 +83,22 @@ pub fn make_num_literal<'a>(
     num_str: &str,
     num_value: IntOrFloatValue,
 ) -> NumLiteral {
-    match interner.get(layout) {
-        Layout::Builtin(Builtin::Int(width)) => match num_value {
+    match interner.get(layout).repr {
+        LayoutRepr::Builtin(Builtin::Int(width)) => match num_value {
             IntOrFloatValue::Int(IntValue::I128(n)) => NumLiteral::Int(n, width),
             IntOrFloatValue::Int(IntValue::U128(n)) => NumLiteral::U128(n),
             IntOrFloatValue::Float(..) => {
                 internal_error!("Float value where int was expected, should have been a type error")
             }
         },
-        Layout::Builtin(Builtin::Float(width)) => match num_value {
+        LayoutRepr::Builtin(Builtin::Float(width)) => match num_value {
             IntOrFloatValue::Float(n) => NumLiteral::Float(n, width),
             IntOrFloatValue::Int(int_value) => match int_value {
                 IntValue::I128(n) => NumLiteral::Float(i128::from_ne_bytes(n) as f64, width),
                 IntValue::U128(n) => NumLiteral::Float(u128::from_ne_bytes(n) as f64, width),
             },
         },
-        Layout::Builtin(Builtin::Decimal) => {
+        LayoutRepr::Builtin(Builtin::Decimal) => {
             let dec = match RocDec::from_str(num_str) {
                 Some(d) => d,
                 None => internal_error!(

@@ -16,7 +16,7 @@ use roc_mono::{
     ir::LambdaSetId,
     layout::{
         cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
-        InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
+        InLayout, Layout, LayoutCache, LayoutInterner, LayoutRepr, TLLayoutInterner, UnionLayout,
     },
 };
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
@@ -1383,26 +1383,28 @@ fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tags, var, types, layout, Some(rec_root))
         }
-        Content::Structure(FlatType::Apply(symbol, _)) => match env.layout_cache.get_in(layout) {
-            Layout::Builtin(builtin) => {
-                add_builtin_type(env, builtin, var, opt_name, types, layout)
-            }
-            _ => {
-                if symbol.is_builtin() {
-                    todo!(
-                        "Handle Apply for builtin symbol {:?} and layout {:?}",
-                        symbol,
-                        layout
-                    )
-                } else {
-                    todo!(
-                        "Handle non-builtin Apply for symbol {:?} and layout {:?}",
-                        symbol,
-                        layout
-                    )
+        Content::Structure(FlatType::Apply(symbol, _)) => {
+            match env.layout_cache.get_in(layout).repr {
+                LayoutRepr::Builtin(builtin) => {
+                    add_builtin_type(env, builtin, var, opt_name, types, layout)
+                }
+                _ => {
+                    if symbol.is_builtin() {
+                        todo!(
+                            "Handle Apply for builtin symbol {:?} and layout {:?}",
+                            symbol,
+                            layout
+                        )
+                    } else {
+                        todo!(
+                            "Handle non-builtin Apply for symbol {:?} and layout {:?}",
+                            symbol,
+                            layout
+                        )
+                    }
                 }
             }
-        },
+        }
         Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
             let is_toplevel = false; // or in any case, we cannot assume that we are
 
@@ -1430,11 +1432,11 @@ fn add_type_help<'a>(
         }
         Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
-                match env.layout_cache.get_in(layout) {
-                    Layout::Builtin(builtin) => {
+                match env.layout_cache.get_in(layout).repr {
+                    LayoutRepr::Builtin(builtin) => {
                         add_builtin_type(env, builtin, var, opt_name, types, layout)
                     }
-                    Layout::Union(union_layout) if *name == Symbol::BOOL_BOOL => {
+                    LayoutRepr::Union(union_layout) if *name == Symbol::BOOL_BOOL => {
                         if cfg!(debug_assertions) {
                             match union_layout {
                                 UnionLayout::NonRecursive(tag_layouts) => {
@@ -1451,7 +1453,7 @@ fn add_type_help<'a>(
 
                         types.add_anonymous(&env.layout_cache.interner, RocType::Bool, layout)
                     }
-                    Layout::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
+                    LayoutRepr::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
                         match union_layout {
                             UnionLayout::NonRecursive(tags) => {
                                 // Result should always have exactly two tags: Ok and Err
@@ -1489,12 +1491,12 @@ fn add_type_help<'a>(
                             }
                         }
                     }
-                    Layout::Struct { .. } if *name == Symbol::RESULT_RESULT => {
+                    LayoutRepr::Struct { .. } if *name == Symbol::RESULT_RESULT => {
                         // can happen if one or both of a and b in `Result.Result a b` are the
                         // empty tag union `[]`
                         add_type_help(env, layout, *real_var, opt_name, types)
                     }
-                    Layout::Struct { .. } if *name == Symbol::DICT_DICT => {
+                    LayoutRepr::Struct { .. } if *name == Symbol::DICT_DICT => {
                         let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
 
                         let key_var = type_vars[0];
@@ -1520,7 +1522,7 @@ fn add_type_help<'a>(
 
                         type_id
                     }
-                    Layout::Struct { .. } if *name == Symbol::SET_SET => {
+                    LayoutRepr::Struct { .. } if *name == Symbol::SET_SET => {
                         let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
 
                         let key_var = type_vars[0];
@@ -1685,11 +1687,11 @@ fn add_builtin_type<'a>(
             Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                env.layout_cache.get_in(elem_layout),
+                env.layout_cache.get_in(elem_layout).repr,
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
-                    Layout::Struct { field_layouts, .. },
+                    LayoutRepr::Struct { field_layouts, .. },
                     Content::Structure(FlatType::Apply(Symbol::LIST_LIST, args_subs_slice)),
                 ) => {
                     let (key_var, val_var) = {
@@ -1735,11 +1737,11 @@ fn add_builtin_type<'a>(
             Alias(Symbol::SET_SET, _alias_vars, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                env.layout_cache.get_in(elem_layout),
+                env.layout_cache.get_in(elem_layout).repr,
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
-                    Layout::Struct { field_layouts, .. },
+                    LayoutRepr::Struct { field_layouts, .. },
                     Alias(Symbol::DICT_DICT, alias_args, _alias_var, AliasKind::Opaque),
                 ) => {
                     let dict_type_vars = env.subs.get_subs_slice(alias_args.type_variables());
@@ -1908,7 +1910,7 @@ fn tag_union_type_from_layout<'a>(
 ) -> RocTagUnion {
     let subs = env.subs;
 
-    match env.layout_cache.get_in(layout) {
+    match env.layout_cache.get_in(layout).repr {
         _ if union_tags.is_newtype_wrapper(subs)
             && matches!(
                 subs.get_content_without_compacting(var),
@@ -1929,7 +1931,7 @@ fn tag_union_type_from_layout<'a>(
                 payload,
             }
         }
-        Layout::Union(union_layout) => {
+        LayoutRepr::Union(union_layout) => {
             use UnionLayout::*;
 
             match union_layout {
@@ -2053,10 +2055,10 @@ fn tag_union_type_from_layout<'a>(
                 }
             }
         }
-        Layout::Builtin(Builtin::Int(int_width)) => {
+        LayoutRepr::Builtin(Builtin::Int(int_width)) => {
             add_int_enumeration(union_tags, subs, &name, int_width)
         }
-        Layout::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct { field_layouts, .. } => {
             let (tag_name, payload) =
                 single_tag_payload_fields(env, union_tags, subs, layout, field_layouts, types);
 
@@ -2066,13 +2068,13 @@ fn tag_union_type_from_layout<'a>(
                 payload,
             }
         }
-        Layout::Builtin(Builtin::Bool) => {
+        LayoutRepr::Builtin(Builtin::Bool) => {
             // This isn't actually a Bool, but rather a 2-tag union with no payloads
             // (so it has the same layout as a Bool, but actually isn't one; if it were
             // a real Bool, it would have been handled elsewhere already!)
             add_int_enumeration(union_tags, subs, &name, IntWidth::U8)
         }
-        Layout::Builtin(builtin) => {
+        LayoutRepr::Builtin(builtin) => {
             let type_id = add_builtin_type(env, builtin, var, opt_name, types, layout);
             let (tag_name, _) = single_tag_payload(union_tags, subs);
 
@@ -2085,7 +2087,7 @@ fn tag_union_type_from_layout<'a>(
                 },
             }
         }
-        Layout::Boxed(elem_layout) => {
+        LayoutRepr::Boxed(elem_layout) => {
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(env, union_tags, subs, layout, &[elem_layout], types);
 
@@ -2095,7 +2097,7 @@ fn tag_union_type_from_layout<'a>(
                 payload: payload_fields,
             }
         }
-        Layout::LambdaSet(lambda_set) => tag_union_type_from_layout(
+        LayoutRepr::LambdaSet(lambda_set) => tag_union_type_from_layout(
             env,
             opt_name,
             name,
@@ -2104,7 +2106,7 @@ fn tag_union_type_from_layout<'a>(
             types,
             lambda_set.runtime_representation(),
         ),
-        Layout::RecursivePointer(_) => {
+        LayoutRepr::RecursivePointer(_) => {
             // A single-tag union which only wraps itself is erroneous and should have
             // been turned into an error earlier in the process.
             unreachable!();

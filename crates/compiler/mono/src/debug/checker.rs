@@ -10,7 +10,8 @@ use crate::{
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{
-        Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+        Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
+        UnionLayout,
     },
 };
 
@@ -198,8 +199,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
         // lazily.
         loop {
             layout = self.interner.chase_recursive_in(layout);
-            match self.interner.get(layout) {
-                Layout::LambdaSet(ls) => layout = ls.representation,
+            match self.interner.get(layout).repr {
+                LayoutRepr::LambdaSet(ls) => layout = ls.representation,
                 _ => return layout,
             }
         }
@@ -291,9 +292,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
             } => {
                 self.check_sym_layout(*cond_symbol, *cond_layout, UseKind::SwitchCond);
                 let layout = self.resolve(*cond_layout);
-                match self.interner.get(layout) {
-                    Layout::Builtin(Builtin::Int(_)) => {}
-                    Layout::Builtin(Builtin::Bool) => {}
+                match self.interner.get(layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(_)) => {}
+                    LayoutRepr::Builtin(Builtin::Bool) => {}
                     _ => self.problem(ProblemKind::BadSwitchConditionLayout {
                         found_layout: *cond_layout,
                     }),
@@ -397,7 +398,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_id,
                 arguments,
             } => {
-                let interned_layout = self.interner.insert(Layout::Union(tag_layout));
+                let interned_layout = self
+                    .interner
+                    .insert_no_semantic(LayoutRepr::Union(tag_layout));
                 self.check_tag_expr(interned_layout, tag_layout, tag_id, arguments);
                 Some(interned_layout)
             }
@@ -437,7 +440,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 }
                 Some(
                     self.interner
-                        .insert(Layout::Builtin(Builtin::List(*elem_layout))),
+                        .insert_no_semantic(LayoutRepr::Builtin(Builtin::List(*elem_layout))),
                 )
             }
             Expr::EmptyArray => {
@@ -446,12 +449,12 @@ impl<'a, 'r> Ctx<'a, 'r> {
             }
             &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
                 let inner = layout;
-                Some(ctx.interner.insert(Layout::Boxed(inner)))
+                Some(ctx.interner.insert_no_semantic(LayoutRepr::Boxed(inner)))
             }),
             &Expr::ExprUnbox { symbol } => self.with_sym_layout(symbol, |ctx, def_line, layout| {
                 let layout = ctx.resolve(layout);
-                match ctx.interner.get(layout) {
-                    Layout::Boxed(inner) => Some(inner),
+                match ctx.interner.get(layout).repr {
+                    LayoutRepr::Boxed(inner) => Some(inner),
                     _ => {
                         ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
                         None
@@ -466,7 +469,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_id: _,
                 arguments: _,
             } => {
-                let union = self.interner.insert(Layout::Union(tag_layout));
+                let union = self
+                    .interner
+                    .insert_no_semantic(LayoutRepr::Union(tag_layout));
                 self.check_sym_layout(symbol, union, UseKind::TagReuse);
                 // TODO also check update arguments
                 Some(union)
@@ -489,8 +494,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
     fn check_struct_at_index(&mut self, structure: Symbol, index: u64) -> Option<InLayout<'a>> {
         self.with_sym_layout(structure, |ctx, def_line, layout| {
             let layout = ctx.resolve(layout);
-            match ctx.interner.get(layout) {
-                Layout::Struct { field_layouts, .. } => {
+            match ctx.interner.get(layout).repr {
+                LayoutRepr::Struct { field_layouts, .. } => {
                     if index as usize >= field_layouts.len() {
                         ctx.problem(ProblemKind::StructIndexOOB {
                             structure,
@@ -522,7 +527,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
         tag_id: u16,
         index: u64,
     ) -> Option<InLayout<'a>> {
-        let union = self.interner.insert(Layout::Union(union_layout));
+        let union = self
+            .interner
+            .insert_no_semantic(LayoutRepr::Union(union_layout));
         self.with_sym_layout(structure, |ctx, def_line, _layout| {
             ctx.check_sym_layout(structure, union, UseKind::TagExpr);
 

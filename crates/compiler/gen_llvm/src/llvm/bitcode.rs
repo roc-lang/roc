@@ -18,7 +18,7 @@ use inkwell::AddressSpace;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, LambdaSet, Layout, LayoutIds, LayoutInterner, STLayoutInterner,
+    Builtin, InLayout, LambdaSet, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
 };
 
 use super::build::{create_entry_block_alloca, BuilderExt};
@@ -610,8 +610,8 @@ pub fn build_compare_wrapper<'a, 'ctx>(
 
             let closure_data_repr = closure_data_layout.runtime_representation();
 
-            let arguments_cast = match layout_interner.get(closure_data_repr) {
-                Layout::Struct {
+            let arguments_cast = match layout_interner.get(closure_data_repr).repr {
+                LayoutRepr::Struct {
                     field_layouts: &[], ..
                 } => {
                     // nothing to add

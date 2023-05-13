@@ -4,8 +4,8 @@ use crate::borrow::Ownership;
 use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
-    LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout,
-    TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche,
+    RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -1063,8 +1063,12 @@ impl<'a> Procs<'a> {
 
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         // EXCEPT when the closure conversion makes it tail-recursive.
-        let is_self_recursive = match top_level.arguments.last().map(|l| layout_cache.get_in(*l)) {
-            Some(Layout::LambdaSet(lambda_set)) => lambda_set.contains(name.name()),
+        let is_self_recursive = match top_level
+            .arguments
+            .last()
+            .map(|l| layout_cache.get_in(*l).repr)
+        {
+            Some(LayoutRepr::LambdaSet(lambda_set)) => lambda_set.contains(name.name()),
             _ => false,
         };
 
@@ -4142,8 +4146,8 @@ pub fn with_hole<'a>(
             let interned = layout_cache.from_var(env.arena, var, env.subs).unwrap();
             let layout = layout_cache.get_in(interned);
 
-            match layout {
-                Layout::Builtin(Builtin::List(elem_layout)) if elem_layout == Layout::U8 => {
+            match layout.repr {
+                LayoutRepr::Builtin(Builtin::List(elem_layout)) if elem_layout == Layout::U8 => {
                     let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
                     for byte in bytes.iter() {
                         elements.push(ListLiteralElement::Literal(Literal::Byte(*byte)));
@@ -4155,7 +4159,7 @@ pub fn with_hole<'a>(
 
                     Stmt::Let(assigned, expr, interned, hole)
                 }
-                Layout::Builtin(Builtin::Str) => Stmt::Let(
+                LayoutRepr::Builtin(Builtin::Str) => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Str(
                         // This is safe because we ensure the utf8 bytes are valid earlier in the compiler pipeline.
@@ -4620,14 +4624,14 @@ pub fn with_hole<'a>(
             match opt_elem_layout {
                 Ok(elem_layout) => {
                     let expr = Expr::EmptyArray;
-                    let list_layout =
-                        layout_cache.put_in(Layout::Builtin(Builtin::List(elem_layout)));
+                    let list_layout = layout_cache
+                        .put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
                     Stmt::Let(assigned, expr, list_layout, hole)
                 }
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
-                    let list_layout =
-                        layout_cache.put_in(Layout::Builtin(Builtin::List(Layout::VOID)));
+                    let list_layout = layout_cache
+                        .put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(Layout::VOID)));
                     Stmt::Let(assigned, expr, list_layout, hole)
                 }
                 Err(LayoutProblem::Erroneous) => panic!("list element is error type"),
@@ -4673,7 +4677,8 @@ pub fn with_hole<'a>(
                 elems: elements.into_bump_slice(),
             };
 
-            let list_layout = layout_cache.put_in(Layout::Builtin(Builtin::List(elem_layout)));
+            let list_layout =
+                layout_cache.put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
 
             let stmt = Stmt::Let(assigned, expr, list_layout, hole);
 
@@ -4975,8 +4980,8 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, record_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-            let field_layouts = match layout_cache.get_in(record_layout) {
-                Layout::Struct { field_layouts, .. } => field_layouts,
+            let field_layouts = match layout_cache.get_in(record_layout).repr {
+                LayoutRepr::Struct { field_layouts, .. } => field_layouts,
                 _ => arena.alloc([record_layout]),
             };
 
@@ -5936,8 +5941,10 @@ where
                 Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
 
             debug_assert_eq!(
-                Layout::struct_no_name_order(field_layouts),
-                layout_cache.get_in(lambda_set.runtime_representation())
+                LayoutRepr::struct_(field_layouts),
+                layout_cache
+                    .get_in(lambda_set.runtime_representation())
+                    .repr
             );
 
             let expr = Expr::Struct(symbols);
@@ -6138,8 +6145,8 @@ fn convert_tag_union<'a>(
                 layout_cache.from_var(env.arena, variant_var, env.subs),
                 "Wrapped"
             );
-            let union_layout = match layout_cache.interner.chase_recursive(variant_layout) {
-                Layout::Union(ul) => ul,
+            let union_layout = match layout_cache.interner.chase_recursive(variant_layout).repr {
+                LayoutRepr::Union(ul) => ul,
                 other => internal_error!(
                     "unexpected layout {:?} for {:?}",
                     other,
@@ -6269,7 +6276,7 @@ fn convert_tag_union<'a>(
                 }
             };
 
-            let union_layout = layout_cache.put_in(Layout::Union(union_layout));
+            let union_layout = layout_cache.put_in_no_semantic(LayoutRepr::Union(union_layout));
 
             let stmt = Stmt::Let(assigned, tag, union_layout, hole);
             let iter = field_symbols_temp
@@ -7807,9 +7814,8 @@ fn specialize_symbol<'a>(
                             // data for a lambda set.
                             let layout = match raw {
                                 RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
-                                RawFunctionLayout::Function(_, lambda_set, _) => {
-                                    layout_cache.put_in(Layout::LambdaSet(lambda_set))
-                                }
+                                RawFunctionLayout::Function(_, lambda_set, _) => layout_cache
+                                    .put_in_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
                             };
 
                             let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
@@ -9055,10 +9061,7 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
-        ClosureCallOptions::Struct {
-            field_layouts,
-            field_order_hash: _,
-        } => {
+        ClosureCallOptions::Struct { field_layouts } => {
             let function_symbol = match lambda_set.iter_set().next() {
                 Some(function_symbol) => function_symbol,
                 None => {
@@ -9714,8 +9717,8 @@ where
     }
 
     while let Some(layout) = stack.pop() {
-        match layout {
-            Layout::Builtin(builtin) => match builtin {
+        match layout.repr {
+            LayoutRepr::Builtin(builtin) => match builtin {
                 Builtin::Int(_)
                 | Builtin::Float(_)
                 | Builtin::Bool
@@ -9723,7 +9726,7 @@ where
                 | Builtin::Str => { /* do nothing */ }
                 Builtin::List(element) => stack.push(layout_interner.get(element)),
             },
-            Layout::Struct { field_layouts, .. } => {
+            LayoutRepr::Struct { field_layouts, .. } => {
                 if field_layouts.iter().any(|l| {
                     layout_interner
                         .get(*l)
@@ -9746,10 +9749,10 @@ where
                     stack.push(layout_interner.get(*in_layout));
                 }
             }
-            Layout::Boxed(boxed) => {
+            LayoutRepr::Boxed(boxed) => {
                 stack.push(layout_interner.get(boxed));
             }
-            Layout::Union(union_layout) => match union_layout {
+            LayoutRepr::Union(union_layout) => match union_layout {
                 UnionLayout::NonRecursive(tags) => {
                     for in_layout in tags.iter().flat_map(|e| e.iter()) {
                         stack.push(layout_interner.get(*in_layout));
@@ -9779,7 +9782,7 @@ where
                     }
                 }
             },
-            Layout::LambdaSet(lambda_set) => {
+            LayoutRepr::LambdaSet(lambda_set) => {
                 let raw_function_layout =
                     RawFunctionLayout::Function(lambda_set.args, lambda_set, lambda_set.ret);
 
@@ -9794,7 +9797,7 @@ where
                 // TODO: figure out if we need to look at the other layouts
                 // stack.push(layout_interner.get(lambda_set.ret));
             }
-            Layout::RecursivePointer(_) => {
+            LayoutRepr::RecursivePointer(_) => {
                 /* do nothing, we've already generated for this type through the Union(_) */
             }
         }
@@ -9816,12 +9819,13 @@ where
     I: LayoutInterner<'a>,
 {
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout::Boxed(interned_unboxed_struct_layout);
+    let boxed_struct_layout =
+        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout));
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
-    let field_layouts = match layout_interner.get(interned_unboxed_struct_layout) {
-        Layout::Struct { field_layouts, .. } => field_layouts,
+    let field_layouts = match layout_interner.get(interned_unboxed_struct_layout).repr {
+        LayoutRepr::Struct { field_layouts, .. } => field_layouts,
         other => {
             unreachable!(
                 "{:?} {:?}",
@@ -9927,7 +9931,7 @@ where
     I: LayoutInterner<'a>,
 {
     let interned = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout::Boxed(interned);
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned));
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 

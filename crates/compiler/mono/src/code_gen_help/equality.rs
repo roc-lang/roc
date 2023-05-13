@@ -7,7 +7,7 @@ use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+    InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType, UnionLayout,
 };
 
 use super::{let_lowlevel, CodeGenHelp, Context, LAYOUT_BOOL};
@@ -22,30 +22,26 @@ pub fn eq_generic<'a>(
     layout_interner: &mut STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> Stmt<'a> {
-    let main_body = match layout_interner.get(layout) {
-        Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
+    use crate::layout::Builtin::*;
+    use LayoutRepr::*;
+    let main_body = match layout_interner.get(layout).repr {
+        Builtin(Int(_) | Float(_) | Bool | Decimal) => {
             unreachable!(
                 "No generated proc for `==`. Use direct code gen for {:?}",
                 layout
             )
         }
-        Layout::Builtin(Builtin::Str) => {
+        Builtin(Str) => {
             unreachable!("No generated helper proc for `==` on Str. Use Zig function.")
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            eq_list(root, ident_ids, ctx, layout_interner, elem_layout)
-        }
-        Layout::Struct { field_layouts, .. } => {
+        Builtin(List(elem_layout)) => eq_list(root, ident_ids, ctx, layout_interner, elem_layout),
+        Struct { field_layouts, .. } => {
             eq_struct(root, ident_ids, ctx, layout_interner, field_layouts)
         }
-        Layout::Union(union_layout) => {
-            eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout)
-        }
-        Layout::Boxed(inner_layout) => {
-            eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout)
-        }
-        Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
-        Layout::RecursivePointer(_) => {
+        Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
+        Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
+        LambdaSet(_) => unreachable!("`==` is not defined on functions"),
+        RecursivePointer(_) => {
             unreachable!(
                 "Can't perform `==` on RecursivePointer. Should have been replaced by a tag union."
             )
@@ -440,7 +436,7 @@ fn eq_tag_union_help<'a>(
     if is_non_recursive {
         compare_ptr_or_value
     } else {
-        let union_layout = layout_interner.insert(Layout::Union(union_layout));
+        let union_layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
         let loop_params_iter = operands.iter().map(|arg| Param {
             symbol: *arg,
             ownership: Ownership::Borrowed,
@@ -472,9 +468,12 @@ fn eq_tag_fields<'a>(
 ) -> Stmt<'a> {
     // Find a RecursivePointer to use in the tail recursion loop
     // (If there are more than one, the others will use non-tail recursion)
-    let rec_ptr_index = field_layouts
-        .iter()
-        .position(|field| matches!(layout_interner.get(*field), Layout::RecursivePointer(_)));
+    let rec_ptr_index = field_layouts.iter().position(|field| {
+        matches!(
+            layout_interner.get(*field).repr,
+            LayoutRepr::RecursivePointer(_)
+        )
+    });
 
     let (tailrec_index, innermost_stmt) = match rec_ptr_index {
         None => {
@@ -660,7 +659,7 @@ fn eq_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_layout = layout_interner.insert(Layout::Boxed(elem_layout));
+    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(elem_layout));
 
     // Compare lengths
 

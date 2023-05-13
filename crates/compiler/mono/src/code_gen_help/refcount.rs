@@ -12,7 +12,8 @@ use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
+    UnionLayout,
 };
 
 use super::{CodeGenHelp, Context, HelperOp};
@@ -74,9 +75,9 @@ pub fn refcount_stmt<'a>(
         }
 
         ModifyRc::DecRef(structure) => {
-            match layout_interner.get(layout) {
+            match layout_interner.get(layout).repr {
                 // Str has no children, so Dec is the same as DecRef.
-                Layout::Builtin(Builtin::Str) => {
+                LayoutRepr::Builtin(Builtin::Str) => {
                     ctx.op = HelperOp::Dec;
                     refcount_stmt(
                         root,
@@ -90,8 +91,8 @@ pub fn refcount_stmt<'a>(
                 }
 
                 // Struct and non-recursive Unions are stack-only, so DecRef is a no-op
-                Layout::Struct { .. } => following,
-                Layout::Union(UnionLayout::NonRecursive(_)) => following,
+                LayoutRepr::Struct { .. } => following,
+                LayoutRepr::Union(UnionLayout::NonRecursive(_)) => following,
 
                 // Inline the refcounting code instead of making a function. Don't iterate fields,
                 // and replace any return statements with jumps to the `following` statement.
@@ -181,14 +182,16 @@ pub fn refcount_generic<'a>(
     layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-    match layout_interner.get(layout) {
-        Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
+    match layout_interner.get(layout).repr {
+        LayoutRepr::Builtin(
+            Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+        ) => {
             // Generate a dummy function that immediately returns Unit
             // Some higher-order Zig builtins *always* call an RC function on List elements.
             rc_return_stmt(root, ident_ids, ctx)
         }
-        Layout::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
-        Layout::Builtin(Builtin::List(elem_layout)) => refcount_list(
+        LayoutRepr::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
+        LayoutRepr::Builtin(Builtin::List(elem_layout)) => refcount_list(
             root,
             ident_ids,
             ctx,
@@ -196,7 +199,7 @@ pub fn refcount_generic<'a>(
             elem_layout,
             structure,
         ),
-        Layout::Struct { field_layouts, .. } => refcount_struct(
+        LayoutRepr::Struct { field_layouts, .. } => refcount_struct(
             root,
             ident_ids,
             ctx,
@@ -204,7 +207,7 @@ pub fn refcount_generic<'a>(
             field_layouts,
             structure,
         ),
-        Layout::Union(union_layout) => refcount_union(
+        LayoutRepr::Union(union_layout) => refcount_union(
             root,
             ident_ids,
             ctx,
@@ -213,7 +216,7 @@ pub fn refcount_generic<'a>(
             union_layout,
             structure,
         ),
-        Layout::LambdaSet(lambda_set) => {
+        LayoutRepr::LambdaSet(lambda_set) => {
             let runtime_layout = lambda_set.representation;
             refcount_generic(
                 root,
@@ -224,10 +227,10 @@ pub fn refcount_generic<'a>(
                 structure,
             )
         }
-        Layout::RecursivePointer(_) => unreachable!(
+        LayoutRepr::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
         ),
-        Layout::Boxed(inner_layout) => refcount_boxed(
+        LayoutRepr::Boxed(inner_layout) => refcount_boxed(
             root,
             ident_ids,
             ctx,
@@ -298,15 +301,15 @@ pub fn refcount_reset_proc_body<'a>(
     let is_unique = root.create_symbol(ident_ids, "is_unique");
     let addr = root.create_symbol(ident_ids, "addr");
 
-    let union_layout = match layout_interner.get(layout) {
-        Layout::Union(u) => u,
+    let union_layout = match layout_interner.get(layout).repr {
+        LayoutRepr::Union(u) => u,
         _ => unimplemented!("Reset is only implemented for UnionLayout"),
     };
 
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
+    let recursion_ptr = layout_interner.insert_no_semantic(LayoutRepr::RecursivePointer(layout));
 
     // Reset structure is unique. Decrement its children and return a pointer to the allocation.
     let then_stmt = {
@@ -480,15 +483,15 @@ pub fn refcount_resetref_proc_body<'a>(
     let is_unique = root.create_symbol(ident_ids, "is_unique");
     let addr = root.create_symbol(ident_ids, "addr");
 
-    let union_layout = match layout_interner.get(layout) {
-        Layout::Union(u) => u,
+    let union_layout = match layout_interner.get(layout).repr {
+        LayoutRepr::Union(u) => u,
         _ => unimplemented!("Reset is only implemented for UnionLayout"),
     };
 
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
+    let recursion_ptr = layout_interner.insert_no_semantic(LayoutRepr::RecursivePointer(layout));
 
     // Reset structure is unique. Return a pointer to the allocation.
     let then_stmt = Stmt::Ret(addr);
@@ -859,7 +862,7 @@ fn refcount_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_layout = layout_interner.insert(Layout::Boxed(elem_layout));
+    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(elem_layout));
 
     //
     // Check if the list is empty
@@ -1480,7 +1483,7 @@ fn refcount_union_rec<'a>(
     };
 
     let rc_structure_stmt = {
-        let alignment = Layout::Union(union_layout)
+        let alignment = LayoutRepr::Union(union_layout)
             .allocation_alignment_bytes(layout_interner, root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
 
@@ -1537,7 +1540,7 @@ fn refcount_union_tailrec<'a>(
     let tailrec_loop = JoinPointId(root.create_symbol(ident_ids, "tailrec_loop"));
     let current = root.create_symbol(ident_ids, "current");
     let next_ptr = root.create_symbol(ident_ids, "next_ptr");
-    let layout = layout_interner.insert(Layout::Union(union_layout));
+    let layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
 
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1682,7 +1685,7 @@ fn refcount_union_tailrec<'a>(
         let jump_with_null_ptr = Stmt::Let(
             null_pointer,
             Expr::NullPointer,
-            layout_interner.insert(Layout::Union(union_layout)),
+            layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout)),
             root.arena.alloc(Stmt::Jump(
                 jp_modify_union,
                 root.arena.alloc([null_pointer]),
@@ -1726,7 +1729,7 @@ fn refcount_union_tailrec<'a>(
     ));
 
     let loop_init = Stmt::Jump(tailrec_loop, root.arena.alloc([initial_structure]));
-    let union_layout = layout_interner.insert(Layout::Union(union_layout));
+    let union_layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
     let loop_param = Param {
         symbol: current,
         ownership: Ownership::Borrowed,

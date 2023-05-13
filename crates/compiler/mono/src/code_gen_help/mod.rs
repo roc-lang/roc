@@ -10,7 +10,8 @@ use crate::ir::{
     Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, LambdaName, Layout, LayoutInterner, Niche, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LambdaName, Layout, LayoutInterner, LayoutRepr, Niche, STLayoutInterner,
+    UnionLayout,
 };
 
 mod equality;
@@ -285,11 +286,11 @@ impl<'a> CodeGenHelp<'a> {
         self.debug_recursion_depth += 1;
 
         let layout = if matches!(
-            layout_interner.get(called_layout),
-            Layout::RecursivePointer(_)
+            layout_interner.get(called_layout).repr,
+            LayoutRepr::RecursivePointer(_)
         ) {
             let union_layout = ctx.recursive_union.unwrap();
-            layout_interner.insert(Layout::Union(union_layout))
+            layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout))
         } else {
             called_layout
         };
@@ -300,7 +301,7 @@ impl<'a> CodeGenHelp<'a> {
 
             let (ret_layout, arg_layouts): (InLayout<'a>, &'a [InLayout<'a>]) = {
                 let arg = self.replace_rec_ptr(ctx, layout_interner, layout);
-                let box_arg = layout_interner.insert(Layout::Boxed(arg));
+                let box_arg = layout_interner.insert_no_semantic(LayoutRepr::Boxed(arg));
 
                 match ctx.op {
                     Dec | DecRef(_) => (LAYOUT_UNIT, self.arena.alloc([arg])),
@@ -429,12 +430,12 @@ impl<'a> CodeGenHelp<'a> {
                 }
                 Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
                 IndirectInc => {
-                    let box_layout = layout_interner.insert(Layout::Boxed(layout));
+                    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([(box_layout, ARG_1), inc_amount])
                 }
                 IndirectDec => {
-                    let box_layout = layout_interner.insert(Layout::Boxed(layout));
+                    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
                     self.arena.alloc([(box_layout, ARG_1)])
                 }
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
@@ -482,7 +483,7 @@ impl<'a> CodeGenHelp<'a> {
                 niche: Niche::NONE,
             },
             HelperOp::IndirectInc => {
-                let box_layout = layout_interner.insert(Layout::Boxed(layout));
+                let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
 
                 ProcLayout {
                     arguments: self.arena.alloc([box_layout, self.layout_isize]),
@@ -491,7 +492,7 @@ impl<'a> CodeGenHelp<'a> {
                 }
             }
             HelperOp::IndirectDec => {
-                let box_layout = layout_interner.insert(Layout::Boxed(layout));
+                let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
 
                 ProcLayout {
                     arguments: self.arena.alloc([box_layout]),
@@ -532,29 +533,26 @@ impl<'a> CodeGenHelp<'a> {
         layout_interner: &mut STLayoutInterner<'a>,
         layout: InLayout<'a>,
     ) -> InLayout<'a> {
-        let layout = match layout_interner.get(layout) {
-            Layout::Builtin(Builtin::List(v)) => {
+        let lay = layout_interner.get(layout);
+        let repr = match lay.repr {
+            LayoutRepr::Builtin(Builtin::List(v)) => {
                 let v = self.replace_rec_ptr(ctx, layout_interner, v);
-                Layout::Builtin(Builtin::List(v))
+                LayoutRepr::Builtin(Builtin::List(v))
             }
 
-            Layout::Builtin(_) => return layout,
+            LayoutRepr::Builtin(_) => return layout,
 
-            Layout::Struct {
-                field_layouts,
-                field_order_hash,
-            } => {
+            LayoutRepr::Struct { field_layouts } => {
                 let mut new_field_layouts = Vec::with_capacity_in(field_layouts.len(), self.arena);
                 for f in field_layouts.iter() {
                     new_field_layouts.push(self.replace_rec_ptr(ctx, layout_interner, *f));
                 }
-                Layout::Struct {
+                LayoutRepr::Struct {
                     field_layouts: new_field_layouts.into_bump_slice(),
-                    field_order_hash,
                 }
             }
 
-            Layout::Union(UnionLayout::NonRecursive(tags)) => {
+            LayoutRepr::Union(UnionLayout::NonRecursive(tags)) => {
                 let mut new_tags = Vec::with_capacity_in(tags.len(), self.arena);
                 for fields in tags {
                     let mut new_fields = Vec::with_capacity_in(fields.len(), self.arena);
@@ -563,28 +561,29 @@ impl<'a> CodeGenHelp<'a> {
                     }
                     new_tags.push(new_fields.into_bump_slice());
                 }
-                Layout::Union(UnionLayout::NonRecursive(new_tags.into_bump_slice()))
+                LayoutRepr::Union(UnionLayout::NonRecursive(new_tags.into_bump_slice()))
             }
 
-            Layout::Union(_) => {
+            LayoutRepr::Union(_) => {
                 // we always fully unroll recursive types. That means tha when we find a
                 // recursive tag union we can replace it with the layout
                 return layout;
             }
 
-            Layout::Boxed(inner) => {
+            LayoutRepr::Boxed(inner) => {
                 let inner = self.replace_rec_ptr(ctx, layout_interner, inner);
-                Layout::Boxed(inner)
+                LayoutRepr::Boxed(inner)
             }
 
-            Layout::LambdaSet(lambda_set) => {
+            LayoutRepr::LambdaSet(lambda_set) => {
                 return self.replace_rec_ptr(ctx, layout_interner, lambda_set.representation)
             }
 
             // This line is the whole point of the function
-            Layout::RecursivePointer(_) => Layout::Union(ctx.recursive_union.unwrap()),
+            LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
         };
-        layout_interner.insert(layout)
+
+        layout_interner.insert(Layout::new(repr, lay.semantic()))
     }
 
     fn union_tail_recursion_fields(
@@ -668,16 +667,16 @@ impl<'a> CallerProc<'a> {
         };
 
         let box_capture_layout = if let Some(capture_layout) = capture_layout {
-            layout_interner.insert(Layout::Boxed(capture_layout))
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(capture_layout))
         } else {
-            layout_interner.insert(Layout::Boxed(Layout::UNIT))
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(Layout::UNIT))
         };
 
-        let box_argument_layout =
-            layout_interner.insert(Layout::Boxed(passed_function.argument_layouts[0]));
+        let box_argument_layout = layout_interner
+            .insert_no_semantic(LayoutRepr::Boxed(passed_function.argument_layouts[0]));
 
         let box_return_layout =
-            layout_interner.insert(Layout::Boxed(passed_function.return_layout));
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(passed_function.return_layout));
 
         let proc_layout = ProcLayout {
             arguments: arena.alloc([box_capture_layout, box_argument_layout, box_return_layout]),
@@ -826,22 +825,22 @@ fn layout_needs_helper_proc<'a>(
     layout: InLayout<'a>,
     op: HelperOp,
 ) -> bool {
-    match layout_interner.get(layout) {
-        Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
-            false
-        }
-        Layout::Builtin(Builtin::Str) => {
+    match layout_interner.get(layout).repr {
+        LayoutRepr::Builtin(
+            Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+        ) => false,
+        LayoutRepr::Builtin(Builtin::Str) => {
             // Str type can use either Zig functions or generated IR, since it's not generic.
             // Eq uses a Zig function, refcount uses generated IR.
             // Both are fine, they were just developed at different times.
             matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef(_))
         }
-        Layout::Builtin(Builtin::List(_)) => true,
-        Layout::Struct { .. } => true, // note: we do generate a helper for Unit, with just a Stmt::Ret
-        Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
-        Layout::Union(_) => true,
-        Layout::LambdaSet(_) => true,
-        Layout::RecursivePointer(_) => false,
-        Layout::Boxed(_) => true,
+        LayoutRepr::Builtin(Builtin::List(_)) => true,
+        LayoutRepr::Struct { .. } => true, // note: we do generate a helper for Unit, with just a Stmt::Ret
+        LayoutRepr::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
+        LayoutRepr::Union(_) => true,
+        LayoutRepr::LambdaSet(_) => true,
+        LayoutRepr::RecursivePointer(_) => false,
+        LayoutRepr::Boxed(_) => true,
     }
 }
