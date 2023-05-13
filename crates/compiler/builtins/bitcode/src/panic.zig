@@ -12,5 +12,4 @@ pub fn panic_help(msg: []const u8, tag_id: u32) void {
 // must export this explicitly because right now it is not used from zig code
 pub fn panic(msg: *const RocStr, alignment: u32) callconv(.C) void {
     return roc_panic(msg, alignment);
-//    return @call(.auto, roc_panic, .{ msg, alignment });
 }
