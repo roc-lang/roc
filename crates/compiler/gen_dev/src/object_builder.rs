@@ -324,7 +324,13 @@ fn build_object<'a, B: Backend<'a>>(
             helper_procs.push(caller_proc.proc);
         }
 
-        module_id.register_debug_idents(ident_ids);
+        if false {
+            module_id.register_debug_idents(ident_ids);
+
+            for p in &helper_procs {
+                println!("{}", p.to_pretty(_interner, 200, true));
+            }
+        }
 
         helper_procs
     };

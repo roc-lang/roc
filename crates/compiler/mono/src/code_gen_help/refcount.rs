@@ -978,10 +978,26 @@ fn refcount_list<'a>(
     // Branch on slice vs list
     //
 
+    // let first_element = StructAtIndex 0 structure
+    let first_element = root.create_symbol(ident_ids, "first_element");
+    let first_element_expr = Expr::StructAtIndex {
+        index: 0,
+        field_layouts: list_field_layouts,
+        structure,
+    };
+    let first_element_stmt = |next| Stmt::Let(first_element, first_element_expr, box_layout, next);
+
     let jp_elements = JoinPointId(root.create_symbol(ident_ids, "jp_elements"));
-    let elements = root.create_symbol(ident_ids, "elements");
-    let param_elems = Param {
-        symbol: elements,
+    let data_pointer = root.create_symbol(ident_ids, "data_pointer");
+    let param_data_pointer = Param {
+        symbol: data_pointer,
+        ownership: Ownership::Owned,
+        layout: Layout::OPAQUE_PTR,
+    };
+
+    let first_element_pointer = root.create_symbol(ident_ids, "first_element_pointer");
+    let param_first_element_pointer = Param {
+        symbol: first_element_pointer,
         ownership: Ownership::Owned,
         layout: Layout::OPAQUE_PTR,
     };
@@ -991,23 +1007,14 @@ fn refcount_list<'a>(
     let one_expr = Expr::Literal(Literal::Int(1i128.to_ne_bytes()));
     let one_stmt = |next| Stmt::Let(one, one_expr, layout_isize, next);
 
-    // ptr_width =
-    let ptr_width = root.create_symbol(ident_ids, "ptr_width");
-    let ptr_width_int = match root.target_info.ptr_width() {
-        PtrWidth::Bytes4 => 4i128,
-        PtrWidth::Bytes8 => 8i128,
-    };
-    let ptr_width_expr = Expr::Literal(Literal::Int(ptr_width_int.to_ne_bytes()));
-    let ptr_width_stmt = |next| Stmt::Let(ptr_width, ptr_width_expr, layout_isize, next);
-
-    let rc_pointer = root.create_symbol(ident_ids, "rc_pointer");
-    let rc_pointer_stmt = move |next| {
+    let slice_data_pointer = root.create_symbol(ident_ids, "slice_data_pointer");
+    let slice_data_pointer_stmt = move |next| {
         one_stmt(arena.alloc(
             //
             let_lowlevel(
                 arena,
                 layout_isize,
-                rc_pointer,
+                slice_data_pointer,
                 LowLevel::NumShiftLeftBy,
                 &[capacity, one],
                 arena.alloc(next),
@@ -1015,50 +1022,29 @@ fn refcount_list<'a>(
         ))
     };
 
-    let data_pointer = root.create_symbol(ident_ids, "data_pointer");
-    let data_pointer_stmt = move |next| {
-        rc_pointer_stmt(
-            //
-            ptr_width_stmt(arena.alloc(
-                //
-                let_lowlevel(
-                    arena,
-                    layout_isize,
-                    data_pointer,
-                    LowLevel::NumAddWrap,
-                    &[rc_pointer, ptr_width],
-                    arena.alloc(next),
-                ),
-            )),
-        )
-    };
-
-    let slice_branch = data_pointer_stmt(
+    let slice_branch = slice_data_pointer_stmt(
         //
-        Stmt::Jump(jp_elements, arena.alloc([data_pointer])),
+        Stmt::Jump(
+            jp_elements,
+            arena.alloc([slice_data_pointer, first_element]),
+        ),
     );
 
-    // let list_elems = StructAtIndex 0 structure
-    let list_elems = root.create_symbol(ident_ids, "list_elems");
-    let list_elems_expr = Expr::StructAtIndex {
-        index: 0,
-        field_layouts: list_field_layouts,
-        structure,
-    };
-    let list_elems_stmt = |next| Stmt::Let(list_elems, list_elems_expr, box_layout, next);
-
-    let list_branch = list_elems_stmt(arena.alloc(
+    let list_branch = arena.alloc(
         //
-        Stmt::Jump(jp_elements, arena.alloc([list_elems])),
-    ));
-
-    let switch_slice_list = Stmt::if_then_else(
-        root.arena,
-        is_slice,
-        Layout::UNIT,
-        slice_branch,
-        arena.alloc(list_branch),
+        Stmt::Jump(jp_elements, arena.alloc([first_element, first_element])),
     );
+
+    let switch_slice_list = arena.alloc(first_element_stmt(arena.alloc(
+        //
+        Stmt::if_then_else(
+            root.arena,
+            is_slice,
+            Layout::UNIT,
+            slice_branch,
+            arena.alloc(list_branch),
+        ),
+    )));
 
     //
     // modify refcount of the list and its elements
@@ -1074,14 +1060,7 @@ fn refcount_list<'a>(
     let mut modify_refcount_stmt =
         |ptr| modify_refcount(root, ident_ids, ctx, ptr, alignment, ret_stmt);
 
-    let modify_list = Stmt::if_then_else(
-        arena,
-        is_slice,
-        Layout::UNIT,
-        // data_pointer_stmt(modify_refcount_stmt(Pointer::ToData(data_pointer))),
-        modify_refcount_stmt(Pointer::ToData(elements)),
-        arena.alloc(modify_refcount_stmt(Pointer::ToData(elements))),
-    );
+    let modify_list = modify_refcount_stmt(Pointer::ToData(data_pointer));
 
     let is_relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
     let modify_elems_and_list =
@@ -1095,7 +1074,7 @@ fn refcount_list<'a>(
                 LAYOUT_UNIT,
                 box_layout,
                 len,
-                list_elems,
+                first_element_pointer,
                 modify_list,
             )
         } else {
@@ -1108,7 +1087,7 @@ fn refcount_list<'a>(
 
     let joinpoint_elems = Stmt::Join {
         id: jp_elements,
-        parameters: arena.alloc([param_elems]),
+        parameters: arena.alloc([param_data_pointer, param_first_element_pointer]),
         body: arena.alloc(modify_elems_and_list),
         remainder: arena.alloc(switch_slice_list),
     };
@@ -1201,10 +1180,19 @@ fn refcount_list_elems<'a>(
     //
 
     let elems_loop = JoinPointId(root.create_symbol(ident_ids, "elems_loop"));
-    let addr = root.create_symbol(ident_ids, "addr");
 
+    let addr = root.create_symbol(ident_ids, "addr");
     let param_addr = Param {
         symbol: addr,
+        ownership: Ownership::Owned,
+        layout: layout_isize,
+    };
+
+    // end address is passed (instead of captured) to work around dev backend bugs
+    // for some reason, the stack space used for a capture can be overwritten after some iterations
+    let end_address = root.create_symbol(ident_ids, "end_address");
+    let param_end_address = Param {
+        symbol: end_address,
         ownership: Ownership::Owned,
         layout: layout_isize,
     };
@@ -1236,13 +1224,15 @@ fn refcount_list_elems<'a>(
     //
     // Next loop iteration
     //
+
     let next_addr = root.create_symbol(ident_ids, "next_addr");
     let next_addr_stmt = |next| {
+        //
         let_lowlevel(
             arena,
             layout_isize,
             next_addr,
-            NumAdd,
+            NumAddSaturated,
             &[addr, elem_size],
             next,
         )
@@ -1253,34 +1243,40 @@ fn refcount_list_elems<'a>(
     //
 
     let is_end = root.create_symbol(ident_ids, "is_end");
-    let is_end_stmt = |next| let_lowlevel(arena, LAYOUT_BOOL, is_end, NumGte, &[addr, end], next);
+    let is_end_stmt = |next| {
+        let_lowlevel(
+            arena,
+            LAYOUT_BOOL,
+            is_end,
+            NumGte,
+            &[addr, end_address],
+            next,
+        )
+    };
 
-    let if_end_of_list = Stmt::Switch {
-        cond_symbol: is_end,
-        cond_layout: LAYOUT_BOOL,
+    let if_end_of_list = Stmt::if_then_else(
+        arena,
+        is_end,
         ret_layout,
-        branches: root.arena.alloc([(1, BranchInfo::None, following)]),
-        default_branch: (
-            BranchInfo::None,
-            arena.alloc(box_stmt(arena.alloc(
+        following,
+        arena.alloc(box_stmt(arena.alloc(
+            //
+            elem_stmt(arena.alloc(
                 //
-                elem_stmt(arena.alloc(
+                mod_elem_stmt(arena.alloc(
                     //
-                    mod_elem_stmt(arena.alloc(
+                    next_addr_stmt(arena.alloc(
                         //
-                        next_addr_stmt(arena.alloc(
-                            //
-                            Stmt::Jump(elems_loop, arena.alloc([next_addr])),
-                        )),
+                        Stmt::Jump(elems_loop, arena.alloc([next_addr, end_address])),
                     )),
                 )),
-            ))),
-        ),
-    };
+            )),
+        ))),
+    );
 
     let joinpoint_loop = Stmt::Join {
         id: elems_loop,
-        parameters: arena.alloc([param_addr]),
+        parameters: arena.alloc([param_addr, param_end_address]),
         body: arena.alloc(
             //
             is_end_stmt(
@@ -1290,7 +1286,7 @@ fn refcount_list_elems<'a>(
         ),
         remainder: root
             .arena
-            .alloc(Stmt::Jump(elems_loop, arena.alloc([start]))),
+            .alloc(Stmt::Jump(elems_loop, arena.alloc([start, end]))),
     };
 
     start_stmt(arena.alloc(
