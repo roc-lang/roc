@@ -1,5 +1,5 @@
 //! Provides a binary that is only used for static build servers.
-use clap::{Arg, Command};
+use clap::{value_parser, Arg, Command};
 use roc_docs::generate_docs_html;
 use std::io;
 use std::path::PathBuf;
@@ -12,16 +12,15 @@ fn main() -> io::Result<()> {
         .about("Generate documentation for a Roc package")
         .arg(
             Arg::new(ROC_FILE)
-                .multiple_values(true)
                 .help("The package's main .roc file")
-                .allow_invalid_utf8(true)
-                .required(false)
+                .num_args(0..)
+                .value_parser(value_parser!(PathBuf))
                 .default_value(DEFAULT_ROC_FILENAME),
         )
         .get_matches();
 
     // Populate roc_files
-    generate_docs_html(PathBuf::from(matches.value_of_os(ROC_FILE).unwrap()));
+    generate_docs_html(matches.get_one::<PathBuf>(ROC_FILE).unwrap().to_owned());
 
     Ok(())
 }
