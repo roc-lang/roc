@@ -2564,21 +2564,21 @@ impl<'a> RecordField<'a> {
     }
 
     pub fn to_assigned_field(
-        &self,
+        self,
         arena: &'a Bump,
     ) -> Result<AssignedField<'a, Expr<'a>>, FoundApplyValue> {
         use AssignedField::*;
 
         match self {
             RecordField::RequiredValue(loc_label, spaces, loc_expr) => {
-                Ok(RequiredValue(*loc_label, spaces, loc_expr))
+                Ok(RequiredValue(loc_label, spaces, loc_expr))
             }
 
             RecordField::OptionalValue(loc_label, spaces, loc_expr) => {
-                Ok(OptionalValue(*loc_label, spaces, loc_expr))
+                Ok(OptionalValue(loc_label, spaces, loc_expr))
             }
 
-            RecordField::LabelOnly(loc_label) => Ok(LabelOnly(*loc_label)),
+            RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
 
             RecordField::ApplyValue(_, _, _) => Err(FoundApplyValue),
 
@@ -2597,22 +2597,22 @@ impl<'a> RecordField<'a> {
     }
 
     fn to_builder_field(
-        &self,
+        self,
         arena: &'a Bump,
     ) -> Result<RecordBuilderField<'a>, FoundOptionalValue> {
         use RecordBuilderField::*;
 
         match self {
             RecordField::RequiredValue(loc_label, spaces, loc_expr) => {
-                Ok(Value(*loc_label, spaces, loc_expr))
+                Ok(Value(loc_label, spaces, loc_expr))
             }
 
             RecordField::OptionalValue(_, _, _) => Err(FoundOptionalValue),
 
-            RecordField::LabelOnly(loc_label) => Ok(LabelOnly(*loc_label)),
+            RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
 
             RecordField::ApplyValue(loc_label, spaces, loc_expr) => {
-                Ok(ApplyValue(*loc_label, spaces, loc_expr))
+                Ok(ApplyValue(loc_label, spaces, loc_expr))
             }
 
             RecordField::SpaceBefore(field, spaces) => {
