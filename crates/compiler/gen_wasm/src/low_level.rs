@@ -2007,11 +2007,10 @@ impl<'a> LowLevelCall<'a> {
         let other_arg_layout = backend
             .layout_interner
             .runtime_representation(backend.storage.symbol_layouts[&self.arguments[1]]);
-        debug_assert!(
-            arg_layout_raw == other_arg_layout,
+        debug_assert_eq!(
+            arg_layout_raw.repr, other_arg_layout.repr,
             "Cannot do `==` comparison on different types: {:?} vs {:?}",
-            arg_layout,
-            other_arg_layout
+            arg_layout, other_arg_layout
         );
 
         let invert_result = matches!(self.lowlevel, LowLevel::NotEq);

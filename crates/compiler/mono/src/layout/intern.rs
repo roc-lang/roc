@@ -14,7 +14,7 @@ use roc_target::TargetInfo;
 
 use crate::layout::LayoutRepr;
 
-use super::{Builtin, LambdaSet, Layout, SeenRecPtrs, SemanticRepr, UnionLayout};
+use super::{LambdaSet, Layout, SeenRecPtrs, SemanticRepr, UnionLayout};
 
 macro_rules! cache_interned_layouts {
     ($($i:literal, $name:ident, $vis:vis, $layout:expr)*; $total_constants:literal) => {
@@ -59,22 +59,22 @@ macro_rules! nosema {
 cache_interned_layouts! {
     0,  VOID, pub, Layout::VOID_NAKED
     1,  UNIT, pub, Layout::UNIT_NAKED
-    2,  BOOL, pub, nosema!(LayoutRepr::Builtin(Builtin::Bool))
-    3,  U8,   pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U8)))
-    4,  U16,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U16)))
-    5,  U32,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U32)))
-    6,  U64,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U64)))
-    7,  U128, pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::U128)))
-    8,  I8,   pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I8)))
-    9,  I16,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I16)))
-    10, I32,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I32)))
-    11, I64,  pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I64)))
-    12, I128, pub, nosema!(LayoutRepr::Builtin(Builtin::Int(IntWidth::I128)))
-    13, F32,  pub, nosema!(LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)))
-    14, F64,  pub, nosema!(LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)))
-    15, DEC,  pub, nosema!(LayoutRepr::Builtin(Builtin::Decimal))
-    16, STR,  pub, nosema!(LayoutRepr::Builtin(Builtin::Str))
-    17, OPAQUE_PTR,  pub, nosema!(LayoutRepr::Boxed(Layout::VOID))
+    2,  BOOL, pub, nosema!(LayoutRepr::BOOL)
+    3,  U8,   pub, nosema!(LayoutRepr::U8)
+    4,  U16,  pub, nosema!(LayoutRepr::U16)
+    5,  U32,  pub, nosema!(LayoutRepr::U32)
+    6,  U64,  pub, nosema!(LayoutRepr::U64)
+    7,  U128, pub, nosema!(LayoutRepr::U128)
+    8,  I8,   pub, nosema!(LayoutRepr::I8)
+    9,  I16,  pub, nosema!(LayoutRepr::I16)
+    10, I32,  pub, nosema!(LayoutRepr::I32)
+    11, I64,  pub, nosema!(LayoutRepr::I64)
+    12, I128, pub, nosema!(LayoutRepr::I128)
+    13, F32,  pub, nosema!(LayoutRepr::F32)
+    14, F64,  pub, nosema!(LayoutRepr::F64)
+    15, DEC,  pub, nosema!(LayoutRepr::DEC)
+    16, STR,  pub, nosema!(LayoutRepr::STR)
+    17, OPAQUE_PTR,  pub, nosema!(LayoutRepr::OPAQUE_PTR)
     18, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
 
     ; 19
@@ -180,6 +180,10 @@ pub trait LayoutInterner<'a>: Sized {
 
     //
     // Convenience methods
+
+    fn eq_repr(&self, a: InLayout<'a>, b: InLayout<'a>) -> bool {
+        self.get(a).repr == self.get(b).repr
+    }
 
     fn target_info(&self) -> TargetInfo;
 

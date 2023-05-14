@@ -39,12 +39,12 @@ pub enum RegisterWidth {
 }
 
 impl RegisterWidth {
-    fn try_from_layout(layout: InLayout) -> Option<Self> {
+    fn try_from_layout(layout: LayoutRepr) -> Option<Self> {
         match layout {
-            Layout::BOOL | Layout::I8 | Layout::U8 => Some(RegisterWidth::W8),
-            Layout::I16 | Layout::U16 => Some(RegisterWidth::W16),
-            Layout::U32 | Layout::I32 => Some(RegisterWidth::W32),
-            Layout::I64 | Layout::U64 => Some(RegisterWidth::W64),
+            LayoutRepr::BOOL | LayoutRepr::I8 | LayoutRepr::U8 => Some(RegisterWidth::W8),
+            LayoutRepr::I16 | LayoutRepr::U16 => Some(RegisterWidth::W16),
+            LayoutRepr::U32 | LayoutRepr::I32 => Some(RegisterWidth::W32),
+            LayoutRepr::I64 | LayoutRepr::U64 => Some(RegisterWidth::W64),
             _ => None,
         }
     }
@@ -886,9 +886,10 @@ impl<
 
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>) {
         // move return value to dst.
-        match *ret_layout {
+        let ret_repr = self.interner().get(*ret_layout).repr;
+        match ret_repr {
             single_register_integers!() => {
-                let width = RegisterWidth::try_from_layout(*ret_layout).unwrap();
+                let width = RegisterWidth::try_from_layout(ret_repr).unwrap();
 
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 ASM::mov_reg_reg(&mut self.buf, width, dst_reg, CC::GENERAL_RETURN_REGS[0]);
@@ -897,7 +898,7 @@ impl<
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
             }
-            Layout::I128 | Layout::U128 => {
+            LayoutRepr::I128 | LayoutRepr::U128 => {
                 let offset = self.storage_manager.claim_stack_area(dst, 16);
 
                 ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
@@ -906,7 +907,7 @@ impl<
 
             other => {
                 //
-                match self.layout_interner.get(other).repr {
+                match other {
                     LayoutRepr::Boxed(_) => {
                         let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                         ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
@@ -1392,13 +1393,14 @@ impl<
     }
 
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        match *arg_layout {
-            single_register_int_builtins!() | Layout::BOOL => {
-                let width = match *arg_layout {
-                    Layout::BOOL | Layout::I8 | Layout::U8 => RegisterWidth::W8,
-                    Layout::I16 | Layout::U16 => RegisterWidth::W16,
-                    Layout::U32 | Layout::I32 => RegisterWidth::W32,
-                    Layout::I64 | Layout::U64 => RegisterWidth::W64,
+        let repr = self.interner().get(*arg_layout).repr;
+        match repr {
+            single_register_int_builtins!() | LayoutRepr::BOOL => {
+                let width = match repr {
+                    LayoutRepr::BOOL | LayoutRepr::I8 | LayoutRepr::U8 => RegisterWidth::W8,
+                    LayoutRepr::I16 | LayoutRepr::U16 => RegisterWidth::W16,
+                    LayoutRepr::U32 | LayoutRepr::I32 => RegisterWidth::W32,
+                    LayoutRepr::I64 | LayoutRepr::U64 => RegisterWidth::W64,
                     _ => unreachable!(),
                 };
 
@@ -1411,7 +1413,7 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
-            Layout::U128 | Layout::I128 => {
+            LayoutRepr::U128 | LayoutRepr::I128 => {
                 let buf = &mut self.buf;
 
                 let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
@@ -1447,10 +1449,10 @@ impl<
                 self.storage_manager.free_symbol(&Symbol::DEV_TMP);
                 self.storage_manager.free_symbol(&Symbol::DEV_TMP2);
             }
-            Layout::F32 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F32)),
-            Layout::F64 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F64)),
-            Layout::DEC => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::DEC)),
-            Layout::STR => {
+            LayoutRepr::F32 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F32)),
+            LayoutRepr::F64 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F64)),
+            LayoutRepr::DEC => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::DEC)),
+            LayoutRepr::STR => {
                 // use a zig call
                 self.build_fn_call(
                     dst,
@@ -1470,7 +1472,7 @@ impl<
                 let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
                 ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
             }
-            other => {
+            _ => {
                 let ident_ids = self
                     .interns
                     .all_ident_ids
@@ -1482,27 +1484,33 @@ impl<
                 let (eq_symbol, eq_linker_data) = self.helper_proc_gen.gen_refcount_proc(
                     ident_ids,
                     self.layout_interner,
-                    other,
+                    *arg_layout,
                     HelperOp::Eq,
                 );
 
                 let fn_name = self.function_symbol_to_string(
                     eq_symbol,
-                    [other, other].into_iter(),
+                    [*arg_layout, *arg_layout].into_iter(),
                     None,
                     Layout::U8,
                 );
 
                 self.helper_proc_symbols.extend(eq_linker_data);
 
-                self.build_fn_call(dst, fn_name, &[*src1, *src2], &[other, other], &Layout::U8)
+                self.build_fn_call(
+                    dst,
+                    fn_name,
+                    &[*src1, *src2],
+                    &[*arg_layout, *arg_layout],
+                    &Layout::U8,
+                )
             }
         }
     }
 
     fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        match *arg_layout {
-            single_register_int_builtins!() | Layout::BOOL => {
+        match self.interner().get(*arg_layout).repr {
+            single_register_int_builtins!() | LayoutRepr::BOOL => {
                 let width = match *arg_layout {
                     Layout::BOOL | Layout::I8 | Layout::U8 => RegisterWidth::W8,
                     Layout::I16 | Layout::U16 => RegisterWidth::W16,
@@ -1520,7 +1528,7 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::neq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
-            Layout::STR => {
+            LayoutRepr::STR => {
                 self.build_fn_call(
                     dst,
                     bitcode::STR_EQUAL.to_string(),
@@ -1543,8 +1551,8 @@ impl<
     }
 
     fn build_not(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        match *arg_layout {
-            Layout::BOOL => {
+        match self.interner().get(*arg_layout).repr {
+            LayoutRepr::BOOL => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
 
@@ -2817,9 +2825,10 @@ impl<
     }
 
     fn return_symbol(&mut self, sym: &Symbol, layout: &InLayout<'a>) {
+        let repr = self.layout_interner.get(*layout).repr;
         if self.storage_manager.is_stored_primitive(sym) {
             // Just load it to the correct type of reg as a stand alone value.
-            match *layout {
+            match repr {
                 single_register_integers!() => {
                     self.storage_manager.load_to_specified_general_reg(
                         &mut self.buf,
@@ -2834,7 +2843,7 @@ impl<
                         CC::FLOAT_RETURN_REGS[0],
                     );
                 }
-                other => match self.layout_interner.get(other).repr {
+                other => match other {
                     LayoutRepr::Boxed(_) => {
                         // treat like a 64-bit integer
                         self.storage_manager.load_to_specified_general_reg(
@@ -3195,7 +3204,7 @@ impl<
         src2: &Symbol,
         arg_layout: &InLayout<'a>,
     ) {
-        match *arg_layout {
+        match self.interner().get(*arg_layout).repr {
             single_register_integers!() => {
                 let buf = &mut self.buf;
 
@@ -3218,7 +3227,7 @@ impl<
                     ASM::unsigned_compare_reg64(buf, register_width, op, dst, src1, src2)
                 }
             }
-            Layout::F32 | Layout::F64 => {
+            LayoutRepr::F32 | LayoutRepr::F64 => {
                 let float_width = match *arg_layout {
                     Layout::F32 => FloatWidth::F32,
                     Layout::F64 => FloatWidth::F64,
@@ -3600,28 +3609,28 @@ macro_rules! zero_extended_int_builtins {
 #[macro_export]
 macro_rules! single_register_int_builtins {
     () => {
-        Layout::I8
-            | Layout::I16
-            | Layout::I32
-            | Layout::I64
-            | Layout::U8
-            | Layout::U16
-            | Layout::U32
-            | Layout::U64
+        LayoutRepr::I8
+            | LayoutRepr::I16
+            | LayoutRepr::I32
+            | LayoutRepr::I64
+            | LayoutRepr::U8
+            | LayoutRepr::U16
+            | LayoutRepr::U32
+            | LayoutRepr::U64
     };
 }
 
 #[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Layout::BOOL | single_register_int_builtins!() | Layout::OPAQUE_PTR
+        LayoutRepr::BOOL | single_register_int_builtins!() | LayoutRepr::OPAQUE_PTR
     };
 }
 
 #[macro_export]
 macro_rules! single_register_floats {
     () => {
-        Layout::F32 | Layout::F64
+        LayoutRepr::F32 | LayoutRepr::F64
     };
 }
 

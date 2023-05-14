@@ -147,12 +147,12 @@ fn build_eq<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let lhs_layout = &layout_interner.runtime_representation_in(lhs_layout);
     let rhs_layout = &layout_interner.runtime_representation_in(rhs_layout);
-    if lhs_layout != rhs_layout {
-        panic!(
-            "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",
-            lhs_layout, rhs_layout
-        );
-    }
+    debug_assert!(
+        layout_interner.eq_repr(*lhs_layout, *rhs_layout),
+        "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",
+        lhs_layout,
+        rhs_layout
+    );
 
     match layout_interner.get(*lhs_layout).repr {
         LayoutRepr::Builtin(builtin) => build_eq_builtin(
