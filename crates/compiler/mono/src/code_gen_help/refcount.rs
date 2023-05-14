@@ -485,7 +485,7 @@ pub fn refcount_resetref_proc_body<'a>(
 
     let union_layout = match layout_interner.get(layout).repr {
         LayoutRepr::Union(u) => u,
-        _ => unimplemented!("Reset is only implemented for UnionLayout"),
+        _ => unimplemented!("Resetref is only implemented for UnionLayout"),
     };
 
     // Whenever we recurse into a child layout we will want to Decrement
@@ -498,29 +498,33 @@ pub fn refcount_resetref_proc_body<'a>(
 
     // Reset structure is not unique. Decrement it and return a NULL pointer.
     let else_stmt = {
-        let decrement_unit = root.create_symbol(ident_ids, "decrement_unit");
-        let decrement_expr = root
-            .call_specialized_op(
-                ident_ids,
-                ctx,
-                layout_interner,
-                layout,
-                root.arena.alloc([structure]),
-            )
-            .unwrap();
-        let decrement_stmt = |next| Stmt::Let(decrement_unit, decrement_expr, LAYOUT_UNIT, next);
+        // Set up the context for a decref.
+        let jp_decref = JoinPointId(root.create_symbol(ident_ids, "jp_decref"));
+        ctx.op = HelperOp::DecRef(jp_decref);
+
+        // Generate the decref code.
+        let rc_stmt = refcount_generic(root, ident_ids, ctx, layout_interner, layout, structure);
 
         // Null pointer with union layout
         let null = root.create_symbol(ident_ids, "null");
         let null_stmt = |next| Stmt::Let(null, Expr::NullPointer, layout, next);
 
-        decrement_stmt(root.arena.alloc(
-            //
-            null_stmt(root.arena.alloc(
+        // Inline the refcounting code instead of making a function. Don't iterate fields,
+        // and replace any return statements with jumps to the `following` statement.
+        let join = Stmt::Join {
+            id: jp_decref,
+            parameters: &[],
+            body: root.arena.alloc(root.arena.alloc(
                 //
-                Stmt::Ret(null),
+                null_stmt(root.arena.alloc(
+                    //
+                    Stmt::Ret(null),
+                )),
             )),
-        ))
+            remainder: root.arena.alloc(rc_stmt),
+        };
+
+        root.arena.alloc(join)
     };
 
     let if_stmt = Stmt::if_then_else(
