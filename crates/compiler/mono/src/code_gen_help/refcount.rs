@@ -721,6 +721,7 @@ fn rc_ptr_from_data_ptr_help<'a>(
 
 enum Pointer {
     ToData(Symbol),
+    #[allow(unused)]
     ToRefcount(Symbol),
 }
 
