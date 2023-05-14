@@ -3,6 +3,12 @@ test-gen-llvm = "test -p test_gen"
 test-gen-dev = "test -p roc_gen_dev -p test_gen --no-default-features --features gen-dev"
 test-gen-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --features gen-wasm"
 test-gen-llvm-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --features gen-llvm-wasm"
+
+nextest-gen-llvm = "nextest run -p test_gen"
+nextest-gen-dev = "nextest run -p roc_gen_dev -p test_gen --no-default-features --features gen-dev"
+nextest-gen-wasm = "nextest run -p roc_gen_wasm -p test_gen --no-default-features --features gen-wasm"
+nextest-gen-llvm-wasm = "nextest run -p roc_gen_wasm -p test_gen --no-default-features --features gen-llvm-wasm"
+
 uitest = "test -p uitest"
 
 [target.wasm32-unknown-unknown]
