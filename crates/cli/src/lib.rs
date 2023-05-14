@@ -406,17 +406,22 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     // Spawn the root task
     if !path.exists() {
-        let path_string = path.to_string_lossy();
+        let current_dir = env::current_dir().unwrap();
+        let expected_file_path = current_dir.join(filename);
+
+        let current_dir_string = current_dir.to_string_lossy();
+        let expected_file_path_string = expected_file_path.to_string_lossy();
 
         // TODO these should use roc_reporting to display nicer error messages.
         match matches.value_source(ROC_FILE) {
             Some(ValueSource::DefaultValue) => {
                 eprintln!(
-                    "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                    "\nThe current directory ({}) does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                    current_dir_string,
                     DEFAULT_ROC_FILENAME
                 )
             }
-            _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
+            _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", expected_file_path_string),
         }
 
         process::exit(1);
@@ -541,17 +546,22 @@ pub fn build(
 
         // Spawn the root task
         if !path.exists() {
-            let path_string = path.to_string_lossy();
+            let current_dir = env::current_dir().unwrap();
+            let expected_file_path = current_dir.join(filename);
+
+            let current_dir_string = current_dir.to_string_lossy();
+            let expected_file_path_string = expected_file_path.to_string_lossy();
 
             // TODO these should use roc_reporting to display nicer error messages.
             match matches.value_source(ROC_FILE) {
                 Some(ValueSource::DefaultValue) => {
                     eprintln!(
-                        "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                        "\nThe current directory ({}) does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                        current_dir_string,
                         DEFAULT_ROC_FILENAME
                     )
                 }
-                _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
+                _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", expected_file_path_string),
             }
 
             process::exit(1);
