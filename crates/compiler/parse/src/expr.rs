@@ -2542,6 +2542,12 @@ pub enum RecordField<'a> {
     ApplyValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
 }
 
+#[derive(Debug)]
+pub struct FoundApplyValue;
+
+#[derive(Debug)]
+struct FoundOptionalValue;
+
 impl<'a> RecordField<'a> {
     fn is_apply_value(&self) -> bool {
         let mut current = self;
@@ -2557,7 +2563,10 @@ impl<'a> RecordField<'a> {
         }
     }
 
-    pub fn to_assigned_field(&self, arena: &'a Bump) -> Result<AssignedField<'a, Expr<'a>>, ()> {
+    pub fn to_assigned_field(
+        &self,
+        arena: &'a Bump,
+    ) -> Result<AssignedField<'a, Expr<'a>>, FoundApplyValue> {
         use AssignedField::*;
 
         match self {
@@ -2571,7 +2580,7 @@ impl<'a> RecordField<'a> {
 
             RecordField::LabelOnly(loc_label) => Ok(LabelOnly(*loc_label)),
 
-            RecordField::ApplyValue(_, _, _) => Err(()),
+            RecordField::ApplyValue(_, _, _) => Err(FoundApplyValue),
 
             RecordField::SpaceBefore(field, spaces) => {
                 let assigned_field = field.to_assigned_field(arena)?;
@@ -2587,7 +2596,10 @@ impl<'a> RecordField<'a> {
         }
     }
 
-    fn to_builder_field(&self, arena: &'a Bump) -> Result<RecordBuilderField<'a>, ()> {
+    fn to_builder_field(
+        &self,
+        arena: &'a Bump,
+    ) -> Result<RecordBuilderField<'a>, FoundOptionalValue> {
         use RecordBuilderField::*;
 
         match self {
@@ -2595,7 +2607,7 @@ impl<'a> RecordField<'a> {
                 Ok(Value(*loc_label, spaces, loc_expr))
             }
 
-            RecordField::OptionalValue(_, _, _) => Err(()),
+            RecordField::OptionalValue(_, _, _) => Err(FoundOptionalValue),
 
             RecordField::LabelOnly(loc_label) => Ok(LabelOnly(*loc_label)),
 
@@ -2764,7 +2776,7 @@ fn record_update_help<'a>(
                 region: loc_field.region,
                 value: builder_field,
             }),
-            Err(()) => Err(EExpr::RecordUpdateBuilder(loc_field.region)),
+            Err(FoundApplyValue) => Err(EExpr::RecordUpdateBuilder(loc_field.region)),
         }
     });
 
@@ -2784,7 +2796,7 @@ fn record_builder_help<'a>(
                 region: loc_field.region,
                 value: builder_field,
             }),
-            Err(()) => Err(EExpr::OptionalValueInRecordBuilder(loc_field.region)),
+            Err(FoundOptionalValue) => Err(EExpr::OptionalValueInRecordBuilder(loc_field.region)),
         }
     });
 
