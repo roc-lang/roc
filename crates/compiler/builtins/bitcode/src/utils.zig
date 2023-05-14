@@ -258,6 +258,11 @@ inline fn decref_ptr_to_refcount(
 ) void {
     if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
+
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("| decrement {*}: ", .{refcount_ptr});
+    }
+
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = refcount_ptr[0];
     if (refcount != REFCOUNT_MAX_ISIZE) {
@@ -271,7 +276,7 @@ inline fn decref_ptr_to_refcount(
                     const oldH = old - REFCOUNT_ONE + 1;
                     const newH = new - REFCOUNT_ONE + 1;
 
-                    std.debug.print("| decrement {*}: {} - 1 = {}!\n", .{ refcount_ptr, oldH, newH });
+                    std.debug.print("{} - 1 = {}!\n", .{ oldH, newH });
                 }
 
                 if (refcount == REFCOUNT_ONE_ISIZE) {
