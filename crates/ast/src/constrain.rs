@@ -289,6 +289,7 @@ pub fn constrain_expr<'a>(
             let fn_reason = Reason::FnCall {
                 name: opt_symbol,
                 arity: args.len() as u8,
+                called_via: *called_via,
             };
 
             let fn_con = constrain_expr(arena, env, call_expr, fn_expected, region);

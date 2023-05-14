@@ -1138,7 +1138,11 @@ fn to_expr_report<'b>(
                     ),
                 }
             }
-            Reason::FnCall { name, arity } => match describe_wanted_function(&found) {
+            Reason::FnCall {
+                name,
+                arity,
+                called_via,
+            } => match describe_wanted_function(&found) {
                 DescribedFunction::NotAFunction(tag) => {
                     let this_value = match name {
                         None => alloc.text("This value"),
@@ -1159,7 +1163,14 @@ fn to_expr_report<'b>(
                                 ),
                             ]),
                             alloc.region(lines.convert_region(expr_region)),
-                            alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?"),
+                            match called_via {
+                                CalledVia::RecordBuilder => {
+                                    alloc.hint("Did you mean to apply it to a function first?")
+                                },
+                                _ => {
+                                    alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?")
+                                }
+                            }
                         ]),
                         Other => alloc.stack([
                             alloc.concat([
@@ -1174,7 +1185,21 @@ fn to_expr_report<'b>(
                                 )),
                             ]),
                             alloc.region(lines.convert_region(expr_region)),
-                            alloc.reflow("Are there any missing commas? Or missing parentheses?"),
+                            match called_via {
+                                CalledVia::RecordBuilder => {
+                                    alloc.concat([
+                                        alloc.tip(),
+                                        alloc.reflow("Replace "),
+                                        alloc.keyword("<-"),
+                                        alloc.reflow(" with "),
+                                        alloc.keyword(":"),
+                                        alloc.reflow(" to assign the field directly.")
+                                    ])
+                                }
+                                _ => {
+                                    alloc.reflow("Are there any missing commas? Or missing parentheses?")
+                                }
+                            }
                         ]),
                     };
 

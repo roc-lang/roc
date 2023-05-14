@@ -10177,6 +10177,166 @@ I recommend using camelCase. It's the standard style in Roc code!
         )
     );
 
+    // Record Builders
+
+    test_report!(
+        optional_field_in_record_builder,
+        indoc!(
+            r#"
+            { 
+                a <- apply "a",
+                b,
+                c ? "optional"
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD BUILDER ────────── tmp/optional_field_in_record_builder/Test.roc ─
+
+    I am partway through parsing a record builder, and I found an optional
+    field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { 
+    5│          a <- apply "a",
+    6│          b,
+    7│          c ? "optional"
+                ^^^^^^^^^^^^^^
+
+    Optional fields can only appear when you destructure a record.
+    "###
+    );
+
+    test_report!(
+        record_update_builder,
+        indoc!(
+            r#"
+            { rec &
+                a <- apply "a",
+                b: 3
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD UPDATE ────────────────────── tmp/record_update_builder/Test.roc ─
+
+    I am partway through parsing a record update, and I found a record
+    builder field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { rec &
+    5│          a <- apply "a",
+                ^^^^^^^^^^^^^^
+
+    Record builders cannot be updated like records.
+    "###
+    );
+
+    test_report!(
+        multiple_record_builders,
+        indoc!(
+            r#"
+            succeed
+                { a <- apply "a" }
+                { b <- apply "b" }
+            "#
+        ),
+        @r###"
+    ── MULTIPLE RECORD BUILDERS ────────────────────────────── /code/proj/Main.roc ─
+
+    This function is applied to multiple record builders:
+
+    4│>      succeed
+    5│>          { a <- apply "a" }
+    6│>          { b <- apply "b" }
+
+    Note: Functions can only take at most one record builder!
+
+    Tip: You can combine them or apply them separately.
+
+    "###
+    );
+
+    test_report!(
+        unapplied_record_builder,
+        indoc!(
+            r#"
+            { a <- apply "a" }
+            "#
+        ),
+        @r###"
+    ── UNAPPLIED RECORD BUILDER ────────────────────────────── /code/proj/Main.roc ─
+
+    This record builder was not applied to a function:
+
+    4│      { a <- apply "a" }
+            ^^^^^^^^^^^^^^^^^^
+
+    However, we need a function to construct the record.
+
+    Note: Functions must be applied directly. The pipe operator (|>) cannot be used.
+    "###
+    );
+
+    test_report!(
+        record_builder_apply_non_function,
+        indoc!(
+            r#"
+            succeed = \_ -> crash ""
+
+            succeed { 
+                a <- "a",
+            }
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value is not a function, but it was given 1 argument:
+
+    7│          a <- "a",
+                     ^^^
+
+    Tip: Replace `<-` with `:` to assign the field directly.
+    "###
+    );
+
+    // Skipping test because opaque types defined in the same module
+    // do not fail with the special opaque type error
+    //
+    // test_report!(
+    //     record_builder_apply_opaque,
+    //     indoc!(
+    //         r#"
+    //         succeed = \_ -> crash ""
+
+    //         Decode := {}
+
+    //         get : Str -> Decode
+    //         get = \_ -> @Decode {}
+
+    //         succeed {
+    //             a <- get "a",
+    //             # missing |> apply ^
+    //         }
+    //         "#
+    //     ),
+    //     @r###"
+    // ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    // This value is an opaque type, so it cannot be called with an argument:
+
+    // 12│          a <- get "a",
+    //                   ^^^^^^^
+
+    // Hint: Did you mean to apply it to a function first?
+    //     "###
+    // );
+
     test_report!(
         destructure_assignment_introduces_no_variables_nested,
         indoc!(

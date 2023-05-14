@@ -3564,6 +3564,7 @@ pub enum Reason {
     FnCall {
         name: Option<Symbol>,
         arity: u8,
+        called_via: CalledVia,
     },
     LowLevelOpArg {
         op: LowLevel,

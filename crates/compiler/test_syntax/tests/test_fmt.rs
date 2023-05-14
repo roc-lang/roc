@@ -1927,6 +1927,98 @@ mod test_fmt {
     }
 
     #[test]
+    fn record_builder() {
+        expr_formats_same(indoc!(
+            r#"
+            { a: 1, b <- get "b" |> batch, c <- get "c" |> batch, d }
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                {   a: 1, b <-  get "b" |> batch,   c <- get "c" |> batch }
+                "#
+            ),
+            indoc!(
+                r#"
+                { a: 1, b <- get "b" |> batch, c <- get "c" |> batch }
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+            {
+                a: 1,
+                b <- get "b" |> batch,
+                c <- get "c" |> batch,
+                d,
+            }
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                {   a: 1, b <-  get "b" |> batch,
+                c <- get "c" |> batch, d }
+                "#
+            ),
+            indoc!(
+                r#"
+                {
+                    a: 1,
+                    b <- get "b" |> batch,
+                    c <- get "c" |> batch,
+                    d,
+                }
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn multiline_record_builder_func_arg() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                succeed {  a: get "a" |> batch,
+                    b: get "b" |> batch, 
+                }
+                "#
+            ),
+            indoc!(
+                r#"
+                succeed {
+                    a: get "a" |> batch,
+                    b: get "b" |> batch,
+                }
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn can_format_multiple_record_builders() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                succeed { a <- get "a" } 
+                    { b <- get "b" }
+                "#
+            ),
+            indoc!(
+                r#"
+                succeed
+                    { a <- get "a" }
+                    { b <- get "b" }
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn final_comments_in_records() {
         expr_formats_same(indoc!(
             r#"

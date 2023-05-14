@@ -549,6 +549,46 @@ fn to_expr_report<'a>(
             }
         }
 
+        EExpr::OptionalValueInRecordBuilder(region) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a record builder, and I found an optional field:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("Optional fields can only appear when you destructure a record."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD RECORD BUILDER".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EExpr::RecordUpdateBuilder(region) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a record update, and I found a record builder field:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("Record builders cannot be updated like records."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD RECORD UPDATE".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         EExpr::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
 
         &EExpr::Number(ENumber::End, pos) => {

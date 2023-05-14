@@ -1052,6 +1052,9 @@ pub fn canonicalize_expr<'a>(
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
+        ast::Expr::RecordBuilder(_) => {
+            unreachable!("RecordBuilder should have been desugared by now")
+        }
         ast::Expr::Backpassing(_, _, _) => {
             unreachable!("Backpassing should have been desugared by now")
         }
@@ -1352,6 +1355,22 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let problem = MalformedIdentifier((*name).into(), *bad_ident, region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::MultipleRecordBuilders(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = MultipleRecordBuilders(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::UnappliedRecordBuilder(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = UnappliedRecordBuilder(sub_expr.region);
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
