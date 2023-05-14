@@ -85,7 +85,6 @@ pub fn build_app() -> Command {
     let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
         .long(FLAG_MAX_THREADS)
         .help("Limit the number of threads (and hence cores) used during compilation")
-        .num_args(0..=1)
         .value_parser(value_parser!(usize))
         .required(false);
 
@@ -128,7 +127,6 @@ pub fn build_app() -> Command {
     let flag_wasm_stack_size_kb = Arg::new(FLAG_WASM_STACK_SIZE_KB)
         .long(FLAG_WASM_STACK_SIZE_KB)
         .help("Stack size in kilobytes for wasm32 target\n(This only applies when --dev also provided.)")
-        .num_args(0..=1)
         .value_parser(value_parser!(u32))
         .required(false);
 
