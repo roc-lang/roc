@@ -1290,10 +1290,7 @@ fn symbol_layout_reusability<'a>(
 /**
    Check if a union layout can be reused. by verifying if the tag is not nullable.
 */
-fn can_reuse_union_layout_tag<'a>(
-    union_layout: UnionLayout<'a>,
-    tag_id_option: Option<Tag>,
-) -> Reuse<'a> {
+fn can_reuse_union_layout_tag(union_layout: UnionLayout, tag_id_option: Option<Tag>) -> Reuse {
     match union_layout {
         UnionLayout::NonRecursive(_) => Reuse::Nonreusable,
         // Non nullable union layouts
