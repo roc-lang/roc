@@ -409,8 +409,8 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         let current_dir = env::current_dir().unwrap();
         let expected_file_path = current_dir.join(filename);
 
-        let current_dir_string = current_dir.to_string_lossy();
-        let expected_file_path_string = expected_file_path.to_string_lossy();
+        let current_dir_string = current_dir.display();
+        let expected_file_path_string = expected_file_path.display();
 
         // TODO these should use roc_reporting to display nicer error messages.
         match matches.value_source(ROC_FILE) {
@@ -549,8 +549,8 @@ pub fn build(
             let current_dir = env::current_dir().unwrap();
             let expected_file_path = current_dir.join(filename);
 
-            let current_dir_string = current_dir.to_string_lossy();
-            let expected_file_path_string = expected_file_path.to_string_lossy();
+            let current_dir_string = current_dir.display();
+            let expected_file_path_string = expected_file_path.display();
 
             // TODO these should use roc_reporting to display nicer error messages.
             match matches.value_source(ROC_FILE) {
