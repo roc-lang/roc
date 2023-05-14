@@ -648,12 +648,19 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
+            let newer_remainder = consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages(lookups.iter().copied()),
+                new_remainder,
+            );
+
             arena.alloc(Stmt::Expect {
                 condition: *condition,
                 region: *region,
                 lookups,
                 variables,
-                remainder: new_remainder,
+                remainder: newer_remainder,
             })
         }
         Stmt::ExpectFx {
@@ -665,12 +672,19 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
+            let newer_remainder = consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages(lookups.iter().copied()),
+                new_remainder,
+            );
+
             arena.alloc(Stmt::ExpectFx {
                 condition: *condition,
                 region: *region,
                 lookups,
                 variables,
-                remainder: new_remainder,
+                remainder: newer_remainder,
             })
         }
         Stmt::Dbg {
