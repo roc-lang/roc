@@ -500,13 +500,12 @@ impl<'a> CodeGenHelp<'a> {
                     niche: Niche::NONE,
                 }
             }
-            HelperOp::Reset => ProcLayout {
+            HelperOp::Reset | HelperOp::ResetRef => ProcLayout {
                 arguments: self.arena.alloc([layout]),
                 result: layout,
                 niche: Niche::NONE,
             },
             HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
-            HelperOp::ResetRef => unreachable!("No generated Proc for ResetRef"),
             HelperOp::Eq => ProcLayout {
                 arguments: self.arena.alloc([layout, layout]),
                 result: LAYOUT_BOOL,
