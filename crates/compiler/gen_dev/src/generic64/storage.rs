@@ -1236,8 +1236,8 @@ impl<
                 let reg = self.load_to_float_reg(buf, &symbol);
                 ASM::mov_base32_freg64(buf, base_offset, reg);
             }
-            _ => {
-                if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get(layout).repr {
+            _ => match layout_interner.get(layout).repr {
+                LayoutRepr::LambdaSet(lambda_set) => {
                     self.jump_argument_stack_storage(
                         layout_interner,
                         buf,
@@ -1245,13 +1245,18 @@ impl<
                         lambda_set.runtime_representation(),
                         base_offset,
                     );
-                } else {
+                }
+                LayoutRepr::Boxed(_) => {
+                    let reg = self.load_to_general_reg(buf, &symbol);
+                    ASM::mov_base32_reg64(buf, base_offset, reg);
+                }
+                _ => {
                     internal_error!(
                         r"cannot load non-primitive layout ({:?}) to primitive stack location",
-                        layout
+                        layout_interner.dbg(layout)
                     )
                 }
-            }
+            },
         }
     }
 

@@ -152,22 +152,28 @@ const RC_TYPE = Refcount.normal;
 
 pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == Refcount.none) return;
+
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("| increment {*}: ", .{ptr_to_refcount});
+    }
+
     // Ensure that the refcount is not whole program lifetime.
     if (ptr_to_refcount.* != REFCOUNT_MAX_ISIZE) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             Refcount.normal => {
-                const old = @bitCast(usize, ptr_to_refcount.*);
-                ptr_to_refcount.* += amount;
-                const new = @bitCast(usize, ptr_to_refcount.*);
-
                 if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const old = @bitCast(usize, ptr_to_refcount.*);
+                    const new = old + @intCast(usize, amount);
+
                     const oldH = old - REFCOUNT_ONE + 1;
                     const newH = new - REFCOUNT_ONE + 1;
 
-                    std.debug.print("| increment {*}: {} + {} = {}!\n", .{ ptr_to_refcount, oldH, amount, newH });
+                    std.debug.print("{} + {} = {}!\n", .{ oldH, amount, newH });
                 }
+
+                ptr_to_refcount.* += amount;
             },
             Refcount.atomic => {
                 _ = @atomicRmw(isize, ptr_to_refcount, std.builtin.AtomicRmwOp.Add, amount, Monotonic);
@@ -252,6 +258,11 @@ inline fn decref_ptr_to_refcount(
 ) void {
     if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
+
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("| decrement {*}: ", .{refcount_ptr});
+    }
+
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = refcount_ptr[0];
     if (refcount != REFCOUNT_MAX_ISIZE) {
@@ -265,7 +276,7 @@ inline fn decref_ptr_to_refcount(
                     const oldH = old - REFCOUNT_ONE + 1;
                     const newH = new - REFCOUNT_ONE + 1;
 
-                    std.debug.print("| decrement {*}: {} - 1 = {}!\n", .{ refcount_ptr, oldH, newH });
+                    std.debug.print("{} - 1 = {}!\n", .{ oldH, newH });
                 }
 
                 if (refcount == REFCOUNT_ONE_ISIZE) {

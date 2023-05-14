@@ -67,6 +67,7 @@ impl<'a> ImportDispatcher for DefaultImportDispatcher<'a> {
 pub(crate) enum Error {
     Type(ValueType, ValueType),
     StackEmpty,
+    MemoryAccessOutOfBounds(u32, u32),
     UnreachableOp,
 }
 
@@ -83,6 +84,12 @@ impl Error {
                 format!(
                     "ERROR: I tried to pop a value from the stack at file offset {:#x}, but it was empty.\n",
                     file_offset
+                )
+            }
+            Error::MemoryAccessOutOfBounds(addr, memory_size) => {
+                format!(
+                    "ERROR: A Wasm instruction at file offset {:#x} tried to access memory at {:#x} but the maximum address is {:#x}\n",
+                    file_offset, addr, memory_size-1
                 )
             }
             Error::UnreachableOp => {
