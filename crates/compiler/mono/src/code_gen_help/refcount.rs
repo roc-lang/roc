@@ -848,15 +848,52 @@ fn refcount_str<'a>(
 
     let return_unit = arena.alloc(rc_return_stmt(root, ident_ids, ctx));
 
+    let one = root.create_symbol(ident_ids, "one");
+    let one_expr = Expr::Literal(Literal::Int(1i128.to_ne_bytes()));
+    let one_stmt = |next| Stmt::Let(one, one_expr, layout_isize, next);
+
+    let data_ptr_int = root.create_symbol(ident_ids, "data_ptr_int");
+    let data_ptr_int_stmt = |next| {
+        let_lowlevel(
+            arena,
+            layout_isize,
+            data_ptr_int,
+            PtrCast,
+            &[last_word],
+            next,
+        )
+    };
+
+    let data_ptr = root.create_symbol(ident_ids, "data_ptr");
+    let data_ptr_stmt = |next| {
+        let_lowlevel(
+            arena,
+            layout_isize,
+            data_ptr,
+            NumShiftLeftBy,
+            &[data_ptr_int, one],
+            next,
+        )
+    };
+
     // when the string is a slice, the capacity field is a pointer to the refcount
-    let slice_branch = modify_refcount(
-        root,
-        ident_ids,
-        ctx,
-        Pointer::ToRefcount(last_word),
-        alignment,
-        return_unit,
-    );
+    let slice_branch = one_stmt(arena.alloc(
+        //
+        data_ptr_int_stmt(arena.alloc(
+            //
+            data_ptr_stmt(arena.alloc(
+                //
+                modify_refcount(
+                    root,
+                    ident_ids,
+                    ctx,
+                    Pointer::ToData(data_ptr),
+                    alignment,
+                    return_unit,
+                ),
+            )),
+        )),
+    ));
 
     // Characters pointer for a real string
     let string_chars = root.create_symbol(ident_ids, "string_chars");
