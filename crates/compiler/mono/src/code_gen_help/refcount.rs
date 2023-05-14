@@ -1225,15 +1225,6 @@ fn refcount_list_elems<'a>(
         layout: layout_isize,
     };
 
-    // end address is passed (instead of captured) to work around dev backend bugs
-    // for some reason, the stack space used for a capture can be overwritten after some iterations
-    let end_address = root.create_symbol(ident_ids, "end_address");
-    let param_end_address = Param {
-        symbol: end_address,
-        ownership: Ownership::Owned,
-        layout: layout_isize,
-    };
-
     //
     // if we haven't reached the end yet...
     //
@@ -1280,16 +1271,7 @@ fn refcount_list_elems<'a>(
     //
 
     let is_end = root.create_symbol(ident_ids, "is_end");
-    let is_end_stmt = |next| {
-        let_lowlevel(
-            arena,
-            LAYOUT_BOOL,
-            is_end,
-            NumGte,
-            &[addr, end_address],
-            next,
-        )
-    };
+    let is_end_stmt = |next| let_lowlevel(arena, LAYOUT_BOOL, is_end, NumGte, &[addr, end], next);
 
     let if_end_of_list = Stmt::if_then_else(
         arena,
@@ -1304,7 +1286,7 @@ fn refcount_list_elems<'a>(
                     //
                     next_addr_stmt(arena.alloc(
                         //
-                        Stmt::Jump(elems_loop, arena.alloc([next_addr, end_address])),
+                        Stmt::Jump(elems_loop, arena.alloc([next_addr])),
                     )),
                 )),
             )),
@@ -1313,7 +1295,7 @@ fn refcount_list_elems<'a>(
 
     let joinpoint_loop = Stmt::Join {
         id: elems_loop,
-        parameters: arena.alloc([param_addr, param_end_address]),
+        parameters: arena.alloc([param_addr]),
         body: arena.alloc(
             //
             is_end_stmt(
