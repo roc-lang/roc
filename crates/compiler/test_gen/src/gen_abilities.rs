@@ -365,13 +365,13 @@ fn encode_use_stdlib() {
                         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
@@ -390,13 +390,13 @@ fn encode_use_stdlib_without_wrapping_custom() {
             toEncoder = \@HelloWorld {} -> Encode.string "Hello, World!\n"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
@@ -414,7 +414,7 @@ fn encode_derive_to_encoder_for_opaque() {
             HelloWorld := { a: Str } has [Encoding]
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -442,13 +442,13 @@ fn to_encoder_encode_custom_has_capture() {
                         |> Encode.appendWith (Encode.string s1) fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
@@ -475,7 +475,7 @@ mod encode_immediate {
                 app "test" imports [Encode, Json] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes "foo" Json.toUtf8) is
+                    when Str.fromUtf8 (Encode.toBytes "foo" Json.json) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -494,7 +494,7 @@ mod encode_immediate {
                 app "test" imports [Encode, Json] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] Json.toUtf8) is
+                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] Json.json) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -513,7 +513,7 @@ mod encode_immediate {
                 app "test" imports [Encode, Json] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes Bool.false Json.toUtf8) is
+                    when Str.fromUtf8 (Encode.toBytes Bool.false Json.json) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -534,7 +534,7 @@ mod encode_immediate {
                         app "test" imports [Encode, Json] provides [main] to "./platform"
 
                         main =
-                            when Str.fromUtf8 (Encode.toBytes {}{} Json.toUtf8) is
+                            when Str.fromUtf8 (Encode.toBytes {}{} Json.json) is
                                 Ok s -> s
                                 _ -> "<bad>"
                         "#
@@ -574,7 +574,7 @@ fn encode_derived_record_one_field_string() {
                 provides [main] to "./platform"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -597,7 +597,7 @@ fn encode_derived_record_two_fields_strings() {
 
             main =
                 rcd = {a: "foo", b: "bar"}
-                result = Str.fromUtf8 (Encode.toBytes rcd Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes rcd Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -620,7 +620,7 @@ fn encode_derived_nested_record_string() {
 
             main =
                 rcd = {a: {b: "bar"}}
-                encoded = Encode.toBytes rcd Json.toUtf8
+                encoded = Encode.toBytes rcd Json.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -644,7 +644,7 @@ fn encode_derived_tag_one_payload_string() {
 
             main =
                 x = A "foo"
-                result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes x Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -667,7 +667,7 @@ fn encode_derived_tag_two_payloads_string() {
 
             main =
                 x = A "foo" "bar"
-                result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes x Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -690,7 +690,7 @@ fn encode_derived_nested_tag_string() {
 
             main =
                 x = A (B "foo" "bar")
-                encoded = Encode.toBytes x Json.toUtf8
+                encoded = Encode.toBytes x Json.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -714,7 +714,7 @@ fn encode_derived_nested_record_tag_record() {
 
             main =
                 x = {a: (B ({c: "foo"}))}
-                encoded = Encode.toBytes x Json.toUtf8
+                encoded = Encode.toBytes x Json.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -738,7 +738,7 @@ fn encode_derived_list_string() {
 
             main =
                 lst = ["foo", "bar", "baz"]
-                encoded = Encode.toBytes lst Json.toUtf8
+                encoded = Encode.toBytes lst Json.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -762,7 +762,7 @@ fn encode_derived_list_of_records() {
 
             main =
                 lst = [{a: "foo"}, {a: "bar"}, {a: "baz"}]
-                encoded = Encode.toBytes lst Json.toUtf8
+                encoded = Encode.toBytes lst Json.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -786,7 +786,7 @@ fn encode_derived_list_of_lists_of_strings() {
 
             main =
                 lst = [["a", "b"], ["c", "d", "e"], ["f"]]
-                encoded = Encode.toBytes lst Json.toUtf8
+                encoded = Encode.toBytes lst Json.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -812,7 +812,7 @@ fn encode_derived_record_with_many_types() {
                 fresh : [Fresh Str, Rotten Str]
                 fresh = Fresh "tomatoes"
                 rcd = {actors: ["Idris Elba", "Mila Kunis"], year: 2004u16, rating: {average: 7u8, min: 1u8, max: 10u8, sentiment: fresh}}
-                result = Str.fromUtf8 (Encode.toBytes rcd Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes rcd Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -837,7 +837,7 @@ fn encode_derived_tuple_two_fields() {
 
             main =
                 tup = ("foo", 10u8)
-                result = Str.fromUtf8 (Encode.toBytes tup Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes tup Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -860,7 +860,7 @@ fn encode_derived_tuple_of_tuples() {
 
             main =
                 tup = ( ("foo", 10u8), (23u8, "bar", 15u8) )
-                result = Str.fromUtf8 (Encode.toBytes tup Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes tup Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -886,7 +886,7 @@ fn encode_derived_generic_record_with_different_field_types() {
             q = @Q {a: 10u32, b: "fieldb"}
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes q Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes q Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -913,7 +913,7 @@ fn encode_derived_generic_tag_with_different_field_types() {
             q = @Q (B 67)
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes q Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes q Json.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -945,7 +945,7 @@ fn decode_use_stdlib() {
                                 Err e -> {result: Err e, rest}
 
             main =
-                when Decode.fromBytes [49, 53] Json.fromUtf8 is
+                when Decode.fromBytes [49, 53] Json.json is
                     Ok (@MyNum n) -> n
                     _ -> 101
             "#
@@ -971,7 +971,7 @@ fn decode_derive_decoder_for_opaque() {
             HelloWorld := { a: Str } has [Decoding]
 
             main =
-                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes Json.json is
                     Ok (@HelloWorld {a}) -> a
                     _ -> "FAIL"
             "#
@@ -1002,7 +1002,7 @@ fn decode_use_stdlib_json_list() {
                                 Err e -> {result: Err e, rest}
 
             main =
-                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes Json.json is
                     Ok (@MyNumList lst) -> lst
                     _ -> []
             "#
@@ -1034,7 +1034,7 @@ mod decode_immediate {
                 app "test" imports [Json] provides [main] to "./platform"
 
                 main =
-                    when Str.toUtf8 "\"foo\"" |> Decode.fromBytes Json.fromUtf8 is
+                    when Str.toUtf8 "\"foo\"" |> Decode.fromBytes Json.json is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -1056,7 +1056,7 @@ mod decode_immediate {
                     input = Str.toUtf8 "[1,2,3]"
                     expected = [1,2,3]
 
-                    actual = Decode.fromBytes input Json.fromUtf8 |> Result.withDefault []
+                    actual = Decode.fromBytes input Json.json |> Result.withDefault []
 
                     actual == expected
                 "#
@@ -1075,7 +1075,7 @@ mod decode_immediate {
                 app "test" imports [Json] provides [main] to "./platform"
 
                 main =
-                    when Str.toUtf8 "false" |> Decode.fromBytes Json.fromUtf8 is
+                    when Str.toUtf8 "false" |> Decode.fromBytes Json.json is
                         Ok s -> s
                         _ -> Bool.true
                 "#
@@ -1096,7 +1096,7 @@ mod decode_immediate {
                         app "test" imports [Json] provides [main] to "./platform"
 
                         main =
-                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes Json.json is
                                 Ok n -> n
                                 _ -> 101{}
                         "#
@@ -1134,7 +1134,7 @@ mod decode_immediate {
                 app "test" imports [Json] provides [main] to "./platform"
 
                 main =
-                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes Json.json is
                         Ok n -> n
                         _ -> 101dec
                 "#
@@ -1154,7 +1154,7 @@ fn decode_list_of_strings() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes Json.json is
                     Ok l -> Str.joinWith l ","
                     _ -> "<bad>"
             "#
@@ -1173,7 +1173,7 @@ fn encode_then_decode_list_of_strings() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Encode.toBytes ["a", "b", "c"] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                when Encode.toBytes ["a", "b", "c"] Json.json |> Decode.fromBytes Json.json is
                     Ok l -> Str.joinWith l ","
                     _ -> "something went wrong"
             "#
@@ -1193,7 +1193,7 @@ fn encode_then_decode_list_of_lists_of_strings() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] Json.json |> Decode.fromBytes Json.json is
                     Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
                     _ -> "something went wrong"
             "#
@@ -1215,7 +1215,7 @@ fn decode_record_two_fields() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json is
                     Ok {first: "ab", second: "cd"} -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1237,7 +1237,7 @@ fn decode_record_two_fields_string_and_int() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes Json.json is
                     Ok {first: "ab", second: 10u8} -> "ab10"
                     _ -> "something went wrong"
             "#
@@ -1259,7 +1259,7 @@ fn decode_record_two_fields_string_and_string_infer() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json is
                     Ok {first, second} -> Str.concat first second
                     _ -> "something went wrong"
             "#
@@ -1281,7 +1281,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json
                 when decoded is
                     Ok rcd -> Str.concat rcd.first rcd.second
                     _ -> "something went wrong"
@@ -1304,7 +1304,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json
                 when decoded is
                     Ok {first, second} -> Str.concat first second
                     _ -> "something went wrong"
@@ -1325,7 +1325,7 @@ fn decode_empty_record() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{}" |> Decode.fromBytes Json.json is
                     Ok {} -> "empty"
                     _ -> "something went wrong"
             "#
@@ -1348,7 +1348,7 @@ fn decode_record_of_record() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes Json.json is
                     Ok {outer: {inner: "a"}, other: {one: "b", two: 10u8}} -> "ab10"
                     _ -> "something went wrong"
             "#
@@ -1370,7 +1370,7 @@ fn decode_tuple_two_elements() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "[\"ab\",10]" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "[\"ab\",10]" |> Decode.fromBytes Json.json is
                     Ok ("ab", 10u8) -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1392,7 +1392,7 @@ fn decode_tuple_of_tuples() {
             app "test" imports [Json] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "[[\"ab\",10],[\"cd\",25]]" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "[[\"ab\",10],[\"cd\",25]]" |> Decode.fromBytes Json.json is
                     Ok ( ("ab", 10u8), ("cd", 25u8) ) -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -2102,7 +2102,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
                     provides [main] to "./platform"
 
             getNumber =
-                { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") Json.fromUtf8
+                { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") Json.json
                         
                 when result is 
                     Ok val -> 

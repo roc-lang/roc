@@ -63,7 +63,7 @@ DecodeError : [TooShort]
 ## ```
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
-##     actual = Decode.fromBytesPartial input Json.fromUtf8
+##     actual = Decode.fromBytesPartial input Json.json
 ##     expected = Ok "hello"
 ##
 ##     actual.result == expected
@@ -136,7 +136,7 @@ decodeWith = \bytes, @Decoder decode, fmt -> decode bytes fmt
 ## ```
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
-##     actual = Decode.fromBytesPartial input Json.fromUtf8
+##     actual = Decode.fromBytesPartial input Json.json
 ##     expected = Ok "hello"
 ##
 ##     actual.result == expected
@@ -150,7 +150,7 @@ fromBytesPartial = \bytes, fmt -> decodeWith bytes decoder fmt
 ## ```
 ## expect
 ##     input = "\"hello\", " |> Str.toUtf8
-##     actual = Decode.fromBytes input Json.fromUtf8
+##     actual = Decode.fromBytes input Json.json
 ##     expected = Ok "hello"
 ##
 ##     actual == expected

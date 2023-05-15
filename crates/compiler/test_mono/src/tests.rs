@@ -1486,7 +1486,7 @@ fn encode_custom_type() {
                     |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1503,7 +1503,7 @@ fn encode_derived_string() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes "abc" Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes "abc" Json.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1521,7 +1521,7 @@ fn encode_derived_record() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "a"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "a"} Json.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1863,7 +1863,7 @@ fn encode_derived_record_one_field_string() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1880,7 +1880,7 @@ fn encode_derived_record_two_field_strings() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1897,7 +1897,7 @@ fn encode_derived_nested_record_string() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1916,7 +1916,7 @@ fn encode_derived_tag_one_field_string() {
         main =
             x : [A Str]
             x = A "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes x Json.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1957,7 +1957,7 @@ fn encode_derived_tag_two_payloads_string() {
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes x Json.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2228,7 +2228,7 @@ fn issue_4749() {
 
         expect
             input = [82, 111, 99]
-            got = Decode.fromBytes input Json.fromUtf8
+            got = Decode.fromBytes input Json.json
             got == Ok "Roc"
         "###
     )
@@ -2467,7 +2467,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
         interface Test exposes [] imports [Json]
 
         getNumber =
-            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.fromUtf8
+            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.json
 
             when result is
                 Ok val ->
@@ -2676,7 +2676,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         accessor = @Q {a : A, b: B}
 
         main =
-            Encode.toBytes accessor Json.toUtf8
+            Encode.toBytes accessor Json.json
         "#
     )
 }
@@ -2716,7 +2716,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
             @Q {a : x, b: x}
 
         main =
-            Encode.toBytes accessor Json.toUtf8
+            Encode.toBytes accessor Json.json
         "#
     )
 }

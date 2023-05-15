@@ -4,12 +4,24 @@ procedure #Derived.0 (#Derived.1):
 
 procedure #Derived.2 (#Derived.3, #Derived.4, #Derived.1):
     let #Derived_gen.7 : Str = "a";
-    let #Derived_gen.8 : Str = CallByName Json.18 #Derived.1;
+    let #Derived_gen.8 : Str = CallByName Json.24 #Derived.1;
     let #Derived_gen.6 : {Str, Str} = Struct {#Derived_gen.7, #Derived_gen.8};
     let #Derived_gen.5 : List {Str, Str} = Array [#Derived_gen.6];
-    let #Derived_gen.4 : List {Str, Str} = CallByName Json.20 #Derived_gen.5;
+    let #Derived_gen.4 : List {Str, Str} = CallByName Json.28 #Derived_gen.5;
     let #Derived_gen.3 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.4 #Derived.4;
     ret #Derived_gen.3;
+
+procedure Bool.1 ():
+    let Bool.49 : Int1 = false;
+    ret Bool.49;
+
+procedure Bool.11 (#Attr.2, #Attr.3):
+    let Bool.50 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.50;
+
+procedure Bool.2 ():
+    let Bool.48 : Int1 = true;
+    ret Bool.48;
 
 procedure Encode.23 (Encode.98):
     ret Encode.98;
@@ -25,11 +37,11 @@ procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     ret Encode.111;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.118 : List U8 = CallByName Json.118 Encode.99 Encode.101 Encode.107;
+    let Encode.118 : List U8 = CallByName Json.233 Encode.99 Encode.101 Encode.107;
     ret Encode.118;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.121 : List U8 = CallByName Json.102 Encode.99 Encode.101 Encode.107;
+    let Encode.121 : List U8 = CallByName Json.181 Encode.99 Encode.101 Encode.107;
     ret Encode.121;
 
 procedure Encode.26 (Encode.105, Encode.106):
@@ -39,163 +51,1304 @@ procedure Encode.26 (Encode.105, Encode.106):
     ret Encode.108;
 
 procedure Json.1 ():
-    let Json.483 : {} = Struct {};
-    ret Json.483;
+    let Json.1171 : [C , C [], C , C , C , C ] = TagId(2) ;
+    ret Json.1171;
 
-procedure Json.102 (Json.103, Json.522, Json.101):
-    let Json.531 : I64 = 34i64;
-    let Json.530 : U8 = CallByName Num.127 Json.531;
-    let Json.528 : List U8 = CallByName List.4 Json.103 Json.530;
-    let Json.529 : List U8 = CallByName Str.12 Json.101;
-    let Json.525 : List U8 = CallByName List.8 Json.528 Json.529;
-    let Json.527 : I64 = 34i64;
-    let Json.526 : U8 = CallByName Num.127 Json.527;
-    let Json.524 : List U8 = CallByName List.4 Json.525 Json.526;
-    ret Json.524;
-
-procedure Json.118 (Json.119, Json.486, Json.117):
-    let Json.519 : I64 = 123i64;
-    let Json.518 : U8 = CallByName Num.127 Json.519;
-    let Json.121 : List U8 = CallByName List.4 Json.119 Json.518;
-    let Json.517 : U64 = CallByName List.6 Json.117;
-    let Json.494 : {List U8, U64} = Struct {Json.121, Json.517};
-    let Json.495 : {} = Struct {};
-    let Json.493 : {List U8, U64} = CallByName List.18 Json.117 Json.494 Json.495;
-    let Json.123 : List U8 = StructAtIndex 0 Json.493;
-    let Json.492 : I64 = 125i64;
-    let Json.491 : U8 = CallByName Num.127 Json.492;
-    let Json.490 : List U8 = CallByName List.4 Json.123 Json.491;
-    ret Json.490;
-
-procedure Json.120 (Json.488, Json.489):
-    let Json.126 : Str = StructAtIndex 0 Json.489;
-    let Json.127 : Str = StructAtIndex 1 Json.489;
-    let Json.124 : List U8 = StructAtIndex 0 Json.488;
-    let Json.125 : U64 = StructAtIndex 1 Json.488;
-    let Json.516 : I64 = 34i64;
-    let Json.515 : U8 = CallByName Num.127 Json.516;
-    let Json.513 : List U8 = CallByName List.4 Json.124 Json.515;
-    let Json.514 : List U8 = CallByName Str.12 Json.126;
-    let Json.510 : List U8 = CallByName List.8 Json.513 Json.514;
-    let Json.512 : I64 = 34i64;
-    let Json.511 : U8 = CallByName Num.127 Json.512;
-    let Json.507 : List U8 = CallByName List.4 Json.510 Json.511;
-    let Json.509 : I64 = 58i64;
-    let Json.508 : U8 = CallByName Num.127 Json.509;
-    let Json.505 : List U8 = CallByName List.4 Json.507 Json.508;
-    let Json.506 : {} = Struct {};
-    let Json.128 : List U8 = CallByName Encode.24 Json.505 Json.127 Json.506;
-    joinpoint Json.500 Json.129:
-        let Json.498 : U64 = 1i64;
-        let Json.497 : U64 = CallByName Num.20 Json.125 Json.498;
-        let Json.496 : {List U8, U64} = Struct {Json.129, Json.497};
-        ret Json.496;
-    in
-    let Json.504 : U64 = 1i64;
-    let Json.501 : Int1 = CallByName Num.24 Json.125 Json.504;
-    if Json.501 then
-        let Json.503 : I64 = 44i64;
-        let Json.502 : U8 = CallByName Num.127 Json.503;
-        let Json.499 : List U8 = CallByName List.4 Json.128 Json.502;
-        jump Json.500 Json.499;
+procedure Json.100 (Json.850):
+    let Json.1302 : Str = "A";
+    let Json.1303 : Int1 = lowlevel Eq Json.1302 Json.850;
+    dec Json.1302;
+    if Json.1303 then
+        dec Json.850;
+        let Json.1225 : Str = "a";
+        ret Json.1225;
     else
-        jump Json.500 Json.128;
+        let Json.1300 : Str = "B";
+        let Json.1301 : Int1 = lowlevel Eq Json.1300 Json.850;
+        dec Json.1300;
+        if Json.1301 then
+            dec Json.850;
+            let Json.1226 : Str = "b";
+            ret Json.1226;
+        else
+            let Json.1298 : Str = "C";
+            let Json.1299 : Int1 = lowlevel Eq Json.1298 Json.850;
+            dec Json.1298;
+            if Json.1299 then
+                dec Json.850;
+                let Json.1227 : Str = "c";
+                ret Json.1227;
+            else
+                let Json.1296 : Str = "D";
+                let Json.1297 : Int1 = lowlevel Eq Json.1296 Json.850;
+                dec Json.1296;
+                if Json.1297 then
+                    dec Json.850;
+                    let Json.1228 : Str = "d";
+                    ret Json.1228;
+                else
+                    let Json.1294 : Str = "E";
+                    let Json.1295 : Int1 = lowlevel Eq Json.1294 Json.850;
+                    dec Json.1294;
+                    if Json.1295 then
+                        dec Json.850;
+                        let Json.1229 : Str = "e";
+                        ret Json.1229;
+                    else
+                        let Json.1292 : Str = "F";
+                        let Json.1293 : Int1 = lowlevel Eq Json.1292 Json.850;
+                        dec Json.1292;
+                        if Json.1293 then
+                            dec Json.850;
+                            let Json.1230 : Str = "f";
+                            ret Json.1230;
+                        else
+                            let Json.1290 : Str = "G";
+                            let Json.1291 : Int1 = lowlevel Eq Json.1290 Json.850;
+                            dec Json.1290;
+                            if Json.1291 then
+                                dec Json.850;
+                                let Json.1231 : Str = "g";
+                                ret Json.1231;
+                            else
+                                let Json.1288 : Str = "H";
+                                let Json.1289 : Int1 = lowlevel Eq Json.1288 Json.850;
+                                dec Json.1288;
+                                if Json.1289 then
+                                    dec Json.850;
+                                    let Json.1232 : Str = "h";
+                                    ret Json.1232;
+                                else
+                                    let Json.1286 : Str = "I";
+                                    let Json.1287 : Int1 = lowlevel Eq Json.1286 Json.850;
+                                    dec Json.1286;
+                                    if Json.1287 then
+                                        dec Json.850;
+                                        let Json.1233 : Str = "i";
+                                        ret Json.1233;
+                                    else
+                                        let Json.1284 : Str = "J";
+                                        let Json.1285 : Int1 = lowlevel Eq Json.1284 Json.850;
+                                        dec Json.1284;
+                                        if Json.1285 then
+                                            dec Json.850;
+                                            let Json.1234 : Str = "j";
+                                            ret Json.1234;
+                                        else
+                                            let Json.1282 : Str = "K";
+                                            let Json.1283 : Int1 = lowlevel Eq Json.1282 Json.850;
+                                            dec Json.1282;
+                                            if Json.1283 then
+                                                dec Json.850;
+                                                let Json.1235 : Str = "k";
+                                                ret Json.1235;
+                                            else
+                                                let Json.1280 : Str = "L";
+                                                let Json.1281 : Int1 = lowlevel Eq Json.1280 Json.850;
+                                                dec Json.1280;
+                                                if Json.1281 then
+                                                    dec Json.850;
+                                                    let Json.1236 : Str = "l";
+                                                    ret Json.1236;
+                                                else
+                                                    let Json.1278 : Str = "M";
+                                                    let Json.1279 : Int1 = lowlevel Eq Json.1278 Json.850;
+                                                    dec Json.1278;
+                                                    if Json.1279 then
+                                                        dec Json.850;
+                                                        let Json.1237 : Str = "m";
+                                                        ret Json.1237;
+                                                    else
+                                                        let Json.1276 : Str = "N";
+                                                        let Json.1277 : Int1 = lowlevel Eq Json.1276 Json.850;
+                                                        dec Json.1276;
+                                                        if Json.1277 then
+                                                            dec Json.850;
+                                                            let Json.1238 : Str = "n";
+                                                            ret Json.1238;
+                                                        else
+                                                            let Json.1274 : Str = "O";
+                                                            let Json.1275 : Int1 = lowlevel Eq Json.1274 Json.850;
+                                                            dec Json.1274;
+                                                            if Json.1275 then
+                                                                dec Json.850;
+                                                                let Json.1239 : Str = "o";
+                                                                ret Json.1239;
+                                                            else
+                                                                let Json.1272 : Str = "P";
+                                                                let Json.1273 : Int1 = lowlevel Eq Json.1272 Json.850;
+                                                                dec Json.1272;
+                                                                if Json.1273 then
+                                                                    dec Json.850;
+                                                                    let Json.1240 : Str = "p";
+                                                                    ret Json.1240;
+                                                                else
+                                                                    let Json.1270 : Str = "Q";
+                                                                    let Json.1271 : Int1 = lowlevel Eq Json.1270 Json.850;
+                                                                    dec Json.1270;
+                                                                    if Json.1271 then
+                                                                        dec Json.850;
+                                                                        let Json.1241 : Str = "q";
+                                                                        ret Json.1241;
+                                                                    else
+                                                                        let Json.1268 : Str = "R";
+                                                                        let Json.1269 : Int1 = lowlevel Eq Json.1268 Json.850;
+                                                                        dec Json.1268;
+                                                                        if Json.1269 then
+                                                                            dec Json.850;
+                                                                            let Json.1242 : Str = "r";
+                                                                            ret Json.1242;
+                                                                        else
+                                                                            let Json.1266 : Str = "S";
+                                                                            let Json.1267 : Int1 = lowlevel Eq Json.1266 Json.850;
+                                                                            dec Json.1266;
+                                                                            if Json.1267 then
+                                                                                dec Json.850;
+                                                                                let Json.1243 : Str = "s";
+                                                                                ret Json.1243;
+                                                                            else
+                                                                                let Json.1264 : Str = "T";
+                                                                                let Json.1265 : Int1 = lowlevel Eq Json.1264 Json.850;
+                                                                                dec Json.1264;
+                                                                                if Json.1265 then
+                                                                                    dec Json.850;
+                                                                                    let Json.1244 : Str = "t";
+                                                                                    ret Json.1244;
+                                                                                else
+                                                                                    let Json.1262 : Str = "U";
+                                                                                    let Json.1263 : Int1 = lowlevel Eq Json.1262 Json.850;
+                                                                                    dec Json.1262;
+                                                                                    if Json.1263 then
+                                                                                        dec Json.850;
+                                                                                        let Json.1245 : Str = "u";
+                                                                                        ret Json.1245;
+                                                                                    else
+                                                                                        let Json.1260 : Str = "V";
+                                                                                        let Json.1261 : Int1 = lowlevel Eq Json.1260 Json.850;
+                                                                                        dec Json.1260;
+                                                                                        if Json.1261 then
+                                                                                            dec Json.850;
+                                                                                            let Json.1246 : Str = "v";
+                                                                                            ret Json.1246;
+                                                                                        else
+                                                                                            let Json.1258 : Str = "W";
+                                                                                            let Json.1259 : Int1 = lowlevel Eq Json.1258 Json.850;
+                                                                                            dec Json.1258;
+                                                                                            if Json.1259 then
+                                                                                                dec Json.850;
+                                                                                                let Json.1247 : Str = "w";
+                                                                                                ret Json.1247;
+                                                                                            else
+                                                                                                let Json.1256 : Str = "X";
+                                                                                                let Json.1257 : Int1 = lowlevel Eq Json.1256 Json.850;
+                                                                                                dec Json.1256;
+                                                                                                if Json.1257 then
+                                                                                                    dec Json.850;
+                                                                                                    let Json.1248 : Str = "x";
+                                                                                                    ret Json.1248;
+                                                                                                else
+                                                                                                    let Json.1254 : Str = "Y";
+                                                                                                    let Json.1255 : Int1 = lowlevel Eq Json.1254 Json.850;
+                                                                                                    dec Json.1254;
+                                                                                                    if Json.1255 then
+                                                                                                        dec Json.850;
+                                                                                                        let Json.1249 : Str = "y";
+                                                                                                        ret Json.1249;
+                                                                                                    else
+                                                                                                        let Json.1252 : Str = "Z";
+                                                                                                        let Json.1253 : Int1 = lowlevel Eq Json.1252 Json.850;
+                                                                                                        dec Json.1252;
+                                                                                                        if Json.1253 then
+                                                                                                            dec Json.850;
+                                                                                                            let Json.1250 : Str = "z";
+                                                                                                            ret Json.1250;
+                                                                                                        else
+                                                                                                            ret Json.850;
 
-procedure Json.18 (Json.101):
-    let Json.520 : Str = CallByName Encode.23 Json.101;
-    ret Json.520;
+procedure Json.101 (Json.851):
+    let Json.1389 : Str = "A";
+    let Json.1390 : Int1 = lowlevel Eq Json.1389 Json.851;
+    dec Json.1389;
+    if Json.1390 then
+        dec Json.851;
+        let Json.1312 : Int1 = CallByName Bool.2;
+        ret Json.1312;
+    else
+        let Json.1387 : Str = "B";
+        let Json.1388 : Int1 = lowlevel Eq Json.1387 Json.851;
+        dec Json.1387;
+        if Json.1388 then
+            dec Json.851;
+            let Json.1313 : Int1 = CallByName Bool.2;
+            ret Json.1313;
+        else
+            let Json.1385 : Str = "C";
+            let Json.1386 : Int1 = lowlevel Eq Json.1385 Json.851;
+            dec Json.1385;
+            if Json.1386 then
+                dec Json.851;
+                let Json.1314 : Int1 = CallByName Bool.2;
+                ret Json.1314;
+            else
+                let Json.1383 : Str = "D";
+                let Json.1384 : Int1 = lowlevel Eq Json.1383 Json.851;
+                dec Json.1383;
+                if Json.1384 then
+                    dec Json.851;
+                    let Json.1315 : Int1 = CallByName Bool.2;
+                    ret Json.1315;
+                else
+                    let Json.1381 : Str = "E";
+                    let Json.1382 : Int1 = lowlevel Eq Json.1381 Json.851;
+                    dec Json.1381;
+                    if Json.1382 then
+                        dec Json.851;
+                        let Json.1316 : Int1 = CallByName Bool.2;
+                        ret Json.1316;
+                    else
+                        let Json.1379 : Str = "F";
+                        let Json.1380 : Int1 = lowlevel Eq Json.1379 Json.851;
+                        dec Json.1379;
+                        if Json.1380 then
+                            dec Json.851;
+                            let Json.1317 : Int1 = CallByName Bool.2;
+                            ret Json.1317;
+                        else
+                            let Json.1377 : Str = "G";
+                            let Json.1378 : Int1 = lowlevel Eq Json.1377 Json.851;
+                            dec Json.1377;
+                            if Json.1378 then
+                                dec Json.851;
+                                let Json.1318 : Int1 = CallByName Bool.2;
+                                ret Json.1318;
+                            else
+                                let Json.1375 : Str = "H";
+                                let Json.1376 : Int1 = lowlevel Eq Json.1375 Json.851;
+                                dec Json.1375;
+                                if Json.1376 then
+                                    dec Json.851;
+                                    let Json.1319 : Int1 = CallByName Bool.2;
+                                    ret Json.1319;
+                                else
+                                    let Json.1373 : Str = "I";
+                                    let Json.1374 : Int1 = lowlevel Eq Json.1373 Json.851;
+                                    dec Json.1373;
+                                    if Json.1374 then
+                                        dec Json.851;
+                                        let Json.1320 : Int1 = CallByName Bool.2;
+                                        ret Json.1320;
+                                    else
+                                        let Json.1371 : Str = "J";
+                                        let Json.1372 : Int1 = lowlevel Eq Json.1371 Json.851;
+                                        dec Json.1371;
+                                        if Json.1372 then
+                                            dec Json.851;
+                                            let Json.1321 : Int1 = CallByName Bool.2;
+                                            ret Json.1321;
+                                        else
+                                            let Json.1369 : Str = "K";
+                                            let Json.1370 : Int1 = lowlevel Eq Json.1369 Json.851;
+                                            dec Json.1369;
+                                            if Json.1370 then
+                                                dec Json.851;
+                                                let Json.1322 : Int1 = CallByName Bool.2;
+                                                ret Json.1322;
+                                            else
+                                                let Json.1367 : Str = "L";
+                                                let Json.1368 : Int1 = lowlevel Eq Json.1367 Json.851;
+                                                dec Json.1367;
+                                                if Json.1368 then
+                                                    dec Json.851;
+                                                    let Json.1323 : Int1 = CallByName Bool.2;
+                                                    ret Json.1323;
+                                                else
+                                                    let Json.1365 : Str = "M";
+                                                    let Json.1366 : Int1 = lowlevel Eq Json.1365 Json.851;
+                                                    dec Json.1365;
+                                                    if Json.1366 then
+                                                        dec Json.851;
+                                                        let Json.1324 : Int1 = CallByName Bool.2;
+                                                        ret Json.1324;
+                                                    else
+                                                        let Json.1363 : Str = "N";
+                                                        let Json.1364 : Int1 = lowlevel Eq Json.1363 Json.851;
+                                                        dec Json.1363;
+                                                        if Json.1364 then
+                                                            dec Json.851;
+                                                            let Json.1325 : Int1 = CallByName Bool.2;
+                                                            ret Json.1325;
+                                                        else
+                                                            let Json.1361 : Str = "O";
+                                                            let Json.1362 : Int1 = lowlevel Eq Json.1361 Json.851;
+                                                            dec Json.1361;
+                                                            if Json.1362 then
+                                                                dec Json.851;
+                                                                let Json.1326 : Int1 = CallByName Bool.2;
+                                                                ret Json.1326;
+                                                            else
+                                                                let Json.1359 : Str = "P";
+                                                                let Json.1360 : Int1 = lowlevel Eq Json.1359 Json.851;
+                                                                dec Json.1359;
+                                                                if Json.1360 then
+                                                                    dec Json.851;
+                                                                    let Json.1327 : Int1 = CallByName Bool.2;
+                                                                    ret Json.1327;
+                                                                else
+                                                                    let Json.1357 : Str = "Q";
+                                                                    let Json.1358 : Int1 = lowlevel Eq Json.1357 Json.851;
+                                                                    dec Json.1357;
+                                                                    if Json.1358 then
+                                                                        dec Json.851;
+                                                                        let Json.1328 : Int1 = CallByName Bool.2;
+                                                                        ret Json.1328;
+                                                                    else
+                                                                        let Json.1355 : Str = "R";
+                                                                        let Json.1356 : Int1 = lowlevel Eq Json.1355 Json.851;
+                                                                        dec Json.1355;
+                                                                        if Json.1356 then
+                                                                            dec Json.851;
+                                                                            let Json.1329 : Int1 = CallByName Bool.2;
+                                                                            ret Json.1329;
+                                                                        else
+                                                                            let Json.1353 : Str = "S";
+                                                                            let Json.1354 : Int1 = lowlevel Eq Json.1353 Json.851;
+                                                                            dec Json.1353;
+                                                                            if Json.1354 then
+                                                                                dec Json.851;
+                                                                                let Json.1330 : Int1 = CallByName Bool.2;
+                                                                                ret Json.1330;
+                                                                            else
+                                                                                let Json.1351 : Str = "T";
+                                                                                let Json.1352 : Int1 = lowlevel Eq Json.1351 Json.851;
+                                                                                dec Json.1351;
+                                                                                if Json.1352 then
+                                                                                    dec Json.851;
+                                                                                    let Json.1331 : Int1 = CallByName Bool.2;
+                                                                                    ret Json.1331;
+                                                                                else
+                                                                                    let Json.1349 : Str = "U";
+                                                                                    let Json.1350 : Int1 = lowlevel Eq Json.1349 Json.851;
+                                                                                    dec Json.1349;
+                                                                                    if Json.1350 then
+                                                                                        dec Json.851;
+                                                                                        let Json.1332 : Int1 = CallByName Bool.2;
+                                                                                        ret Json.1332;
+                                                                                    else
+                                                                                        let Json.1347 : Str = "V";
+                                                                                        let Json.1348 : Int1 = lowlevel Eq Json.1347 Json.851;
+                                                                                        dec Json.1347;
+                                                                                        if Json.1348 then
+                                                                                            dec Json.851;
+                                                                                            let Json.1333 : Int1 = CallByName Bool.2;
+                                                                                            ret Json.1333;
+                                                                                        else
+                                                                                            let Json.1345 : Str = "W";
+                                                                                            let Json.1346 : Int1 = lowlevel Eq Json.1345 Json.851;
+                                                                                            dec Json.1345;
+                                                                                            if Json.1346 then
+                                                                                                dec Json.851;
+                                                                                                let Json.1334 : Int1 = CallByName Bool.2;
+                                                                                                ret Json.1334;
+                                                                                            else
+                                                                                                let Json.1343 : Str = "X";
+                                                                                                let Json.1344 : Int1 = lowlevel Eq Json.1343 Json.851;
+                                                                                                dec Json.1343;
+                                                                                                if Json.1344 then
+                                                                                                    dec Json.851;
+                                                                                                    let Json.1335 : Int1 = CallByName Bool.2;
+                                                                                                    ret Json.1335;
+                                                                                                else
+                                                                                                    let Json.1341 : Str = "Y";
+                                                                                                    let Json.1342 : Int1 = lowlevel Eq Json.1341 Json.851;
+                                                                                                    dec Json.1341;
+                                                                                                    if Json.1342 then
+                                                                                                        dec Json.851;
+                                                                                                        let Json.1336 : Int1 = CallByName Bool.2;
+                                                                                                        ret Json.1336;
+                                                                                                    else
+                                                                                                        let Json.1339 : Str = "Z";
+                                                                                                        let Json.1340 : Int1 = lowlevel Eq Json.1339 Json.851;
+                                                                                                        dec Json.1339;
+                                                                                                        dec Json.851;
+                                                                                                        if Json.1340 then
+                                                                                                            let Json.1337 : Int1 = CallByName Bool.2;
+                                                                                                            ret Json.1337;
+                                                                                                        else
+                                                                                                            let Json.1338 : Int1 = CallByName Bool.1;
+                                                                                                            ret Json.1338;
 
-procedure Json.20 (Json.117):
-    let Json.484 : List {Str, Str} = CallByName Encode.23 Json.117;
-    ret Json.484;
+procedure Json.181 (Json.182, Json.1527, Json.180):
+    let Json.1530 : List U8 = CallByName Json.25 Json.180;
+    let Json.1529 : List U8 = CallByName List.8 Json.182 Json.1530;
+    ret Json.1529;
+
+procedure Json.188 (Json.1578, Json.191):
+    let Json.189 : U64 = StructAtIndex 0 Json.1578;
+    let Json.190 : Int1 = StructAtIndex 1 Json.1578;
+    switch Json.191:
+        case 34:
+            let Json.1581 : Int1 = false;
+            let Json.1580 : {U64, Int1} = Struct {Json.189, Json.1581};
+            let Json.1579 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) Json.1580;
+            ret Json.1579;
+    
+        case 92:
+            let Json.1584 : Int1 = false;
+            let Json.1583 : {U64, Int1} = Struct {Json.189, Json.1584};
+            let Json.1582 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) Json.1583;
+            ret Json.1582;
+    
+        case 47:
+            let Json.1587 : Int1 = false;
+            let Json.1586 : {U64, Int1} = Struct {Json.189, Json.1587};
+            let Json.1585 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) Json.1586;
+            ret Json.1585;
+    
+        case 8:
+            let Json.1590 : Int1 = false;
+            let Json.1589 : {U64, Int1} = Struct {Json.189, Json.1590};
+            let Json.1588 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) Json.1589;
+            ret Json.1588;
+    
+        case 12:
+            let Json.1593 : Int1 = false;
+            let Json.1592 : {U64, Int1} = Struct {Json.189, Json.1593};
+            let Json.1591 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) Json.1592;
+            ret Json.1591;
+    
+        case 10:
+            let Json.1596 : Int1 = false;
+            let Json.1595 : {U64, Int1} = Struct {Json.189, Json.1596};
+            let Json.1594 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) Json.1595;
+            ret Json.1594;
+    
+        case 13:
+            let Json.1599 : Int1 = false;
+            let Json.1598 : {U64, Int1} = Struct {Json.189, Json.1599};
+            let Json.1597 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) Json.1598;
+            ret Json.1597;
+    
+        case 9:
+            let Json.1602 : Int1 = false;
+            let Json.1601 : {U64, Int1} = Struct {Json.189, Json.1602};
+            let Json.1600 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) Json.1601;
+            ret Json.1600;
+    
+        default:
+            let Json.1606 : U64 = 1i64;
+            let Json.1605 : U64 = CallByName Num.19 Json.189 Json.1606;
+            let Json.1604 : {U64, Int1} = Struct {Json.1605, Json.190};
+            let Json.1603 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) Json.1604;
+            ret Json.1603;
+    
+
+procedure Json.214 (Json.215, Json.216):
+    let Json.1549 : List U8 = CallByName Json.26 Json.216;
+    let Json.1548 : List U8 = CallByName List.8 Json.215 Json.1549;
+    ret Json.1548;
+
+procedure Json.233 (Json.234, Json.1174, Json.232):
+    let Json.1524 : I64 = 123i64;
+    let Json.1523 : U8 = CallByName Num.127 Json.1524;
+    let Json.237 : List U8 = CallByName List.4 Json.234 Json.1523;
+    let Json.1522 : U64 = CallByName List.6 Json.232;
+    let Json.1182 : {List U8, U64} = Struct {Json.237, Json.1522};
+    let Json.1181 : {List U8, U64} = CallByName List.18 Json.232 Json.1182 Json.1174;
+    let Json.239 : List U8 = StructAtIndex 0 Json.1181;
+    let Json.1180 : I64 = 125i64;
+    let Json.1179 : U8 = CallByName Num.127 Json.1180;
+    let Json.1178 : List U8 = CallByName List.4 Json.239 Json.1179;
+    ret Json.1178;
+
+procedure Json.236 (Json.1176, Json.1177, Json.235):
+    let Json.242 : Str = StructAtIndex 0 Json.1177;
+    let Json.243 : Str = StructAtIndex 1 Json.1177;
+    let Json.240 : List U8 = StructAtIndex 0 Json.1176;
+    let Json.241 : U64 = StructAtIndex 1 Json.1176;
+    let Json.244 : Str = CallByName Json.81 Json.242 Json.235;
+    let Json.1204 : I64 = 34i64;
+    let Json.1203 : U8 = CallByName Num.127 Json.1204;
+    let Json.1201 : List U8 = CallByName List.4 Json.240 Json.1203;
+    let Json.1202 : List U8 = CallByName Str.12 Json.244;
+    let Json.1198 : List U8 = CallByName List.8 Json.1201 Json.1202;
+    let Json.1200 : I64 = 34i64;
+    let Json.1199 : U8 = CallByName Num.127 Json.1200;
+    let Json.1195 : List U8 = CallByName List.4 Json.1198 Json.1199;
+    let Json.1197 : I64 = 58i64;
+    let Json.1196 : U8 = CallByName Num.127 Json.1197;
+    let Json.1193 : List U8 = CallByName List.4 Json.1195 Json.1196;
+    let Json.245 : List U8 = CallByName Encode.24 Json.1193 Json.243 Json.235;
+    joinpoint Json.1188 Json.246:
+        let Json.1186 : U64 = 1i64;
+        let Json.1185 : U64 = CallByName Num.20 Json.241 Json.1186;
+        let Json.1184 : {List U8, U64} = Struct {Json.246, Json.1185};
+        ret Json.1184;
+    in
+    let Json.1192 : U64 = 1i64;
+    let Json.1189 : Int1 = CallByName Num.24 Json.241 Json.1192;
+    if Json.1189 then
+        let Json.1191 : I64 = 44i64;
+        let Json.1190 : U8 = CallByName Num.127 Json.1191;
+        let Json.1187 : List U8 = CallByName List.4 Json.245 Json.1190;
+        jump Json.1188 Json.1187;
+    else
+        jump Json.1188 Json.245;
+
+procedure Json.24 (Json.180):
+    let Json.1525 : Str = CallByName Encode.23 Json.180;
+    ret Json.1525;
+
+procedure Json.25 (Json.183):
+    let Json.184 : List U8 = CallByName Str.12 Json.183;
+    let Json.1607 : U64 = 0i64;
+    let Json.1608 : Int1 = true;
+    let Json.185 : {U64, Int1} = Struct {Json.1607, Json.1608};
+    let Json.1577 : {} = Struct {};
+    inc Json.184;
+    let Json.186 : {U64, Int1} = CallByName List.26 Json.184 Json.185 Json.1577;
+    let Json.1531 : Int1 = StructAtIndex 1 Json.186;
+    let Json.1575 : Int1 = true;
+    let Json.1576 : Int1 = lowlevel Eq Json.1575 Json.1531;
+    if Json.1576 then
+        let Json.1541 : U64 = CallByName List.6 Json.184;
+        let Json.1542 : U64 = 2i64;
+        let Json.1540 : U64 = CallByName Num.19 Json.1541 Json.1542;
+        let Json.1537 : List U8 = CallByName List.68 Json.1540;
+        let Json.1539 : U8 = 34i64;
+        let Json.1538 : List U8 = Array [Json.1539];
+        let Json.1536 : List U8 = CallByName List.8 Json.1537 Json.1538;
+        let Json.1533 : List U8 = CallByName List.8 Json.1536 Json.184;
+        let Json.1535 : U8 = 34i64;
+        let Json.1534 : List U8 = Array [Json.1535];
+        let Json.1532 : List U8 = CallByName List.8 Json.1533 Json.1534;
+        ret Json.1532;
+    else
+        let Json.1574 : U64 = StructAtIndex 0 Json.186;
+        inc Json.184;
+        let Json.1573 : {List U8, List U8} = CallByName List.52 Json.184 Json.1574;
+        let Json.210 : List U8 = StructAtIndex 0 Json.1573;
+        let Json.212 : List U8 = StructAtIndex 1 Json.1573;
+        let Json.1571 : U64 = CallByName List.6 Json.184;
+        dec Json.184;
+        let Json.1572 : U64 = 120i64;
+        let Json.1569 : U64 = CallByName Num.21 Json.1571 Json.1572;
+        let Json.1570 : U64 = 100i64;
+        let Json.1568 : U64 = CallByName Num.94 Json.1569 Json.1570;
+        let Json.1565 : List U8 = CallByName List.68 Json.1568;
+        let Json.1567 : U8 = 34i64;
+        let Json.1566 : List U8 = Array [Json.1567];
+        let Json.1564 : List U8 = CallByName List.8 Json.1565 Json.1566;
+        let Json.213 : List U8 = CallByName List.8 Json.1564 Json.210;
+        let Json.1547 : {} = Struct {};
+        let Json.1544 : List U8 = CallByName List.18 Json.212 Json.213 Json.1547;
+        let Json.1546 : U8 = 34i64;
+        let Json.1545 : List U8 = Array [Json.1546];
+        let Json.1543 : List U8 = CallByName List.8 Json.1544 Json.1545;
+        ret Json.1543;
+
+procedure Json.26 (Json.217):
+    switch Json.217:
+        case 34:
+            let Json.1550 : List U8 = Array [92i64, 34i64];
+            ret Json.1550;
+    
+        case 92:
+            let Json.1551 : List U8 = Array [92i64, 92i64];
+            ret Json.1551;
+    
+        case 47:
+            let Json.1552 : List U8 = Array [92i64, 47i64];
+            ret Json.1552;
+    
+        case 8:
+            let Json.1554 : U8 = 98i64;
+            let Json.1553 : List U8 = Array [92i64, Json.1554];
+            ret Json.1553;
+    
+        case 12:
+            let Json.1556 : U8 = 102i64;
+            let Json.1555 : List U8 = Array [92i64, Json.1556];
+            ret Json.1555;
+    
+        case 10:
+            let Json.1558 : U8 = 110i64;
+            let Json.1557 : List U8 = Array [92i64, Json.1558];
+            ret Json.1557;
+    
+        case 13:
+            let Json.1560 : U8 = 114i64;
+            let Json.1559 : List U8 = Array [92i64, Json.1560];
+            ret Json.1559;
+    
+        case 9:
+            let Json.1562 : U8 = 114i64;
+            let Json.1561 : List U8 = Array [92i64, Json.1562];
+            ret Json.1561;
+    
+        default:
+            let Json.1563 : List U8 = Array [Json.217];
+            ret Json.1563;
+    
+
+procedure Json.28 (Json.232):
+    let Json.1172 : List {Str, Str} = CallByName Encode.23 Json.232;
+    ret Json.1172;
+
+procedure Json.81 (Json.801, Json.802):
+    let Json.1521 : U8 = GetTagId Json.802;
+    switch Json.1521:
+        case 2:
+            ret Json.801;
+    
+        case 5:
+            let Json.1206 : Str = CallByName Json.86 Json.801;
+            ret Json.1206;
+    
+        case 4:
+            let Json.1396 : Str = CallByName Json.87 Json.801;
+            ret Json.1396;
+    
+        case 3:
+            let Json.1485 : Str = CallByName Json.88 Json.801;
+            ret Json.1485;
+    
+        case 0:
+            let Json.1517 : Str = CallByName Json.89 Json.801;
+            ret Json.1517;
+    
+        default:
+            dec Json.801;
+            let Json.803 : [] = UnionAtIndex (Id 1) (Index 0) Json.802;
+            let Json.1520 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+            Crash Json.1520
+    
+
+procedure Json.831 (Json.1492):
+    let Json.1493 : List Str = StructAtIndex 1 Json.1492;
+    let #Derived_gen.14 : List Str = StructAtIndex 0 Json.1492;
+    dec #Derived_gen.14;
+    ret Json.1493;
+
+procedure Json.839 (Json.1213):
+    let Json.1214 : List Str = StructAtIndex 1 Json.1213;
+    let #Derived_gen.16 : List Str = StructAtIndex 0 Json.1213;
+    dec #Derived_gen.16;
+    ret Json.1214;
+
+procedure Json.86 (Json.808):
+    let Json.1207 : Str = CallByName Json.96 Json.808;
+    ret Json.1207;
+
+procedure Json.87 (Json.809):
+    let Json.1397 : Str = CallByName Json.93 Json.809;
+    ret Json.1397;
+
+procedure Json.88 (Json.810):
+    let Json.1486 : Str = CallByName Json.94 Json.810;
+    ret Json.1486;
+
+procedure Json.89 (Json.811):
+    ret Json.811;
+
+procedure Json.93 (Json.823):
+    let Json.824 : List Str = CallByName Str.55 Json.823;
+    let Json.1482 : U64 = lowlevel ListLen Json.824;
+    let Json.1483 : U64 = 1i64;
+    let Json.1484 : Int1 = lowlevel NumGte Json.1482 Json.1483;
+    if Json.1484 then
+        dec Json.823;
+        let Json.1481 : U64 = 0i64;
+        let Json.825 : Str = lowlevel ListGetUnsafe Json.824 Json.1481;
+        inc Json.825;
+        let Json.826 : Str = CallByName Json.99 Json.825;
+        let Json.827 : List Str = CallByName List.38 Json.824;
+        let Json.1399 : List Str = CallByName List.13 Json.827 Json.826;
+        let Json.1400 : Str = "";
+        let Json.1398 : Str = CallByName Str.4 Json.1399 Json.1400;
+        dec Json.1400;
+        dec Json.1399;
+        ret Json.1398;
+    else
+        dec Json.824;
+        ret Json.823;
+
+procedure Json.94 (Json.828):
+    let Json.829 : List Str = CallByName Str.55 Json.828;
+    dec Json.828;
+    let Json.1516 : U64 = CallByName List.6 Json.829;
+    let Json.830 : List Str = CallByName List.68 Json.1516;
+    let Json.1494 : {List Str, List Str} = Struct {Json.829, Json.830};
+    let Json.1490 : {List Str, List Str} = CallByName Json.95 Json.1494;
+    let Json.1491 : {} = Struct {};
+    let Json.1488 : List Str = CallByName Json.831 Json.1490;
+    let Json.1489 : Str = "";
+    let Json.1487 : Str = CallByName Str.4 Json.1488 Json.1489;
+    dec Json.1488;
+    dec Json.1489;
+    ret Json.1487;
+
+procedure Json.95 (Json.1629):
+    joinpoint Json.1495 Json.1167:
+        let Json.833 : List Str = StructAtIndex 0 Json.1167;
+        let Json.832 : List Str = StructAtIndex 1 Json.1167;
+        let Json.1513 : U64 = lowlevel ListLen Json.833;
+        let Json.1514 : U64 = 1i64;
+        let Json.1515 : Int1 = lowlevel NumGte Json.1513 Json.1514;
+        if Json.1515 then
+            let Json.1512 : U64 = 0i64;
+            let Json.834 : Str = lowlevel ListGetUnsafe Json.833 Json.1512;
+            inc 2 Json.834;
+            joinpoint Json.1510 Json.1509:
+                if Json.1509 then
+                    let Json.1499 : List Str = CallByName List.38 Json.833;
+                    let Json.1502 : Str = "-";
+                    let Json.1503 : Str = CallByName Json.100 Json.834;
+                    let Json.1501 : List Str = Array [Json.1502, Json.1503];
+                    let Json.1500 : List Str = CallByName List.8 Json.832 Json.1501;
+                    let Json.1498 : {List Str, List Str} = Struct {Json.1499, Json.1500};
+                    jump Json.1495 Json.1498;
+                else
+                    dec Json.834;
+                    let Json.1508 : U64 = 0i64;
+                    let Json.835 : Str = lowlevel ListGetUnsafe Json.833 Json.1508;
+                    inc Json.835;
+                    let Json.1506 : List Str = CallByName List.38 Json.833;
+                    let Json.1507 : List Str = CallByName List.4 Json.832 Json.835;
+                    let Json.1505 : {List Str, List Str} = Struct {Json.1506, Json.1507};
+                    jump Json.1495 Json.1505;
+            in
+            let Json.1511 : Int1 = CallByName Json.101 Json.834;
+            jump Json.1510 Json.1511;
+        else
+            let Json.1496 : {List Str, List Str} = Struct {Json.833, Json.832};
+            ret Json.1496;
+    in
+    jump Json.1495 Json.1629;
+
+procedure Json.96 (Json.836):
+    let Json.837 : List Str = CallByName Str.55 Json.836;
+    dec Json.836;
+    let Json.1395 : U64 = CallByName List.6 Json.837;
+    let Json.838 : List Str = CallByName List.68 Json.1395;
+    let Json.1215 : {List Str, List Str} = Struct {Json.837, Json.838};
+    let Json.1211 : {List Str, List Str} = CallByName Json.97 Json.1215;
+    let Json.1212 : {} = Struct {};
+    let Json.1209 : List Str = CallByName Json.839 Json.1211;
+    let Json.1210 : Str = "";
+    let Json.1208 : Str = CallByName Str.4 Json.1209 Json.1210;
+    dec Json.1209;
+    dec Json.1210;
+    ret Json.1208;
+
+procedure Json.97 (Json.1620):
+    joinpoint Json.1216 Json.1168:
+        let Json.841 : List Str = StructAtIndex 0 Json.1168;
+        let Json.840 : List Str = StructAtIndex 1 Json.1168;
+        let Json.1392 : U64 = lowlevel ListLen Json.841;
+        let Json.1393 : U64 = 1i64;
+        let Json.1394 : Int1 = lowlevel NumGte Json.1392 Json.1393;
+        if Json.1394 then
+            let Json.1391 : U64 = 0i64;
+            let Json.842 : Str = lowlevel ListGetUnsafe Json.841 Json.1391;
+            inc 2 Json.842;
+            joinpoint Json.1310 Json.1309:
+                if Json.1309 then
+                    let Json.1220 : List Str = CallByName List.38 Json.841;
+                    let Json.1223 : Str = "_";
+                    let Json.1224 : Str = CallByName Json.100 Json.842;
+                    let Json.1222 : List Str = Array [Json.1223, Json.1224];
+                    let Json.1221 : List Str = CallByName List.8 Json.840 Json.1222;
+                    let Json.1219 : {List Str, List Str} = Struct {Json.1220, Json.1221};
+                    jump Json.1216 Json.1219;
+                else
+                    dec Json.842;
+                    let Json.1308 : U64 = 0i64;
+                    let Json.843 : Str = lowlevel ListGetUnsafe Json.841 Json.1308;
+                    inc Json.843;
+                    let Json.1306 : List Str = CallByName List.38 Json.841;
+                    let Json.1307 : List Str = CallByName List.4 Json.840 Json.843;
+                    let Json.1305 : {List Str, List Str} = Struct {Json.1306, Json.1307};
+                    jump Json.1216 Json.1305;
+            in
+            let Json.1311 : Int1 = CallByName Json.101 Json.842;
+            jump Json.1310 Json.1311;
+        else
+            let Json.1217 : {List Str, List Str} = Struct {Json.841, Json.840};
+            ret Json.1217;
+    in
+    jump Json.1216 Json.1620;
+
+procedure Json.99 (Json.849):
+    let Json.1478 : Str = "a";
+    let Json.1479 : Int1 = lowlevel Eq Json.1478 Json.849;
+    dec Json.1478;
+    if Json.1479 then
+        dec Json.849;
+        let Json.1401 : Str = "A";
+        ret Json.1401;
+    else
+        let Json.1476 : Str = "b";
+        let Json.1477 : Int1 = lowlevel Eq Json.1476 Json.849;
+        dec Json.1476;
+        if Json.1477 then
+            dec Json.849;
+            let Json.1402 : Str = "B";
+            ret Json.1402;
+        else
+            let Json.1474 : Str = "c";
+            let Json.1475 : Int1 = lowlevel Eq Json.1474 Json.849;
+            dec Json.1474;
+            if Json.1475 then
+                dec Json.849;
+                let Json.1403 : Str = "C";
+                ret Json.1403;
+            else
+                let Json.1472 : Str = "d";
+                let Json.1473 : Int1 = lowlevel Eq Json.1472 Json.849;
+                dec Json.1472;
+                if Json.1473 then
+                    dec Json.849;
+                    let Json.1404 : Str = "D";
+                    ret Json.1404;
+                else
+                    let Json.1470 : Str = "e";
+                    let Json.1471 : Int1 = lowlevel Eq Json.1470 Json.849;
+                    dec Json.1470;
+                    if Json.1471 then
+                        dec Json.849;
+                        let Json.1405 : Str = "E";
+                        ret Json.1405;
+                    else
+                        let Json.1468 : Str = "f";
+                        let Json.1469 : Int1 = lowlevel Eq Json.1468 Json.849;
+                        dec Json.1468;
+                        if Json.1469 then
+                            dec Json.849;
+                            let Json.1406 : Str = "F";
+                            ret Json.1406;
+                        else
+                            let Json.1466 : Str = "g";
+                            let Json.1467 : Int1 = lowlevel Eq Json.1466 Json.849;
+                            dec Json.1466;
+                            if Json.1467 then
+                                dec Json.849;
+                                let Json.1407 : Str = "G";
+                                ret Json.1407;
+                            else
+                                let Json.1464 : Str = "h";
+                                let Json.1465 : Int1 = lowlevel Eq Json.1464 Json.849;
+                                dec Json.1464;
+                                if Json.1465 then
+                                    dec Json.849;
+                                    let Json.1408 : Str = "H";
+                                    ret Json.1408;
+                                else
+                                    let Json.1462 : Str = "i";
+                                    let Json.1463 : Int1 = lowlevel Eq Json.1462 Json.849;
+                                    dec Json.1462;
+                                    if Json.1463 then
+                                        dec Json.849;
+                                        let Json.1409 : Str = "I";
+                                        ret Json.1409;
+                                    else
+                                        let Json.1460 : Str = "j";
+                                        let Json.1461 : Int1 = lowlevel Eq Json.1460 Json.849;
+                                        dec Json.1460;
+                                        if Json.1461 then
+                                            dec Json.849;
+                                            let Json.1410 : Str = "J";
+                                            ret Json.1410;
+                                        else
+                                            let Json.1458 : Str = "k";
+                                            let Json.1459 : Int1 = lowlevel Eq Json.1458 Json.849;
+                                            dec Json.1458;
+                                            if Json.1459 then
+                                                dec Json.849;
+                                                let Json.1411 : Str = "K";
+                                                ret Json.1411;
+                                            else
+                                                let Json.1456 : Str = "l";
+                                                let Json.1457 : Int1 = lowlevel Eq Json.1456 Json.849;
+                                                dec Json.1456;
+                                                if Json.1457 then
+                                                    dec Json.849;
+                                                    let Json.1412 : Str = "L";
+                                                    ret Json.1412;
+                                                else
+                                                    let Json.1454 : Str = "m";
+                                                    let Json.1455 : Int1 = lowlevel Eq Json.1454 Json.849;
+                                                    dec Json.1454;
+                                                    if Json.1455 then
+                                                        dec Json.849;
+                                                        let Json.1413 : Str = "M";
+                                                        ret Json.1413;
+                                                    else
+                                                        let Json.1452 : Str = "n";
+                                                        let Json.1453 : Int1 = lowlevel Eq Json.1452 Json.849;
+                                                        dec Json.1452;
+                                                        if Json.1453 then
+                                                            dec Json.849;
+                                                            let Json.1414 : Str = "N";
+                                                            ret Json.1414;
+                                                        else
+                                                            let Json.1450 : Str = "o";
+                                                            let Json.1451 : Int1 = lowlevel Eq Json.1450 Json.849;
+                                                            dec Json.1450;
+                                                            if Json.1451 then
+                                                                dec Json.849;
+                                                                let Json.1415 : Str = "O";
+                                                                ret Json.1415;
+                                                            else
+                                                                let Json.1448 : Str = "p";
+                                                                let Json.1449 : Int1 = lowlevel Eq Json.1448 Json.849;
+                                                                dec Json.1448;
+                                                                if Json.1449 then
+                                                                    dec Json.849;
+                                                                    let Json.1416 : Str = "P";
+                                                                    ret Json.1416;
+                                                                else
+                                                                    let Json.1446 : Str = "q";
+                                                                    let Json.1447 : Int1 = lowlevel Eq Json.1446 Json.849;
+                                                                    dec Json.1446;
+                                                                    if Json.1447 then
+                                                                        dec Json.849;
+                                                                        let Json.1417 : Str = "Q";
+                                                                        ret Json.1417;
+                                                                    else
+                                                                        let Json.1444 : Str = "r";
+                                                                        let Json.1445 : Int1 = lowlevel Eq Json.1444 Json.849;
+                                                                        dec Json.1444;
+                                                                        if Json.1445 then
+                                                                            dec Json.849;
+                                                                            let Json.1418 : Str = "R";
+                                                                            ret Json.1418;
+                                                                        else
+                                                                            let Json.1442 : Str = "s";
+                                                                            let Json.1443 : Int1 = lowlevel Eq Json.1442 Json.849;
+                                                                            dec Json.1442;
+                                                                            if Json.1443 then
+                                                                                dec Json.849;
+                                                                                let Json.1419 : Str = "S";
+                                                                                ret Json.1419;
+                                                                            else
+                                                                                let Json.1440 : Str = "t";
+                                                                                let Json.1441 : Int1 = lowlevel Eq Json.1440 Json.849;
+                                                                                dec Json.1440;
+                                                                                if Json.1441 then
+                                                                                    dec Json.849;
+                                                                                    let Json.1420 : Str = "T";
+                                                                                    ret Json.1420;
+                                                                                else
+                                                                                    let Json.1438 : Str = "u";
+                                                                                    let Json.1439 : Int1 = lowlevel Eq Json.1438 Json.849;
+                                                                                    dec Json.1438;
+                                                                                    if Json.1439 then
+                                                                                        dec Json.849;
+                                                                                        let Json.1421 : Str = "U";
+                                                                                        ret Json.1421;
+                                                                                    else
+                                                                                        let Json.1436 : Str = "v";
+                                                                                        let Json.1437 : Int1 = lowlevel Eq Json.1436 Json.849;
+                                                                                        dec Json.1436;
+                                                                                        if Json.1437 then
+                                                                                            dec Json.849;
+                                                                                            let Json.1422 : Str = "V";
+                                                                                            ret Json.1422;
+                                                                                        else
+                                                                                            let Json.1434 : Str = "w";
+                                                                                            let Json.1435 : Int1 = lowlevel Eq Json.1434 Json.849;
+                                                                                            dec Json.1434;
+                                                                                            if Json.1435 then
+                                                                                                dec Json.849;
+                                                                                                let Json.1423 : Str = "W";
+                                                                                                ret Json.1423;
+                                                                                            else
+                                                                                                let Json.1432 : Str = "x";
+                                                                                                let Json.1433 : Int1 = lowlevel Eq Json.1432 Json.849;
+                                                                                                dec Json.1432;
+                                                                                                if Json.1433 then
+                                                                                                    dec Json.849;
+                                                                                                    let Json.1424 : Str = "X";
+                                                                                                    ret Json.1424;
+                                                                                                else
+                                                                                                    let Json.1430 : Str = "y";
+                                                                                                    let Json.1431 : Int1 = lowlevel Eq Json.1430 Json.849;
+                                                                                                    dec Json.1430;
+                                                                                                    if Json.1431 then
+                                                                                                        dec Json.849;
+                                                                                                        let Json.1425 : Str = "Y";
+                                                                                                        ret Json.1425;
+                                                                                                    else
+                                                                                                        let Json.1428 : Str = "z";
+                                                                                                        let Json.1429 : Int1 = lowlevel Eq Json.1428 Json.849;
+                                                                                                        dec Json.1428;
+                                                                                                        if Json.1429 then
+                                                                                                            dec Json.849;
+                                                                                                            let Json.1426 : Str = "Z";
+                                                                                                            ret Json.1426;
+                                                                                                        else
+                                                                                                            ret Json.849;
+
+procedure List.13 (#Attr.2, #Attr.3):
+    let List.595 : List Str = lowlevel ListPrepend #Attr.2 #Attr.3;
+    ret List.595;
 
 procedure List.139 (List.140, List.141, List.138):
-    let List.541 : {List U8, U64} = CallByName Json.120 List.140 List.141;
-    ret List.541;
+    let List.543 : {List U8, U64} = CallByName Json.236 List.140 List.141 List.138;
+    ret List.543;
+
+procedure List.139 (List.140, List.141, List.138):
+    let List.563 : List U8 = CallByName Json.214 List.140 List.141;
+    ret List.563;
 
 procedure List.18 (List.136, List.137, List.138):
-    let List.522 : {List U8, U64} = CallByName List.92 List.136 List.137 List.138;
-    ret List.522;
+    let List.524 : {List U8, U64} = CallByName List.92 List.136 List.137 List.138;
+    ret List.524;
 
-procedure List.4 (List.107, List.108):
-    let List.521 : U64 = 1i64;
-    let List.520 : List U8 = CallByName List.70 List.107 List.521;
-    let List.519 : List U8 = CallByName List.71 List.520 List.108;
-    ret List.519;
-
-procedure List.6 (#Attr.2):
-    let List.494 : U64 = lowlevel ListLen #Attr.2;
-    ret List.494;
-
-procedure List.6 (#Attr.2):
-    let List.544 : U64 = lowlevel ListLen #Attr.2;
+procedure List.18 (List.136, List.137, List.138):
+    let List.544 : List U8 = CallByName List.92 List.136 List.137 List.138;
     ret List.544;
 
+procedure List.26 (List.153, List.154, List.155):
+    let List.612 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.92 List.153 List.154 List.155;
+    let List.615 : U8 = 1i64;
+    let List.616 : U8 = GetTagId List.612;
+    let List.617 : Int1 = lowlevel Eq List.615 List.616;
+    if List.617 then
+        let List.156 : {U64, Int1} = UnionAtIndex (Id 1) (Index 0) List.612;
+        ret List.156;
+    else
+        let List.157 : {U64, Int1} = UnionAtIndex (Id 0) (Index 0) List.612;
+        ret List.157;
+
+procedure List.31 (#Attr.2, #Attr.3):
+    let List.577 : List Str = lowlevel ListDropAt #Attr.2 #Attr.3;
+    ret List.577;
+
+procedure List.38 (List.292):
+    let List.585 : U64 = 0i64;
+    let List.584 : List Str = CallByName List.31 List.292 List.585;
+    ret List.584;
+
+procedure List.4 (List.107, List.108):
+    let List.520 : U64 = 1i64;
+    let List.519 : List Str = CallByName List.70 List.107 List.520;
+    let List.518 : List Str = CallByName List.71 List.519 List.108;
+    ret List.518;
+
+procedure List.4 (List.107, List.108):
+    let List.523 : U64 = 1i64;
+    let List.522 : List U8 = CallByName List.70 List.107 List.523;
+    let List.521 : List U8 = CallByName List.71 List.522 List.108;
+    ret List.521;
+
+procedure List.49 (List.370, List.371):
+    let List.604 : U64 = StructAtIndex 0 List.371;
+    let List.605 : U64 = 0i64;
+    let List.602 : Int1 = CallByName Bool.11 List.604 List.605;
+    if List.602 then
+        dec List.370;
+        let List.603 : List U8 = Array [];
+        ret List.603;
+    else
+        let List.599 : U64 = StructAtIndex 1 List.371;
+        let List.600 : U64 = StructAtIndex 0 List.371;
+        let List.598 : List U8 = CallByName List.72 List.370 List.599 List.600;
+        ret List.598;
+
+procedure List.52 (List.385, List.386):
+    let List.387 : U64 = CallByName List.6 List.385;
+    joinpoint List.610 List.388:
+        let List.608 : U64 = 0i64;
+        let List.607 : {U64, U64} = Struct {List.388, List.608};
+        inc List.385;
+        let List.389 : List U8 = CallByName List.49 List.385 List.607;
+        let List.606 : U64 = CallByName Num.20 List.387 List.388;
+        let List.597 : {U64, U64} = Struct {List.606, List.388};
+        let List.390 : List U8 = CallByName List.49 List.385 List.597;
+        let List.596 : {List U8, List U8} = Struct {List.389, List.390};
+        ret List.596;
+    in
+    let List.611 : Int1 = CallByName Num.24 List.387 List.386;
+    if List.611 then
+        jump List.610 List.386;
+    else
+        jump List.610 List.387;
+
+procedure List.6 (#Attr.2):
+    let List.591 : U64 = lowlevel ListLen #Attr.2;
+    ret List.591;
+
+procedure List.6 (#Attr.2):
+    let List.592 : U64 = lowlevel ListLen #Attr.2;
+    ret List.592;
+
+procedure List.6 (#Attr.2):
+    let List.594 : U64 = lowlevel ListLen #Attr.2;
+    ret List.594;
+
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.538 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.538;
+    let List.540 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.540;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.560 : U8 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.560;
+
+procedure List.68 (#Attr.2):
+    let List.587 : List Str = lowlevel ListWithCapacity #Attr.2;
+    ret List.587;
+
+procedure List.68 (#Attr.2):
+    let List.589 : List U8 = lowlevel ListWithCapacity #Attr.2;
+    ret List.589;
 
 procedure List.70 (#Attr.2, #Attr.3):
     let List.500 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
     ret List.500;
 
+procedure List.70 (#Attr.2, #Attr.3):
+    let List.517 : List Str = lowlevel ListReserve #Attr.2 #Attr.3;
+    ret List.517;
+
 procedure List.71 (#Attr.2, #Attr.3):
     let List.498 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
     ret List.498;
 
-procedure List.8 (#Attr.2, #Attr.3):
-    let List.543 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
-    ret List.543;
+procedure List.71 (#Attr.2, #Attr.3):
+    let List.515 : List Str = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.515;
 
-procedure List.80 (List.554, List.555, List.556, List.557, List.558):
-    joinpoint List.528 List.433 List.434 List.435 List.436 List.437:
-        let List.530 : Int1 = CallByName Num.22 List.436 List.437;
-        if List.530 then
-            let List.537 : {Str, Str} = CallByName List.66 List.433 List.436;
-            inc List.537;
-            let List.531 : {List U8, U64} = CallByName List.139 List.434 List.537 List.435;
-            let List.534 : U64 = 1i64;
-            let List.533 : U64 = CallByName Num.19 List.436 List.534;
-            jump List.528 List.433 List.531 List.435 List.533 List.437;
+procedure List.72 (#Attr.2, #Attr.3, #Attr.4):
+    let List.601 : List U8 = lowlevel ListSublist #Attr.2 #Attr.3 #Attr.4;
+    ret List.601;
+
+procedure List.8 (#Attr.2, #Attr.3):
+    let List.566 : List Str = lowlevel ListConcat #Attr.2 #Attr.3;
+    ret List.566;
+
+procedure List.8 (#Attr.2, #Attr.3):
+    let List.574 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
+    ret List.574;
+
+procedure List.80 (List.648, List.649, List.650, List.651, List.652):
+    joinpoint List.530 List.433 List.434 List.435 List.436 List.437:
+        let List.532 : Int1 = CallByName Num.22 List.436 List.437;
+        if List.532 then
+            let List.539 : {Str, Str} = CallByName List.66 List.433 List.436;
+            inc List.539;
+            let List.533 : {List U8, U64} = CallByName List.139 List.434 List.539 List.435;
+            let List.536 : U64 = 1i64;
+            let List.535 : U64 = CallByName Num.19 List.436 List.536;
+            jump List.530 List.433 List.533 List.435 List.535 List.437;
         else
             dec List.433;
             ret List.434;
     in
-    jump List.528 List.554 List.555 List.556 List.557 List.558;
+    jump List.530 List.648 List.649 List.650 List.651 List.652;
+
+procedure List.80 (List.665, List.666, List.667, List.668, List.669):
+    joinpoint List.550 List.433 List.434 List.435 List.436 List.437:
+        let List.552 : Int1 = CallByName Num.22 List.436 List.437;
+        if List.552 then
+            let List.559 : U8 = CallByName List.66 List.433 List.436;
+            let List.553 : List U8 = CallByName List.139 List.434 List.559 List.435;
+            let List.556 : U64 = 1i64;
+            let List.555 : U64 = CallByName Num.19 List.436 List.556;
+            jump List.550 List.433 List.553 List.435 List.555 List.437;
+        else
+            dec List.433;
+            ret List.434;
+    in
+    jump List.550 List.665 List.666 List.667 List.668 List.669;
+
+procedure List.80 (List.701, List.702, List.703, List.704, List.705):
+    joinpoint List.621 List.433 List.434 List.435 List.436 List.437:
+        let List.623 : Int1 = CallByName Num.22 List.436 List.437;
+        if List.623 then
+            let List.632 : U8 = CallByName List.66 List.433 List.436;
+            let List.624 : [C {U64, Int1}, C {U64, Int1}] = CallByName Json.188 List.434 List.632;
+            let List.629 : U8 = 1i64;
+            let List.630 : U8 = GetTagId List.624;
+            let List.631 : Int1 = lowlevel Eq List.629 List.630;
+            if List.631 then
+                let List.438 : {U64, Int1} = UnionAtIndex (Id 1) (Index 0) List.624;
+                let List.627 : U64 = 1i64;
+                let List.626 : U64 = CallByName Num.19 List.436 List.627;
+                jump List.621 List.433 List.438 List.435 List.626 List.437;
+            else
+                dec List.433;
+                let List.439 : {U64, Int1} = UnionAtIndex (Id 0) (Index 0) List.624;
+                let List.628 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) List.439;
+                ret List.628;
+        else
+            dec List.433;
+            let List.622 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.434;
+            ret List.622;
+    in
+    jump List.621 List.701 List.702 List.703 List.704 List.705;
 
 procedure List.92 (List.430, List.431, List.432):
-    let List.526 : U64 = 0i64;
-    let List.527 : U64 = CallByName List.6 List.430;
-    let List.525 : {List U8, U64} = CallByName List.80 List.430 List.431 List.432 List.526 List.527;
-    ret List.525;
+    let List.528 : U64 = 0i64;
+    let List.529 : U64 = CallByName List.6 List.430;
+    let List.527 : {List U8, U64} = CallByName List.80 List.430 List.431 List.432 List.528 List.529;
+    ret List.527;
+
+procedure List.92 (List.430, List.431, List.432):
+    let List.548 : U64 = 0i64;
+    let List.549 : U64 = CallByName List.6 List.430;
+    let List.547 : List U8 = CallByName List.80 List.430 List.431 List.432 List.548 List.549;
+    ret List.547;
+
+procedure List.92 (List.430, List.431, List.432):
+    let List.619 : U64 = 0i64;
+    let List.620 : U64 = CallByName List.6 List.430;
+    let List.618 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.80 List.430 List.431 List.432 List.619 List.620;
+    ret List.618;
 
 procedure Num.127 (#Attr.2):
-    let Num.288 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.288;
+    let Num.286 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.286;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.291 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.295 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.295;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.289 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.289;
+    let Num.299 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.299;
 
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.292 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+procedure Num.21 (#Attr.2, #Attr.3):
+    let Num.292 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
     ret Num.292;
 
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.298 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.298;
+
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.290 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.290;
+    let Num.300 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.300;
+
+procedure Num.94 (#Attr.2, #Attr.3):
+    let Num.291 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Str.12 (#Attr.2):
     let Str.313 : List U8 = lowlevel StrToUtf8 #Attr.2;
     ret Str.313;
 
+procedure Str.4 (#Attr.2, #Attr.3):
+    let Str.316 : Str = lowlevel StrJoinWith #Attr.2 #Attr.3;
+    ret Str.316;
+
 procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
     let Str.307 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
     ret Str.307;
+
+procedure Str.55 (#Attr.2):
+    let Str.319 : List Str = lowlevel StrGraphemes #Attr.2;
+    ret Str.319;
 
 procedure Str.9 (Str.79):
     let Str.305 : U64 = 0i64;
@@ -209,15 +1362,15 @@ procedure Str.9 (Str.79):
     else
         let Str.300 : U8 = StructAtIndex 3 Str.80;
         let Str.301 : U64 = StructAtIndex 0 Str.80;
-        let #Derived_gen.14 : Str = StructAtIndex 1 Str.80;
-        dec #Derived_gen.14;
+        let #Derived_gen.15 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.15;
         let Str.299 : {U64, U8} = Struct {Str.301, Str.300};
         let Str.298 : [C {U64, U8}, C Str] = TagId(0) Str.299;
         ret Str.298;
 
 procedure Test.0 ():
     let Test.11 : Str = "foo";
-    let Test.10 : {} = CallByName Json.1;
+    let Test.10 : [C , C [], C , C , C , C ] = CallByName Json.1;
     let Test.8 : List U8 = CallByName Encode.26 Test.11 Test.10;
     let Test.1 : [C {U64, U8}, C Str] = CallByName Str.9 Test.8;
     let Test.5 : U8 = 1i64;
