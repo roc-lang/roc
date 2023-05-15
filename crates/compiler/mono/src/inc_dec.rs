@@ -648,20 +648,20 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
-            let new_expect = arena.alloc(Stmt::Expect {
+            let newer_remainder = consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages(lookups.iter().copied()),
+                new_remainder,
+            );
+
+            arena.alloc(Stmt::Expect {
                 condition: *condition,
                 region: *region,
                 lookups,
                 variables,
-                remainder: new_remainder,
-            });
-
-            consume_and_insert_inc_stmts(
-                arena,
-                environment,
-                environment.owned_usages(lookups.iter().copied()),
-                new_expect,
-            )
+                remainder: newer_remainder,
+            })
         }
         Stmt::ExpectFx {
             condition,
@@ -672,20 +672,20 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
-            let new_expectfx = arena.alloc(Stmt::ExpectFx {
+            let newer_remainder = consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages(lookups.iter().copied()),
+                new_remainder,
+            );
+
+            arena.alloc(Stmt::ExpectFx {
                 condition: *condition,
                 region: *region,
                 lookups,
                 variables,
-                remainder: new_remainder,
-            });
-
-            consume_and_insert_inc_stmts(
-                arena,
-                environment,
-                environment.owned_usages(lookups.iter().copied()),
-                new_expectfx,
-            )
+                remainder: newer_remainder,
+            })
         }
         Stmt::Dbg {
             symbol,
@@ -694,20 +694,11 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
-            let new_debug = arena.alloc(Stmt::Dbg {
+            arena.alloc(Stmt::Dbg {
                 symbol: *symbol,
                 variable: *variable,
                 remainder: new_remainder,
-            });
-
-            // TODO this assumes the debug statement to consume the variable. I'm not sure if that is (always) the case.
-            // But the old inc_dec pass passes variables
-            consume_and_insert_inc_stmts(
-                arena,
-                environment,
-                environment.owned_usages([*symbol]),
-                new_debug,
-            )
+            })
         }
         Stmt::Join {
             id: joinpoint_id,

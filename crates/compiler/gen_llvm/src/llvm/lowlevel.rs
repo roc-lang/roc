@@ -1256,7 +1256,20 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             unreachable!("The {:?} operation is turned into mono Expr", op)
         }
 
-        PtrCast | PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        PtrCast => {
+            arguments!(data_ptr);
+
+            let target_type =
+                basic_type_from_layout(env, layout_interner, layout).into_pointer_type();
+
+            debug_assert!(data_ptr.is_pointer_value());
+
+            env.builder
+                .build_pointer_cast(data_ptr.into_pointer_value(), target_type, "ptr_cast")
+                .into()
+        }
+
+        PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }

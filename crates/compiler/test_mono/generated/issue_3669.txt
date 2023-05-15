@@ -13,8 +13,8 @@ procedure Test.2 (Test.19):
             ret Test.14;
         else
             let Test.5 : [<rnu><null>, C *self] = UnionAtIndex (Id 0) (Index 0) Test.7;
-            let #Derived_gen.2 : Int1 = lowlevel RefCountIsUnique Test.7;
-            if #Derived_gen.2 then
+            let #Derived_gen.0 : Int1 = lowlevel RefCountIsUnique Test.7;
+            if #Derived_gen.0 then
                 decref Test.7;
                 jump Test.13 Test.5;
             else

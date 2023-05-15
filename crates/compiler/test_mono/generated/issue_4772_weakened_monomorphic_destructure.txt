@@ -393,5 +393,6 @@ procedure Test.12 ():
     let Test.14 : Int1 = CallByName Bool.11 Test.10 Test.15;
     dec Test.15;
     expect Test.14;
+    dec Test.10;
     let Test.13 : {} = Struct {};
     ret Test.13;

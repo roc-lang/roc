@@ -39,7 +39,7 @@ procedure Test.4 (Test.28, Test.29):
     joinpoint Test.15 Test.5 #Attr.12:
         let Test.2 : U8 = UnionAtIndex (Id 0) (Index 1) #Attr.12;
         let Test.3 : [<rnu><null>, C *self U8] = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-        joinpoint #Derived_gen.1:
+        joinpoint #Derived_gen.0:
             let Test.17 : U8 = CallByName Num.21 Test.2 Test.5;
             let Test.18 : U8 = GetTagId Test.3;
             switch Test.18:
@@ -52,14 +52,14 @@ procedure Test.4 (Test.28, Test.29):
                     ret Test.16;
             
         in
-        let #Derived_gen.2 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-        if #Derived_gen.2 then
+        let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if #Derived_gen.1 then
             decref #Attr.12;
-            jump #Derived_gen.1;
+            jump #Derived_gen.0;
         else
             inc Test.3;
             decref #Attr.12;
-            jump #Derived_gen.1;
+            jump #Derived_gen.0;
     in
     jump Test.15 Test.28 Test.29;
 

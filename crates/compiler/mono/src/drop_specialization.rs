@@ -124,17 +124,11 @@ fn specialize_drops_stmt<'a, 'i>(
                         }
                     }
                 }
-                Expr::Struct(_) => {
-                    let mut new_environment = environment.clone_without_incremented();
 
-                    alloc_let_with_continuation!(&mut new_environment)
-                }
                 Expr::Tag { tag_id, .. } => {
-                    let mut new_environment = environment.clone_without_incremented();
+                    environment.symbol_tag.insert(*binding, *tag_id);
 
-                    new_environment.symbol_tag.insert(*binding, *tag_id);
-
-                    alloc_let_with_continuation!(&mut new_environment)
+                    alloc_let_with_continuation!(environment)
                 }
                 Expr::StructAtIndex {
                     index, structure, ..
@@ -185,8 +179,8 @@ fn specialize_drops_stmt<'a, 'i>(
                     }
                     alloc_let_with_continuation!(environment)
                 }
-
-                Expr::RuntimeErrorFunction(_)
+                Expr::Struct(_)
+                | Expr::RuntimeErrorFunction(_)
                 | Expr::ExprBox { .. }
                 | Expr::NullPointer
                 | Expr::GetTagId { .. }

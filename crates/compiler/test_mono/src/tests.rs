@@ -2923,3 +2923,90 @@ fn error_on_erroneous_condition() {
         "#
     )
 }
+
+#[mono_test]
+fn binary_tree_fbip() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            tree = Node (Node (Node (Node Tip Tip) Tip) (Node Tip Tip)) (Node Tip Tip)
+            checkFbip tree
+
+        Tree : [Node Tree Tree, Tip]
+
+        check : Tree -> Num a
+        check = \t -> when t is
+            Node l r -> check l + check r + 1
+            Tip -> 0
+
+        Visit : [NodeR Tree Visit, Done]
+
+        checkFbip : Tree -> Num a
+        checkFbip = \t -> checkFbipHelper t Done 0
+
+        checkFbipHelper : Tree, Visit, Num a-> Num a
+        checkFbipHelper = \t, v, a -> when t is
+            Node l r -> checkFbipHelper l (NodeR r v) (a + 1)
+            Tip -> when v is
+                NodeR r v2 -> checkFbipHelper r v2 a
+                Done -> a
+        "#
+    )
+}
+
+#[mono_test]
+fn rb_tree_fbip() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = Leaf
+            |> ins 0 0
+            |> ins 5 1
+            |> ins 6 2
+            |> ins 4 3
+            |> ins 9 4
+            |> ins 3 5
+            |> ins 2 6
+            |> ins 1 7
+            |> ins 8 8
+            |> ins 7 9
+
+        Color : [Red, Black]
+
+        Tree a : [Node Color (Tree a) I32 a (Tree a), Leaf]
+
+        ins : Tree a, I32, a -> Tree a
+        ins = \t, k, v -> when t is
+            Leaf -> Node Red Leaf k v Leaf
+            Node Black l kx vx r ->
+                if k < kx
+                    then when l is
+                        Node Red _ _ _ _ -> when (ins l k v) is
+                            Node _ (Node Red ly ky vy ry) kz vz rz -> Node Red (Node Black ly ky vy ry) kz vz (Node Black rz kx vx r)
+                            Node _ lz kz vz (Node Red ly ky vy ry) -> Node Red (Node Black lz kz vz ly) ky vy (Node Black ry kx vx r)
+                            Node _ ly ky vy ry -> Node Black (Node Red ly ky vy ry) kx vx r
+                            Leaf -> Leaf
+                        _ -> Node Black (ins l k v) kx vx r
+                else
+                    if k > kx
+                        then when r is
+                            Node Red _ _ _ _ -> when ins r k v is
+                                Node _ (Node Red ly ky vy ry) kz vz rz -> Node Red (Node Black ly ky vy ry) kz vz (Node Black rz kx vx r)
+                                Node _ lz kz vz (Node Red ly ky vy ry) -> Node Red (Node Black lz kz vz ly) ky vy (Node Black ry kx vx r)
+                                Node _ ly ky vy ry -> Node Black (Node Red ly ky vy ry) kx vx r
+                                Leaf -> Leaf
+                            _ -> Node Black l kx vx (ins r k v)
+                    else Node Black l k v r
+            Node Red l kx vx r ->
+                if k < kx
+                    then Node Red (ins l k v) kx vx r
+                else
+                    if k > kx 
+                        then Node Red l kx vx (ins r k v)
+                        else Node Red l k v r
+        "#
+    )
+}

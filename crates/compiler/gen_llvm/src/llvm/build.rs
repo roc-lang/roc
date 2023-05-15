@@ -1184,9 +1184,24 @@ pub fn build_exp_expr<'a, 'ctx>(
             };
 
             let ctx = env.context;
+            let check_if_null = ctx.append_basic_block(parent, "check_if_null");
+            let check_if_unique = ctx.append_basic_block(parent, "check_if_unique");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            env.builder.build_unconditional_branch(check_if_null);
+
+            env.builder.position_at_end(check_if_null);
+
+            env.builder.build_conditional_branch(
+                env.builder.build_is_null(tag_ptr, "is_tag_null"),
+                cont_block,
+                check_if_unique,
+            );
+
+            env.builder.position_at_end(check_if_unique);
+
             let then_block = ctx.append_basic_block(parent, "then_reset");
             let else_block = ctx.append_basic_block(parent, "else_decref");
-            let cont_block = ctx.append_basic_block(parent, "cont");
 
             let refcount_ptr =
                 PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
@@ -1227,7 +1242,11 @@ pub fn build_exp_expr<'a, 'ctx>(
                 let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
 
                 let null_ptr = tag_ptr.get_type().const_null();
-                phi.add_incoming(&[(&tag_ptr, then_block), (&null_ptr, else_block)]);
+                phi.add_incoming(&[
+                    (&null_ptr, check_if_null),
+                    (&tag_ptr, then_block),
+                    (&null_ptr, else_block),
+                ]);
 
                 phi.as_basic_value()
             }
@@ -1246,8 +1265,23 @@ pub fn build_exp_expr<'a, 'ctx>(
             let tag_ptr = tag_ptr.into_pointer_value();
 
             let ctx = env.context;
-            let not_unique_block = ctx.append_basic_block(parent, "else_decref");
+            let check_if_null = ctx.append_basic_block(parent, "check_if_null");
+            let check_if_unique = ctx.append_basic_block(parent, "check_if_unique");
             let cont_block = ctx.append_basic_block(parent, "cont");
+
+            env.builder.build_unconditional_branch(check_if_null);
+
+            env.builder.position_at_end(check_if_null);
+
+            env.builder.build_conditional_branch(
+                env.builder.build_is_null(tag_ptr, "is_tag_null"),
+                cont_block,
+                check_if_unique,
+            );
+
+            env.builder.position_at_end(check_if_unique);
+
+            let not_unique_block = ctx.append_basic_block(parent, "else_decref");
 
             let refcount_ptr =
                 PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
@@ -1274,7 +1308,11 @@ pub fn build_exp_expr<'a, 'ctx>(
                 let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
 
                 let null_ptr = tag_ptr.get_type().const_null();
-                phi.add_incoming(&[(&tag_ptr, parent_block), (&null_ptr, not_unique_block)]);
+                phi.add_incoming(&[
+                    (&null_ptr, check_if_null),
+                    (&tag_ptr, parent_block),
+                    (&null_ptr, not_unique_block),
+                ]);
 
                 phi.as_basic_value()
             }
