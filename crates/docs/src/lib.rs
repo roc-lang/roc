@@ -134,7 +134,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
     };
 
     // Write index.html for package (/index.html)
-    {
+    /*{
         let rendered_package = template_html
             .replace(
                 "<!-- Page title -->",
@@ -155,7 +155,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 error
             )
         });
-    }
+    }*/
 
     // Write each package module's index.html file
     for module_docs in loaded_module.docs_by_module.values() {
