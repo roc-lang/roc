@@ -371,7 +371,7 @@ fn encode_use_stdlib() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
@@ -396,7 +396,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
@@ -448,7 +448,7 @@ fn to_encoder_encode_custom_has_capture() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
