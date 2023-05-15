@@ -82,7 +82,7 @@ bumpalo = { version = "3.12.0", features = ["collections"] }
 bytemuck = { version = "1.13.1", features = ["derive"] }
 capstone = { version = "0.11.0", default-features = false }
 cgmath = "0.18.0"
-clap = { version = "3.2.23", default-features = false, features = ["std", "color", "suggestions"] }
+clap = { version = "4.2.7", default-features = false, features = ["std", "color", "suggestions"] }
 colored = "2.0.0"
 confy = { git = 'https://github.com/rust-cli/confy', features = ["yaml_conf"], default-features = false }
 console_error_panic_hook = "0.1.7"

@@ -51,7 +51,7 @@ mod cli_run {
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
-    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT, "=true");
+    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT);
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 

@@ -4,7 +4,10 @@
 extern crate const_format;
 
 use bumpalo::Bump;
-use clap::{Arg, ArgMatches, Command, ValueSource};
+use clap::{
+    builder::PossibleValuesParser, parser::ValueSource, value_parser, Arg, ArgAction, ArgMatches,
+    Command,
+};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_build::program::{
     handle_error_module, handle_loading_problem, standard_load_config, BuildFileError,
@@ -18,7 +21,7 @@ use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
 use std::env;
-use std::ffi::{CString, OsStr};
+use std::ffi::{CString, OsStr, OsString};
 use std::io;
 use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
@@ -72,72 +75,76 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 const VERSION: &str = include_str!("../../../version.txt");
 
-pub fn build_app<'a>() -> Command<'a> {
+pub fn build_app() -> Command {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
         .long(FLAG_OPTIMIZE)
         .help("Optimize the compiled program to run faster\n(Optimization takes time to complete.)")
+        .action(ArgAction::SetTrue)
         .required(false);
 
     let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
         .long(FLAG_MAX_THREADS)
         .help("Limit the number of threads (and hence cores) used during compilation")
-        .takes_value(true)
-        .validator(|s| s.parse::<usize>())
+        .value_parser(value_parser!(usize))
         .required(false);
 
     let flag_opt_size = Arg::new(FLAG_OPT_SIZE)
         .long(FLAG_OPT_SIZE)
         .help("Optimize the compiled program to have a small binary size\n(Optimization takes time to complete.)")
+        .action(ArgAction::SetTrue)
         .required(false);
 
     let flag_dev = Arg::new(FLAG_DEV)
         .long(FLAG_DEV)
         .help("Make compilation finish as soon as possible, at the expense of runtime performance")
+        .action(ArgAction::SetTrue)
         .required(false);
 
     let flag_debug = Arg::new(FLAG_DEBUG)
         .long(FLAG_DEBUG)
         .help("Store LLVM debug information in the generated program")
+        .action(ArgAction::SetTrue)
         .required(false);
 
     let flag_time = Arg::new(FLAG_TIME)
         .long(FLAG_TIME)
         .help("Print detailed compilation time information")
+        .action(ArgAction::SetTrue)
         .required(false);
 
     let flag_linker = Arg::new(FLAG_LINKER)
         .long(FLAG_LINKER)
         .help("Set which linker to use\n(The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.)")
-        .possible_values(["surgical", "legacy"])
+        .value_parser(["surgical", "legacy"])
         .required(false);
 
     let flag_prebuilt = Arg::new(FLAG_PREBUILT)
         .long(FLAG_PREBUILT)
-        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled by default when using `roc build` with a --target other than `--target <current machine>`.)")
-        .possible_values(["true", "false"])
+        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled implicitly when using `roc build` with a --target other than `--target <current machine>`, unless the target is wasm.)")
+        .action(ArgAction::SetTrue)
         .required(false);
 
     let flag_wasm_stack_size_kb = Arg::new(FLAG_WASM_STACK_SIZE_KB)
         .long(FLAG_WASM_STACK_SIZE_KB)
         .help("Stack size in kilobytes for wasm32 target\n(This only applies when --dev also provided.)")
-        .takes_value(true)
-        .validator(|s| s.parse::<u32>())
+        .value_parser(value_parser!(u32))
         .required(false);
 
     let roc_file_to_run = Arg::new(ROC_FILE)
         .help("The .roc file of an app to run")
-        .allow_invalid_utf8(true)
+        .value_parser(value_parser!(PathBuf))
         .required(false)
         .default_value(DEFAULT_ROC_FILENAME);
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
         .help("Arguments to pass into the app being run\ne.g. `roc run -- arg1 arg2`")
-        .allow_invalid_utf8(true)
-        .multiple_values(true)
-        .takes_value(true)
+        .value_parser(value_parser!(OsString))
+        .num_args(0..)
         .allow_hyphen_values(true)
         .last(true);
 
+    let build_target_values_parser =
+        PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
@@ -151,21 +158,20 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
-            .arg(flag_wasm_stack_size_kb.clone())
+            .arg(flag_wasm_stack_size_kb)
             .arg(
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
                     .help("Choose a different target")
-                    .default_value(Target::default().into())
-                    .possible_values(Target::iter().map(|target| {
-                        Into::<&'static str>::into(target)
-                    }))
+                    .default_value(Into::<&'static str>::into(Target::default()))
+                    .value_parser(build_target_values_parser.clone())
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
                     .help("Build a C library instead of an executable")
+                    .action(ArgAction::SetTrue)
                     .required(false),
             )
             .arg(
@@ -173,19 +179,20 @@ pub fn build_app<'a>() -> Command<'a> {
                     .long(FLAG_BUNDLE)
                     .help("Create an archive of a package (for example, a .tar, .tar.gz, or .tar.br file), so others can add it as a HTTPS dependency.")
                     .conflicts_with(FLAG_TARGET)
-                    .possible_values([".tar", ".tar.gz", ".tar.br"])
+                    .value_parser([".tar", ".tar.gz", ".tar.br"])
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_NO_LINK)
                     .long(FLAG_NO_LINK)
                     .help("Do not link\n(Instead, just output the `.o` file.)")
+                    .action(ArgAction::SetTrue)
                     .required(false),
             )
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file to build")
-                    .allow_invalid_utf8(true)
+                    .value_parser(value_parser!(PathBuf))
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME),
             )
@@ -203,7 +210,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the main module")
-                    .allow_invalid_utf8(true)
+                    .value_parser(value_parser!(PathBuf))
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
             )
@@ -243,13 +250,14 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
-                    .multiple_values(true)
+                    .num_args(0..)
                     .required(false)
-                    .allow_invalid_utf8(true))
+                    .value_parser(value_parser!(OsString)))
             .arg(
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
                     .help("Checks that specified files are formatted\n(If formatting is needed, return a non-zero exit code.)")
+                    .action(ArgAction::SetTrue)
                     .required(false),
             )
         )
@@ -262,7 +270,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")
-                    .allow_invalid_utf8(true)
+                    .value_parser(value_parser!(PathBuf))
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME),
             )
@@ -271,9 +279,8 @@ pub fn build_app<'a>() -> Command<'a> {
             Command::new(CMD_DOCS)
                 .about("Generate documentation for a Roc package")
                 .arg(Arg::new(ROC_FILE)
-                    .multiple_values(true)
                     .help("The package's main .roc file")
-                    .allow_invalid_utf8(true)
+                    .value_parser(value_parser!(PathBuf))
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME),
                 )
@@ -284,19 +291,19 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(GLUE_SPEC)
                     .help("The specification for how to translate Roc types into output files.")
-                    .allow_invalid_utf8(true)
+                    .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
             .arg(
                 Arg::new(GLUE_DIR)
                     .help("The directory for the generated glue code.\nNote: The implementation can write to any file in this directory.")
-                    .allow_invalid_utf8(true)
+                    .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file whose exposed types should be translated.")
-                    .allow_invalid_utf8(true)
+                    .value_parser(value_parser!(PathBuf))
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
             )
@@ -306,23 +313,20 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for an app using the platform")
-                    .allow_invalid_utf8(true)
+                    .value_parser(value_parser!(PathBuf))
                     .required(true)
             )
             .arg(
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
                     .help("Choose a different target")
-                    .default_value(Target::default().into())
-                    .possible_values(Target::iter().map(|target| {
-                        Into::<&'static str>::into(target)
-                    }))
+                    .default_value(Into::<&'static str>::into(Target::default()))
+                    .value_parser(build_target_values_parser)
                     .required(false),
             )
         )
-        .trailing_var_arg(true)
         .arg(flag_optimize)
-        .arg(flag_max_threads.clone())
+        .arg(flag_max_threads)
         .arg(flag_opt_size)
         .arg(flag_dev)
         .arg(flag_debug)
@@ -338,9 +342,9 @@ pub fn build_app<'a>() -> Command<'a> {
                 .about("Launch the Roc editor (Work In Progress)")
                 .arg(
                     Arg::new(DIRECTORY_OR_FILES)
-                        .multiple_values(true)
+                        .num_args(0..)
                         .required(false)
-                        .allow_invalid_utf8(true)
+                        .value_parser(value_parser!(OsString))
                         .help("(optional) The directory or files to open on launch"),
                 ),
         )
@@ -363,9 +367,9 @@ pub enum FormatMode {
 
 fn opt_level_from_flags(matches: &ArgMatches) -> OptLevel {
     match (
-        matches.is_present(FLAG_OPTIMIZE),
-        matches.is_present(FLAG_OPT_SIZE),
-        matches.is_present(FLAG_DEV),
+        matches.get_flag(FLAG_OPTIMIZE),
+        matches.get_flag(FLAG_OPT_SIZE),
+        matches.get_flag(FLAG_DEV),
     ) {
         (true, false, false) => OptLevel::Optimize,
         (false, true, false) => OptLevel::Size,
@@ -389,25 +393,21 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let start_time = Instant::now();
     let arena = Bump::new();
-    let filename = matches.value_of_os(ROC_FILE).unwrap();
     let opt_level = opt_level_from_flags(matches);
 
-    let threading = match matches
-        .value_of(FLAG_MAX_THREADS)
-        .and_then(|s| s.parse::<usize>().ok())
-    {
+    let threading = match matches.get_one::<usize>(FLAG_MAX_THREADS) {
         None => Threading::AllAvailable,
         Some(0) => user_error!("cannot build with at most 0 threads"),
         Some(1) => Threading::Single,
-        Some(n) => Threading::AtMost(n),
+        Some(n) => Threading::AtMost(*n),
     };
 
-    let path = Path::new(filename);
+    let path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
 
     // Spawn the root task
     if !path.exists() {
         let current_dir = env::current_dir().unwrap();
-        let expected_file_path = current_dir.join(filename);
+        let expected_file_path = current_dir.join(path);
 
         let current_dir_string = current_dir.display();
         let expected_file_path_string = expected_file_path.display();
@@ -454,7 +454,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             return handle_loading_problem(problem);
         }
         Err(LoadMonomorphizedError::ErrorModule(module)) => {
-            return handle_error_module(module, start_time.elapsed(), filename, false);
+            return handle_error_module(module, start_time.elapsed(), path.as_os_str(), false);
         }
     };
     let problems = report_problems_monomorphized(&mut loaded);
@@ -540,14 +540,12 @@ pub fn build(
     use roc_build::program::build_file;
     use BuildConfig::*;
 
-    let filename = matches.value_of_os(ROC_FILE).unwrap();
-    let path_buf = {
-        let path = Path::new(filename);
-
+    let path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+    {
         // Spawn the root task
         if !path.exists() {
             let current_dir = env::current_dir().unwrap();
-            let expected_file_path = current_dir.join(filename);
+            let expected_file_path = current_dir.join(path);
 
             let current_dir_string = current_dir.display();
             let expected_file_path_string = expected_file_path.display();
@@ -567,11 +565,12 @@ pub fn build(
             process::exit(1);
         }
 
-        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_BUNDLE) {
+        if config == BuildConfig::BuildOnly && matches.contains_id(FLAG_BUNDLE) {
             let start_time = Instant::now();
 
             let compression =
-                Compression::try_from(matches.value_of(FLAG_BUNDLE).unwrap()).unwrap();
+                Compression::try_from(matches.get_one::<String>(FLAG_BUNDLE).unwrap().as_str())
+                    .unwrap();
 
             // Print a note of advice. This is mainly here because brotli takes so long but produces
             // such smaller output files; the idea is to encourage people to wait for brotli,
@@ -608,9 +607,7 @@ pub fn build(
 
             return Ok(0);
         }
-
-        path.to_path_buf()
-    };
+    }
 
     // the process will end after this function,
     // so we don't want to spend time freeing these values
@@ -624,7 +621,7 @@ pub fn build(
 
     // Note: This allows using `--dev` with `--optimize`.
     // This means frontend optimizations and dev backend.
-    let code_gen_backend = if matches.is_present(FLAG_DEV) {
+    let code_gen_backend = if matches.get_flag(FLAG_DEV) {
         if matches!(triple.architecture, Architecture::Wasm32) {
             CodeGenBackend::Wasm
         } else {
@@ -639,17 +636,14 @@ pub fn build(
         CodeGenBackend::Llvm(backend_mode)
     };
 
-    let emit_debug_info = matches.is_present(FLAG_DEBUG);
-    let emit_timings = matches.is_present(FLAG_TIME);
+    let emit_debug_info = matches.get_flag(FLAG_DEBUG);
+    let emit_timings = matches.get_flag(FLAG_TIME);
 
-    let threading = match matches
-        .value_of(FLAG_MAX_THREADS)
-        .and_then(|s| s.parse::<usize>().ok())
-    {
+    let threading = match matches.get_one::<usize>(FLAG_MAX_THREADS) {
         None => Threading::AllAvailable,
         Some(0) => user_error!("cannot build with at most 0 threads"),
         Some(1) => Threading::Single,
-        Some(n) => Threading::AtMost(n),
+        Some(n) => Threading::AtMost(*n),
     };
 
     let wasm_dev_backend = matches!(code_gen_backend, CodeGenBackend::Wasm);
@@ -657,27 +651,29 @@ pub fn build(
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
     } else if !roc_linker::supported(link_type, &triple)
-        || matches.value_of(FLAG_LINKER) == Some("legacy")
+        || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
     {
         LinkingStrategy::Legacy
     } else {
         LinkingStrategy::Surgical
     };
 
-    let prebuilt = if matches.is_present(FLAG_PREBUILT) {
-        matches.value_of(FLAG_PREBUILT) == Some("true")
-    } else {
-        // When compiling for a different target, default to assuming a prebuilt platform.
-        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the current machine.
-        // We make an exception for Wasm, because cross-compiling is the norm in that case.
-        triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
+    let prebuilt = {
+        let cross_compile = triple != Triple::host();
+        let targeting_wasm = matches!(triple.architecture, Architecture::Wasm32);
+
+        matches.get_flag(FLAG_PREBUILT) ||
+            // When compiling for a different target, assume a prebuilt platform.
+            // Otherwise compilation would most likely fail because many toolchains
+            // assume you're compiling for the current machine. We make an exception
+            // for Wasm, because cross-compiling is the norm in that case.
+            (cross_compile && !targeting_wasm)
     };
 
     let wasm_dev_stack_bytes: Option<u32> = matches
-        .try_get_one::<&str>(FLAG_WASM_STACK_SIZE_KB)
+        .try_get_one::<u32>(FLAG_WASM_STACK_SIZE_KB)
         .ok()
         .flatten()
-        .and_then(|s| s.parse::<u32>().ok())
         .map(|x| x * 1024);
 
     let build_ordering = match config {
@@ -696,7 +692,7 @@ pub fn build(
     let res_binary_path = build_file(
         &arena,
         &triple,
-        path_buf,
+        path.to_owned(),
         code_gen_options,
         emit_timings,
         link_type,
@@ -752,7 +748,10 @@ pub fn build(
                         );
                     }
 
-                    let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
+                    let args = matches
+                        .get_many::<OsString>(ARGS_FOR_APP)
+                        .unwrap_or_default()
+                        .map(|s| s.as_os_str());
 
                     // don't waste time deallocating; the process ends anyway
                     // ManuallyDrop will leak the bytes because we don't drop manually
@@ -784,7 +783,10 @@ pub fn build(
                         );
                     }
 
-                    let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
+                    let args = matches
+                        .get_many::<OsString>(ARGS_FOR_APP)
+                        .unwrap_or_default()
+                        .map(|s| s.as_os_str());
 
                     // don't waste time deallocating; the process ends anyway
                     // ManuallyDrop will leak the bytes because we don't drop manually
@@ -795,7 +797,7 @@ pub fn build(
             }
         }
         Err(BuildFileError::ErrorModule { module, total_time }) => {
-            handle_error_module(module, total_time, filename, true)
+            handle_error_module(module, total_time, path.as_os_str(), true)
         }
         Err(BuildFileError::LoadingProblem(problem)) => handle_loading_problem(problem),
     }
