@@ -120,8 +120,8 @@ pub fn build_app() -> Command {
 
     let flag_prebuilt = Arg::new(FLAG_PREBUILT)
         .long(FLAG_PREBUILT)
-        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled by default when using `roc build` with a --target other than `--target <current machine>`.)")
-        .value_parser(["true", "false"])
+        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled implicitly when using `roc build` with a --target other than `--target <current machine>`, unless the target is wasm.)")
+        .action(ArgAction::SetTrue)
         .required(false);
 
     let flag_wasm_stack_size_kb = Arg::new(FLAG_WASM_STACK_SIZE_KB)
@@ -658,13 +658,16 @@ pub fn build(
         LinkingStrategy::Surgical
     };
 
-    let prebuilt = if matches.contains_id(FLAG_PREBUILT) {
-        matches.get_one::<String>(FLAG_PREBUILT).map(|s| s.as_str()) == Some("true")
-    } else {
-        // When compiling for a different target, default to assuming a prebuilt platform.
-        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the current machine.
-        // We make an exception for Wasm, because cross-compiling is the norm in that case.
-        triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
+    let prebuilt = {
+        let cross_compile = triple != Triple::host();
+        let targeting_wasm = matches!(triple.architecture, Architecture::Wasm32);
+
+        matches.get_flag(FLAG_PREBUILT) ||
+            // When compiling for a different target, assume a prebuilt platform.
+            // Otherwise compilation would most likely fail because many toolchains
+            // assume you're compiling for the current machine. We make an exception
+            // for Wasm, because cross-compiling is the norm in that case.
+            (cross_compile && !targeting_wasm)
     };
 
     let wasm_dev_stack_bytes: Option<u32> = matches
