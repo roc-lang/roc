@@ -143,6 +143,8 @@ pub fn build_app() -> Command {
         .allow_hyphen_values(true)
         .last(true);
 
+    let build_target_values_parser =
+        PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
@@ -162,12 +164,7 @@ pub fn build_app() -> Command {
                     .long(FLAG_TARGET)
                     .help("Choose a different target")
                     .default_value(Into::<&'static str>::into(Target::default()))
-                    .value_parser(
-                        PossibleValuesParser::new(
-                            Target::iter().map(|target| {
-                                Into::<&'static str>::into(target)
-                            })
-                        ))
+                    .value_parser(build_target_values_parser.clone())
                     .required(false),
             )
             .arg(
@@ -283,7 +280,6 @@ pub fn build_app() -> Command {
                 .about("Generate documentation for a Roc package")
                 .arg(Arg::new(ROC_FILE)
                     .help("The package's main .roc file")
-                    .num_args(0..0)
                     .value_parser(value_parser!(PathBuf))
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME),
@@ -325,12 +321,7 @@ pub fn build_app() -> Command {
                     .long(FLAG_TARGET)
                     .help("Choose a different target")
                     .default_value(Into::<&'static str>::into(Target::default()))
-                    .value_parser(
-                        PossibleValuesParser::new(
-                            Target::iter().map(|target| {
-                                Into::<&'static str>::into(target)
-                            })
-                        ))
+                    .value_parser(build_target_values_parser)
                     .required(false),
             )
         )
