@@ -528,7 +528,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
         internal_error!(
-            "Failed to read host object file {}! Try setting --prebuilt-platform=false",
+            "Failed to read host object file {}! Try omitting --prebuilt-platform",
             preprocessed_host_path.display()
         )
     });
@@ -794,7 +794,7 @@ fn build_loaded_file<'a>(
     };
 
     // For example, if we're loading the platform from a URL, it's automatically prebuilt
-    // even if the --prebuilt-platform=true CLI flag wasn't set.
+    // even if the --prebuilt-platform CLI flag wasn't set.
     let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
 
     let cwd = app_module_path.parent().unwrap();
@@ -1036,9 +1036,10 @@ fn build_loaded_file<'a>(
 }
 
 fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: PathBuf) {
-    let prefix = match prebuilt_requested {
-        true => "Because I was run with --prebuilt-platform=true, ",
-        false => "",
+    let prefix = if prebuilt_requested {
+        "Because I was run with --prebuilt-platform, "
+    } else {
+        ""
     };
 
     let preprocessed_host_path_str = preprocessed_host_path.to_string_lossy();
@@ -1057,7 +1058,7 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
 
             However, it was not there!{}
 
-            If you have the platform's source code locally, you may be able to generate it by re-running this command with --prebuilt-platform=false
+            If you have the platform's source code locally, you may be able to generate it by re-running this command omitting --prebuilt-platform
             "#
         ),
         prefix,
