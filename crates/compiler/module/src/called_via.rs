@@ -88,6 +88,10 @@ pub enum CalledVia {
     /// This call is the result of desugaring string interpolation,
     /// e.g. "\(first) \(last)" is transformed into Str.concat (Str.concat first " ") last.
     StringInterpolation,
+
+    /// This call is the result of desugaring a Record Builder field.
+    /// e.g. succeed { a <- get "a" } is transformed into (get "a") (succeed \a -> { a })
+    RecordBuilder,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

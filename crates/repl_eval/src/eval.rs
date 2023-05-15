@@ -11,7 +11,7 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
     self, cmp_fields, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache,
-    LayoutInterner, TLLayoutInterner, UnionLayout, UnionVariant, WrappedVariant,
+    LayoutInterner, LayoutRepr, TLLayoutInterner, UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
@@ -265,8 +265,8 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
-fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn expr_of_tag<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     data_addr: usize,
     tag_name: &TagName,
@@ -289,8 +289,8 @@ fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
 
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
-fn tag_id_from_data<'a, 'env, M: ReplAppMemory>(
-    env: &Env<'a, 'env>,
+fn tag_id_from_data<'a, M: ReplAppMemory>(
+    env: &Env<'a, '_>,
     mem: &M,
     union_layout: UnionLayout<'a>,
     data_addr: usize,
@@ -353,13 +353,13 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         };
     }
 
-    let expr = match env.layout_cache.get_in(layout) {
-        Layout::Builtin(Builtin::Bool) => {
+    let expr = match env.layout_cache.get_in(layout).repr {
+        LayoutRepr::Builtin(Builtin::Bool) => {
             app.call_function(main_fn_name, |_mem: &A::Memory, num: bool| {
                 bool_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
             })
         }
-        Layout::Builtin(Builtin::Int(int_width)) => {
+        LayoutRepr::Builtin(Builtin::Int(int_width)) => {
             use IntWidth::*;
 
             match int_width {
@@ -386,7 +386,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 I128 => num_helper!(i128),
             }
         }
-        Layout::Builtin(Builtin::Float(float_width)) => {
+        LayoutRepr::Builtin(Builtin::Float(float_width)) => {
             use FloatWidth::*;
 
             match float_width {
@@ -394,8 +394,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 F64 => num_helper!(f64),
             }
         }
-        Layout::Builtin(Builtin::Decimal) => num_helper!(RocDec),
-        Layout::Builtin(Builtin::Str) => {
+        LayoutRepr::Builtin(Builtin::Decimal) => num_helper!(RocDec),
+        LayoutRepr::Builtin(Builtin::Str) => {
             let body = |mem: &A::Memory, addr| {
                 let string = mem.deref_str(addr);
                 let arena_str = env.arena.alloc_str(string);
@@ -404,7 +404,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 
             app.call_function_returns_roc_str(env.target_info, main_fn_name, body)
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => app.call_function_returns_roc_list(
+        LayoutRepr::Builtin(Builtin::List(elem_layout)) => app.call_function_returns_roc_list(
             main_fn_name,
             |mem: &A::Memory, (addr, len, _cap)| {
                 list_to_ast(
@@ -417,13 +417,11 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 )
             },
         ),
-        Layout::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct { field_layouts, .. } => {
             let fields = [Layout::U64, layout];
-            let layout = env
-                .layout_cache
-                .put_in(Layout::struct_no_name_order(env.arena.alloc(fields)));
 
-            let result_stack_size = env.layout_cache.interner.stack_size(layout);
+            let result_stack_size = LayoutRepr::struct_(env.arena.alloc(fields))
+                .stack_size(&env.layout_cache.interner, env.target_info);
 
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match env
                 .subs
@@ -466,7 +464,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 struct_addr_to_ast,
             )
         }
-        Layout::Union(UnionLayout::NonRecursive(_)) => {
+        LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
             let size = env.layout_cache.interner.stack_size(layout);
 
             app.call_function_dynamic_size(
@@ -484,10 +482,10 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 },
             )
         }
-        Layout::Union(UnionLayout::Recursive(_))
-        | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
-        | Layout::Union(UnionLayout::NullableUnwrapped { .. })
-        | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
+        LayoutRepr::Union(UnionLayout::Recursive(_))
+        | LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(_))
+        | LayoutRepr::Union(UnionLayout::NullableUnwrapped { .. })
+        | LayoutRepr::Union(UnionLayout::NullableWrapped { .. }) => {
             let size = env.layout_cache.interner.stack_size(layout);
 
             app.call_function_dynamic_size(
@@ -505,11 +503,11 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 },
             )
         }
-        Layout::RecursivePointer(_) => {
+        LayoutRepr::RecursivePointer(_) => {
             unreachable!("RecursivePointers can only be inside structures")
         }
-        Layout::LambdaSet(_) => OPAQUE_FUNCTION,
-        Layout::Boxed(_) => {
+        LayoutRepr::LambdaSet(_) => OPAQUE_FUNCTION,
+        LayoutRepr::Boxed(_) => {
             let size = env.layout_cache.interner.stack_size(layout);
 
             app.call_function_dynamic_size(main_fn_name, size as usize, |mem: &A::Memory, addr| {
@@ -559,11 +557,11 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
     let (newtype_containers, _alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
     let raw_content = env.subs.get_content_without_compacting(raw_var);
 
-    let expr = match (raw_content, env.layout_cache.get_in(layout)) {
-        (Content::Structure(FlatType::Func(_, _, _)), _) | (_, Layout::LambdaSet(_)) => {
+    let expr = match (raw_content, env.layout_cache.get_in(layout).repr) {
+        (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_)) => {
             OPAQUE_FUNCTION
         }
-        (_, Layout::Builtin(Builtin::Bool)) => {
+        (_, LayoutRepr::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
             let num: u8 = mem.deref_u8(addr);
@@ -572,7 +570,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 
             bool_to_ast(env, num != 0, raw_content)
         }
-        (_, Layout::Builtin(Builtin::Int(int_width))) => {
+        (_, LayoutRepr::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
 
             match int_width {
@@ -594,7 +592,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 I128 => helper!(deref_i128, i128),
             }
         }
-        (_, Layout::Builtin(Builtin::Float(float_width))) => {
+        (_, LayoutRepr::Builtin(Builtin::Float(float_width))) => {
             use FloatWidth::*;
 
             match float_width {
@@ -602,24 +600,27 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 F64 => helper!(deref_f64, f64),
             }
         }
-        (_, Layout::Builtin(Builtin::Decimal)) => {
+        (_, LayoutRepr::Builtin(Builtin::Decimal)) => {
             helper!(deref_dec, RocDec)
         }
-        (_, Layout::Builtin(Builtin::List(elem_layout))) => {
+        (_, LayoutRepr::Builtin(Builtin::List(elem_layout))) => {
             let elem_addr = mem.deref_usize(addr);
             let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
             let _cap = mem.deref_usize(addr + 2 * env.target_info.ptr_width() as usize);
 
             list_to_ast(env, mem, elem_addr, len, elem_layout, raw_content)
         }
-        (_, Layout::Builtin(Builtin::Str)) => {
+        (_, LayoutRepr::Builtin(Builtin::Str)) => {
             let string = mem.deref_str(addr);
             let arena_str = env.arena.alloc_str(string);
             Expr::Str(StrLiteral::PlainLine(arena_str))
         }
-        (_, Layout::Struct { field_layouts, .. }) => match raw_content {
+        (_, LayoutRepr::Struct { field_layouts, .. }) => match raw_content {
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, mem, addr, *fields)
+            }
+            Content::Structure(FlatType::Tuple(elems,_)) => {
+                struct_to_ast_tuple(env, mem, addr, *elems)
             }
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
@@ -641,7 +642,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 );
             }
         },
-        (_, Layout::RecursivePointer(_)) => match (raw_content, when_recursive) {
+        (_, LayoutRepr::RecursivePointer(_)) => match (raw_content, when_recursive) {
             (
                 Content::RecursionVar {
                     structure,
@@ -664,13 +665,13 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 let union_layout = env.layout_cache
                     .from_var(env.arena, *structure, env.subs)
                     .expect("no layout for structure");
-                debug_assert!(matches!(env.layout_cache.get_in(union_layout), Layout::Union(..)));
+                debug_assert!(matches!(env.layout_cache.get_in(union_layout).repr, LayoutRepr::Union(..)));
                 let when_recursive = WhenRecursive::Loop(union_layout);
                 addr_to_ast(env, mem, addr, union_layout, when_recursive, *structure)
             }
             other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
         },
-        (_, Layout::Union(UnionLayout::NonRecursive(union_layouts))) => {
+        (_, LayoutRepr::Union(UnionLayout::NonRecursive(union_layouts))) => {
             let union_layout = UnionLayout::NonRecursive(union_layouts);
 
             let tags = match raw_content {
@@ -705,7 +706,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 WhenRecursive::Unreachable,
             )
         }
-        (_, Layout::Union(union_layout @ UnionLayout::Recursive(union_layouts))) => {
+        (_, LayoutRepr::Union(union_layout @ UnionLayout::Recursive(union_layouts))) => {
             let (rec_var, tags) = match raw_content {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)
@@ -744,7 +745,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 when_recursive,
             )
         }
-        (_, Layout::Union(UnionLayout::NonNullableUnwrapped(_))) => {
+        (_, LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(_))) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)
@@ -775,7 +776,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 when_recursive,
             )
         }
-        (_, Layout::Union(UnionLayout::NullableUnwrapped { .. })) => {
+        (_, LayoutRepr::Union(UnionLayout::NullableUnwrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)
@@ -815,7 +816,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 )
             }
         }
-        (_, Layout::Union(union_layout @ UnionLayout::NullableWrapped { .. })) => {
+        (_, LayoutRepr::Union(union_layout @ UnionLayout::NullableWrapped { .. })) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)
@@ -860,7 +861,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (
             Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)),
-            Layout::Boxed(inner_layout),
+            LayoutRepr::Boxed(inner_layout),
         ) => {
             debug_assert_eq!(args.len(), 1);
 
@@ -886,7 +887,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 
             Expr::Apply(box_box, box_box_args, CalledVia::Space)
         }
-        (_, Layout::Boxed(_)) => {
+        (_, LayoutRepr::Boxed(_)) => {
             unreachable!("Box layouts can only be behind a `Box.Box` application")
         }
     };
@@ -947,8 +948,8 @@ fn list_to_ast<'a, M: ReplAppMemory>(
     Expr::List(Collection::with_items(output))
 }
 
-fn single_tag_union_to_ast<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     field_layouts: &'a [InLayout<'a>],
@@ -1004,8 +1005,8 @@ where
     output
 }
 
-fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn struct_to_ast<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     record_fields: RecordFields,
@@ -1030,7 +1031,7 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
 
         let struct_layout = env
             .layout_cache
-            .put_in(Layout::struct_no_name_order(inner_layouts));
+            .put_in_no_semantic(LayoutRepr::struct_(inner_layouts));
         let loc_expr = &*arena.alloc(Loc {
             value: addr_to_ast(
                 env,
@@ -1130,8 +1131,8 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
     }
 }
 
-fn struct_to_ast_tuple<'a, 'env, M: ReplAppMemory>(
-    env: &mut Env<'a, 'env>,
+fn struct_to_ast_tuple<'a, M: ReplAppMemory>(
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     tuple_elems: TupleElems,

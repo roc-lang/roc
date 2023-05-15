@@ -5,6 +5,8 @@
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
+use std::collections::hash_map::Entry;
+
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
@@ -12,14 +14,14 @@ use roc_error_macros::internal_error;
 use roc_module::ident::ModuleName;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::code_gen_help::CodeGenHelp;
+use roc_mono::code_gen_help::{CallerProc, CodeGenHelp};
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
-    SelfRecursive, Stmt,
+    BranchInfo, CallType, CrashTag, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
+    Literal, Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
-    UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+    TagIdIntType, UnionLayout,
 };
 use roc_mono::list_element_layout;
 
@@ -28,12 +30,29 @@ mod object_builder;
 pub use object_builder::build_module;
 mod run_roc;
 
+#[derive(Debug, Clone, Copy)]
+pub enum AssemblyBackendMode {
+    /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
+    Binary,
+    /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    Test,
+}
+
+impl AssemblyBackendMode {
+    fn generate_allocators(self) -> bool {
+        match self {
+            AssemblyBackendMode::Binary => false,
+            AssemblyBackendMode::Test => true,
+        }
+    }
+}
+
 pub struct Env<'a> {
     pub arena: &'a Bump,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
-    pub generate_allocators: bool,
+    pub mode: AssemblyBackendMode,
 }
 
 // These relocations likely will need a length.
@@ -62,10 +81,228 @@ pub enum Relocation {
     },
 }
 
+#[repr(u8)]
+enum UpdateMode {
+    Immutable = 0,
+}
+
+struct ListArgument<'a> {
+    element_layout: InLayout<'a>,
+
+    alignment: Symbol,
+    element_width: Symbol,
+}
+
+// Track when a variable is last used (and hence when it can be disregarded). This is non-trivial
+// in the presence of join points. Consider this example:
+//
+// let len = 3
+//
+// joinpoint f = \a ->
+//     joinpoint g = \b ->
+//         # len is used here
+//     in
+//         ...
+// in
+//     ...
+//
+// we have to keep `len` alive until after the joinpoint goes out of scope!
+#[derive(Debug, Default)]
+struct LastSeenMap<'a> {
+    last_seen: MutMap<Symbol, *const Stmt<'a>>,
+    join_map: MutMap<JoinPointId, &'a [Param<'a>]>,
+}
+
+impl<'a> LastSeenMap<'a> {
+    fn set_last_seen(&mut self, symbol: Symbol, stmt: &'a Stmt<'a>) {
+        self.last_seen.insert(symbol, stmt);
+    }
+
+    /// scan_ast runs through the ast and fill the last seen map.
+    /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
+    fn scan_ast(root: &'a Stmt<'a>) -> MutMap<Symbol, *const Stmt<'a>> {
+        let mut this: Self = Default::default();
+
+        this.scan_ast_help(root);
+
+        this.last_seen
+    }
+
+    fn scan_ast_help(&mut self, stmt: &'a Stmt<'a>) {
+        match stmt {
+            Stmt::Let(sym, expr, _, following) => {
+                self.set_last_seen(*sym, stmt);
+                match expr {
+                    Expr::Literal(_) => {}
+                    Expr::NullPointer => {}
+
+                    Expr::Call(call) => self.scan_ast_call(call, stmt),
+
+                    Expr::Tag { arguments, .. } => {
+                        for sym in *arguments {
+                            self.set_last_seen(*sym, stmt);
+                        }
+                    }
+                    Expr::ExprBox { symbol } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
+                    Expr::ExprUnbox { symbol } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
+                    Expr::Struct(syms) => {
+                        for sym in *syms {
+                            self.set_last_seen(*sym, stmt);
+                        }
+                    }
+                    Expr::StructAtIndex { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
+                    Expr::GetTagId { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
+                    Expr::UnionAtIndex { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
+                    Expr::Array { elems, .. } => {
+                        for elem in *elems {
+                            if let ListLiteralElement::Symbol(sym) = elem {
+                                self.set_last_seen(*sym, stmt);
+                            }
+                        }
+                    }
+                    Expr::Reuse {
+                        symbol, arguments, ..
+                    } => {
+                        self.set_last_seen(*symbol, stmt);
+                        for sym in *arguments {
+                            self.set_last_seen(*sym, stmt);
+                        }
+                    }
+                    Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
+                    Expr::EmptyArray => {}
+                    Expr::RuntimeErrorFunction(_) => {}
+                }
+                self.scan_ast_help(following);
+            }
+
+            Stmt::Switch {
+                cond_symbol,
+                branches,
+                default_branch,
+                ..
+            } => {
+                self.set_last_seen(*cond_symbol, stmt);
+                for (_, _, branch) in *branches {
+                    self.scan_ast_help(branch);
+                }
+                self.scan_ast_help(default_branch.1);
+            }
+            Stmt::Ret(sym) => {
+                self.set_last_seen(*sym, stmt);
+            }
+            Stmt::Refcounting(modify, following) => {
+                let sym = modify.get_symbol();
+
+                self.set_last_seen(sym, stmt);
+                self.scan_ast_help(following);
+            }
+            Stmt::Join {
+                parameters,
+                body: continuation,
+                remainder,
+                id: JoinPointId(sym),
+                ..
+            } => {
+                self.set_last_seen(*sym, stmt);
+                self.join_map.insert(JoinPointId(*sym), parameters);
+                self.scan_ast_help(remainder);
+
+                for (symbol, symbol_stmt) in Self::scan_ast(continuation) {
+                    match self.last_seen.entry(symbol) {
+                        Entry::Occupied(mut occupied) => {
+                            // lives for the joinpoint
+                            occupied.insert(stmt);
+                        }
+                        Entry::Vacant(vacant) => {
+                            // lives for some time within the continuation
+                            vacant.insert(symbol_stmt);
+                        }
+                    }
+                }
+
+                for param in *parameters {
+                    self.set_last_seen(param.symbol, stmt);
+                }
+            }
+            Stmt::Jump(JoinPointId(sym), symbols) => {
+                if let Some(parameters) = self.join_map.get(&JoinPointId(*sym)) {
+                    // Keep the parameters around. They will be overwritten when jumping.
+                    for param in *parameters {
+                        self.set_last_seen(param.symbol, stmt);
+                    }
+                }
+                for sym in *symbols {
+                    self.set_last_seen(*sym, stmt);
+                }
+            }
+
+            Stmt::Dbg { .. } => todo!("dbg not implemented in the dev backend"),
+            Stmt::Expect { .. } => todo!("expect is not implemented in the dev backend"),
+            Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the dev backend"),
+
+            Stmt::Crash(msg, _crash_tag) => {
+                self.set_last_seen(*msg, stmt);
+            }
+        }
+    }
+
+    fn scan_ast_call(&mut self, call: &roc_mono::ir::Call, stmt: &'a roc_mono::ir::Stmt<'a>) {
+        let roc_mono::ir::Call {
+            call_type,
+            arguments,
+        } = call;
+
+        for sym in *arguments {
+            self.set_last_seen(*sym, stmt);
+        }
+
+        match call_type {
+            CallType::ByName { .. } => {}
+            CallType::LowLevel { .. } => {}
+            CallType::HigherOrder { .. } => {}
+            CallType::Foreign { .. } => {}
+        }
+    }
+}
+
 trait Backend<'a> {
     fn env(&self) -> &Env<'a>;
     fn interns(&self) -> &Interns;
+    fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
+
+    fn interner_mut(&mut self) -> &mut STLayoutInterner<'a> {
+        self.module_interns_helpers_mut().1
+    }
+
+    fn debug_symbol(&mut self, name: &str) -> Symbol {
+        let module_id = self.env().module_id;
+
+        self.debug_symbol_in(module_id, name)
+    }
+
+    fn debug_symbol_in(&mut self, module_id: ModuleId, name: &str) -> Symbol {
+        let ident_ids = self
+            .interns_mut()
+            .all_ident_ids
+            .get_mut(&module_id)
+            .unwrap();
+
+        let ident_id = ident_ids.add_str(name);
+        Symbol::new(module_id, ident_id)
+    }
 
     // This method is suboptimal, but it seems to be the only way to make rust understand
     // that all of these values can be mutable at the same time. By returning them together,
@@ -77,6 +314,7 @@ trait Backend<'a> {
         &mut STLayoutInterner<'a>,
         &mut Interns,
         &mut CodeGenHelp<'a>,
+        &mut Vec<'a, CallerProc<'a>>,
     );
 
     fn function_symbol_to_string<'b, I>(
@@ -121,11 +359,74 @@ trait Backend<'a> {
             .starts_with(ModuleName::APP)
     }
 
+    fn list_argument(&mut self, list_layout: InLayout<'a>) -> ListArgument<'a> {
+        let element_layout = match self.interner().get(list_layout).repr {
+            LayoutRepr::Builtin(Builtin::List(e)) => e,
+            _ => unreachable!(),
+        };
+
+        let (element_width_int, alignment_int) =
+            self.interner().stack_size_and_alignment(element_layout);
+
+        let alignment = self.debug_symbol("alignment");
+        self.load_literal_i32(&alignment, Ord::max(alignment_int, 8) as i32);
+
+        let element_width = self.debug_symbol("element_width");
+        self.load_literal_i64(&element_width, element_width_int as i64);
+
+        ListArgument {
+            element_layout,
+            alignment,
+            element_width,
+        }
+    }
+
+    fn increment_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
+        let box_layout = self
+            .interner_mut()
+            .insert_no_semantic(LayoutRepr::Boxed(layout));
+
+        let element_increment = self.debug_symbol("element_increment");
+        let element_increment_symbol = self.build_indirect_inc(layout);
+
+        let element_increment_string = self.function_symbol_to_string(
+            element_increment_symbol,
+            [box_layout].into_iter(),
+            None,
+            Layout::UNIT,
+        );
+
+        self.build_fn_pointer(&element_increment, element_increment_string);
+
+        element_increment
+    }
+
+    fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
+        let box_layout = self
+            .interner_mut()
+            .insert_no_semantic(LayoutRepr::Boxed(layout));
+
+        let element_decrement = self.debug_symbol("element_decrement");
+        let element_decrement_symbol = self.build_indirect_dec(layout);
+
+        let element_decrement_string = self.function_symbol_to_string(
+            element_decrement_symbol,
+            [box_layout].into_iter(),
+            None,
+            Layout::UNIT,
+        );
+
+        self.build_fn_pointer(&element_decrement, element_decrement_string);
+
+        element_decrement
+    }
+
     fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a>;
 
     fn helper_proc_symbols_mut(&mut self) -> &mut Vec<'a, (Symbol, ProcLayout<'a>)>;
 
     fn helper_proc_symbols(&self) -> &Vec<'a, (Symbol, ProcLayout<'a>)>;
+    fn caller_procs(&self) -> &Vec<'a, CallerProc<'a>>;
 
     /// reset resets any registers or other values that may be occupied at the end of a procedure.
     /// It also passes basic procedure information to the builder for setup of the next function.
@@ -158,14 +459,17 @@ trait Backend<'a> {
             proc.ret_layout,
         );
 
+        let body = self.env().arena.alloc(proc.body);
+
         self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
             self.set_layout_map(*sym, layout);
         }
-        self.scan_ast(&proc.body);
+        self.scan_ast(body);
         self.create_free_map();
-        self.build_stmt(&proc.body, &proc.ret_layout);
+        self.build_stmt(layout_ids, body, &proc.ret_layout);
+
         let mut helper_proc_names = bumpalo::vec![in self.env().arena];
         helper_proc_names.reserve(self.helper_proc_symbols().len());
         for (rc_proc_sym, rc_proc_layout) in self.helper_proc_symbols() {
@@ -175,18 +479,34 @@ trait Backend<'a> {
 
             helper_proc_names.push((*rc_proc_sym, name));
         }
+
+        for caller_proc in self.caller_procs() {
+            let proc_layout = caller_proc.proc_layout;
+            let proc_symbol = caller_proc.proc_symbol;
+            let name = layout_ids
+                .get_toplevel(proc_symbol, &proc_layout)
+                .to_symbol_string(proc_symbol, self.interns());
+
+            helper_proc_names.push((proc_symbol, name));
+        }
+
         let (bytes, relocs) = self.finalize();
         (bytes, relocs, helper_proc_names)
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &InLayout<'a>) {
+    fn build_stmt(
+        &mut self,
+        layout_ids: &mut LayoutIds<'a>,
+        stmt: &Stmt<'a>,
+        ret_layout: &InLayout<'a>,
+    ) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout);
                 self.set_layout_map(*sym, layout);
                 self.free_symbols(stmt);
-                self.build_stmt(following, ret_layout);
+                self.build_stmt(layout_ids, following, ret_layout);
             }
             Stmt::Ret(sym) => {
                 self.load_literal_symbols(&[*sym]);
@@ -201,7 +521,7 @@ trait Backend<'a> {
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
                 let (rc_stmt, new_specializations) = {
-                    let (module_id, layout_interner, interns, rc_proc_gen) =
+                    let (module_id, layout_interner, interns, rc_proc_gen, _) =
                         self.module_interns_helpers_mut();
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
@@ -218,7 +538,7 @@ trait Backend<'a> {
                     self.helper_proc_symbols_mut().push(spec);
                 }
 
-                self.build_stmt(rc_stmt, ret_layout)
+                self.build_stmt(layout_ids, rc_stmt, ret_layout)
             }
             Stmt::Switch {
                 cond_symbol,
@@ -229,6 +549,7 @@ trait Backend<'a> {
             } => {
                 self.load_literal_symbols(&[*cond_symbol]);
                 self.build_switch(
+                    layout_ids,
                     cond_symbol,
                     cond_layout,
                     branches,
@@ -246,7 +567,7 @@ trait Backend<'a> {
                 for param in parameters.iter() {
                     self.set_layout_map(param.symbol, &param.layout);
                 }
-                self.build_join(id, parameters, body, remainder, ret_layout);
+                self.build_join(layout_ids, id, parameters, body, remainder, ret_layout);
                 self.free_symbols(stmt);
             }
             Stmt::Jump(id, args) => {
@@ -265,12 +586,39 @@ trait Backend<'a> {
                 self.build_jump(id, args, arg_layouts.into_bump_slice(), ret_layout);
                 self.free_symbols(stmt);
             }
+            Stmt::Crash(msg, crash_tag) => self.roc_panic(*msg, *crash_tag),
             x => todo!("the statement, {:?}", x),
         }
     }
+
+    fn roc_panic(&mut self, msg: Symbol, crash_tag: CrashTag) {
+        let error_message = self.debug_symbol("error_message");
+
+        self.load_literal(
+            &error_message,
+            &Layout::U32,
+            &Literal::Int((crash_tag as u128).to_ne_bytes()),
+        );
+
+        // Now that the arguments are needed, load them if they are literals.
+        let arguments = &[msg, error_message];
+        self.load_literal_symbols(arguments);
+        self.build_fn_call(
+            &Symbol::DEV_TMP2,
+            String::from("roc_panic"),
+            arguments,
+            &[Layout::STR, Layout::U32],
+            &Layout::UNIT,
+        );
+
+        self.free_symbol(&error_message);
+        self.free_symbol(&Symbol::DEV_TMP2);
+    }
+
     // build_switch generates a instructions for a switch statement.
     fn build_switch(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         cond_symbol: &Symbol,
         cond_layout: &InLayout<'a>,
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
@@ -281,6 +629,7 @@ trait Backend<'a> {
     // build_join generates a instructions for a join statement.
     fn build_join(
         &mut self,
+        layout_ids: &mut LayoutIds<'a>,
         id: &JoinPointId,
         parameters: &'a [Param<'a>],
         body: &'a Stmt<'a>,
@@ -329,7 +678,7 @@ trait Backend<'a> {
                                 arg_layouts,
                                 ret_layout,
                             );
-                        } else if sym.is_builtin() {
+                        } else if func_sym.name().is_builtin() {
                             // These builtins can be built through `build_fn_call` as well, but the
                             // implementation in `build_builtin` inlines some of the symbols.
                             return self.build_builtin(
@@ -365,6 +714,7 @@ trait Backend<'a> {
                                 internal_error!("the argument, {:?}, has no know layout", arg);
                             }
                         }
+
                         self.build_run_low_level(
                             sym,
                             lowlevel,
@@ -373,7 +723,34 @@ trait Backend<'a> {
                             layout,
                         )
                     }
-                    x => todo!("the call type, {:?}", x),
+                    CallType::HigherOrder(higher_order) => {
+                        self.build_higher_order_lowlevel(sym, higher_order, *layout)
+                    }
+                    CallType::Foreign {
+                        foreign_symbol,
+                        ret_layout,
+                    } => {
+                        let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
+                            bumpalo::vec![in self.env().arena];
+                        arg_layouts.reserve(arguments.len());
+                        let layout_map = self.layout_map();
+                        for arg in *arguments {
+                            if let Some(layout) = layout_map.get(arg) {
+                                arg_layouts.push(*layout);
+                            } else {
+                                internal_error!("the argument, {:?}, has no know layout", arg);
+                            }
+                        }
+
+                        self.load_literal_symbols(arguments);
+                        self.build_fn_call(
+                            sym,
+                            foreign_symbol.as_str().to_string(),
+                            arguments,
+                            arg_layouts.into_bump_slice(),
+                            ret_layout,
+                        );
+                    }
                 }
             }
             Expr::EmptyArray => {
@@ -387,9 +764,6 @@ trait Backend<'a> {
                 }) {
                     syms.push(*sym);
                 }
-                // TODO: This could be a huge waste.
-                // We probably want to call this within create_array, one element at a time.
-                self.load_literal_symbols(syms.into_bump_slice());
                 self.create_array(sym, elem_layout, elems);
             }
             Expr::Struct(fields) => {
@@ -427,8 +801,8 @@ trait Backend<'a> {
                 self.tag(sym, arguments, tag_layout, *tag_id);
             }
             Expr::ExprBox { symbol: value } => {
-                let element_layout = match self.interner().get(*layout) {
-                    Layout::Boxed(boxed) => boxed,
+                let element_layout = match self.interner().get(*layout).repr {
+                    LayoutRepr::Boxed(boxed) => boxed,
                     _ => unreachable!("{:?}", self.interner().dbg(*layout)),
                 };
 
@@ -486,6 +860,25 @@ trait Backend<'a> {
                 );
                 self.build_num_add(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumAddSaturated => {
+                self.build_num_add_saturated(*sym, args[0], args[1], *ret_layout);
+            }
+            LowLevel::NumAddWrap => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumAdd: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumAdd: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumAdd: expected to have the same argument and return layout"
+                );
+                self.build_num_add(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumAddChecked => {
                 self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
             }
@@ -513,22 +906,8 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::NumMul => {
-                debug_assert_eq!(
-                    2,
-                    args.len(),
-                    "NumMul: expected to have exactly two argument"
-                );
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
-                    "NumMul: expected all arguments of to have the same layout"
-                );
-                debug_assert_eq!(
-                    arg_layouts[0], *ret_layout,
-                    "NumMul: expected to have the same argument and return layout"
-                );
-                self.build_num_mul(sym, &args[0], &args[1], ret_layout)
-            }
+            LowLevel::NumMul => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
+            LowLevel::NumMulWrap => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
                 debug_assert_eq!(
                     2,
@@ -545,6 +924,8 @@ trait Backend<'a> {
                 );
                 self.build_num_div(sym, &args[0], &args[1], ret_layout)
             }
+
+            LowLevel::NumRemUnchecked => self.build_num_rem(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumNeg => {
                 debug_assert_eq!(
                     1,
@@ -596,78 +977,90 @@ trait Backend<'a> {
                 );
                 self.build_num_sub_wrap(sym, &args[0], &args[1], ret_layout)
             }
-            LowLevel::NumSubSaturated => match self.interner().get(*ret_layout) {
-                Layout::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+            LowLevel::NumSubSaturated => match self.interner().get(*ret_layout).repr {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
                     sym,
                     bitcode::NUM_SUB_SATURATED_INT[int_width].to_string(),
                     args,
                     arg_layouts,
                     ret_layout,
                 ),
-                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
                     self.build_num_sub(sym, &args[0], &args[1], ret_layout)
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                     // saturated sub is just normal sub
                     self.build_num_sub(sym, &args[0], &args[1], ret_layout)
                 }
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     // self.load_args_and_call_zig(backend, bitcode::DEC_SUB_SATURATED)
                     todo!()
                 }
                 _ => internal_error!("invalid return type"),
             },
             LowLevel::NumBitwiseAnd => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_bitwise_and(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise and on a non-integer")
                 }
             }
             LowLevel::NumBitwiseOr => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_bitwise_or(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise or on a non-integer")
                 }
             }
             LowLevel::NumBitwiseXor => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_bitwise_xor(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise xor on a non-integer")
                 }
             }
             LowLevel::And => {
-                if let Layout::Builtin(Builtin::Bool) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Bool) = self.interner().get(*ret_layout).repr {
                     self.build_int_bitwise_and(sym, &args[0], &args[1], IntWidth::U8)
                 } else {
                     internal_error!("bitwise and on a non-integer")
                 }
             }
             LowLevel::Or => {
-                if let Layout::Builtin(Builtin::Bool) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Bool) = self.interner().get(*ret_layout).repr {
                     self.build_int_bitwise_or(sym, &args[0], &args[1], IntWidth::U8)
                 } else {
                     internal_error!("bitwise or on a non-integer")
                 }
             }
             LowLevel::NumShiftLeftBy => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_shift_left(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("shift left on a non-integer")
                 }
             }
             LowLevel::NumShiftRightBy => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_shift_right(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("shift right on a non-integer")
                 }
             }
             LowLevel::NumShiftRightZfBy => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                if let LayoutRepr::Builtin(Builtin::Int(int_width)) =
+                    self.interner().get(*ret_layout).repr
+                {
                     self.build_int_shift_right_zero_fill(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("shift right zero-fill on a non-integer")
@@ -758,6 +1151,48 @@ trait Backend<'a> {
                     "NumToFrac: expected to have return layout of type Float"
                 );
                 self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout)
+            }
+            LowLevel::NumIsNan => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsNan: expected to have exactly one argument"
+                );
+
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumIsNan: expected to have return layout of type Bool"
+                );
+                self.build_num_is_nan(sym, &args[0], &arg_layouts[0])
+            }
+            LowLevel::NumIsInfinite => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsInfinite: expected to have exactly one argument"
+                );
+
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumIsInfinite: expected to have return layout of type Bool"
+                );
+                self.build_num_is_infinite(sym, &args[0], &arg_layouts[0])
+            }
+            LowLevel::NumIsFinite => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "NumIsFinite: expected to have exactly one argument"
+                );
+
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumIsFinite: expected to have return layout of type Bool"
+                );
+                self.build_num_is_finite(sym, &args[0], &arg_layouts[0])
             }
             LowLevel::NumLte => {
                 debug_assert_eq!(
@@ -1045,18 +1480,18 @@ trait Backend<'a> {
                 ret_layout,
             ),
             LowLevel::StrToNum => {
-                let number_layout = match self.interner().get(*ret_layout) {
-                    Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
+                let number_layout = match self.interner().get(*ret_layout).repr {
+                    LayoutRepr::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
                     _ => unreachable!(),
                 };
 
                 // match on the return layout to figure out which zig builtin we need
-                let intrinsic = match self.interner().get(number_layout) {
-                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
-                    Layout::Builtin(Builtin::Float(float_width)) => {
+                let intrinsic = match self.interner().get(number_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    LayoutRepr::Builtin(Builtin::Float(float_width)) => {
                         &bitcode::STR_TO_FLOAT[float_width]
                     }
-                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                    LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
                     _ => unreachable!(),
                 };
 
@@ -1070,20 +1505,234 @@ trait Backend<'a> {
                 );
                 self.build_ptr_cast(sym, &args[0])
             }
-            LowLevel::RefCountDec => self.build_fn_call(
+            LowLevel::PtrWrite => {
+                let element_layout = match self.interner().get(*ret_layout).repr {
+                    LayoutRepr::Boxed(boxed) => boxed,
+                    _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
+                };
+
+                self.build_ptr_write(*sym, args[0], args[1], element_layout);
+            }
+            LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,
-                bitcode::UTILS_DECREF.to_string(),
+                bitcode::UTILS_DECREF_RC_PTR.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::RefCountInc => self.build_fn_call(
+            LowLevel::RefCountIncRcPtr => self.build_fn_call(
                 sym,
-                bitcode::UTILS_INCREF.to_string(),
+                bitcode::UTILS_INCREF_RC_PTR.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::RefCountDecDataPtr => self.build_fn_call(
+                sym,
+                bitcode::UTILS_DECREF_DATA_PTR.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::RefCountIncDataPtr => self.build_fn_call(
+                sym,
+                bitcode::UTILS_INCREF_DATA_PTR.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::RefCountIsUnique => self.build_fn_call(
+                sym,
+                bitcode::UTILS_IS_UNIQUE.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::NumToStr => {
+                let arg_layout = arg_layouts[0];
+                let intrinsic = match self.interner().get(arg_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::STR_FROM_INT[width],
+                    LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::STR_FROM_FLOAT[width],
+                    LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_TO_STR,
+                    x => internal_error!("NumToStr is not defined for {:?}", x),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+            LowLevel::StrIsEmpty => {
+                let intrinsic = bitcode::STR_IS_EMPTY.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+            LowLevel::NumIntCast => {
+                let source_width = match self.interner().get(arg_layouts[0]).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => width,
+                    _ => unreachable!(),
+                };
+
+                let target_width = match self.interner().get(*ret_layout).repr {
+                    LayoutRepr::Builtin(Builtin::Int(width)) => width,
+                    _ => unreachable!(),
+                };
+
+                self.build_num_int_cast(sym, &args[0], source_width, target_width)
+            }
+            LowLevel::NumIsMultipleOf => {
+                let int_width = arg_layouts[0].try_int_width().unwrap();
+                let intrinsic = bitcode::NUM_IS_MULTIPLE_OF[int_width].to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+            LowLevel::ListSublist => {
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    start: usize,
+                //    len: usize,
+                //    dec: Dec,
+
+                let list = args[0];
+                let start = args[1];
+                let len = args[2];
+
+                let list_layout = arg_layouts[0];
+                let list_argument = self.list_argument(list_layout);
+                let element_layout = list_argument.element_layout;
+
+                let args = [
+                    list,
+                    list_argument.alignment,
+                    list_argument.element_width,
+                    start,
+                    len,
+                    self.decrement_fn_pointer(element_layout),
+                ];
+
+                let layout_usize = Layout::U64;
+
+                let arg_layouts = [
+                    arg_layouts[0],
+                    Layout::U32,
+                    layout_usize,
+                    arg_layouts[1],
+                    arg_layouts[2],
+                    layout_usize,
+                ];
+
+                let intrinsic = bitcode::LIST_SUBLIST.to_string();
+                self.build_fn_call(sym, intrinsic, &args, &arg_layouts, &list_layout);
+            }
+            LowLevel::ListSwap => {
+                let list = args[0];
+                let i = args[1];
+                let j = args[2];
+
+                let list_layout = arg_layouts[0];
+                let list_argument = self.list_argument(list_layout);
+
+                let update_mode = self.debug_symbol("update_mode");
+                self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
+
+                let layout_usize = Layout::U64;
+
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    index_1: usize,
+                //    index_2: usize,
+                //    update_mode: UpdateMode,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_SWAP.to_string(),
+                    &[
+                        list,
+                        list_argument.alignment,
+                        list_argument.element_width,
+                        i,
+                        j,
+                        update_mode,
+                    ],
+                    &[
+                        list_layout,
+                        Layout::U32,
+                        layout_usize,
+                        layout_usize,
+                        layout_usize,
+                        Layout::U8,
+                    ],
+                    ret_layout,
+                );
+            }
+            LowLevel::ListReleaseExcessCapacity => {
+                let list = args[0];
+
+                let list_layout = arg_layouts[0];
+                let list_argument = self.list_argument(list_layout);
+
+                let update_mode = self.debug_symbol("update_mode");
+                self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
+
+                let layout_usize = Layout::U64;
+
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    update_mode: UpdateMode,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_RELEASE_EXCESS_CAPACITY.to_string(),
+                    &[
+                        list,
+                        list_argument.alignment,
+                        list_argument.element_width,
+                        update_mode,
+                    ],
+                    &[list_layout, Layout::U32, layout_usize, Layout::U8],
+                    ret_layout,
+                );
+            }
+
+            LowLevel::ListDropAt => {
+                let list = args[0];
+                let drop_index = args[1];
+
+                let list_layout = arg_layouts[0];
+                let list_argument = self.list_argument(list_layout);
+                let element_layout = list_argument.element_layout;
+
+                let update_mode = self.debug_symbol("update_mode");
+                self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
+
+                let layout_usize = Layout::U64;
+                let element_decrement = self.decrement_fn_pointer(element_layout);
+
+                //    list: RocList,
+                //    alignment: u32,
+                //    element_width: usize,
+                //    drop_index: usize,
+                //    dec: Dec,
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::LIST_DROP_AT.to_string(),
+                    &[
+                        list,
+                        list_argument.alignment,
+                        list_argument.element_width,
+                        drop_index,
+                        element_decrement,
+                    ],
+                    &[
+                        list_layout,
+                        Layout::U32,
+                        layout_usize,
+                        layout_usize,
+                        layout_usize,
+                    ],
+                    ret_layout,
+                );
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }
@@ -1133,16 +1782,24 @@ trait Backend<'a> {
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             Symbol::BOOL_TRUE => {
-                let bool_layout = Layout::BOOL;
-                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
-                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
-                self.free_symbol(&Symbol::DEV_TMP)
+                const LITERAL: &Literal<'static> = &Literal::Bool(true);
+                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL;
+
+                if self.env().lazy_literals {
+                    self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));
+                } else {
+                    self.load_literal(sym, BOOL_LAYOUT, LITERAL);
+                }
             }
             Symbol::BOOL_FALSE => {
-                let bool_layout = Layout::BOOL;
-                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
-                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
-                self.free_symbol(&Symbol::DEV_TMP)
+                const LITERAL: &Literal<'static> = &Literal::Bool(false);
+                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL;
+
+                if self.env().lazy_literals {
+                    self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));
+                } else {
+                    self.load_literal(sym, BOOL_LAYOUT, LITERAL);
+                }
             }
             Symbol::STR_IS_VALID_SCALAR => {
                 // just call the function
@@ -1156,9 +1813,7 @@ trait Backend<'a> {
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
-            other => {
-                eprintln!("maybe {other:?} should have a custom implementation?");
-
+            _other => {
                 // just call the function
                 let fn_name = self.function_symbol_to_string(
                     func_sym,
@@ -1184,14 +1839,34 @@ trait Backend<'a> {
         ret_layout: &InLayout<'a>,
     );
 
+    fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String);
+
     /// Move a returned value into `dst`
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
+
+    /// build_num_abs stores the absolute value of src into dst.
+    fn build_num_int_cast(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        source: IntWidth,
+        target: IntWidth,
+    );
 
     /// build_num_abs stores the absolute value of src into dst.
     fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_add stores the sum of src1 and src2 into dst.
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    /// build_num_add_saturated stores the sum of src1 and src2 into dst.
+    fn build_num_add_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    );
 
     /// build_num_add_checked stores the sum of src1 and src2 into dst.
     fn build_num_add_checked(
@@ -1218,6 +1893,9 @@ trait Backend<'a> {
 
     /// build_num_mul stores `src1 / src2` into dst.
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    /// build_num_mul stores `src1 % src2` into dst.
+    fn build_num_rem(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_neg stores the negated value of src into dst.
     fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>);
@@ -1324,6 +2002,15 @@ trait Backend<'a> {
         ret_layout: &InLayout<'a>,
     );
 
+    /// build_num_is_nan check is a Frac is NaN
+    fn build_num_is_nan(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
+
+    /// build_num_is_infinite check is a Frac is infinite
+    fn build_num_is_infinite(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
+
+    /// build_num_is_finite check is a Frac is finite
+    fn build_num_is_finite(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
+
     /// build_num_lte stores the result of `src1 <= src2` into dst.
     fn build_num_lte(
         &mut self,
@@ -1347,6 +2034,17 @@ trait Backend<'a> {
 
     /// build_list_len returns the length of a list.
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
+
+    /// generate a call to a higher-order lowlevel
+    fn build_higher_order_lowlevel(
+        &mut self,
+        dst: &Symbol,
+        holl: &HigherOrderLowLevel<'a>,
+        ret_layout: InLayout<'a>,
+    );
+
+    fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol;
+    fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol;
 
     /// build_list_with_capacity creates and returns a list with the given capacity.
     fn build_list_with_capacity(
@@ -1416,6 +2114,14 @@ trait Backend<'a> {
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
+    fn build_ptr_write(
+        &mut self,
+        sym: Symbol,
+        ptr: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+    );
+
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;
 
@@ -1435,6 +2141,30 @@ trait Backend<'a> {
 
     /// load_literal sets a symbol to be equal to a literal.
     fn load_literal(&mut self, sym: &Symbol, layout: &InLayout<'a>, lit: &Literal<'a>);
+
+    fn load_literal_i64(&mut self, sym: &Symbol, value: i64) {
+        let literal = Literal::Int((value as i128).to_ne_bytes());
+
+        self.load_literal(sym, &Layout::I64, &literal)
+    }
+
+    fn load_literal_i32(&mut self, sym: &Symbol, value: i32) {
+        let literal = Literal::Int((value as i128).to_ne_bytes());
+
+        self.load_literal(sym, &Layout::I32, &literal)
+    }
+
+    fn load_literal_i16(&mut self, sym: &Symbol, value: i16) {
+        let literal = Literal::Int((value as i128).to_ne_bytes());
+
+        self.load_literal(sym, &Layout::I16, &literal)
+    }
+
+    fn load_literal_i8(&mut self, sym: &Symbol, value: i8) {
+        let literal = Literal::Int((value as i128).to_ne_bytes());
+
+        self.load_literal(sym, &Layout::I8, &literal)
+    }
 
     /// create_empty_array creates an empty array with nullptr, zero length, and zero capacity.
     fn create_empty_array(&mut self, sym: &Symbol);
@@ -1503,11 +2233,6 @@ trait Backend<'a> {
     /// free_symbol frees any registers or stack space used to hold a symbol.
     fn free_symbol(&mut self, sym: &Symbol);
 
-    /// set_last_seen sets the statement a symbol was last seen in.
-    fn set_last_seen(&mut self, sym: Symbol, stmt: &Stmt<'a>) {
-        self.last_seen_map().insert(sym, stmt);
-    }
-
     /// last_seen_map gets the map from symbol to when it is last seen in the function.
     fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>>;
 
@@ -1550,138 +2275,7 @@ trait Backend<'a> {
 
     /// scan_ast runs through the ast and fill the last seen map.
     /// This must iterate through the ast in the same way that build_stmt does. i.e. then before else.
-    fn scan_ast(&mut self, stmt: &Stmt<'a>) {
-        // Join map keeps track of join point parameters so that we can keep them around while they still might be jumped to.
-        let mut join_map: MutMap<JoinPointId, &'a [Param<'a>]> = MutMap::default();
-        match stmt {
-            Stmt::Let(sym, expr, _, following) => {
-                self.set_last_seen(*sym, stmt);
-                match expr {
-                    Expr::Literal(_) => {}
-                    Expr::NullPointer => {}
-
-                    Expr::Call(call) => self.scan_ast_call(call, stmt),
-
-                    Expr::Tag { arguments, .. } => {
-                        for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                    }
-                    Expr::ExprBox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
-                    Expr::ExprUnbox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
-                    Expr::Struct(syms) => {
-                        for sym in *syms {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                    }
-                    Expr::StructAtIndex { structure, .. } => {
-                        self.set_last_seen(*structure, stmt);
-                    }
-                    Expr::GetTagId { structure, .. } => {
-                        self.set_last_seen(*structure, stmt);
-                    }
-                    Expr::UnionAtIndex { structure, .. } => {
-                        self.set_last_seen(*structure, stmt);
-                    }
-                    Expr::Array { elems, .. } => {
-                        for elem in *elems {
-                            if let ListLiteralElement::Symbol(sym) = elem {
-                                self.set_last_seen(*sym, stmt);
-                            }
-                        }
-                    }
-                    Expr::Reuse {
-                        symbol, arguments, ..
-                    } => {
-                        self.set_last_seen(*symbol, stmt);
-                        for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                    }
-                    Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
-                    Expr::EmptyArray => {}
-                    Expr::RuntimeErrorFunction(_) => {}
-                }
-                self.scan_ast(following);
-            }
-
-            Stmt::Switch {
-                cond_symbol,
-                branches,
-                default_branch,
-                ..
-            } => {
-                self.set_last_seen(*cond_symbol, stmt);
-                for (_, _, branch) in *branches {
-                    self.scan_ast(branch);
-                }
-                self.scan_ast(default_branch.1);
-            }
-            Stmt::Ret(sym) => {
-                self.set_last_seen(*sym, stmt);
-            }
-            Stmt::Refcounting(modify, following) => {
-                let sym = modify.get_symbol();
-
-                self.set_last_seen(sym, stmt);
-                self.scan_ast(following);
-            }
-            Stmt::Join {
-                parameters,
-                body: continuation,
-                remainder,
-                id: JoinPointId(sym),
-                ..
-            } => {
-                self.set_last_seen(*sym, stmt);
-                join_map.insert(JoinPointId(*sym), parameters);
-                for param in *parameters {
-                    self.set_last_seen(param.symbol, stmt);
-                }
-                self.scan_ast(remainder);
-                self.scan_ast(continuation);
-            }
-            Stmt::Jump(JoinPointId(sym), symbols) => {
-                if let Some(parameters) = join_map.get(&JoinPointId(*sym)) {
-                    // Keep the parameters around. They will be overwritten when jumping.
-                    for param in *parameters {
-                        self.set_last_seen(param.symbol, stmt);
-                    }
-                }
-                for sym in *symbols {
-                    self.set_last_seen(*sym, stmt);
-                }
-            }
-
-            Stmt::Dbg { .. } => todo!("dbg not implemented in the dev backend"),
-            Stmt::Expect { .. } => todo!("expect is not implemented in the dev backend"),
-            Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the dev backend"),
-
-            Stmt::Crash(..) => todo!("crash is not implemented in the dev backend"),
-        }
-    }
-
-    fn scan_ast_call(&mut self, call: &roc_mono::ir::Call, stmt: &roc_mono::ir::Stmt<'a>) {
-        let roc_mono::ir::Call {
-            call_type,
-            arguments,
-        } = call;
-
-        for sym in *arguments {
-            self.set_last_seen(*sym, stmt);
-        }
-
-        match call_type {
-            CallType::ByName { .. } => {}
-            CallType::LowLevel { .. } => {}
-            CallType::HigherOrder { .. } => {}
-            CallType::Foreign { .. } => {}
-        }
+    fn scan_ast(&mut self, stmt: &'a Stmt<'a>) {
+        *self.last_seen_map() = LastSeenMap::scan_ast(stmt);
     }
 }

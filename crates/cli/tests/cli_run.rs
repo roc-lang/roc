@@ -151,7 +151,11 @@ mod cli_run {
         let stderr = stderr.replacen(ignorable, "", 1);
 
         let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
-        if !(stderr.is_empty() || is_reporting_runtime) {
+        if !(stderr.is_empty() || is_reporting_runtime
+            // macOS ld reports this warning, but if we remove -undefined dynamic_lookup,
+            // linking stops working properly.
+            || stderr.trim() == "ld: warning: -undefined dynamic_lookup may not work with chained fixups")
+        {
             panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
         }
 

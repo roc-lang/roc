@@ -1,18 +1,22 @@
-use crate::metadata::{self, Metadata, VirtualOffset};
+use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::MmapMut;
 use object::macho;
 use object::{
-    CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian, Object, ObjectSection,
+    CompressedFileRange, CompressionFormat, LittleEndian as LE, Object, ObjectSection,
     ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
     SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
-use std::ffi::CStr;
-use std::mem;
-use std::path::Path;
-use std::time::{Duration, Instant};
+use serde::{Deserialize, Serialize};
+use std::{
+    ffi::CStr,
+    io::{BufReader, BufWriter},
+    mem,
+    path::Path,
+    time::{Duration, Instant},
+};
 use target_lexicon::Triple;
 
 use crate::{
@@ -33,6 +37,73 @@ const STUB_ADDRESS_OFFSET: u64 = 0x06;
 //     dynamic_lib_count: usize,
 //     shared_lib_index: usize,
 // }
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+enum VirtualOffset {
+    Absolute,
+    Relative(u64),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct SurgeryEntry {
+    file_offset: u64,
+    virtual_offset: VirtualOffset,
+    size: u8,
+}
+
+// TODO: Reanalyze each piece of data in this struct.
+// I think a number of them can be combined to reduce string duplication.
+// Also I think a few of them aren't need.
+// For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
+// TODO: we probably should be storing numbers in an endian neutral way.
+#[derive(Default, Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct Metadata {
+    app_functions: Vec<String>,
+    // offset followed by address.
+    plt_addresses: MutMap<String, (u64, u64)>,
+    surgeries: MutMap<String, Vec<SurgeryEntry>>,
+    dynamic_symbol_indices: MutMap<String, u64>,
+    _static_symbol_indices: MutMap<String, u64>,
+    roc_symbol_vaddresses: MutMap<String, u64>,
+    exec_len: u64,
+    load_align_constraint: u64,
+    added_byte_count: u64,
+    last_vaddr: u64,
+    _dynamic_section_offset: u64,
+    _dynamic_symbol_table_section_offset: u64,
+    _symbol_table_section_offset: u64,
+    _symbol_table_size: u64,
+    macho_cmd_loc: u64,
+}
+
+impl Metadata {
+    fn write_to_file(&self, metadata_filename: &Path) {
+        let metadata_file =
+            std::fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+
+        serialize_into(BufWriter::new(metadata_file), self)
+            .unwrap_or_else(|err| internal_error!("Failed to serialize metadata: {err}"));
+    }
+
+    fn read_from_file(metadata_filename: &Path) -> Self {
+        let input = std::fs::File::open(metadata_filename).unwrap_or_else(|e| {
+            internal_error!(
+                r#"
+
+                Error:
+                    {}\n"#,
+                e
+            )
+        });
+
+        match deserialize_from(BufReader::new(input)) {
+            Ok(data) => data,
+            Err(err) => {
+                internal_error!("Failed to deserialize metadata: {}", err);
+            }
+        }
+    }
+}
 
 fn report_timing(label: &str, duration: Duration) {
     println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
@@ -67,7 +138,7 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
             .next()
             .unwrap();
 
-        let address = sym.address() as u64;
+        let address = sym.address();
 
         // special exceptions for memcpy and memset.
         if name == "roc_memcpy" {
@@ -83,7 +154,7 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
 }
 
 struct Surgeries<'a> {
-    surgeries: MutMap<String, Vec<metadata::SurgeryEntry>>,
+    surgeries: MutMap<String, Vec<SurgeryEntry>>,
     app_func_addresses: MutMap<u64, &'a str>,
     indirect_warning_given: bool,
 }
@@ -217,7 +288,7 @@ impl<'a> Surgeries<'a> {
                         self.surgeries
                             .get_mut(*func_name)
                             .unwrap()
-                            .push(metadata::SurgeryEntry {
+                            .push(SurgeryEntry {
                                 file_offset: offset,
                                 virtual_offset: VirtualOffset::Relative(inst.next_ip()),
                                 size: op_size,
@@ -253,7 +324,7 @@ impl<'a> Surgeries<'a> {
     }
 }
 
-/// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
+/// Constructs a `Metadata` from a host executable binary, and writes it to disk
 pub(crate) fn preprocess_macho(
     target: &Triple,
     host_exe_path: &Path,
@@ -273,7 +344,7 @@ pub(crate) fn preprocess_macho(
         }
     };
 
-    let mut md = metadata::Metadata {
+    let mut md = Metadata {
         roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
         ..Default::default()
     };
@@ -325,8 +396,8 @@ pub(crate) fn preprocess_macho(
     {
         use macho::{DyldInfoCommand, DylibCommand, Section64, SegmentCommand64};
 
-        let exec_header = load_struct_inplace::<macho::MachHeader64<LittleEndian>>(exec_data, 0);
-        let num_load_cmds = exec_header.ncmds.get(NativeEndian);
+        let exec_header = load_struct_inplace::<macho::MachHeader64<LE>>(exec_data, 0);
+        let num_load_cmds = exec_header.ncmds.get(LE);
 
         let mut offset = mem::size_of_val(exec_header);
 
@@ -334,17 +405,17 @@ pub(crate) fn preprocess_macho(
         let mut stubs_symbol_count = None;
 
         'cmds: for _ in 0..num_load_cmds {
-            let info = load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, offset);
-            let cmd = info.cmd.get(NativeEndian);
-            let cmdsize = info.cmdsize.get(NativeEndian);
+            let info = load_struct_inplace::<macho::LoadCommand<LE>>(exec_data, offset);
+            let cmd = info.cmd.get(LE);
+            let cmdsize = info.cmdsize.get(LE);
 
             if cmd == macho::LC_SEGMENT_64 {
-                let info = load_struct_inplace::<SegmentCommand64<LittleEndian>>(exec_data, offset);
+                let info = load_struct_inplace::<SegmentCommand64<LE>>(exec_data, offset);
 
                 if &info.segname[0..6] == b"__TEXT" {
-                    let sections = info.nsects.get(NativeEndian);
+                    let sections = info.nsects.get(LE);
 
-                    let sections_info = load_structs_inplace::<Section64<LittleEndian>>(
+                    let sections_info = load_structs_inplace::<Section64<LE>>(
                         exec_data,
                         offset + mem::size_of_val(info),
                         sections as usize,
@@ -352,9 +423,9 @@ pub(crate) fn preprocess_macho(
 
                     for section_info in sections_info {
                         if &section_info.sectname[0..7] == b"__stubs" {
-                            stubs_symbol_index = Some(section_info.reserved1.get(NativeEndian));
+                            stubs_symbol_index = Some(section_info.reserved1.get(LE));
                             stubs_symbol_count =
-                                Some(section_info.size.get(NativeEndian) / STUB_ADDRESS_OFFSET);
+                                Some(section_info.size.get(LE) / STUB_ADDRESS_OFFSET);
 
                             break 'cmds;
                         }
@@ -378,14 +449,14 @@ pub(crate) fn preprocess_macho(
         let shared_lib_filename = shared_lib.file_name();
 
         for _ in 0..num_load_cmds {
-            let info = load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, offset);
-            let cmd = info.cmd.get(NativeEndian);
-            let cmdsize = info.cmdsize.get(NativeEndian);
+            let info = load_struct_inplace::<macho::LoadCommand<LE>>(exec_data, offset);
+            let cmd = info.cmd.get(LE);
+            let cmdsize = info.cmdsize.get(LE);
 
             if cmd == macho::LC_DYLD_INFO_ONLY {
-                let info = load_struct_inplace::<DyldInfoCommand<LittleEndian>>(exec_data, offset);
+                let info = load_struct_inplace::<DyldInfoCommand<LE>>(exec_data, offset);
 
-                let lazy_bind_offset = info.lazy_bind_off.get(NativeEndian) as usize;
+                let lazy_bind_offset = info.lazy_bind_off.get(LE) as usize;
 
                 let lazy_bind_symbols = mach_object::LazyBind::parse(
                     &exec_data[lazy_bind_offset..],
@@ -412,8 +483,8 @@ pub(crate) fn preprocess_macho(
                     }
                 }
             } else if cmd == macho::LC_LOAD_DYLIB {
-                let info = load_struct_inplace::<DylibCommand<LittleEndian>>(exec_data, offset);
-                let name_offset = info.dylib.name.offset.get(NativeEndian) as usize;
+                let info = load_struct_inplace::<DylibCommand<LE>>(exec_data, offset);
+                let name_offset = info.dylib.name.offset.get(LE) as usize;
                 let str_start_index = offset + name_offset;
                 let str_end_index = offset + cmdsize as usize;
                 let str_bytes = &exec_data[str_start_index..str_end_index];
@@ -581,7 +652,7 @@ pub(crate) fn preprocess_macho(
 
 fn gen_macho_le(
     exec_data: &[u8],
-    md: &mut metadata::Metadata,
+    md: &mut Metadata,
     out_filename: &Path,
     macho_load_so_offset: usize,
     _target: &Triple,
@@ -600,19 +671,18 @@ fn gen_macho_le(
 
     use macho::{Section64, SegmentCommand64};
 
-    let exec_header = load_struct_inplace::<macho::MachHeader64<LittleEndian>>(exec_data, 0);
-    let num_load_cmds = exec_header.ncmds.get(NativeEndian);
-    let size_of_cmds = exec_header.sizeofcmds.get(NativeEndian) as usize;
+    let exec_header = load_struct_inplace::<macho::MachHeader64<LE>>(exec_data, 0);
+    let num_load_cmds = exec_header.ncmds.get(LE);
+    let size_of_cmds = exec_header.sizeofcmds.get(LE) as usize;
 
     // Add a new text segment and data segment
-    let segment_cmd_size = mem::size_of::<SegmentCommand64<LittleEndian>>();
-    let section_size = mem::size_of::<Section64<LittleEndian>>();
+    let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
+    let section_size = mem::size_of::<Section64<LE>>();
 
     // We need the full command size, including the dynamic-length string at the end.
     // To get that, we need to load the command.
-    let info =
-        load_struct_inplace::<macho::LoadCommand<LittleEndian>>(exec_data, macho_load_so_offset);
-    let total_cmd_size = info.cmdsize.get(NativeEndian) as usize;
+    let info = load_struct_inplace::<macho::LoadCommand<LE>>(exec_data, macho_load_so_offset);
+    let total_cmd_size = info.cmdsize.get(LE) as usize;
 
     // ======================== Important TODO ==========================
     // TODO: we accidentally instroduced a big change here.
@@ -654,16 +724,16 @@ fn gen_macho_le(
 
     out_mmap[start_index..start_index + rest_of_data.len()].copy_from_slice(rest_of_data);
 
-    let out_header = load_struct_inplace_mut::<macho::MachHeader64<LittleEndian>>(&mut out_mmap, 0);
+    let out_header = load_struct_inplace_mut::<macho::MachHeader64<LE>>(&mut out_mmap, 0);
 
     // TODO: this needs to change to adding the 2 new commands when we are ready.
     // -1 because we're deleting 1 load command and then NOT adding 2 new ones.
     {
         let added_bytes = -(total_cmd_size as isize); // TODO: Change when add the new sections.
-        out_header.ncmds.set(LittleEndian, num_load_cmds - 1);
+        out_header.ncmds.set(LE, num_load_cmds - 1);
         out_header
             .sizeofcmds
-            .set(LittleEndian, (size_of_cmds as isize + added_bytes) as u32);
+            .set(LE, (size_of_cmds as isize + added_bytes) as u32);
     }
 
     // Go through every command and shift it by added_bytes if it's absolute, unless it's inside the command header
@@ -681,50 +751,37 @@ fn gen_macho_le(
 
     // minus one because we "deleted" a load command
     for _ in 0..(num_load_cmds - 1) {
-        let info = load_struct_inplace::<macho::LoadCommand<LittleEndian>>(&out_mmap, offset);
-        let cmd_size = info.cmdsize.get(NativeEndian) as usize;
+        let info = load_struct_inplace::<macho::LoadCommand<LE>>(&out_mmap, offset);
+        let cmd_size = info.cmdsize.get(LE) as usize;
 
-        match info.cmd.get(NativeEndian) {
+        match info.cmd.get(LE) {
             macho::LC_SEGMENT_64 => {
-                let cmd = load_struct_inplace_mut::<macho::SegmentCommand64<LittleEndian>>(
-                    &mut out_mmap,
-                    offset,
-                );
+                let cmd =
+                    load_struct_inplace_mut::<macho::SegmentCommand64<LE>>(&mut out_mmap, offset);
 
                 // Ignore page zero, it never moves.
-                if cmd.segname == "__PAGEZERO\0\0\0\0\0\0".as_bytes()
-                    || cmd.vmaddr.get(NativeEndian) == 0
-                {
+                if cmd.segname == "__PAGEZERO\0\0\0\0\0\0".as_bytes() || cmd.vmaddr.get(LE) == 0 {
                     offset += cmd_size;
                     continue;
                 }
 
-                let old_file_offest = cmd.fileoff.get(NativeEndian);
+                let old_file_offest = cmd.fileoff.get(LE);
                 // The segment with file offset zero also includes the header.
                 // As such, its file offset does not change.
                 // Instead, its file size should be increased.
                 if old_file_offest > 0 {
-                    cmd.fileoff
-                        .set(LittleEndian, old_file_offest + md.added_byte_count as u64);
-                    cmd.vmaddr.set(
-                        LittleEndian,
-                        cmd.vmaddr.get(NativeEndian) + md.added_byte_count as u64,
-                    );
+                    cmd.fileoff.set(LE, old_file_offest + md.added_byte_count);
+                    cmd.vmaddr.set(LE, cmd.vmaddr.get(LE) + md.added_byte_count);
                 } else {
-                    cmd.filesize.set(
-                        LittleEndian,
-                        cmd.filesize.get(NativeEndian) + md.added_byte_count as u64,
-                    );
-                    cmd.vmsize.set(
-                        LittleEndian,
-                        cmd.vmsize.get(NativeEndian) + md.added_byte_count as u64,
-                    );
+                    cmd.filesize
+                        .set(LE, cmd.filesize.get(LE) + md.added_byte_count);
+                    cmd.vmsize.set(LE, cmd.vmsize.get(LE) + md.added_byte_count);
                 }
 
-                // let num_sections = cmd.nsects.get(NativeEndian);
-                // let sections = load_structs_inplace_mut::<macho::Section64<LittleEndian>>(
+                // let num_sections = cmd.nsects.get(LE);
+                // let sections = load_structs_inplace_mut::<macho::Section64<LE >>(
                 //     &mut out_mmap,
-                //     offset + mem::size_of::<macho::SegmentCommand64<LittleEndian>>(),
+                //     offset + mem::size_of::<macho::SegmentCommand64<LE >>(),
                 //     num_sections as usize,
                 // );
                 // struct Relocation {
@@ -736,34 +793,34 @@ fn gen_macho_le(
 
                 // for section in sections {
                 //     section.addr.set(
-                //         LittleEndian,
-                //         section.addr.get(NativeEndian) + md.added_byte_count as u64,
+                //         LE ,
+                //         section.addr.get(LE) + md.added_byte_count as u64,
                 //     );
 
                 //     // If offset is zero, don't update it.
                 //     // Zero is used for things like BSS that don't exist in the file.
-                //     let old_offset = section.offset.get(NativeEndian);
+                //     let old_offset = section.offset.get(LE);
                 //     if old_offset > 0 {
                 //         section
                 //             .offset
-                //             .set(LittleEndian, old_offset + md.added_byte_count as u32);
+                //             .set(LE , old_offset + md.added_byte_count as u32);
                 //     }
 
-                //     // dbg!(&section.reloff.get(NativeEndian));
-                //     // dbg!(section.reloff.get(NativeEndian) as i32);
+                //     // dbg!(&section.reloff.get(LE));
+                //     // dbg!(section.reloff.get(LE) as i32);
                 //     // dbg!(&section);
                 //     // dbg!(&md.added_byte_count);
                 //     // dbg!(String::from_utf8_lossy(&section.sectname));
-                //     if section.nreloc.get(NativeEndian) > 0 {
+                //     if section.nreloc.get(LE) > 0 {
                 //         section.reloff.set(
-                //             LittleEndian,
-                //             section.reloff.get(NativeEndian) + md.added_byte_count as u32,
+                //             LE ,
+                //             section.reloff.get(LE) + md.added_byte_count as u32,
                 //         );
                 //     }
 
                 //     relocation_offsets.push(Relocation {
-                //         offset: section.reloff.get(NativeEndian),
-                //         num_relocations: section.nreloc.get(NativeEndian),
+                //         offset: section.reloff.get(LE),
+                //         num_relocations: section.nreloc.get(LE),
                 //     });
                 // }
 
@@ -773,7 +830,7 @@ fn gen_macho_le(
                 //     num_relocations,
                 // } in relocation_offsets
                 // {
-                //     let relos = load_structs_inplace_mut::<macho::Relocation<LittleEndian>>(
+                //     let relos = load_structs_inplace_mut::<macho::Relocation<LE >>(
                 //         &mut out_mmap,
                 //         offset as usize,
                 //         num_relocations as usize,
@@ -781,13 +838,13 @@ fn gen_macho_le(
 
                 //     // TODO this has never been tested, because scattered relocations only come up on ARM!
                 //     for relo in relos.iter_mut() {
-                //         if relo.r_scattered(LittleEndian, cpu_type) {
-                //             let mut scattered_info = relo.scattered_info(NativeEndian);
+                //         if relo.r_scattered(LE , cpu_type) {
+                //             let mut scattered_info = relo.scattered_info(LE);
 
                 //             if !scattered_info.r_pcrel {
                 //                 scattered_info.r_value += md.added_byte_count as u32;
 
-                //                 let new_info = scattered_info.relocation(LittleEndian);
+                //                 let new_info = scattered_info.relocation(LE );
 
                 //                 relo.r_word0 = new_info.r_word0;
                 //                 relo.r_word1 = new_info.r_word1;
@@ -797,30 +854,25 @@ fn gen_macho_le(
                 // }
 
                 // TODO this seems to be wrong and unnecessary, and should probably be deleted.
-                // offset += num_sections as usize * mem::size_of::<macho::Section64<LittleEndian>>();
+                // offset += num_sections as usize * mem::size_of::<macho::Section64<LE >>();
             }
             macho::LC_SYMTAB => {
-                let cmd = load_struct_inplace_mut::<macho::SymtabCommand<LittleEndian>>(
-                    &mut out_mmap,
-                    offset,
-                );
+                let cmd =
+                    load_struct_inplace_mut::<macho::SymtabCommand<LE>>(&mut out_mmap, offset);
 
-                let sym_offset = cmd.symoff.get(NativeEndian);
-                let num_syms = cmd.nsyms.get(NativeEndian);
+                let sym_offset = cmd.symoff.get(LE);
+                let num_syms = cmd.nsyms.get(LE);
 
                 if num_syms > 0 {
-                    cmd.symoff
-                        .set(LittleEndian, sym_offset + md.added_byte_count as u32);
+                    cmd.symoff.set(LE, sym_offset + md.added_byte_count as u32);
                 }
 
-                if cmd.strsize.get(NativeEndian) > 0 {
-                    cmd.stroff.set(
-                        LittleEndian,
-                        cmd.stroff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.strsize.get(LE) > 0 {
+                    cmd.stroff
+                        .set(LE, cmd.stroff.get(LE) + md.added_byte_count as u32);
                 }
 
-                let table = load_structs_inplace_mut::<macho::Nlist64<LittleEndian>>(
+                let table = load_structs_inplace_mut::<macho::Nlist64<LE>>(
                     &mut out_mmap,
                     sym_offset as usize + md.added_byte_count as usize,
                     num_syms as usize,
@@ -829,59 +881,44 @@ fn gen_macho_le(
                 for entry in table {
                     let entry_type = entry.n_type & macho::N_TYPE;
                     if entry_type == macho::N_ABS || entry_type == macho::N_SECT {
-                        entry.n_value.set(
-                            LittleEndian,
-                            entry.n_value.get(NativeEndian) + md.added_byte_count as u64,
-                        );
+                        entry
+                            .n_value
+                            .set(LE, entry.n_value.get(LE) + md.added_byte_count);
                     }
                 }
             }
             macho::LC_DYSYMTAB => {
-                let cmd = load_struct_inplace_mut::<macho::DysymtabCommand<LittleEndian>>(
-                    &mut out_mmap,
-                    offset,
-                );
+                let cmd =
+                    load_struct_inplace_mut::<macho::DysymtabCommand<LE>>(&mut out_mmap, offset);
 
-                if cmd.ntoc.get(NativeEndian) > 0 {
-                    cmd.tocoff.set(
-                        LittleEndian,
-                        cmd.tocoff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.ntoc.get(LE) > 0 {
+                    cmd.tocoff
+                        .set(LE, cmd.tocoff.get(LE) + md.added_byte_count as u32);
                 }
 
-                if cmd.nmodtab.get(NativeEndian) > 0 {
-                    cmd.modtaboff.set(
-                        LittleEndian,
-                        cmd.modtaboff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.nmodtab.get(LE) > 0 {
+                    cmd.modtaboff
+                        .set(LE, cmd.modtaboff.get(LE) + md.added_byte_count as u32);
                 }
 
-                if cmd.nextrefsyms.get(NativeEndian) > 0 {
-                    cmd.extrefsymoff.set(
-                        LittleEndian,
-                        cmd.extrefsymoff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.nextrefsyms.get(LE) > 0 {
+                    cmd.extrefsymoff
+                        .set(LE, cmd.extrefsymoff.get(LE) + md.added_byte_count as u32);
                 }
 
-                if cmd.nindirectsyms.get(NativeEndian) > 0 {
-                    cmd.indirectsymoff.set(
-                        LittleEndian,
-                        cmd.indirectsymoff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.nindirectsyms.get(LE) > 0 {
+                    cmd.indirectsymoff
+                        .set(LE, cmd.indirectsymoff.get(LE) + md.added_byte_count as u32);
                 }
 
-                if cmd.nextrel.get(NativeEndian) > 0 {
-                    cmd.extreloff.set(
-                        LittleEndian,
-                        cmd.extreloff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.nextrel.get(LE) > 0 {
+                    cmd.extreloff
+                        .set(LE, cmd.extreloff.get(LE) + md.added_byte_count as u32);
                 }
 
-                if cmd.nlocrel.get(NativeEndian) > 0 {
-                    cmd.locreloff.set(
-                        LittleEndian,
-                        cmd.locreloff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.nlocrel.get(LE) > 0 {
+                    cmd.locreloff
+                        .set(LE, cmd.locreloff.get(LE) + md.added_byte_count as u32);
                 }
 
                 // TODO maybe we need to update something else too - relocations maybe?
@@ -889,29 +926,25 @@ fn gen_macho_le(
                 // Look at otool -I at least for the indirect symbols.
             }
             macho::LC_TWOLEVEL_HINTS => {
-                let cmd = load_struct_inplace_mut::<macho::TwolevelHintsCommand<LittleEndian>>(
+                let cmd = load_struct_inplace_mut::<macho::TwolevelHintsCommand<LE>>(
                     &mut out_mmap,
                     offset,
                 );
 
-                if cmd.nhints.get(NativeEndian) > 0 {
-                    cmd.offset.set(
-                        LittleEndian,
-                        cmd.offset.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.nhints.get(LE) > 0 {
+                    cmd.offset
+                        .set(LE, cmd.offset.get(LE) + md.added_byte_count as u32);
                 }
             }
             macho::LC_FUNCTION_STARTS => {
-                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LittleEndian>>(
+                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
                     &mut out_mmap,
                     offset,
                 );
 
-                if cmd.datasize.get(NativeEndian) > 0 {
-                    cmd.dataoff.set(
-                        LittleEndian,
-                        cmd.dataoff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.datasize.get(LE) > 0 {
+                    cmd.dataoff
+                        .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
                     // TODO: This lists the start of every function. Which, of course, have moved.
                     // That being said, to my understanding this section is optional and may just be debug information.
                     // As such, updating it should not be required.
@@ -920,36 +953,30 @@ fn gen_macho_le(
             }
             macho::LC_DATA_IN_CODE => {
                 let (offset, size) = {
-                    let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LittleEndian>>(
+                    let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
                         &mut out_mmap,
                         offset,
                     );
 
-                    if cmd.datasize.get(NativeEndian) > 0 {
-                        cmd.dataoff.set(
-                            LittleEndian,
-                            cmd.dataoff.get(NativeEndian) + md.added_byte_count as u32,
-                        );
+                    if cmd.datasize.get(LE) > 0 {
+                        cmd.dataoff
+                            .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
                     }
-                    (
-                        cmd.dataoff.get(NativeEndian),
-                        cmd.datasize.get(NativeEndian),
-                    )
+                    (cmd.dataoff.get(LE), cmd.datasize.get(LE))
                 };
 
                 // Update every data in code entry.
                 if size > 0 {
-                    let entry_size = mem::size_of::<macho::DataInCodeEntry<LittleEndian>>();
-                    let entries = load_structs_inplace_mut::<macho::DataInCodeEntry<LittleEndian>>(
+                    let entry_size = mem::size_of::<macho::DataInCodeEntry<LE>>();
+                    let entries = load_structs_inplace_mut::<macho::DataInCodeEntry<LE>>(
                         &mut out_mmap,
                         offset as usize,
                         size as usize / entry_size,
                     );
                     for entry in entries.iter_mut() {
-                        entry.offset.set(
-                            LittleEndian,
-                            entry.offset.get(NativeEndian) + md.added_byte_count as u32,
-                        )
+                        entry
+                            .offset
+                            .set(LE, entry.offset.get(LE) + md.added_byte_count as u32)
                     }
                 }
             }
@@ -959,63 +986,49 @@ fn gen_macho_le(
             | macho::LC_LINKER_OPTIMIZATION_HINT
             | macho::LC_DYLD_EXPORTS_TRIE
             | macho::LC_DYLD_CHAINED_FIXUPS => {
-                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LittleEndian>>(
+                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
                     &mut out_mmap,
                     offset,
                 );
 
-                if cmd.datasize.get(NativeEndian) > 0 {
-                    cmd.dataoff.set(
-                        LittleEndian,
-                        cmd.dataoff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.datasize.get(LE) > 0 {
+                    cmd.dataoff
+                        .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
                 }
             }
             macho::LC_ENCRYPTION_INFO_64 => {
-                let cmd = load_struct_inplace_mut::<macho::EncryptionInfoCommand64<LittleEndian>>(
+                let cmd = load_struct_inplace_mut::<macho::EncryptionInfoCommand64<LE>>(
                     &mut out_mmap,
                     offset,
                 );
 
-                if cmd.cryptsize.get(NativeEndian) > 0 {
-                    cmd.cryptoff.set(
-                        LittleEndian,
-                        cmd.cryptoff.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.cryptsize.get(LE) > 0 {
+                    cmd.cryptoff
+                        .set(LE, cmd.cryptoff.get(LE) + md.added_byte_count as u32);
                 }
             }
             macho::LC_DYLD_INFO | macho::LC_DYLD_INFO_ONLY => {
-                let cmd = load_struct_inplace_mut::<macho::DyldInfoCommand<LittleEndian>>(
-                    &mut out_mmap,
-                    offset,
-                );
+                let cmd =
+                    load_struct_inplace_mut::<macho::DyldInfoCommand<LE>>(&mut out_mmap, offset);
 
-                if cmd.rebase_size.get(NativeEndian) > 0 {
-                    cmd.rebase_off.set(
-                        LittleEndian,
-                        cmd.rebase_off.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.rebase_size.get(LE) > 0 {
+                    cmd.rebase_off
+                        .set(LE, cmd.rebase_off.get(LE) + md.added_byte_count as u32);
                 }
 
-                if cmd.bind_size.get(NativeEndian) > 0 {
-                    cmd.bind_off.set(
-                        LittleEndian,
-                        cmd.bind_off.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.bind_size.get(LE) > 0 {
+                    cmd.bind_off
+                        .set(LE, cmd.bind_off.get(LE) + md.added_byte_count as u32);
                 }
 
-                if cmd.weak_bind_size.get(NativeEndian) > 0 {
-                    cmd.weak_bind_off.set(
-                        LittleEndian,
-                        cmd.weak_bind_off.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.weak_bind_size.get(LE) > 0 {
+                    cmd.weak_bind_off
+                        .set(LE, cmd.weak_bind_off.get(LE) + md.added_byte_count as u32);
                 }
 
-                if cmd.lazy_bind_size.get(NativeEndian) > 0 {
-                    cmd.lazy_bind_off.set(
-                        LittleEndian,
-                        cmd.lazy_bind_off.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.lazy_bind_size.get(LE) > 0 {
+                    cmd.lazy_bind_off
+                        .set(LE, cmd.lazy_bind_off.get(LE) + md.added_byte_count as u32);
                 }
 
                 // TODO: Parse and update the related tables here.
@@ -1026,40 +1039,26 @@ fn gen_macho_le(
                 // Also `xcrun dyldinfo` is useful for debugging this.
             }
             macho::LC_SYMSEG => {
-                let cmd = load_struct_inplace_mut::<macho::SymsegCommand<LittleEndian>>(
-                    &mut out_mmap,
-                    offset,
-                );
+                let cmd =
+                    load_struct_inplace_mut::<macho::SymsegCommand<LE>>(&mut out_mmap, offset);
 
-                if cmd.size.get(NativeEndian) > 0 {
-                    cmd.offset.set(
-                        LittleEndian,
-                        cmd.offset.get(NativeEndian) + md.added_byte_count as u32,
-                    );
+                if cmd.size.get(LE) > 0 {
+                    cmd.offset
+                        .set(LE, cmd.offset.get(LE) + md.added_byte_count as u32);
                 }
             }
             macho::LC_MAIN => {
-                let cmd = load_struct_inplace_mut::<macho::EntryPointCommand<LittleEndian>>(
-                    &mut out_mmap,
-                    offset,
-                );
+                let cmd =
+                    load_struct_inplace_mut::<macho::EntryPointCommand<LE>>(&mut out_mmap, offset);
 
-                cmd.entryoff.set(
-                    LittleEndian,
-                    cmd.entryoff.get(NativeEndian) + md.added_byte_count as u64,
-                );
+                cmd.entryoff
+                    .set(LE, cmd.entryoff.get(LE) + md.added_byte_count);
             }
             macho::LC_NOTE => {
-                let cmd = load_struct_inplace_mut::<macho::NoteCommand<LittleEndian>>(
-                    &mut out_mmap,
-                    offset,
-                );
+                let cmd = load_struct_inplace_mut::<macho::NoteCommand<LE>>(&mut out_mmap, offset);
 
-                if cmd.size.get(NativeEndian) > 0 {
-                    cmd.offset.set(
-                        LittleEndian,
-                        cmd.offset.get(NativeEndian) + md.added_byte_count as u64,
-                    );
+                if cmd.size.get(LE) > 0 {
+                    cmd.offset.set(LE, cmd.offset.get(LE) + md.added_byte_count);
                 }
             }
             macho::LC_ID_DYLIB
@@ -1125,7 +1124,7 @@ fn gen_macho_le(
 
 // fn scan_macho_dynamic_deps(
 //     _exec_obj: &object::File,
-//     _md: &mut metadata::Metadata,
+//     _md: &mut Metadata,
 //     _app_syms: &[Symbol],
 //     _shared_lib: &str,
 //     _exec_data: &[u8],
@@ -1223,7 +1222,7 @@ fn surgery_macho_help(
     _out_filename: &Path,
     verbose: bool,
     _time: bool,
-    md: &metadata::Metadata,
+    md: &Metadata,
     exec_mmap: &mut MmapMut,
     offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
     app_obj: object::File,
@@ -1397,8 +1396,8 @@ fn surgery_macho_help(
                     };
 
                     if let Some(target_offset) = target_offset {
-                        let virt_base = section_virtual_offset as usize + rel.0 as usize;
-                        let base = section_offset as usize + rel.0 as usize;
+                        let virt_base = section_virtual_offset + rel.0 as usize;
+                        let base = section_offset + rel.0 as usize;
                         let target: i64 = match rel.1.kind() {
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
@@ -1459,89 +1458,89 @@ fn surgery_macho_help(
     // // Load this section (we made room for it earlier) and then mutate all its data to make it the desired command
     // {
     //     let cmd =
-    //         load_struct_inplace_mut::<macho::SegmentCommand64<LittleEndian>>(exec_mmap, cmd_offset);
-    //     let size_of_section = mem::size_of::<macho::Section64<LittleEndian>>() as u32;
+    //         load_struct_inplace_mut::<macho::SegmentCommand64<LE >>(exec_mmap, cmd_offset);
+    //     let size_of_section = mem::size_of::<macho::Section64<LE >>() as u32;
     //     let size_of_cmd = mem::size_of_val(cmd);
 
     //     cmd_offset += size_of_cmd;
 
-    //     cmd.cmd.set(LittleEndian, macho::LC_SEGMENT_64);
+    //     cmd.cmd.set(LE , macho::LC_SEGMENT_64);
     //     cmd.cmdsize
-    //         .set(LittleEndian, size_of_section + size_of_cmd as u32);
+    //         .set(LE , size_of_section + size_of_cmd as u32);
     //     cmd.segname = *b"__DATA_CONST\0\0\0\0";
     //     cmd.vmaddr
-    //         .set(LittleEndian, new_rodata_section_vaddr as u64);
+    //         .set(LE , new_rodata_section_vaddr as u64);
     //     cmd.vmsize.set(
-    //         LittleEndian,
+    //         LE ,
     //         (new_text_section_vaddr - new_rodata_section_vaddr) as u64,
     //     );
     //     cmd.fileoff
-    //         .set(LittleEndian, new_rodata_section_offset as u64);
+    //         .set(LE , new_rodata_section_offset as u64);
     //     cmd.filesize.set(
-    //         LittleEndian,
+    //         LE ,
     //         (new_text_section_offset - new_rodata_section_offset) as u64,
     //     );
-    //     cmd.nsects.set(LittleEndian, 1);
-    //     cmd.maxprot.set(LittleEndian, 0x00000003);
-    //     cmd.initprot.set(LittleEndian, 0x00000003);
+    //     cmd.nsects.set(LE , 1);
+    //     cmd.maxprot.set(LE , 0x00000003);
+    //     cmd.initprot.set(LE , 0x00000003);
 
     //     // TODO set protection
     // }
 
     // {
-    //     let cmd = load_struct_inplace_mut::<macho::Section64<LittleEndian>>(exec_mmap, cmd_offset);
+    //     let cmd = load_struct_inplace_mut::<macho::Section64<LE >>(exec_mmap, cmd_offset);
     //     let size_of_cmd = mem::size_of_val(cmd);
 
     //     cmd_offset += size_of_cmd;
 
     //     cmd.sectname = *b"__const\0\0\0\0\0\0\0\0\0";
     //     cmd.segname = *b"__DATA_CONST\0\0\0\0";
-    //     cmd.addr.set(LittleEndian, new_rodata_section_vaddr as u64);
+    //     cmd.addr.set(LE , new_rodata_section_vaddr as u64);
     //     cmd.size.set(
-    //         LittleEndian,
+    //         LE ,
     //         (new_text_section_offset - new_rodata_section_offset) as u64,
     //     );
-    //     cmd.offset.set(LittleEndian, 0); // TODO is this offset since the start of the file, or segment offset?
-    //     cmd.align.set(LittleEndian, 12); // TODO should this be 4096?
-    //     cmd.reloff.set(LittleEndian, 264); // TODO this should NOT be hardcoded! Should get it from somewhere.
+    //     cmd.offset.set(LE , 0); // TODO is this offset since the start of the file, or segment offset?
+    //     cmd.align.set(LE , 12); // TODO should this be 4096?
+    //     cmd.reloff.set(LE , 264); // TODO this should NOT be hardcoded! Should get it from somewhere.
     // }
 
     // {
     //     let cmd =
-    //         load_struct_inplace_mut::<macho::SegmentCommand64<LittleEndian>>(exec_mmap, cmd_offset);
-    //     let size_of_section = mem::size_of::<macho::Section64<LittleEndian>>() as u32;
+    //         load_struct_inplace_mut::<macho::SegmentCommand64<LE >>(exec_mmap, cmd_offset);
+    //     let size_of_section = mem::size_of::<macho::Section64<LE >>() as u32;
     //     let size_of_cmd = mem::size_of_val(cmd);
 
     //     cmd_offset += size_of_cmd;
 
-    //     cmd.cmd.set(LittleEndian, macho::LC_SEGMENT_64);
+    //     cmd.cmd.set(LE , macho::LC_SEGMENT_64);
     //     cmd.cmdsize
-    //         .set(LittleEndian, size_of_section + size_of_cmd as u32);
+    //         .set(LE , size_of_section + size_of_cmd as u32);
     //     cmd.segname = *b"__TEXT\0\0\0\0\0\0\0\0\0\0";
-    //     cmd.vmaddr.set(LittleEndian, new_text_section_vaddr as u64);
+    //     cmd.vmaddr.set(LE , new_text_section_vaddr as u64);
     //     cmd.vmsize
-    //         .set(LittleEndian, (offset - new_text_section_offset) as u64);
+    //         .set(LE , (offset - new_text_section_offset) as u64);
     //     cmd.fileoff
-    //         .set(LittleEndian, new_text_section_offset as u64);
+    //         .set(LE , new_text_section_offset as u64);
     //     cmd.filesize
-    //         .set(LittleEndian, (offset - new_text_section_offset) as u64);
-    //     cmd.nsects.set(LittleEndian, 1);
-    //     cmd.maxprot.set(LittleEndian, 0x00000005); // this is what a zig-generated host had
-    //     cmd.initprot.set(LittleEndian, 0x00000005); // this is what a zig-generated host had
+    //         .set(LE , (offset - new_text_section_offset) as u64);
+    //     cmd.nsects.set(LE , 1);
+    //     cmd.maxprot.set(LE , 0x00000005); // this is what a zig-generated host had
+    //     cmd.initprot.set(LE , 0x00000005); // this is what a zig-generated host had
     // }
 
     // {
-    //     let cmd = load_struct_inplace_mut::<macho::Section64<LittleEndian>>(exec_mmap, cmd_offset);
+    //     let cmd = load_struct_inplace_mut::<macho::Section64<LE >>(exec_mmap, cmd_offset);
 
     //     cmd.segname = *b"__TEXT\0\0\0\0\0\0\0\0\0\0";
     //     cmd.sectname = *b"__text\0\0\0\0\0\0\0\0\0\0";
-    //     cmd.addr.set(LittleEndian, new_text_section_vaddr as u64);
+    //     cmd.addr.set(LE , new_text_section_vaddr as u64);
     //     cmd.size
-    //         .set(LittleEndian, (offset - new_text_section_offset) as u64);
-    //     cmd.offset.set(LittleEndian, 0); // TODO is this offset since the start of the file, or segment offset?
-    //     cmd.align.set(LittleEndian, 12); // TODO this is 4096 (2^12) - which load_align_constraint does, above - but should it?
-    //     cmd.flags.set(LittleEndian, 0x80000400); // TODO this is what a zig-generated host had
-    //     cmd.reloff.set(LittleEndian, 264); // TODO this should NOT be hardcoded! Should get it from somewhere.
+    //         .set(LE , (offset - new_text_section_offset) as u64);
+    //     cmd.offset.set(LE , 0); // TODO is this offset since the start of the file, or segment offset?
+    //     cmd.align.set(LE , 12); // TODO this is 4096 (2^12) - which load_align_constraint does, above - but should it?
+    //     cmd.flags.set(LE , 0x80000400); // TODO this is what a zig-generated host had
+    //     cmd.reloff.set(LE , 264); // TODO this should NOT be hardcoded! Should get it from somewhere.
     // }
 
     // Update calls from platform and dynamic symbols.
@@ -1618,13 +1617,13 @@ fn surgery_macho_help(
 
         // Commented out because it doesn't apply to mach-o
         // if let Some(i) = md.dynamic_symbol_indices.get(func_name) {
-        //     let sym = load_struct_inplace_mut::<elf::Sym64<LittleEndian>>(
+        //     let sym = load_struct_inplace_mut::<elf::Sym64<LE >>(
         //         exec_mmap,
-        //         dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LittleEndian>>(),
+        //         dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE >>(),
         //     );
-        //     sym.st_value = endian::U64::new(LittleEndian, func_virt_offset as u64);
-        //     sym.st_size = endian::U64::new(
-        //         LittleEndian,
+        //     sym.st_value.set(LE , func_virt_offset as u64);
+        //     sym.st_size.set(
+        //         LE ,
         //         match app_func_size_map.get(func_name) {
         //             Some(size) => *size,
         //             None => {

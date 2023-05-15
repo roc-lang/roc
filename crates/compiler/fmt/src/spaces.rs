@@ -4,8 +4,9 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Header, Module, Pattern, Spaced, Spaces, StrLiteral,
-        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        HasAbility, HasClause, HasImpls, Header, Module, Pattern, RecordBuilderField, Spaced,
+        Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -21,22 +22,14 @@ use crate::{Ast, Buf};
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
 
-pub fn fmt_default_spaces<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    indent: u16,
-) {
+pub fn fmt_default_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u16) {
     if spaces.is_empty() {
         buf.spaces(1);
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
 }
-pub fn fmt_default_newline<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    indent: u16,
-) {
+pub fn fmt_default_newline(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u16) {
     if spaces.is_empty() {
         buf.newline();
     } else {
@@ -153,7 +146,7 @@ pub fn fmt_comments_only<'a, 'buf, I>(
     }
 }
 
-fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
+fn fmt_comment(buf: &mut Buf, comment: &str) {
     // The '#' in a comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
@@ -192,7 +185,7 @@ where
     count
 }
 
-fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
+fn fmt_docs(buf: &mut Buf, docs: &str) {
     // The "##" in a doc comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
@@ -622,6 +615,29 @@ impl<'a, T: RemoveSpaces<'a> + Copy + std::fmt::Debug> RemoveSpaces<'a> for Assi
     }
 }
 
+impl<'a> RemoveSpaces<'a> for RecordBuilderField<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            RecordBuilderField::Value(a, _, c) => RecordBuilderField::Value(
+                a.remove_spaces(arena),
+                arena.alloc([]),
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            RecordBuilderField::ApplyValue(a, _, c) => RecordBuilderField::ApplyValue(
+                a.remove_spaces(arena),
+                arena.alloc([]),
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            RecordBuilderField::LabelOnly(a) => {
+                RecordBuilderField::LabelOnly(a.remove_spaces(arena))
+            }
+            RecordBuilderField::Malformed(a) => RecordBuilderField::Malformed(a),
+            RecordBuilderField::SpaceBefore(a, _) => a.remove_spaces(arena),
+            RecordBuilderField::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for StrLiteral<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -668,6 +684,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 fields: fields.remove_spaces(arena),
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
+            Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
@@ -730,6 +747,8 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
+            Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
+            Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),

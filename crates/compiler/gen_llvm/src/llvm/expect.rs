@@ -13,7 +13,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 use roc_region::all::Region;
 
@@ -66,8 +66,8 @@ fn pointer_at_offset<'ctx>(
 }
 
 /// Writes the module and region into the buffer
-fn write_header<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn write_header<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
     mut offset: IntValue<'ctx>,
     condition: Symbol,
@@ -95,8 +95,8 @@ fn write_header<'a, 'ctx, 'env>(
 
 /// Read the first two 32-bit values from the shared memory,
 /// representing the total number of expect frames and the next free position
-fn read_state<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn read_state<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
     let ptr_type = env.ptr_int().ptr_type(AddressSpace::default());
@@ -113,8 +113,8 @@ fn read_state<'a, 'ctx, 'env>(
     (count.into_int_value(), offset.into_int_value())
 }
 
-fn write_state<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn write_state<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
     count: IntValue<'ctx>,
     offset: IntValue<'ctx>,
@@ -175,8 +175,8 @@ pub(crate) fn notify_parent_dbg(env: &Env, shared_memory: &SharedMemoryPointer) 
 //     ..
 //     lookup_val_n  (varsize)
 //
-pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     layout_ids: &mut LayoutIds<'a>,
@@ -287,8 +287,8 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     write_state(env, original_ptr, new_count, offset)
 }
 
-fn build_clone<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
@@ -296,8 +296,8 @@ fn build_clone<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     layout: InLayout<'a>,
 ) -> IntValue<'ctx> {
-    match layout_interner.get(layout) {
-        Layout::Builtin(builtin) => build_clone_builtin(
+    match layout_interner.get(layout).repr {
+        LayoutRepr::Builtin(builtin) => build_clone_builtin(
             env,
             layout_interner,
             layout_ids,
@@ -307,7 +307,7 @@ fn build_clone<'a, 'ctx, 'env>(
             builtin,
         ),
 
-        Layout::Struct { field_layouts, .. } => build_clone_struct(
+        LayoutRepr::Struct { field_layouts, .. } => build_clone_struct(
             env,
             layout_interner,
             layout_ids,
@@ -319,9 +319,9 @@ fn build_clone<'a, 'ctx, 'env>(
 
         // Since we will never actually display functions (and hence lambda sets)
         // we just write nothing to the buffer
-        Layout::LambdaSet(_) => cursors.extra_offset,
+        LayoutRepr::LambdaSet(_) => cursors.extra_offset,
 
-        Layout::Union(union_layout) => {
+        LayoutRepr::Union(union_layout) => {
             if layout_interner.safe_to_memcpy(layout) {
                 let ptr = unsafe {
                     env.builder.new_build_in_bounds_gep(
@@ -353,7 +353,7 @@ fn build_clone<'a, 'ctx, 'env>(
             }
         }
 
-        Layout::Boxed(inner_layout) => {
+        LayoutRepr::Boxed(inner_layout) => {
             // write the offset
             build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
 
@@ -384,7 +384,7 @@ fn build_clone<'a, 'ctx, 'env>(
             )
         }
 
-        Layout::RecursivePointer(rec_layout) => {
+        LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
             let bt = basic_type_from_layout(env, layout_interner, layout);
@@ -396,8 +396,8 @@ fn build_clone<'a, 'ctx, 'env>(
                 "i64_to_opaque",
             );
 
-            let union_layout = match layout_interner.get(rec_layout) {
-                Layout::Union(union_layout) => {
+            let union_layout = match layout_interner.get(rec_layout).repr {
+                LayoutRepr::Union(union_layout) => {
                     debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                     union_layout
                 }
@@ -417,8 +417,8 @@ fn build_clone<'a, 'ctx, 'env>(
     }
 }
 
-fn build_clone_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone_struct<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
@@ -426,7 +426,7 @@ fn build_clone_struct<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     field_layouts: &[InLayout<'a>],
 ) -> IntValue<'ctx> {
-    let layout = Layout::struct_no_name_order(field_layouts);
+    let layout = LayoutRepr::struct_(field_layouts);
 
     if layout.safe_to_memcpy(layout_interner) {
         build_copy(env, ptr, cursors.offset, value)
@@ -467,8 +467,8 @@ fn build_clone_struct<'a, 'ctx, 'env>(
     }
 }
 
-fn build_clone_tag<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone_tag<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
@@ -476,7 +476,7 @@ fn build_clone_tag<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     union_layout: UnionLayout<'a>,
 ) -> IntValue<'ctx> {
-    let layout = layout_interner.insert(Layout::Union(union_layout));
+    let layout = layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout));
     let layout_id = layout_ids.get(Symbol::CLONE, &layout);
     let fn_name = layout_id.to_symbol_string(Symbol::CLONE, &env.interns);
 
@@ -545,8 +545,8 @@ fn build_clone_tag<'a, 'ctx, 'env>(
     result.into_int_value()
 }
 
-fn load_tag_data<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn load_tag_data<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
     tag_value: PointerValue<'ctx>,
@@ -573,8 +573,8 @@ fn load_tag_data<'a, 'ctx, 'env>(
     env.builder.new_build_load(tag_type, data_ptr, "load_data")
 }
 
-fn clone_tag_payload_and_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn clone_tag_payload_and_id<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
@@ -623,8 +623,8 @@ fn clone_tag_payload_and_id<'a, 'ctx, 'env>(
     answer
 }
 
-fn build_clone_tag_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone_tag_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: UnionLayout<'a>,
@@ -689,8 +689,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 );
 
                 // load the tag payload (if any)
-                let payload_layout = Layout::struct_no_name_order(field_layouts);
-                let payload_in_layout = layout_interner.insert(payload_layout);
+                let payload_layout = LayoutRepr::struct_(field_layouts);
+                let payload_in_layout = layout_interner.insert_no_semantic(payload_layout);
 
                 let opaque_payload_ptr = env
                     .builder
@@ -748,11 +748,11 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
 
                 let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
 
-                let layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
                 let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
                     layout
                 } else {
-                    layout_interner.insert(Layout::struct_no_name_order(
+                    layout_interner.insert_no_semantic(LayoutRepr::struct_(
                         env.arena.alloc([layout, union_layout.tag_id_layout()]),
                     ))
                 };
@@ -797,7 +797,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
 
             build_copy(env, ptr, offset, extra_offset.into());
 
-            let layout = layout_interner.insert(Layout::struct_no_name_order(fields));
+            let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(fields));
             let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
             let (width, _) = union_layout.data_size_and_alignment(layout_interner, env.target_info);
@@ -853,7 +853,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                         other_tags[i]
                     };
 
-                    let layout = layout_interner.insert(Layout::struct_no_name_order(fields));
+                    let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(fields));
                     let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
                     let (width, _) =
@@ -928,7 +928,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 // write the "pointer" af the current offset
                 build_copy(env, ptr, offset, extra_offset.into());
 
-                let layout = layout_interner.insert(Layout::struct_no_name_order(other_fields));
+                let layout = layout_interner.insert_no_semantic(LayoutRepr::struct_(other_fields));
                 let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
                 let cursors = Cursors {
@@ -958,8 +958,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
     }
 }
 
-fn write_pointer_with_tag_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn write_pointer_with_tag_id<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
     extra_offset: IntValue<'ctx>,
@@ -986,8 +986,8 @@ fn write_pointer_with_tag_id<'a, 'ctx, 'env>(
     }
 }
 
-fn build_copy<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_copy<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     ptr: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -1012,8 +1012,8 @@ fn build_copy<'a, 'ctx, 'env>(
     env.builder.build_int_add(offset, width, "new_offset")
 }
 
-fn build_clone_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_clone_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,

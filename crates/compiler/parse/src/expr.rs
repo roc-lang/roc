@@ -1,6 +1,6 @@
 use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Has, HasAbilities,
-    Pattern, Spaceable, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -21,6 +21,7 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::soa::Slice;
+use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -1875,7 +1876,10 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             pattern
         }
 
-        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
+        Expr::SpaceBefore(..)
+        | Expr::SpaceAfter(..)
+        | Expr::ParensAround(..)
+        | Expr::RecordBuilder(..) => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -1921,6 +1925,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Dbg(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
+        | Expr::MultipleRecordBuilders { .. }
+        | Expr::UnappliedRecordBuilder { .. }
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
         | Expr::Crash => return Err(()),
@@ -2479,10 +2485,10 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
                     // TODO: make this state impossible to represent in Ident::Access,
                     // by splitting out parts[0] into a separate field with a type of `&'a str`,
                     // rather than a `&'a [Accessor<'a>]`.
-                    panic!("Parsed an Ident::Access with a first part of a tuple index");
+                    internal_error!("Parsed an Ident::Access with a first part of a tuple index");
                 }
                 None => {
-                    panic!("Parsed an Ident::Access with no parts");
+                    internal_error!("Parsed an Ident::Access with no parts");
                 }
             };
 
@@ -2526,8 +2532,123 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
     .trace("list_literal")
 }
 
-pub fn record_value_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
-    use AssignedField::*;
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RecordField<'a> {
+    RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+    OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+    LabelOnly(Loc<&'a str>),
+    SpaceBefore(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
+    ApplyValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+}
+
+#[derive(Debug)]
+pub struct FoundApplyValue;
+
+#[derive(Debug)]
+struct FoundOptionalValue;
+
+impl<'a> RecordField<'a> {
+    fn is_apply_value(&self) -> bool {
+        let mut current = self;
+
+        loop {
+            match current {
+                RecordField::ApplyValue(_, _, _) => break true,
+                RecordField::SpaceBefore(field, _) | RecordField::SpaceAfter(field, _) => {
+                    current = *field;
+                }
+                _ => break false,
+            }
+        }
+    }
+
+    pub fn to_assigned_field(
+        self,
+        arena: &'a Bump,
+    ) -> Result<AssignedField<'a, Expr<'a>>, FoundApplyValue> {
+        use AssignedField::*;
+
+        match self {
+            RecordField::RequiredValue(loc_label, spaces, loc_expr) => {
+                Ok(RequiredValue(loc_label, spaces, loc_expr))
+            }
+
+            RecordField::OptionalValue(loc_label, spaces, loc_expr) => {
+                Ok(OptionalValue(loc_label, spaces, loc_expr))
+            }
+
+            RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
+
+            RecordField::ApplyValue(_, _, _) => Err(FoundApplyValue),
+
+            RecordField::SpaceBefore(field, spaces) => {
+                let assigned_field = field.to_assigned_field(arena)?;
+
+                Ok(SpaceBefore(arena.alloc(assigned_field), spaces))
+            }
+
+            RecordField::SpaceAfter(field, spaces) => {
+                let assigned_field = field.to_assigned_field(arena)?;
+
+                Ok(SpaceAfter(arena.alloc(assigned_field), spaces))
+            }
+        }
+    }
+
+    fn to_builder_field(
+        self,
+        arena: &'a Bump,
+    ) -> Result<RecordBuilderField<'a>, FoundOptionalValue> {
+        use RecordBuilderField::*;
+
+        match self {
+            RecordField::RequiredValue(loc_label, spaces, loc_expr) => {
+                Ok(Value(loc_label, spaces, loc_expr))
+            }
+
+            RecordField::OptionalValue(_, _, _) => Err(FoundOptionalValue),
+
+            RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
+
+            RecordField::ApplyValue(loc_label, spaces, loc_expr) => {
+                Ok(ApplyValue(loc_label, spaces, loc_expr))
+            }
+
+            RecordField::SpaceBefore(field, spaces) => {
+                let builder_field = field.to_builder_field(arena)?;
+
+                Ok(SpaceBefore(arena.alloc(builder_field), spaces))
+            }
+
+            RecordField::SpaceAfter(field, spaces) => {
+                let builder_field = field.to_builder_field(arena)?;
+
+                Ok(SpaceAfter(arena.alloc(builder_field), spaces))
+            }
+        }
+    }
+}
+
+impl<'a> Spaceable<'a> for RecordField<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordField::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordField::SpaceAfter(self, spaces)
+    }
+}
+
+pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
+    use RecordField::*;
+
+    enum AssignKind {
+        Required,
+        Optional,
+        Apply,
+    }
+
+    use AssignKind::*;
 
     map_with_arena!(
         and!(
@@ -2535,9 +2656,10 @@ pub fn record_value_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, 
             and!(
                 spaces(),
                 optional(and!(
-                    either!(
-                        word1(b':', ERecord::Colon),
-                        word1(b'?', ERecord::QuestionMark)
+                    one_of!(
+                        map!(word1(b':', ERecord::Colon), |_| Required),
+                        map!(word1(b'?', ERecord::QuestionMark), |_| Optional),
+                        map!(word2(b'<', b'-', ERecord::Arrow), |_| Apply),
                     ),
                     spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
                 ))
@@ -2545,13 +2667,11 @@ pub fn record_value_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, 
         ),
         |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
             match opt_loc_val {
-                Some((Either::First(_), loc_val)) => {
-                    RequiredValue(loc_label, spaces, arena.alloc(loc_val))
-                }
+                Some((Required, loc_val)) => RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
 
-                Some((Either::Second(_), loc_val)) => {
-                    OptionalValue(loc_label, spaces, arena.alloc(loc_val))
-                }
+                Some((Optional, loc_val)) => OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
+
+                Some((Apply, loc_val)) => ApplyValue(loc_label, spaces, arena.alloc(loc_val)),
 
                 // If no value was provided, record it as a Var.
                 // Canonicalize will know what to do with a Var later.
@@ -2576,7 +2696,7 @@ fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> 
 
 struct RecordHelp<'a> {
     update: Option<Loc<Expr<'a>>>,
-    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    fields: Collection<'a, Loc<RecordField<'a>>>,
 }
 
 fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
@@ -2596,9 +2716,9 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                 word1(b'&', ERecord::Ampersand)
             ))),
             fields: collection_inner!(
-                loc!(record_value_field()),
+                loc!(record_field()),
                 word1(b',', ERecord::End),
-                AssignedField::SpaceBefore
+                RecordField::SpaceBefore
             ),
         })),
         word1(b'}', ERecord::End)
@@ -2613,20 +2733,74 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
             record_field_access_chain()
         ),
         move |arena, state, _, (record, accessors)| {
-            // This is a record literal, not a destructure.
-            let value = match record.update {
-                Some(update) => Expr::RecordUpdate {
-                    update: &*arena.alloc(update),
-                    fields: record.fields,
-                },
-                None => Expr::Record(record.fields),
+            let expr_result = match record.update {
+                Some(update) => record_update_help(arena, update, record.fields),
+                None => {
+                    let is_record_builder = record
+                        .fields
+                        .iter()
+                        .any(|field| field.value.is_apply_value());
+
+                    if is_record_builder {
+                        record_builder_help(arena, record.fields)
+                    } else {
+                        let fields = record.fields.map_items(arena, |loc_field| {
+                            loc_field.map(|field| field.to_assigned_field(arena).unwrap())
+                        });
+
+                        Ok(Expr::Record(fields))
+                    }
+                }
             };
 
-            let value = apply_expr_access_chain(arena, value, accessors);
+            match expr_result {
+                Ok(expr) => {
+                    let value = apply_expr_access_chain(arena, expr, accessors);
 
-            Ok((MadeProgress, value, state))
+                    Ok((MadeProgress, value, state))
+                }
+                Err(err) => Err((MadeProgress, err)),
+            }
         },
     )
+}
+
+fn record_update_help<'a>(
+    arena: &'a Bump,
+    update: Loc<Expr<'a>>,
+    fields: Collection<'a, Loc<RecordField<'a>>>,
+) -> Result<Expr<'a>, EExpr<'a>> {
+    let result = fields.map_items_result(arena, |loc_field| {
+        match loc_field.value.to_assigned_field(arena) {
+            Ok(builder_field) => Ok(Loc {
+                region: loc_field.region,
+                value: builder_field,
+            }),
+            Err(FoundApplyValue) => Err(EExpr::RecordUpdateBuilder(loc_field.region)),
+        }
+    });
+
+    result.map(|fields| Expr::RecordUpdate {
+        update: &*arena.alloc(update),
+        fields,
+    })
+}
+
+fn record_builder_help<'a>(
+    arena: &'a Bump,
+    fields: Collection<'a, Loc<RecordField<'a>>>,
+) -> Result<Expr<'a>, EExpr<'a>> {
+    let result = fields.map_items_result(arena, |loc_field| {
+        match loc_field.value.to_builder_field(arena) {
+            Ok(builder_field) => Ok(Loc {
+                region: loc_field.region,
+                value: builder_field,
+            }),
+            Err(FoundOptionalValue) => Err(EExpr::OptionalValueInRecordBuilder(loc_field.region)),
+        }
+    });
+
+    result.map(Expr::RecordBuilder)
 }
 
 fn apply_expr_access_chain<'a>(

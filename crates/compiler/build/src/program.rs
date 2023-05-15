@@ -4,6 +4,7 @@ use crate::link::{
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
 use roc_error_macros::internal_error;
+use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{
@@ -74,7 +75,7 @@ impl Deref for CodeObject {
 
 #[derive(Debug, Clone, Copy)]
 pub enum CodeGenBackend {
-    Assembly,
+    Assembly(AssemblyBackendMode),
     Llvm(LlvmBackendMode),
     Wasm,
 }
@@ -103,24 +104,23 @@ pub fn gen_from_mono_module<'a>(
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
-        CodeGenBackend::Assembly => gen_from_mono_module_dev(
+        CodeGenBackend::Wasm => gen_from_mono_module_dev(
             arena,
             loaded,
             target,
             preprocessed_host_path,
             wasm_dev_stack_bytes,
+            AssemblyBackendMode::Binary, // dummy value, unused in practice
+        ),
+        CodeGenBackend::Assembly(backend_mode) => gen_from_mono_module_dev(
+            arena,
+            loaded,
+            target,
+            preprocessed_host_path,
+            wasm_dev_stack_bytes,
+            backend_mode,
         ),
         CodeGenBackend::Llvm(backend_mode) => {
-            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
-        }
-        CodeGenBackend::Wasm => {
-            // emit wasm via the llvm backend
-
-            let backend_mode = match code_gen_options.opt_level {
-                OptLevel::Development => LlvmBackendMode::BinaryDev,
-                OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
-            };
-
             gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
         }
     }
@@ -459,6 +459,7 @@ fn gen_from_mono_module_dev<'a>(
     target: &target_lexicon::Triple,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
+    backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     use target_lexicon::Architecture;
 
@@ -470,7 +471,7 @@ fn gen_from_mono_module_dev<'a>(
             wasm_dev_stack_bytes,
         ),
         Architecture::X86_64 | Architecture::Aarch64(_) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target)
+            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
         }
         _ => todo!(),
     }
@@ -483,12 +484,13 @@ pub fn gen_from_mono_module_dev<'a>(
     target: &target_lexicon::Triple,
     _host_input_path: &Path,
     _wasm_dev_stack_bytes: Option<u32>,
+    backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     use target_lexicon::Architecture;
 
     match target.architecture {
         Architecture::X86_64 | Architecture::Aarch64(_) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target)
+            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
         }
         _ => todo!(),
     }
@@ -565,11 +567,11 @@ fn gen_from_mono_module_dev_assembly<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
     target: &target_lexicon::Triple,
+    backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     let code_gen_start = Instant::now();
 
     let lazy_literals = true;
-    let generate_allocators = false; // provided by the platform
 
     let MonomorphizedModule {
         module_id,
@@ -585,7 +587,7 @@ fn gen_from_mono_module_dev_assembly<'a>(
         module_id,
         exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
-        generate_allocators,
+        mode: backend_mode,
     };
 
     let module_object =
@@ -966,9 +968,17 @@ fn build_loaded_file<'a>(
             std::fs::write(&output_exe_path, &*roc_app_bytes).unwrap();
         }
         (LinkingStrategy::Legacy, _) => {
+            let extension = if matches!(operating_system, roc_target::OperatingSystem::Wasi) {
+                // Legacy linker is only by used llvm wasm backend, not dev.
+                // llvm wasm backend directly emits a bitcode file when targeting wasi, not a `.o` or `.wasm` file.
+                // If we set the extension wrong, zig will print a ton of warnings when linking.
+                "bc"
+            } else {
+                operating_system.object_file_ext()
+            };
             let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
-                .suffix(&format!(".{}", operating_system.object_file_ext()))
+                .suffix(&format!(".{}", extension))
                 .tempfile()
                 .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
             let app_o_file = app_o_file.path();
@@ -985,7 +995,7 @@ fn build_loaded_file<'a>(
                 inputs.push(preprocessed_host_path.as_path().to_str().unwrap());
             }
 
-            if matches!(code_gen_options.backend, CodeGenBackend::Assembly) {
+            if matches!(code_gen_options.backend, CodeGenBackend::Assembly(_)) {
                 inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 

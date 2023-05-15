@@ -1052,6 +1052,9 @@ pub fn canonicalize_expr<'a>(
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
+        ast::Expr::RecordBuilder(_) => {
+            unreachable!("RecordBuilder should have been desugared by now")
+        }
         ast::Expr::Backpassing(_, _, _) => {
             unreachable!("Backpassing should have been desugared by now")
         }
@@ -1356,6 +1359,22 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
+        ast::Expr::MultipleRecordBuilders(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = MultipleRecordBuilders(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::UnappliedRecordBuilder(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = UnappliedRecordBuilder(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
         &ast::Expr::NonBase10Int {
             string,
             base,
@@ -1378,31 +1397,31 @@ pub fn canonicalize_expr<'a>(
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
         bad_expr @ ast::Expr::ParensAround(_) => {
-            panic!(
+            internal_error!(
                 "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::SpaceBefore(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::SpaceAfter(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::BinOps { .. } => {
-            panic!(
+            internal_error!(
                 "A binary operator chain did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::UnaryOp(_, _) => {
-            panic!(
+            internal_error!(
                 "A unary operator did not get desugared somehow: {:#?}",
                 bad_expr
             );
@@ -1814,7 +1833,7 @@ fn canonicalize_field<'a>(
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
-            panic!("Somehow a LabelOnly record field was not desugared!");
+            internal_error!("Somehow a LabelOnly record field was not desugared!");
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
@@ -1822,7 +1841,7 @@ fn canonicalize_field<'a>(
         }
 
         Malformed(_string) => {
-            panic!("TODO canonicalize malformed record field");
+            internal_error!("TODO canonicalize malformed record field");
         }
     }
 }

@@ -262,6 +262,8 @@ pub const NUM_COS: IntrinsicName = float_intrinsic!("roc_builtins.num.cos");
 pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");
 pub const NUM_ACOS: IntrinsicName = float_intrinsic!("roc_builtins.num.acos");
 pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");
+pub const NUM_IS_NAN: IntrinsicName = float_intrinsic!("roc_builtins.num.is_nan");
+pub const NUM_IS_INFINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is_infinite");
 pub const NUM_IS_FINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is_finite");
 pub const NUM_LOG: IntrinsicName = float_intrinsic!("roc_builtins.num.log");
 pub const NUM_POW: IntrinsicName = float_intrinsic!("roc_builtins.num.pow");
@@ -285,9 +287,15 @@ pub const NUM_SUB_CHECKED_FLOAT: IntrinsicName =
 
 pub const NUM_MUL_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_or_panic");
 pub const NUM_MUL_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_saturated");
+pub const NUM_MUL_WRAP_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_wrapped");
 pub const NUM_MUL_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_with_overflow");
 pub const NUM_MUL_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.mul_with_overflow");
+
+pub const NUM_IS_MULTIPLE_OF: IntrinsicName = int_intrinsic!("roc_builtins.num.is_multiple_of");
+
+pub const NUM_SHIFT_RIGHT_ZERO_FILL: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.shift_right_zero_fill");
 
 pub const NUM_COUNT_LEADING_ZERO_BITS: IntrinsicName =
     int_intrinsic!("roc_builtins.num.count_leading_zero_bits");
@@ -308,6 +316,7 @@ pub const STR_SPLIT: &str = "roc_builtins.str.str_split";
 pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";
+pub const STR_IS_EMPTY: &str = "roc_builtins.str.is_empty";
 pub const STR_CAPACITY: &str = "roc_builtins.str.capacity";
 pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
 pub const STR_STARTS_WITH_SCALAR: &str = "roc_builtins.str.starts_with_scalar";
@@ -375,8 +384,11 @@ pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";
-pub const UTILS_INCREF: &str = "roc_builtins.utils.incref";
-pub const UTILS_DECREF: &str = "roc_builtins.utils.decref";
+pub const UTILS_INCREF_RC_PTR: &str = "roc_builtins.utils.incref_rc_ptr";
+pub const UTILS_DECREF_RC_PTR: &str = "roc_builtins.utils.decref_rc_ptr";
+pub const UTILS_INCREF_DATA_PTR: &str = "roc_builtins.utils.incref_data_ptr";
+pub const UTILS_DECREF_DATA_PTR: &str = "roc_builtins.utils.decref_data_ptr";
+pub const UTILS_IS_UNIQUE: &str = "roc_builtins.utils.is_unique";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
 
 pub const UTILS_EXPECT_FAILED_START_SHARED_BUFFER: &str =

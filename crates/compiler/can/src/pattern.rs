@@ -321,8 +321,8 @@ pub fn canonicalize_def_header_pattern<'a>(
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct PermitShadows(pub bool);
 
-fn canonicalize_pattern_symbol<'a>(
-    env: &mut Env<'a>,
+fn canonicalize_pattern_symbol(
+    env: &mut Env,
     scope: &mut Scope,
     output: &mut Output,
     region: Region,

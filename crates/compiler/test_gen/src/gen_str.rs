@@ -497,23 +497,23 @@ fn str_concat_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_is_empty() {
     assert_evals_to!(r#"Str.isEmpty "abc""#, false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn big_str_is_empty() {
     assert_evals_to!(
-        r#"Str.isEmpty "this is more than 15 chars long""#,
+        r#"Str.isEmpty "this is more than 23 chars long""#,
         false,
         bool
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn empty_str_is_empty() {
     assert_evals_to!(r#"Str.isEmpty """#, true, bool);
 }

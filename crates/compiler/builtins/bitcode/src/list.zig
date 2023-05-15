@@ -974,7 +974,7 @@ test "listConcat: non-unique with unique overlapping" {
     var bytes: [*]u8 = @ptrCast([*]u8, nonUnique.bytes);
     const ptr_width = @sizeOf(usize);
     const refcount_ptr = @ptrCast([*]isize, @alignCast(ptr_width, bytes) - ptr_width);
-    utils.increfC(&refcount_ptr[0], 1);
+    utils.increfRcPtrC(&refcount_ptr[0], 1);
     defer nonUnique.decref(@sizeOf(u8)); // listConcat will dec the other refcount
 
     var unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..]);

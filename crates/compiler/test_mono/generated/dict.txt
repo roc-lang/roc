@@ -16,7 +16,12 @@ procedure Dict.34 ():
 
 procedure Dict.4 (Dict.504):
     let Dict.85 : U64 = StructAtIndex 3 Dict.504;
-    dec Dict.504;
+    let #Derived_gen.2 : List {[], []} = StructAtIndex 0 Dict.504;
+    dec #Derived_gen.2;
+    let #Derived_gen.1 : List U64 = StructAtIndex 1 Dict.504;
+    dec #Derived_gen.1;
+    let #Derived_gen.0 : List I8 = StructAtIndex 2 Dict.504;
+    dec #Derived_gen.0;
     ret Dict.85;
 
 procedure List.11 (List.115, List.116):
@@ -74,12 +79,12 @@ procedure List.82 (List.526, List.527, List.528):
     jump List.508 List.526 List.527 List.528;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.276 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.276;
+    let Num.282 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.282;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.278 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.278;
+    let Num.284 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Test.0 ():
     let Test.3 : {} = Struct {};

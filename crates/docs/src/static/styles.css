@@ -177,6 +177,13 @@ main {
   min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
 }
 
+/* Module links on the package index page (/index.html) */
+.index-module-links {
+    margin: 0;
+    padding: 0;
+    list-style-type: none;
+}
+
 section {
   padding: 0px 0px 16px 0px;
   margin: 72px 0px;
@@ -644,15 +651,15 @@ code .literal {
 }
 
 /* Keywords and punctuation */
-samp .keyword, 
+samp .keyword,
 code .keyword,
-samp .punctuation.section, 
+samp .punctuation.section,
 code .punctuation.section,
-samp .punctuation.separator, 
+samp .punctuation.separator,
 code .punctuation.separator,
-samp .punctuation.terminator, 
+samp .punctuation.terminator,
 code .punctuation.terminator,
-samp .kw, 
+samp .kw,
 code .kw {
     color: var(--magenta);
 }

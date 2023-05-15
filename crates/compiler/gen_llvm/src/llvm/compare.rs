@@ -11,15 +11,15 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::build::{load_roc_value, use_roc_value, BuilderExt};
 use super::convert::argument_type_from_union_layout;
 use super::lowlevel::dec_binop_with_unchecked;
 
-pub fn generic_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn generic_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -38,8 +38,8 @@ pub fn generic_eq<'a, 'ctx, 'env>(
     )
 }
 
-pub fn generic_neq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn generic_neq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -58,8 +58,8 @@ pub fn generic_neq<'a, 'ctx, 'env>(
     )
 }
 
-fn build_eq_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_eq_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -136,8 +136,8 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
     }
 }
 
-fn build_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -147,15 +147,15 @@ fn build_eq<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let lhs_layout = &layout_interner.runtime_representation_in(lhs_layout);
     let rhs_layout = &layout_interner.runtime_representation_in(rhs_layout);
-    if lhs_layout != rhs_layout {
-        panic!(
-            "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",
-            lhs_layout, rhs_layout
-        );
-    }
+    debug_assert!(
+        layout_interner.eq_repr(*lhs_layout, *rhs_layout),
+        "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",
+        lhs_layout,
+        rhs_layout
+    );
 
-    match layout_interner.get(*lhs_layout) {
-        Layout::Builtin(builtin) => build_eq_builtin(
+    match layout_interner.get(*lhs_layout).repr {
+        LayoutRepr::Builtin(builtin) => build_eq_builtin(
             env,
             layout_interner,
             layout_ids,
@@ -165,7 +165,7 @@ fn build_eq<'a, 'ctx, 'env>(
             &builtin,
         ),
 
-        Layout::Struct { field_layouts, .. } => build_struct_eq(
+        LayoutRepr::Struct { field_layouts, .. } => build_struct_eq(
             env,
             layout_interner,
             layout_ids,
@@ -175,9 +175,9 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val.into_struct_value(),
         ),
 
-        Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
+        LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closures"),
 
-        Layout::Union(union_layout) => build_tag_eq(
+        LayoutRepr::Union(union_layout) => build_tag_eq(
             env,
             layout_interner,
             layout_ids,
@@ -187,7 +187,7 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val,
         ),
 
-        Layout::Boxed(inner_layout) => build_box_eq(
+        LayoutRepr::Boxed(inner_layout) => build_box_eq(
             env,
             layout_interner,
             layout_ids,
@@ -197,7 +197,7 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val,
         ),
 
-        Layout::RecursivePointer(rec_layout) => {
+        LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
             let bt = basic_type_from_layout(env, layout_interner, layout);
@@ -215,8 +215,8 @@ fn build_eq<'a, 'ctx, 'env>(
                 "i64_to_opaque",
             );
 
-            let union_layout = match layout_interner.get(rec_layout) {
-                Layout::Union(union_layout) => {
+            let union_layout = match layout_interner.get(rec_layout).repr {
+                LayoutRepr::Union(union_layout) => {
                     debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
                     union_layout
                 }
@@ -236,8 +236,8 @@ fn build_eq<'a, 'ctx, 'env>(
     }
 }
 
-fn build_neq_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_neq_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -326,8 +326,8 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
     }
 }
 
-fn build_neq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_neq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
@@ -342,8 +342,8 @@ fn build_neq<'a, 'ctx, 'env>(
         );
     }
 
-    match layout_interner.get(lhs_layout) {
-        Layout::Builtin(builtin) => build_neq_builtin(
+    match layout_interner.get(lhs_layout).repr {
+        LayoutRepr::Builtin(builtin) => build_neq_builtin(
             env,
             layout_interner,
             layout_ids,
@@ -353,7 +353,7 @@ fn build_neq<'a, 'ctx, 'env>(
             &builtin,
         ),
 
-        Layout::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct { field_layouts, .. } => {
             let is_equal = build_struct_eq(
                 env,
                 layout_interner,
@@ -370,7 +370,7 @@ fn build_neq<'a, 'ctx, 'env>(
             result.into()
         }
 
-        Layout::Union(union_layout) => {
+        LayoutRepr::Union(union_layout) => {
             let is_equal = build_tag_eq(
                 env,
                 layout_interner,
@@ -387,7 +387,7 @@ fn build_neq<'a, 'ctx, 'env>(
             result.into()
         }
 
-        Layout::Boxed(inner_layout) => {
+        LayoutRepr::Boxed(inner_layout) => {
             let is_equal = build_box_eq(
                 env,
                 layout_interner,
@@ -404,15 +404,15 @@ fn build_neq<'a, 'ctx, 'env>(
             result.into()
         }
 
-        Layout::RecursivePointer(_) => {
+        LayoutRepr::RecursivePointer(_) => {
             unreachable!("recursion pointers should never be compared directly")
         }
-        Layout::LambdaSet(_) => unreachable!("cannot compare closure"),
+        LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closure"),
     }
 }
 
-fn build_list_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_list_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     list_layout: InLayout<'a>,
@@ -424,12 +424,12 @@ fn build_list_eq<'a, 'ctx, 'env>(
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::LIST_EQ;
-    let element_layout = if let Layout::RecursivePointer(rec) = layout_interner.get(element_layout)
-    {
-        rec
-    } else {
-        element_layout
-    };
+    let element_layout =
+        if let LayoutRepr::RecursivePointer(rec) = layout_interner.get(element_layout).repr {
+            rec
+        } else {
+            element_layout
+        };
     let fn_name = layout_ids
         .get(symbol, &element_layout)
         .to_symbol_string(symbol, &env.interns);
@@ -469,8 +469,8 @@ fn build_list_eq<'a, 'ctx, 'env>(
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_list_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_list_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
@@ -627,8 +627,8 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
     }
 }
 
-fn build_struct_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_struct_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     struct_layout: InLayout<'a>,
@@ -679,8 +679,8 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_struct_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_struct_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
@@ -741,11 +741,11 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
             .build_extract_value(struct2, index as u32, "eq_field")
             .unwrap();
 
-        let are_equal = if let Layout::RecursivePointer(rec_layout) =
-            layout_interner.get(*field_layout)
+        let are_equal = if let LayoutRepr::RecursivePointer(rec_layout) =
+            layout_interner.get(*field_layout).repr
         {
             debug_assert!(
-                matches!(layout_interner.get(rec_layout), Layout::Union(union_layout) if !matches!(union_layout, UnionLayout::NonRecursive(..)))
+                matches!(layout_interner.get(rec_layout).repr, LayoutRepr::Union(union_layout) if !matches!(union_layout, UnionLayout::NonRecursive(..)))
             );
 
             let field_layout = rec_layout;
@@ -812,8 +812,8 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
     }
 }
 
-fn build_tag_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_tag_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     tag_layout: InLayout<'a>,
@@ -864,8 +864,8 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_tag_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_tag_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
@@ -973,7 +973,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env.builder.position_at_end(block);
 
                 let struct_layout =
-                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                    layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
                 let answer = eq_ptr_to_struct(
                     env,
@@ -1046,7 +1046,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env.builder.position_at_end(block);
 
                 let struct_layout =
-                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                    layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
                 let answer = eq_ptr_to_struct(
                     env,
@@ -1108,7 +1108,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_other);
 
-            let struct_layout = layout_interner.insert(Layout::struct_no_name_order(other_fields));
+            let struct_layout =
+                layout_interner.insert_no_semantic(LayoutRepr::struct_(other_fields));
 
             let answer = eq_ptr_to_struct(
                 env,
@@ -1208,7 +1209,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env.builder.position_at_end(block);
 
                 let struct_layout =
-                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+                    layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
                 let answer = eq_ptr_to_struct(
                     env,
@@ -1248,7 +1249,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_fields);
 
-            let struct_layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+            let struct_layout =
+                layout_interner.insert_no_semantic(LayoutRepr::struct_(field_layouts));
 
             let answer = eq_ptr_to_struct(
                 env,
@@ -1265,8 +1267,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     }
 }
 
-fn eq_ptr_to_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn eq_ptr_to_struct<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     struct_layout: InLayout<'a>,
@@ -1314,8 +1316,8 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
 
 /// ----
 
-fn build_box_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_box_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     box_layout: InLayout<'a>,
@@ -1366,8 +1368,8 @@ fn build_box_eq<'a, 'ctx, 'env>(
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_box_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_box_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,

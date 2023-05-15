@@ -1292,3 +1292,15 @@ fn tuple() {
         r#"("a", 2) : ( Str, U32 )*"#,
     );
 }
+
+#[test]
+fn nested_tuple() {
+    expect_success(
+        indoc!(
+            r#"
+            ("a", (2u32, 3u32))
+            "#
+        ),
+        r#"("a", (2, 3)) : ( Str, ( U32, U32 )a )a"#,
+    );
+}

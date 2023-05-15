@@ -2615,6 +2615,27 @@ mod test_reporting {
     I would have to crash if I saw one of those! So rather than pattern
     matching in function arguments, put a `when` in the function body to
     account for all possibilities.
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+     9│      f : Either -> {}
+    10│      f = \Left v -> v
+                 ^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        […] -> {}
+
+    But the type annotation on `f` says it should be:
+
+        [Right Str, …] -> {}
+
+    Tip: Looks like a closed tag union does not have the `Right` tag.
+
+    Tip: Closed tag unions can't grow, because that might change the size
+    in memory. Can you use an open tag union?
     "###
     );
 
@@ -10156,6 +10177,166 @@ I recommend using camelCase. It's the standard style in Roc code!
         )
     );
 
+    // Record Builders
+
+    test_report!(
+        optional_field_in_record_builder,
+        indoc!(
+            r#"
+            { 
+                a <- apply "a",
+                b,
+                c ? "optional"
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD BUILDER ────────── tmp/optional_field_in_record_builder/Test.roc ─
+
+    I am partway through parsing a record builder, and I found an optional
+    field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { 
+    5│          a <- apply "a",
+    6│          b,
+    7│          c ? "optional"
+                ^^^^^^^^^^^^^^
+
+    Optional fields can only appear when you destructure a record.
+    "###
+    );
+
+    test_report!(
+        record_update_builder,
+        indoc!(
+            r#"
+            { rec &
+                a <- apply "a",
+                b: 3
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD UPDATE ────────────────────── tmp/record_update_builder/Test.roc ─
+
+    I am partway through parsing a record update, and I found a record
+    builder field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { rec &
+    5│          a <- apply "a",
+                ^^^^^^^^^^^^^^
+
+    Record builders cannot be updated like records.
+    "###
+    );
+
+    test_report!(
+        multiple_record_builders,
+        indoc!(
+            r#"
+            succeed
+                { a <- apply "a" }
+                { b <- apply "b" }
+            "#
+        ),
+        @r###"
+    ── MULTIPLE RECORD BUILDERS ────────────────────────────── /code/proj/Main.roc ─
+
+    This function is applied to multiple record builders:
+
+    4│>      succeed
+    5│>          { a <- apply "a" }
+    6│>          { b <- apply "b" }
+
+    Note: Functions can only take at most one record builder!
+
+    Tip: You can combine them or apply them separately.
+
+    "###
+    );
+
+    test_report!(
+        unapplied_record_builder,
+        indoc!(
+            r#"
+            { a <- apply "a" }
+            "#
+        ),
+        @r###"
+    ── UNAPPLIED RECORD BUILDER ────────────────────────────── /code/proj/Main.roc ─
+
+    This record builder was not applied to a function:
+
+    4│      { a <- apply "a" }
+            ^^^^^^^^^^^^^^^^^^
+
+    However, we need a function to construct the record.
+
+    Note: Functions must be applied directly. The pipe operator (|>) cannot be used.
+    "###
+    );
+
+    test_report!(
+        record_builder_apply_non_function,
+        indoc!(
+            r#"
+            succeed = \_ -> crash ""
+
+            succeed { 
+                a <- "a",
+            }
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value is not a function, but it was given 1 argument:
+
+    7│          a <- "a",
+                     ^^^
+
+    Tip: Replace `<-` with `:` to assign the field directly.
+    "###
+    );
+
+    // Skipping test because opaque types defined in the same module
+    // do not fail with the special opaque type error
+    //
+    // test_report!(
+    //     record_builder_apply_opaque,
+    //     indoc!(
+    //         r#"
+    //         succeed = \_ -> crash ""
+
+    //         Decode := {}
+
+    //         get : Str -> Decode
+    //         get = \_ -> @Decode {}
+
+    //         succeed {
+    //             a <- get "a",
+    //             # missing |> apply ^
+    //         }
+    //         "#
+    //     ),
+    //     @r###"
+    // ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    // This value is an opaque type, so it cannot be called with an argument:
+
+    // 12│          a <- get "a",
+    //                   ^^^^^^^
+
+    // Hint: Did you mean to apply it to a function first?
+    //     "###
+    // );
+
     test_report!(
         destructure_assignment_introduces_no_variables_nested,
         indoc!(
@@ -13408,6 +13589,136 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't call an opaque type because I don't know what it is! Maybe you
     meant to unwrap it first?
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_too_few,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : U8, U8 -> U8
+            f = \x -> x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    3│  f : U8, U8 -> U8
+    4│  f = \x -> x
+            ^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too few arguments. I was expecting 1 more.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_too_many,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : U8, U8 -> U8
+            f = \x, y, z -> x + y + z
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    3│  f : U8, U8 -> U8
+    4│  f = \x, y, z -> x + y + z
+            ^^^^^^^^^^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8, U8, Int Unsigned8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_nested_too_few,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                f : U8, U8 -> U8
+                f = \x -> x
+
+                f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : U8, U8 -> U8
+    5│      f = \x -> x
+                ^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too few arguments. I was expecting 1 more.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_nested_too_many,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                f : U8, U8 -> U8
+                f = \x, y, z -> x + y + z
+
+                f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : U8, U8 -> U8
+    5│      f = \x, y, z -> x + y + z
+                ^^^^^^^^^^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8, U8, Int Unsigned8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
     "###
     );
 }

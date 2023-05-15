@@ -2,7 +2,9 @@ use bitflags::bitflags;
 use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::{dbg_do, dbg_set};
 #[cfg(debug_assertions)]
-use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_RECURSION};
+use roc_debug_flags::{
+    ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_ONE_RECURSION,
+};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
@@ -370,7 +372,7 @@ impl<'a> Env<'a> {
         debug_assert!(size_after < size_before, "nothing was removed");
     }
 
-    fn seen_recursion_pair(&mut self, var1: Variable, var2: Variable) -> bool {
+    fn seen_recursion_pair(&self, var1: Variable, var2: Variable) -> bool {
         let (var1, var2) = (
             self.subs.get_root_key_without_compacting(var1),
             self.subs.get_root_key_without_compacting(var2),
@@ -861,68 +863,77 @@ fn unify_two_aliases<M: MetaCollector>(
             merged_args.push(merged_var);
         }
 
-        for (l, r) in lambda_set_it {
-            let l_var = env.subs[l];
-            let r_var = env.subs[r];
-            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
-
-            let merged_var = choose_merged_var(env.subs, l_var, r_var);
-            merged_lambda_set_args.push(merged_var);
+        if !outcome.mismatches.is_empty() {
+            return outcome;
         }
 
-        for (l, r) in infer_ext_in_output_vars_it {
-            let l_var = env.subs[l];
-            let r_var = env.subs[r];
-            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+        // Even if there are no changes to alias arguments, and no new variables were
+        // introduced, we may still need to unify the "actual types" of the alias or opaque!
+        //
+        // The unification is not necessary from a types perspective (and in fact, we may want
+        // to disable it for `roc check` later on), but it is necessary for the monomorphizer,
+        // which expects identical types to be reflected in the same variable.
+        //
+        // As a concrete example, consider the unification of two opaques
+        //
+        //   P := [Zero, Succ P]
+        //
+        //   (@P (Succ n)) ~ (@P (Succ o))
+        //
+        // `P` has no arguments, and unification of the surface of `P` introduces nothing new.
+        // But if we do not unify the types of `n` and `o`, which are recursion variables, they
+        // will remain disjoint! Currently, the implication of this is that they will be seen
+        // to have separate recursive memory layouts in the monomorphizer - which is no good
+        // for our compilation model.
+        //
+        // As such, always unify the real vars.
 
-            let merged_var = choose_merged_var(env.subs, l_var, r_var);
-            merged_infer_ext_in_output_vars.push(merged_var);
+        // Don't report real_var mismatches, because they must always be surfaced higher, from
+        // the argument types.
+        let mut real_var_outcome = unify_pool::<M>(env, pool, real_var, other_real_var, ctx.mode);
+        let _ = real_var_outcome.mismatches.drain(..);
+        outcome.union(real_var_outcome);
+
+        let merged_real_var = choose_merged_var(env.subs, real_var, other_real_var);
+
+        // Now, we need to unify the lambda set and IOIOP variables of both aliases.
+        //
+        // We wait to do this until after we have unified the real vars, because the real vars
+        // should contain the lambda set and IOIOP variables of the aliases, so most of these
+        // should be short-circuits.
+        {
+            for (l, r) in lambda_set_it {
+                let l_var = env.subs[l];
+                let r_var = env.subs[r];
+                outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+                let merged_var = choose_merged_var(env.subs, l_var, r_var);
+                merged_lambda_set_args.push(merged_var);
+            }
+
+            for (l, r) in infer_ext_in_output_vars_it {
+                let l_var = env.subs[l];
+                let r_var = env.subs[r];
+                outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+                let merged_var = choose_merged_var(env.subs, l_var, r_var);
+                merged_infer_ext_in_output_vars.push(merged_var);
+            }
         }
 
-        if outcome.mismatches.is_empty() {
-            // Even if there are no changes to alias arguments, and no new variables were
-            // introduced, we may still need to unify the "actual types" of the alias or opaque!
-            //
-            // The unification is not necessary from a types perspective (and in fact, we may want
-            // to disable it for `roc check` later on), but it is necessary for the monomorphizer,
-            // which expects identical types to be reflected in the same variable.
-            //
-            // As a concrete example, consider the unification of two opaques
-            //
-            //   P := [Zero, Succ P]
-            //
-            //   (@P (Succ n)) ~ (@P (Succ o))
-            //
-            // `P` has no arguments, and unification of the surface of `P` introduces nothing new.
-            // But if we do not unify the types of `n` and `o`, which are recursion variables, they
-            // will remain disjoint! Currently, the implication of this is that they will be seen
-            // to have separate recursive memory layouts in the monomorphizer - which is no good
-            // for our compilation model.
-            //
-            // As such, always unify the real vars.
+        // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
+        // the merged vars are all left, avoid re-insertion. Is checking for argument slice
+        // equality faster than re-inserting?
+        let merged_variables = AliasVariables::insert_into_subs(
+            env.subs,
+            merged_args,
+            merged_lambda_set_args,
+            merged_infer_ext_in_output_vars,
+        );
 
-            // Don't report real_var mismatches, because they must always be surfaced higher, from
-            // the argument types.
-            let mut real_var_outcome =
-                unify_pool::<M>(env, pool, real_var, other_real_var, ctx.mode);
-            let _ = real_var_outcome.mismatches.drain(..);
-            outcome.union(real_var_outcome);
+        let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
 
-            let merged_real_var = choose_merged_var(env.subs, real_var, other_real_var);
-
-            // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
-            // the merged vars are all left, avoid re-insertion. Is checking for argument slice
-            // equality faster than re-inserting?
-            let merged_variables = AliasVariables::insert_into_subs(
-                env.subs,
-                merged_args,
-                merged_lambda_set_args,
-                merged_infer_ext_in_output_vars,
-            );
-            let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
-
-            outcome.union(merge(env, ctx, merged_content));
-        }
+        outcome.union(merge(env, ctx, merged_content));
 
         outcome
     } else {
@@ -1359,10 +1370,8 @@ fn separate_union_lambdas<M: MetaCollector>(
     //   F2 -> { left: [ [a] ],         right: [ [Str] ] }
     let mut buckets: VecMap<Symbol, Sides> = VecMap::with_capacity(fields1.len() + fields2.len());
 
-    let (mut fields_left, mut fields_right) = (
-        fields1.iter_all().into_iter().peekable(),
-        fields2.iter_all().into_iter().peekable(),
-    );
+    let (mut fields_left, mut fields_right) =
+        (fields1.iter_all().peekable(), fields2.iter_all().peekable());
 
     loop {
         use std::cmp::Ordering;
@@ -1451,8 +1460,8 @@ fn separate_union_lambdas<M: MetaCollector>(
                                 // code generator, we have not yet observed a case where they must
                                 // collapsed to the type checker of the surface syntax.
                                 // It is possible this assumption will be invalidated!
-                                maybe_mark_union_recursive(env, var1);
-                                maybe_mark_union_recursive(env, var2);
+                                maybe_mark_union_recursive(env, pool, var1);
+                                maybe_mark_union_recursive(env, pool, var2);
                             }
 
                             // Check whether the two type variables in the closure set are
@@ -2723,7 +2732,6 @@ fn unify_tag_unions<M: MetaCollector>(
     initial_ext1: TagExt,
     tags2: UnionTags,
     initial_ext2: TagExt,
-    recursion_var: Rec,
 ) -> Outcome<M> {
     let (separate, mut ext1, mut ext2) =
         separate_union_tags(env.subs, tags1, initial_ext1, tags2, initial_ext2);
@@ -2783,7 +2791,6 @@ fn unify_tag_unions<M: MetaCollector>(
                 shared_tags,
                 OtherTags2::Empty,
                 merge_tag_exts(ext1, ext2),
-                recursion_var,
             );
 
             shared_tags_outcome.union(ext_outcome);
@@ -2820,15 +2827,8 @@ fn unify_tag_unions<M: MetaCollector>(
 
             let combined_ext = ext1.map(|_| extra_tags_in_2);
 
-            let mut shared_tags_outcome = unify_shared_tags(
-                env,
-                pool,
-                ctx,
-                shared_tags,
-                OtherTags2::Empty,
-                combined_ext,
-                recursion_var,
-            );
+            let mut shared_tags_outcome =
+                unify_shared_tags(env, pool, ctx, shared_tags, OtherTags2::Empty, combined_ext);
 
             shared_tags_outcome.union(ext_outcome);
 
@@ -2883,15 +2883,8 @@ fn unify_tag_unions<M: MetaCollector>(
 
         let combined_ext = ext2.map(|_| extra_tags_in_1);
 
-        let shared_tags_outcome = unify_shared_tags(
-            env,
-            pool,
-            ctx,
-            shared_tags,
-            OtherTags2::Empty,
-            combined_ext,
-            recursion_var,
-        );
+        let shared_tags_outcome =
+            unify_shared_tags(env, pool, ctx, shared_tags, OtherTags2::Empty, combined_ext);
         total_outcome.union(shared_tags_outcome);
 
         if extend_ext_with_uninhabited {
@@ -2956,8 +2949,7 @@ fn unify_tag_unions<M: MetaCollector>(
 
         env.subs.commit_snapshot(snapshot);
 
-        let shared_tags_outcome =
-            unify_shared_tags(env, pool, ctx, shared_tags, other_tags, ext, recursion_var);
+        let shared_tags_outcome = unify_shared_tags(env, pool, ctx, shared_tags, other_tags, ext);
         total_outcome.union(shared_tags_outcome);
         total_outcome
     }
@@ -2974,7 +2966,7 @@ enum OtherTags2 {
 
 /// Promotes a non-recursive tag union or lambda set to its recursive variant, if it is found to be
 /// recursive.
-fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
+fn maybe_mark_union_recursive(env: &mut Env, pool: &mut Pool, union_var: Variable) {
     let subs = &mut env.subs;
     'outer: while let Err((_, chain)) = subs.occurs(union_var) {
         // walk the chain till we find a tag union or lambda set, starting from the variable that
@@ -2983,7 +2975,9 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
             let description = subs.get(v);
             match description.content {
                 Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                    subs.mark_tag_union_recursive(v, tags, ext_var);
+                    let rec_var = subs.mark_tag_union_recursive(v, tags, ext_var);
+                    pool.push(rec_var);
+
                     continue 'outer;
                 }
                 LambdaSet(self::LambdaSet {
@@ -2992,7 +2986,14 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {
-                    subs.mark_lambda_set_recursive(v, solved, unspecialized, ambient_function_var);
+                    let rec_var = subs.mark_lambda_set_recursive(
+                        v,
+                        solved,
+                        unspecialized,
+                        ambient_function_var,
+                    );
+                    pool.push(rec_var);
+
                     continue 'outer;
                 }
                 _ => { /* fall through */ }
@@ -3008,12 +3009,12 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
         }) {
             return;
         } else {
-            // We may have partially solved a recursive type, but still see an occurs, if the type
-            // has errors inside of it. As such, admit this; however, for well-typed programs, this
-            // case should never be observed. Set ROC_VERIFY_OCCURS_RECURSION to verify this branch
-            // is not reached for well-typed programs.
-            if dbg_set!(ROC_VERIFY_OCCURS_RECURSION)
-                || !chain.iter().any(|&var| {
+            // We may seen an occurs check that passes through another recursion var if the occurs
+            // check is passing through another recursive type.
+            // But, if ROC_VERIFY_OCCURS_ONE_RECURSION is set, we check that we only found a new
+            // recursion.
+            if dbg_set!(ROC_VERIFY_OCCURS_ONE_RECURSION)
+                && !chain.iter().any(|&var| {
                     matches!(
                         subs.get_content_without_compacting(var),
                         Content::Structure(FlatType::RecursiveTagUnion(..))
@@ -3068,6 +3069,24 @@ fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
     }
 }
 
+#[inline]
+fn find_union_rec(subs: &Subs, ctx: &Context) -> Rec {
+    match (
+        subs.get_content_without_compacting(ctx.first),
+        subs.get_content_without_compacting(ctx.second),
+    ) {
+        (Structure(s1), Structure(s2)) => match (s1, s2) {
+            (FlatType::RecursiveTagUnion(l, _, _), FlatType::RecursiveTagUnion(r, _, _)) => {
+                Rec::Both(*l, *r)
+            }
+            (FlatType::RecursiveTagUnion(l, _, _), _) => Rec::Left(*l),
+            (_, FlatType::RecursiveTagUnion(r, _, _)) => Rec::Right(*r),
+            _ => Rec::None,
+        },
+        _ => Rec::None,
+    }
+}
+
 #[must_use]
 fn unify_shared_tags<M: MetaCollector>(
     env: &mut Env,
@@ -3076,7 +3095,6 @@ fn unify_shared_tags<M: MetaCollector>(
     shared_tags: Vec<(TagName, (VariableSubsSlice, VariableSubsSlice))>,
     other_tags: OtherTags2,
     ext: TagExt,
-    recursion_var: Rec,
 ) -> Outcome<M> {
     let mut matching_tags = Vec::default();
     let num_shared_tags = shared_tags.len();
@@ -3121,8 +3139,8 @@ fn unify_shared_tags<M: MetaCollector>(
             // since we're expanding tag unions to equal depths as described above,
             // we'll always pass through this branch. So, we promote tag unions to recursive
             // ones here if it turns out they are that.
-            maybe_mark_union_recursive(env, actual);
-            maybe_mark_union_recursive(env, expected);
+            maybe_mark_union_recursive(env, pool, actual);
+            maybe_mark_union_recursive(env, pool, expected);
 
             let mut outcome = Outcome::<M>::default();
 
@@ -3184,6 +3202,13 @@ fn unify_shared_tags<M: MetaCollector>(
                 UnionTags::insert_into_subs(env.subs, all_fields)
             }
         };
+
+        // Look up if either unions are recursive, and if so, what the recursive variable is.
+        //
+        // We wait until we're about to merge the unions to do this, since above, while unifying
+        // payloads, we may have promoted a non-recursive union involved in this unification to
+        // a recursive one.
+        let recursion_var = find_union_rec(env.subs, ctx);
 
         let merge_outcome = unify_shared_tags_merge(env, ctx, new_tags, new_ext_var, recursion_var);
 
@@ -3268,24 +3293,20 @@ fn unify_flat_type<M: MetaCollector>(
         }
 
         (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
             debug_assert!(is_recursion_var(env.subs, *recursion_var));
             // this never happens in type-correct programs, but may happen if there is a type error
 
-            let rec = Rec::Left(*recursion_var);
-
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(env.subs, *recursion_var));
 
-            let rec = Rec::Right(*recursion_var);
-
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
@@ -3300,8 +3321,7 @@ fn unify_flat_type<M: MetaCollector>(
                 env.subs.dbg(*rec2)
             );
 
-            let rec = Rec::Both(*rec1, *rec2);
-            let mut outcome = unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
+            let mut outcome = unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2);
             outcome.union(unify_pool(env, pool, *rec1, *rec2, ctx.mode));
 
             outcome
@@ -3400,7 +3420,7 @@ fn unify_flat_type<M: MetaCollector>(
             );
             let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2)
         }
         (FunctionOrTagUnion(tag_names, _, ext1), TagUnion(tags2, ext2)) => {
             let empty_tag_var_slices = SubsSlice::extend_new(
@@ -3409,7 +3429,7 @@ fn unify_flat_type<M: MetaCollector>(
             );
             let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
-            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
@@ -3421,9 +3441,8 @@ fn unify_flat_type<M: MetaCollector>(
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
             let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
-            let rec = Rec::Left(*recursion_var);
 
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2)
         }
 
         (FunctionOrTagUnion(tag_names, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
@@ -3434,9 +3453,8 @@ fn unify_flat_type<M: MetaCollector>(
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
             let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
-            let rec = Rec::Right(*recursion_var);
 
-            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2)
         }
 
         // these have underscores because they're unused in --release builds

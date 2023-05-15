@@ -162,7 +162,7 @@ pub const RocStr = extern struct {
             const ref_ptr = self.getRefcountPtr();
             if (ref_ptr != null) {
                 const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@alignOf(isize), ref_ptr));
-                utils.increfC(@ptrCast(*isize, isizes - 1), @intCast(isize, n));
+                utils.increfRcPtrC(@ptrCast(*isize, isizes - 1), @intCast(isize, n));
             }
         }
     }
@@ -1523,6 +1523,10 @@ test "graphemes: emojis, ut8, and ascii characters" {
 
 pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
     return string.len();
+}
+
+pub fn isEmpty(string: RocStr) callconv(.C) bool {
+    return string.isEmpty();
 }
 
 pub fn getCapacity(string: RocStr) callconv(.C) usize {

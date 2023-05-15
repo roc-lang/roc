@@ -1,0 +1,7 @@
+app "test" provides [f] to "./platform"
+
+{a} : {a: _}
+{a} = {a: ""}
+
+f = a
+#   ^ Str

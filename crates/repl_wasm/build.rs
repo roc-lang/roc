@@ -31,7 +31,7 @@ fn main() {
     let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
         .expect("failed to write host builtins object to tempfile");
 
-    let output = Command::new(&zig_executable())
+    let output = Command::new(zig_executable())
         .args([
             "wasm-ld",
             builtins_host_tempfile.path().to_str().unwrap(),
@@ -67,7 +67,7 @@ fn build_wasm_platform(out_dir: &str, source_path: &str) -> PathBuf {
     let mut platform_obj = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
     platform_obj.set_extension(OBJECT_EXTENSION);
 
-    Command::new(&zig_executable())
+    Command::new(zig_executable())
         .args([
             "build-lib",
             "-target",

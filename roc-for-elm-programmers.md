@@ -558,7 +558,7 @@ SomethingIJustMadeUp "hi" "there" : [SomethingIJustMadeUp Str Str]*
 Foo : [Foo]*
 
 > y = Foo "hi" Bar
-Foo "hi" 5 : [Foo Str [Bar]*]*
+Foo "hi" Bar : [Foo Str [Bar]*]*
 
 > z = Foo ["str1", "str2"]
 Foo ["str1", "str2"] : [Foo (List Str)]*
@@ -1323,24 +1323,24 @@ Some differences to note:
 
 Here are various Roc expressions involving operators, and what they desugar to.
 
-| Expression      | Desugars to      |
-| --------------- | ---------------- |
+| Expression        | Desugars to        |
+| ----------------- | ------------------ |
 | `a + b`           | `Num.add a b`      |
 | `a - b`           | `Num.sub a b`      |
 | `a * b`           | `Num.mul a b`      |
-| `a / b`           | `Num.div a b`    |
-| `a // b`          | `Num.divTrunc a b`      |
+| `a / b`           | `Num.div a b`      |
+| `a // b`          | `Num.divTrunc a b` |
 | `a ^ b`           | `Num.pow a b`      |
-| `a % b`           | `Num.rem a b`    |
-| `a >> b`          | `Num.shr a b`    |
-| `a << b`          | `Num.shl a b`    |
+| `a % b`           | `Num.rem a b`      |
+| `a >> b`          | `Num.shr a b`      |
+| `a << b`          | `Num.shl a b`      |
 | `-a`              | `Num.neg a`        |
 | `-f x y`          | `Num.neg (f x y)`  |
 | `a == b`          | `Bool.isEq a b`    |
 | `a != b`          | `Bool.isNotEq a b` |
 | `a && b`          | `Bool.and a b`     |
-| `a \|\| b`          | `Bool.or a b`      |
+| `a \|\| b`        | `Bool.or a b`      |
 | `!a`              | `Bool.not a`       |
 | `!f x y`          | `Bool.not (f x y)` |
-| `a \|> b`          | `b a`              |
-| `a b c \|> f x y`  | `f (a b c) x y`    |
+| `a \|> b`         | `b a`              |
+| `a b c \|> f x y` | `f (a b c) x y`    |

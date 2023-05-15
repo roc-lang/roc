@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    func = \record ->
+        when record.tag is
+            A -> { record & tag: B }
+            B -> { record & tag: A }
+
+    func
+
+main = entry
+#      ^^^^^ { tag : [A, B] }w_a -[[func(2)]]-> { tag : [A, B] }w_a

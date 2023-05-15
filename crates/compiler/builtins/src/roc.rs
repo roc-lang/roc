@@ -1,3 +1,4 @@
+use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
 
 #[inline(always)]
@@ -15,7 +16,7 @@ pub fn module_source(module_id: ModuleId) -> &'static str {
         ModuleId::DECODE => DECODE,
         ModuleId::HASH => HASH,
         ModuleId::JSON => JSON,
-        _ => panic!(
+        _ => internal_error!(
             "ModuleId {:?} is not part of the standard library",
             module_id
         ),

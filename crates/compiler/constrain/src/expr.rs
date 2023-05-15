@@ -466,6 +466,7 @@ pub fn constrain_expr(
             let fn_reason = Reason::FnCall {
                 name: opt_symbol,
                 arity: loc_args.len() as u8,
+                called_via: *called_via,
             };
 
             let fn_con = constrain_expr(
@@ -1782,7 +1783,7 @@ fn constrain_function_def(
 
             let signature_index = constraints.push_type(types, signature);
 
-            let (arg_types, signature_closure_type, ret_type) = match types[signature] {
+            let (arg_types, _signature_closure_type, ret_type) = match types[signature] {
                 TypeTag::Function(signature_closure_type, ret_type) => (
                     types.get_type_arguments(signature),
                     signature_closure_type,
@@ -1888,13 +1889,12 @@ fn constrain_function_def(
                 delayed_is_open_constraints: vec![],
             };
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
-            let ret_var = function_def.return_type;
             let closure_var = function_def.closure_type;
 
             let ret_type_index = constraints.push_type(types, ret_type);
 
-            vars.push(ret_var);
-            vars.push(closure_var);
+            vars.push(function_def.return_type);
+            vars.push(function_def.closure_type);
 
             let mut def_pattern_state = PatternState::default();
 
@@ -1913,21 +1913,22 @@ fn constrain_function_def(
 
             // TODO see if we can get away with not adding this constraint at all
             def_pattern_state.vars.push(expr_var);
-            let annotation_expected = FromAnnotation(
-                loc_pattern.clone(),
-                arity,
-                AnnotationSource::TypedBody {
-                    region: annotation.region,
-                },
-                signature_index,
-            );
+            let annotation_expected = {
+                constraints.push_expected_type(FromAnnotation(
+                    loc_pattern.clone(),
+                    arity,
+                    AnnotationSource::TypedBody {
+                        region: annotation.region,
+                    },
+                    signature_index,
+                ))
+            };
 
             {
                 let expr_type_index = constraints.push_variable(expr_var);
-                let expected_index = constraints.push_expected_type(annotation_expected);
                 def_pattern_state.constraints.push(constraints.equal_types(
                     expr_type_index,
-                    expected_index,
+                    annotation_expected,
                     Category::Storage(std::file!(), std::line!()),
                     Region::span_across(&annotation.region, &loc_body_expr.region),
                 ));
@@ -1955,8 +1956,8 @@ fn constrain_function_def(
                 &mut vars,
             );
 
-            let annotation_expected = constraints.push_expected_type(FromAnnotation(
-                loc_pattern.clone(),
+            let return_type_annotation_expected = constraints.push_expected_type(FromAnnotation(
+                loc_pattern,
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
@@ -1964,31 +1965,34 @@ fn constrain_function_def(
                 ret_type_index,
             ));
 
-            let ret_constraint = constrain_expr(
-                types,
-                constraints,
-                env,
-                loc_body_expr.region,
-                &loc_body_expr.value,
-                annotation_expected,
-            );
-            let ret_constraint = attach_resolution_constraints(constraints, env, ret_constraint);
+            let solved_fn_type = {
+                // TODO(types-soa) optimize for Variable
+                let pattern_types = types.from_old_type_slice(
+                    function_def.arguments.iter().map(|a| Type::Variable(a.0)),
+                );
+                let lambda_set = types.from_old_type(&Type::Variable(function_def.closure_type));
+                let ret_var = types.from_old_type(&Type::Variable(function_def.return_type));
+
+                let fn_type = types.function(pattern_types, lambda_set, ret_var);
+                constraints.push_type(types, fn_type)
+            };
+
+            let ret_constraint = {
+                let con = constrain_expr(
+                    types,
+                    constraints,
+                    env,
+                    loc_body_expr.region,
+                    &loc_body_expr.value,
+                    return_type_annotation_expected,
+                );
+                attach_resolution_constraints(constraints, env, con)
+            };
 
             vars.push(expr_var);
+
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
-            let signature_closure_type = {
-                let signature_closure_type_index =
-                    constraints.push_type(types, signature_closure_type);
-                constraints.push_expected_type(Expected::FromAnnotation(
-                    loc_pattern,
-                    arity,
-                    AnnotationSource::TypedBody {
-                        region: annotation.region,
-                    },
-                    signature_closure_type_index,
-                ))
-            };
             let cons = [
                 constraints.let_constraint(
                     [],
@@ -1999,14 +2003,24 @@ fn constrain_function_def(
                     // This is a syntactic function, it can be generalized
                     Generalizable(true),
                 ),
-                constraints.equal_types_var(
-                    closure_var,
-                    signature_closure_type,
-                    Category::ClosureSize,
+                // Store the inferred ret var into the function type now, so that
+                // when we check that the solved function type matches the annotation, we can
+                // display the fully inferred return variable.
+                constraints.store(
+                    ret_type_index,
+                    function_def.return_type,
+                    std::file!(),
+                    std::line!(),
+                ),
+                // Now, check the solved function type matches the annotation.
+                constraints.equal_types(
+                    solved_fn_type,
+                    annotation_expected,
+                    Category::Lambda,
                     region,
                 ),
+                // Finally put the solved closure type into the dedicated def expr variable.
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
-                constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
 
@@ -2600,7 +2614,7 @@ pub fn constrain_decls(
                     cycle_mark,
                 );
 
-                index += length as usize;
+                index += length;
             }
         }
 
@@ -2719,7 +2733,7 @@ fn constrain_typed_def(
                 name,
                 ..
             }),
-            TypeTag::Function(signature_closure_type, ret_type),
+            TypeTag::Function(_signature_closure_type, ret_type),
         ) => {
             let arg_types = types.get_type_arguments(signature);
 
@@ -2765,6 +2779,17 @@ fn constrain_typed_def(
                 &mut vars,
             );
 
+            let solved_fn_type = {
+                // TODO(types-soa) optimize for Variable
+                let arg_types =
+                    types.from_old_type_slice(arguments.iter().map(|a| Type::Variable(a.0)));
+                let lambda_set = types.from_old_type(&Type::Variable(closure_var));
+                let ret_var = types.from_old_type(&Type::Variable(ret_var));
+
+                let fn_type = types.function(arg_types, lambda_set, ret_var);
+                constraints.push_type(types, fn_type)
+            };
+
             let body_type = constraints.push_expected_type(FromAnnotation(
                 def.loc_pattern.clone(),
                 arguments.len(),
@@ -2787,18 +2812,6 @@ fn constrain_typed_def(
             vars.push(*fn_var);
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
-            let signature_closure_type = {
-                let signature_closure_type_index =
-                    constraints.push_type(types, signature_closure_type);
-                constraints.push_expected_type(Expected::FromAnnotation(
-                    def.loc_pattern.clone(),
-                    arity,
-                    AnnotationSource::TypedBody {
-                        region: annotation.region,
-                    },
-                    signature_closure_type_index,
-                ))
-            };
             let cons = [
                 constraints.let_constraint(
                     [],
@@ -2809,15 +2822,20 @@ fn constrain_typed_def(
                     // This is a syntactic function, it can be generalized
                     Generalizable(true),
                 ),
-                constraints.equal_types_var(
-                    closure_var,
-                    signature_closure_type,
-                    Category::ClosureSize,
+                // Store the inferred ret var into the function type now, so that
+                // when we check that the solved function type matches the annotation, we can
+                // display the fully inferred return variable.
+                constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
+                // Now, check the solved function type matches the annotation.
+                constraints.equal_types(
+                    solved_fn_type,
+                    annotation_expected,
+                    Category::Lambda,
                     region,
                 ),
+                // Finally put the solved closure type into the dedicated def expr variables.
                 constraints.store(signature_index, *fn_var, std::file!(), std::line!()),
                 constraints.store(signature_index, expr_var, std::file!(), std::line!()),
-                constraints.store(ret_type_index, ret_var, std::file!(), std::line!()),
                 closure_constraint,
             ];
 
@@ -3005,6 +3023,29 @@ fn constrain_typed_function_arguments(
             }
         }
     }
+
+    // There may be argument idents left over that don't line up with the function arity.
+    // Add their patterns' symbols in so that they are present in the env, even though this will
+    // wind up a type error.
+    if arguments.len() > arg_types.len() {
+        for (pattern_var, _annotated_mark, loc_pattern) in &arguments[arg_types.len()..] {
+            let pattern_var_index = constraints.push_variable(*pattern_var);
+
+            def_pattern_state.vars.push(*pattern_var);
+
+            let pattern_expected =
+                constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_var_index));
+            constrain_pattern(
+                types,
+                constraints,
+                env,
+                &loc_pattern.value,
+                loc_pattern.region,
+                pattern_expected,
+                argument_pattern_state,
+            );
+        }
+    }
 }
 
 fn constrain_typed_function_arguments_simple(
@@ -3125,6 +3166,29 @@ fn constrain_typed_function_arguments_simple(
                     .constraints
                     .push(exhaustive_constraint)
             }
+        }
+    }
+
+    // There may be argument idents left over that don't line up with the function arity.
+    // Add their patterns' symbols in so that they are present in the env, even though this will
+    // wind up a type error.
+    if arguments.len() > arg_types.len() {
+        for (pattern_var, _annotated_mark, loc_pattern) in &arguments[arg_types.len()..] {
+            let pattern_var_index = constraints.push_variable(*pattern_var);
+
+            def_pattern_state.vars.push(*pattern_var);
+
+            let pattern_expected =
+                constraints.push_pat_expected_type(PExpected::NoExpectation(pattern_var_index));
+            constrain_pattern(
+                types,
+                constraints,
+                env,
+                &loc_pattern.value,
+                loc_pattern.region,
+                pattern_expected,
+                argument_pattern_state,
+            );
         }
     }
 }
@@ -3531,7 +3595,7 @@ fn constraint_recursive_function(
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
             let def_con = expr_con;
 
-            flex_info.vars = vec![expr_var];
+            flex_info.vars.push(expr_var);
             flex_info.constraints.push(def_con);
             flex_info.def_types.insert(
                 loc_symbol.value,

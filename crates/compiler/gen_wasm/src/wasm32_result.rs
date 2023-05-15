@@ -7,7 +7,7 @@ The user needs to analyse the Wasm module's memory to decode the result.
 use bumpalo::{collections::Vec, Bump};
 
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, UnionLayout};
+use roc_mono::layout::{Builtin, InLayout, LayoutInterner, LayoutRepr, UnionLayout};
 use roc_std::{RocBox, RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use roc_wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Signature,
@@ -55,30 +55,30 @@ pub fn insert_wrapper_for_layout<'a>(
         }
     };
 
-    match interner.get(layout) {
-        Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+    match interner.get(layout).repr {
+        LayoutRepr::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
             i8::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+        LayoutRepr::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
             i16::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+        LayoutRepr::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
             i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+        LayoutRepr::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
             i64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+        LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
             f32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+        LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
             f64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Bool) => {
+        LayoutRepr::Builtin(Builtin::Bool) => {
             bool::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
-        Layout::Union(_) | Layout::Boxed(_) => {
+        LayoutRepr::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
+        LayoutRepr::Union(_) | LayoutRepr::Boxed(_) => {
             i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
         _ => stack_data_structure(),

@@ -1,15 +1,17 @@
 use bumpalo::collections::vec::Vec;
+use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
 use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
-    SelfRecursive, Stmt, UpdateModeId,
+    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, PassedFunction,
+    Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, LambdaName, Layout, LayoutInterner, Niche, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LambdaName, Layout, LayoutInterner, LayoutRepr, Niche, STLayoutInterner,
+    UnionLayout,
 };
 
 mod equality;
@@ -20,6 +22,7 @@ const LAYOUT_UNIT: InLayout = Layout::UNIT;
 
 const ARG_1: Symbol = Symbol::ARG_1;
 const ARG_2: Symbol = Symbol::ARG_2;
+const ARG_3: Symbol = Symbol::ARG_3;
 
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
@@ -29,6 +32,8 @@ pub const REFCOUNT_MAX: usize = 0;
 pub enum HelperOp {
     Inc,
     Dec,
+    IndirectInc,
+    IndirectDec,
     DecRef(JoinPointId),
     Reset,
     ResetRef,
@@ -38,6 +43,14 @@ pub enum HelperOp {
 impl HelperOp {
     fn is_decref(&self) -> bool {
         matches!(self, Self::DecRef(_))
+    }
+
+    fn is_dec(&self) -> bool {
+        matches!(self, Self::Dec)
+    }
+
+    fn is_inc(&self) -> bool {
+        matches!(self, Self::Inc)
     }
 }
 
@@ -79,7 +92,6 @@ pub struct CodeGenHelp<'a> {
     home: ModuleId,
     target_info: TargetInfo,
     layout_isize: InLayout<'a>,
-    union_refcount: UnionLayout<'a>,
     specializations: Vec<'a, Specialization<'a>>,
     debug_recursion_depth: usize,
 }
@@ -88,15 +100,11 @@ impl<'a> CodeGenHelp<'a> {
     pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
         let layout_isize = Layout::isize(target_info);
 
-        // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
-        let union_refcount = UnionLayout::NonNullableUnwrapped(arena.alloc([layout_isize]));
-
         CodeGenHelp {
             arena,
             home,
             target_info,
             layout_isize,
-            union_refcount,
             specializations: Vec::with_capacity_in(16, arena),
             debug_recursion_depth: 0,
         }
@@ -278,24 +286,29 @@ impl<'a> CodeGenHelp<'a> {
         self.debug_recursion_depth += 1;
 
         let layout = if matches!(
-            layout_interner.get(called_layout),
-            Layout::RecursivePointer(_)
+            layout_interner.get(called_layout).repr,
+            LayoutRepr::RecursivePointer(_)
         ) {
             let union_layout = ctx.recursive_union.unwrap();
-            layout_interner.insert(Layout::Union(union_layout))
+            layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout))
         } else {
             called_layout
         };
 
         if layout_needs_helper_proc(layout_interner, layout, ctx.op) {
+            let arena = self.arena;
             let proc_name = self.find_or_create_proc(ident_ids, ctx, layout_interner, layout);
 
             let (ret_layout, arg_layouts): (InLayout<'a>, &'a [InLayout<'a>]) = {
                 let arg = self.replace_rec_ptr(ctx, layout_interner, layout);
+                let box_arg = layout_interner.insert_no_semantic(LayoutRepr::Boxed(arg));
+
                 match ctx.op {
                     Dec | DecRef(_) => (LAYOUT_UNIT, self.arena.alloc([arg])),
                     Reset | ResetRef => (layout, self.arena.alloc([layout])),
                     Inc => (LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
+                    IndirectDec => (LAYOUT_UNIT, arena.alloc([box_arg])),
+                    IndirectInc => (LAYOUT_UNIT, arena.alloc([box_arg, self.layout_isize])),
                     Eq => (LAYOUT_BOOL, self.arena.alloc([arg, arg])),
                 }
             };
@@ -345,7 +358,8 @@ impl<'a> CodeGenHelp<'a> {
         // Procs can be recursive, so we need to create the symbol before the body is complete
         // But with nested recursion, that means Symbols and Procs can end up in different orders.
         // We want the same order, especially for function indices in Wasm. So create an empty slot and fill it in later.
-        let (proc_symbol, proc_layout) = self.create_proc_symbol(ident_ids, ctx, layout);
+        let (proc_symbol, proc_layout) =
+            self.create_proc_symbol(ident_ids, layout_interner, ctx, layout);
         ctx.new_linker_data.push((proc_symbol, proc_layout));
         let spec_index = self.specializations.len();
         self.specializations.push(Specialization {
@@ -360,6 +374,17 @@ impl<'a> CodeGenHelp<'a> {
             Inc | Dec | DecRef(_) => (
                 LAYOUT_UNIT,
                 refcount::refcount_generic(
+                    self,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    layout,
+                    Symbol::ARG_1,
+                ),
+            ),
+            IndirectInc | IndirectDec => (
+                LAYOUT_UNIT,
+                refcount::refcount_indirect(
                     self,
                     ident_ids,
                     ctx,
@@ -404,6 +429,15 @@ impl<'a> CodeGenHelp<'a> {
                     self.arena.alloc([roc_value, inc_amount])
                 }
                 Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
+                IndirectInc => {
+                    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
+                    let inc_amount = (self.layout_isize, ARG_2);
+                    self.arena.alloc([(box_layout, ARG_1), inc_amount])
+                }
+                IndirectDec => {
+                    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
+                    self.arena.alloc([(box_layout, ARG_1)])
+                }
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
             }
         };
@@ -424,6 +458,7 @@ impl<'a> CodeGenHelp<'a> {
     fn create_proc_symbol(
         &self,
         ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
         ctx: &mut Context<'a>,
         layout: InLayout<'a>,
     ) -> (Symbol, ProcLayout<'a>) {
@@ -447,6 +482,24 @@ impl<'a> CodeGenHelp<'a> {
                 result: LAYOUT_UNIT,
                 niche: Niche::NONE,
             },
+            HelperOp::IndirectInc => {
+                let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
+
+                ProcLayout {
+                    arguments: self.arena.alloc([box_layout, self.layout_isize]),
+                    result: LAYOUT_UNIT,
+                    niche: Niche::NONE,
+                }
+            }
+            HelperOp::IndirectDec => {
+                let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
+
+                ProcLayout {
+                    arguments: self.arena.alloc([box_layout]),
+                    result: LAYOUT_UNIT,
+                    niche: Niche::NONE,
+                }
+            }
             HelperOp::Reset => ProcLayout {
                 arguments: self.arena.alloc([layout]),
                 result: layout,
@@ -480,29 +533,26 @@ impl<'a> CodeGenHelp<'a> {
         layout_interner: &mut STLayoutInterner<'a>,
         layout: InLayout<'a>,
     ) -> InLayout<'a> {
-        let layout = match layout_interner.get(layout) {
-            Layout::Builtin(Builtin::List(v)) => {
+        let lay = layout_interner.get(layout);
+        let repr = match lay.repr {
+            LayoutRepr::Builtin(Builtin::List(v)) => {
                 let v = self.replace_rec_ptr(ctx, layout_interner, v);
-                Layout::Builtin(Builtin::List(v))
+                LayoutRepr::Builtin(Builtin::List(v))
             }
 
-            Layout::Builtin(_) => return layout,
+            LayoutRepr::Builtin(_) => return layout,
 
-            Layout::Struct {
-                field_layouts,
-                field_order_hash,
-            } => {
+            LayoutRepr::Struct { field_layouts } => {
                 let mut new_field_layouts = Vec::with_capacity_in(field_layouts.len(), self.arena);
                 for f in field_layouts.iter() {
                     new_field_layouts.push(self.replace_rec_ptr(ctx, layout_interner, *f));
                 }
-                Layout::Struct {
+                LayoutRepr::Struct {
                     field_layouts: new_field_layouts.into_bump_slice(),
-                    field_order_hash,
                 }
             }
 
-            Layout::Union(UnionLayout::NonRecursive(tags)) => {
+            LayoutRepr::Union(UnionLayout::NonRecursive(tags)) => {
                 let mut new_tags = Vec::with_capacity_in(tags.len(), self.arena);
                 for fields in tags {
                     let mut new_fields = Vec::with_capacity_in(fields.len(), self.arena);
@@ -511,72 +561,240 @@ impl<'a> CodeGenHelp<'a> {
                     }
                     new_tags.push(new_fields.into_bump_slice());
                 }
-                Layout::Union(UnionLayout::NonRecursive(new_tags.into_bump_slice()))
+                LayoutRepr::Union(UnionLayout::NonRecursive(new_tags.into_bump_slice()))
             }
 
-            Layout::Union(_) => {
+            LayoutRepr::Union(_) => {
                 // we always fully unroll recursive types. That means tha when we find a
                 // recursive tag union we can replace it with the layout
                 return layout;
             }
 
-            Layout::Boxed(inner) => {
+            LayoutRepr::Boxed(inner) => {
                 let inner = self.replace_rec_ptr(ctx, layout_interner, inner);
-                Layout::Boxed(inner)
+                LayoutRepr::Boxed(inner)
             }
 
-            Layout::LambdaSet(lambda_set) => {
+            LayoutRepr::LambdaSet(lambda_set) => {
                 return self.replace_rec_ptr(ctx, layout_interner, lambda_set.representation)
             }
 
             // This line is the whole point of the function
-            Layout::RecursivePointer(_) => Layout::Union(ctx.recursive_union.unwrap()),
+            LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
         };
-        layout_interner.insert(layout)
+
+        layout_interner.insert(Layout::new(repr, lay.semantic()))
     }
 
     fn union_tail_recursion_fields(
         &self,
-        layout_interner: &STLayoutInterner<'a>,
+        union_in_layout: InLayout<'a>,
         union: UnionLayout<'a>,
-    ) -> (bool, Vec<'a, Option<usize>>) {
+    ) -> Option<Vec<'a, Option<usize>>> {
         use UnionLayout::*;
         match union {
-            NonRecursive(_) => (false, bumpalo::vec![in self.arena]),
+            NonRecursive(_) => None,
 
-            Recursive(tags) => self.union_tail_recursion_fields_help(layout_interner, tags),
+            Recursive(tags) => self.union_tail_recursion_fields_help(union_in_layout, tags),
 
             NonNullableUnwrapped(field_layouts) => {
-                self.union_tail_recursion_fields_help(layout_interner, &[field_layouts])
+                self.union_tail_recursion_fields_help(union_in_layout, &[field_layouts])
             }
 
             NullableWrapped {
                 other_tags: tags, ..
-            } => self.union_tail_recursion_fields_help(layout_interner, tags),
+            } => self.union_tail_recursion_fields_help(union_in_layout, tags),
 
             NullableUnwrapped { other_fields, .. } => {
-                self.union_tail_recursion_fields_help(layout_interner, &[other_fields])
+                self.union_tail_recursion_fields_help(union_in_layout, &[other_fields])
             }
         }
     }
 
     fn union_tail_recursion_fields_help(
         &self,
-        layout_interner: &STLayoutInterner<'a>,
+        in_layout: InLayout<'a>,
         tags: &[&'a [InLayout<'a>]],
-    ) -> (bool, Vec<'a, Option<usize>>) {
-        let mut can_use_tailrec = false;
-        let mut tailrec_indices = Vec::with_capacity_in(tags.len(), self.arena);
+    ) -> Option<Vec<'a, Option<usize>>> {
+        let tailrec_indices = tags
+            .iter()
+            .map(|fields| fields.iter().position(|f| *f == in_layout))
+            .collect_in::<Vec<_>>(self.arena);
 
-        for fields in tags.iter() {
-            let found_index = fields
-                .iter()
-                .position(|f| matches!(layout_interner.get(*f), Layout::RecursivePointer(_)));
-            tailrec_indices.push(found_index);
-            can_use_tailrec |= found_index.is_some();
+        if tailrec_indices.iter().any(|i| i.is_some()) {
+            None
+        } else {
+            Some(tailrec_indices)
+        }
+    }
+}
+
+pub struct CallerProc<'a> {
+    pub proc_symbol: Symbol,
+    pub proc_layout: ProcLayout<'a>,
+    pub proc: Proc<'a>,
+}
+
+impl<'a> CallerProc<'a> {
+    fn create_symbol(home: ModuleId, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
+        let ident_id = ident_ids.add_str(debug_name);
+        Symbol::new(home, ident_id)
+    }
+
+    fn create_caller_proc_symbol(
+        home: ModuleId,
+        ident_ids: &mut IdentIds,
+        operation: &str,
+        wrapped_function: Symbol,
+    ) -> Symbol {
+        let debug_name = format!("#help_{}_{}_{:?}", "caller", operation, wrapped_function,);
+
+        Self::create_symbol(home, ident_ids, &debug_name)
+    }
+
+    pub fn new(
+        arena: &'a Bump,
+        home: ModuleId,
+        ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
+        passed_function: &PassedFunction<'a>,
+        capture_layout: Option<InLayout<'a>>,
+    ) -> Self {
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(arena),
+            recursive_union: None,
+            op: HelperOp::Eq,
+        };
+
+        let box_capture_layout = if let Some(capture_layout) = capture_layout {
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(capture_layout))
+        } else {
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(Layout::UNIT))
+        };
+
+        let box_argument_layout = layout_interner
+            .insert_no_semantic(LayoutRepr::Boxed(passed_function.argument_layouts[0]));
+
+        let box_return_layout =
+            layout_interner.insert_no_semantic(LayoutRepr::Boxed(passed_function.return_layout));
+
+        let proc_layout = ProcLayout {
+            arguments: arena.alloc([box_capture_layout, box_argument_layout, box_return_layout]),
+            result: Layout::UNIT,
+            niche: Niche::NONE,
+        };
+
+        let proc_symbol =
+            Self::create_caller_proc_symbol(home, ident_ids, "map", passed_function.name.name());
+
+        ctx.new_linker_data.push((proc_symbol, proc_layout));
+
+        let unbox_capture = Expr::ExprUnbox {
+            symbol: Symbol::ARG_1,
+        };
+
+        let unbox_argument = Expr::ExprUnbox {
+            symbol: Symbol::ARG_2,
+        };
+
+        let unboxed_capture = Self::create_symbol(home, ident_ids, "unboxed_capture");
+        let unboxed_argument = Self::create_symbol(home, ident_ids, "unboxed_argument");
+        let call_result = Self::create_symbol(home, ident_ids, "call_result");
+        let unit_symbol = Self::create_symbol(home, ident_ids, "unit_symbol");
+        let ignored = Self::create_symbol(home, ident_ids, "ignored");
+
+        let call = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: passed_function.name,
+                ret_layout: passed_function.return_layout,
+                arg_layouts: passed_function.argument_layouts,
+                specialization_id: passed_function.specialization_id,
+            },
+            arguments: if capture_layout.is_some() {
+                arena.alloc([unboxed_argument, unboxed_capture])
+            } else {
+                arena.alloc([unboxed_argument])
+            },
+        });
+
+        let ptr_write = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrWrite,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: arena.alloc([Symbol::ARG_3, call_result]),
+        });
+
+        let mut body = Stmt::Let(
+            unboxed_argument,
+            unbox_argument,
+            passed_function.argument_layouts[0],
+            arena.alloc(Stmt::Let(
+                call_result,
+                call,
+                passed_function.return_layout,
+                arena.alloc(Stmt::Let(
+                    ignored,
+                    ptr_write,
+                    box_return_layout,
+                    arena.alloc(Stmt::Let(
+                        unit_symbol,
+                        Expr::Struct(&[]),
+                        Layout::UNIT,
+                        arena.alloc(Stmt::Ret(unit_symbol)),
+                    )),
+                )),
+            )),
+        );
+
+        if let Some(capture_layout) = capture_layout {
+            body = Stmt::Let(
+                unboxed_capture,
+                unbox_capture,
+                capture_layout,
+                arena.alloc(body),
+            );
         }
 
-        (can_use_tailrec, tailrec_indices)
+        let args: &'a [(InLayout<'a>, Symbol)] = {
+            arena.alloc([
+                (box_capture_layout, ARG_1),
+                (box_argument_layout, ARG_2),
+                (box_return_layout, ARG_3),
+            ])
+        };
+
+        let proc = Proc {
+            name: LambdaName::no_niche(proc_symbol),
+            args,
+            body,
+            closure_data_layout: None,
+            ret_layout: Layout::UNIT,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        };
+
+        if false {
+            let allocator = ven_pretty::BoxAllocator;
+            let doc = proc
+                .to_doc::<_, (), _>(
+                    &allocator,
+                    layout_interner,
+                    true,
+                    crate::ir::Parens::NotNeeded,
+                )
+                .1
+                .pretty(80)
+                .to_string();
+
+            println!("{}", doc);
+        }
+
+        Self {
+            proc_symbol,
+            proc_layout,
+            proc,
+        }
     }
 }
 
@@ -607,22 +825,22 @@ fn layout_needs_helper_proc<'a>(
     layout: InLayout<'a>,
     op: HelperOp,
 ) -> bool {
-    match layout_interner.get(layout) {
-        Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
-            false
-        }
-        Layout::Builtin(Builtin::Str) => {
+    match layout_interner.get(layout).repr {
+        LayoutRepr::Builtin(
+            Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+        ) => false,
+        LayoutRepr::Builtin(Builtin::Str) => {
             // Str type can use either Zig functions or generated IR, since it's not generic.
             // Eq uses a Zig function, refcount uses generated IR.
             // Both are fine, they were just developed at different times.
             matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef(_))
         }
-        Layout::Builtin(Builtin::List(_)) => true,
-        Layout::Struct { .. } => true, // note: we do generate a helper for Unit, with just a Stmt::Ret
-        Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
-        Layout::Union(_) => true,
-        Layout::LambdaSet(_) => true,
-        Layout::RecursivePointer(_) => false,
-        Layout::Boxed(_) => true,
+        LayoutRepr::Builtin(Builtin::List(_)) => true,
+        LayoutRepr::Struct { .. } => true, // note: we do generate a helper for Unit, with just a Stmt::Ret
+        LayoutRepr::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
+        LayoutRepr::Union(_) => true,
+        LayoutRepr::LambdaSet(_) => true,
+        LayoutRepr::RecursivePointer(_) => false,
+        LayoutRepr::Boxed(_) => true,
     }
 }

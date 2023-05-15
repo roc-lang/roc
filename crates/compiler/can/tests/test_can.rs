@@ -14,8 +14,10 @@ mod helpers;
 mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
+    use core::panic;
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::{ClosureData, IntValue, Recursive};
+    use roc_module::symbol::Symbol;
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::{Position, Region};
     use std::{f64, i64};
@@ -652,6 +654,172 @@ mod test_can {
         assert!(matches!(
             loc_expr.value,
             Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue { .. })
+        ));
+    }
+
+    // RECORD BUILDERS
+    #[test]
+    fn record_builder_desugar() {
+        let src = indoc!(
+            r#"
+                succeed = \_ -> crash "succeed"
+                apply = \_ -> crash "get"
+
+                d = 3
+
+                succeed {
+                    a: 1,
+                    b <- apply "b",
+                    c <- apply "c",
+                    d
+                }
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        // Assert that we desugar to:
+        //
+        // (apply "c") ((apply "b") (succeed \b -> \c -> { a: 1, b, c, d }))
+
+        // (apply "c") ..
+        let (apply_c, c_to_b) = simplify_curried_call(&out.loc_expr.value);
+        assert_apply_call(apply_c, "c", &out.interns);
+
+        // (apply "b") ..
+        let (apply_b, b_to_succeed) = simplify_curried_call(c_to_b);
+        assert_apply_call(apply_b, "b", &out.interns);
+
+        // (succeed ..)
+        let (succeed, b_closure) = simplify_curried_call(b_to_succeed);
+
+        match succeed {
+            Var(sym, _) => assert_eq!(sym.as_str(&out.interns), "succeed"),
+            _ => panic!("Not calling succeed: {:?}", succeed),
+        }
+
+        // \b -> ..
+        let (b_sym, c_closure) = simplify_builder_closure(b_closure);
+
+        // \c -> ..
+        let (c_sym, c_body) = simplify_builder_closure(c_closure);
+
+        // { a: 1, b, c, d }
+        match c_body {
+            Record { fields, .. } => {
+                match get_field_expr(fields, "a") {
+                    Num(_, num_str, _, _) => {
+                        assert_eq!(num_str.to_string(), "1");
+                    }
+                    expr => panic!("a is not a Num: {:?}", expr),
+                }
+
+                assert_eq!(get_field_var_sym(fields, "b"), b_sym);
+                assert_eq!(get_field_var_sym(fields, "c"), c_sym);
+                assert_eq!(get_field_var_sym(fields, "d").as_str(&out.interns), "d");
+            }
+            _ => panic!("Closure body wasn't a Record: {:?}", c_body),
+        }
+    }
+
+    fn simplify_curried_call(expr: &Expr) -> (&Expr, &Expr) {
+        match expr {
+            LetNonRec(_, loc_expr) => simplify_curried_call(&loc_expr.value),
+            Call(fun, args, _) => (&fun.1.value, &args[0].1.value),
+            _ => panic!("Final Expr is not a Call: {:?}", expr),
+        }
+    }
+
+    fn assert_apply_call(expr: &Expr, expected: &str, interns: &roc_module::symbol::Interns) {
+        match simplify_curried_call(expr) {
+            (Var(sym, _), Str(val)) => {
+                assert_eq!(sym.as_str(interns), "apply");
+                assert_eq!(val.to_string(), expected);
+            }
+            call => panic!("Not a valid (get {}) call: {:?}", expected, call),
+        };
+    }
+
+    fn simplify_builder_closure(expr: &Expr) -> (Symbol, &Expr) {
+        use roc_can::pattern::Pattern::*;
+
+        match expr {
+            Closure(closure) => match &closure.arguments[0].2.value {
+                Identifier(sym) => (*sym, &closure.loc_body.value),
+                pattern => panic!("Not an identifier pattern: {:?}", pattern),
+            },
+            _ => panic!("Not a closure: {:?}", expr),
+        }
+    }
+
+    fn get_field_expr<'a>(
+        fields: &'a roc_collections::SendMap<roc_module::ident::Lowercase, roc_can::expr::Field>,
+        name: &'a str,
+    ) -> &'a Expr {
+        let ident = roc_module::ident::Lowercase::from(name);
+
+        &fields.get(&ident).unwrap().loc_expr.value
+    }
+
+    fn get_field_var_sym(
+        fields: &roc_collections::SendMap<roc_module::ident::Lowercase, roc_can::expr::Field>,
+        name: &str,
+    ) -> roc_module::symbol::Symbol {
+        match get_field_expr(fields, name) {
+            Var(sym, _) => *sym,
+            expr => panic!("Not a var: {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn multiple_record_builders_error() {
+        let src = indoc!(
+            r#"
+                succeed 
+                    { a <- apply "a" }
+                    { b <- apply "b" }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, loc_expr, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
+        )));
+
+        assert!(matches!(
+            loc_expr.value,
+            Expr::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
+        ));
+    }
+
+    #[test]
+    fn hanging_record_builder() {
+        let src = indoc!(
+            r#"
+                { a <- apply "a" }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, loc_expr, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
+        )));
+
+        assert!(matches!(
+            loc_expr.value,
+            Expr::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
         ));
     }
 

@@ -15,8 +15,6 @@ procedure List.2 (List.96, List.97):
 procedure List.3 (List.104, List.105, List.106):
     let List.503 : {List I64, I64} = CallByName List.64 List.104 List.105 List.106;
     let List.502 : List I64 = StructAtIndex 0 List.503;
-    inc List.502;
-    dec List.503;
     ret List.502;
 
 procedure List.6 (#Attr.2):
@@ -42,8 +40,8 @@ procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
     ret List.499;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.277 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.277;
+    let Num.283 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Test.1 (Test.2):
     let Test.28 : U64 = 0i64;

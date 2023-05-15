@@ -40,12 +40,12 @@ procedure List.92 (List.430, List.431, List.432):
     ret List.497;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.275 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.275;
+    let Num.281 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.281;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.276 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.276;
+    let Num.282 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.282;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.300 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
@@ -58,33 +58,41 @@ procedure Test.11 (Test.53, Test.54):
     joinpoint Test.27 Test.12 #Attr.12:
         let Test.8 : Int1 = UnionAtIndex (Id 2) (Index 1) #Attr.12;
         let Test.7 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-        inc Test.7;
-        dec #Attr.12;
-        joinpoint Test.31 Test.29:
-            let Test.30 : U8 = GetTagId Test.7;
-            switch Test.30:
+        joinpoint #Derived_gen.3:
+            joinpoint Test.31 Test.29:
+                let Test.30 : U8 = GetTagId Test.7;
+                switch Test.30:
+                    case 0:
+                        dec Test.7;
+                        let Test.28 : Str = CallByName Test.2 Test.29;
+                        ret Test.28;
+                
+                    case 1:
+                        let Test.28 : Str = CallByName Test.9 Test.29 Test.7;
+                        ret Test.28;
+                
+                    default:
+                        jump Test.27 Test.29 Test.7;
+                
+            in
+            switch Test.8:
                 case 0:
-                    dec Test.7;
-                    let Test.28 : Str = CallByName Test.2 Test.29;
-                    ret Test.28;
-            
-                case 1:
-                    let Test.28 : Str = CallByName Test.9 Test.29 Test.7;
-                    ret Test.28;
+                    let Test.32 : Str = CallByName Test.3 Test.12;
+                    jump Test.31 Test.32;
             
                 default:
-                    jump Test.27 Test.29 Test.7;
+                    let Test.32 : Str = CallByName Test.4 Test.12;
+                    jump Test.31 Test.32;
             
         in
-        switch Test.8:
-            case 0:
-                let Test.32 : Str = CallByName Test.3 Test.12;
-                jump Test.31 Test.32;
-        
-            default:
-                let Test.32 : Str = CallByName Test.4 Test.12;
-                jump Test.31 Test.32;
-        
+        let #Derived_gen.4 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if #Derived_gen.4 then
+            decref #Attr.12;
+            jump #Derived_gen.3;
+        else
+            inc Test.7;
+            decref #Attr.12;
+            jump #Derived_gen.3;
     in
     jump Test.27 Test.53 Test.54;
 
@@ -117,34 +125,42 @@ procedure Test.6 (Test.7, Test.8, Test.5):
 procedure Test.9 (Test.10, #Attr.12):
     let Test.8 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
     let Test.7 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    inc Test.7;
-    dec #Attr.12;
-    let Test.37 : U8 = GetTagId Test.7;
-    joinpoint Test.38 Test.36:
-        switch Test.8:
+    joinpoint #Derived_gen.5:
+        let Test.37 : U8 = GetTagId Test.7;
+        joinpoint Test.38 Test.36:
+            switch Test.8:
+                case 0:
+                    let Test.35 : Str = CallByName Test.3 Test.36;
+                    ret Test.35;
+            
+                default:
+                    let Test.35 : Str = CallByName Test.4 Test.36;
+                    ret Test.35;
+            
+        in
+        switch Test.37:
             case 0:
-                let Test.35 : Str = CallByName Test.3 Test.36;
-                ret Test.35;
+                dec Test.7;
+                let Test.39 : Str = CallByName Test.2 Test.10;
+                jump Test.38 Test.39;
+        
+            case 1:
+                let Test.39 : Str = CallByName Test.9 Test.10 Test.7;
+                jump Test.38 Test.39;
         
             default:
-                let Test.35 : Str = CallByName Test.4 Test.36;
-                ret Test.35;
+                let Test.39 : Str = CallByName Test.11 Test.10 Test.7;
+                jump Test.38 Test.39;
         
     in
-    switch Test.37:
-        case 0:
-            dec Test.7;
-            let Test.39 : Str = CallByName Test.2 Test.10;
-            jump Test.38 Test.39;
-    
-        case 1:
-            let Test.39 : Str = CallByName Test.9 Test.10 Test.7;
-            jump Test.38 Test.39;
-    
-        default:
-            let Test.39 : Str = CallByName Test.11 Test.10 Test.7;
-            jump Test.38 Test.39;
-    
+    let #Derived_gen.6 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.6 then
+        decref #Attr.12;
+        jump #Derived_gen.5;
+    else
+        inc Test.7;
+        decref #Attr.12;
+        jump #Derived_gen.5;
 
 procedure Test.0 ():
     let Test.41 : Int1 = false;

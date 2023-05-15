@@ -1,0 +1,6 @@
+app "test" provides [main] to "./platform"
+
+MHash has hash : a -> U64 | a has MHash
+
+main = hash
+#      ^^^^ MHash#hash(2): a -[[] + a:hash(2):1]-> U64 | a has MHash

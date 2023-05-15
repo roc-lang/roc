@@ -1,0 +1,11 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Job : [Job [Command] (List Job)]
+
+    job : Job
+
+    job
+
+main = entry
+#      ^^^^^ Job

@@ -398,7 +398,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let _alignment = self.fetch_immediate_u32(module);
         let offset = self.fetch_immediate_u32(module);
         let base_addr = self.value_store.pop_u32()?;
-        Ok(base_addr + offset)
+        let addr = base_addr + offset;
+        let memory_size = self.memory.len() as u32;
+        if addr >= memory_size {
+            Err(Error::MemoryAccessOutOfBounds(addr, memory_size))
+        } else {
+            Ok(addr)
+        }
     }
 
     fn get_store_addr_value(&mut self, module: &WasmModule<'a>) -> Result<(usize, Value), Error> {
@@ -409,8 +415,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let offset = self.fetch_immediate_u32(module);
         let value = self.value_store.pop();
         let base_addr = self.value_store.pop_u32()?;
-        let addr = (base_addr + offset) as usize;
-        Ok((addr, value))
+        let addr = base_addr + offset;
+        let memory_size = self.memory.len() as u32;
+        if addr >= memory_size {
+            Err(Error::MemoryAccessOutOfBounds(addr, memory_size))
+        } else {
+            Ok((addr as usize, value))
+        }
     }
 
     fn write_debug<T: fmt::Debug>(&mut self, value: T) {
@@ -948,7 +959,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 let memory_index = self.fetch_immediate_u32(module);
                 assert_eq!(memory_index, 0);
                 let old_bytes = self.memory.len() as u32;
-                let old_pages = old_bytes / MemorySection::PAGE_SIZE as u32;
+                let old_pages = old_bytes / MemorySection::PAGE_SIZE;
                 let grow_pages = self.value_store.pop_u32()?;
                 let grow_bytes = grow_pages * MemorySection::PAGE_SIZE;
                 let new_bytes = old_bytes + grow_bytes;
@@ -1700,7 +1711,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             } else {
                 // For calls, we print special debug stuff in do_call
                 let base = self.current_frame.locals_start + self.current_frame.locals_count;
-                let slice = self.value_store.get_slice(base as usize);
+                let slice = self.value_store.get_slice(base);
                 eprintln!("{:06x} {:17} {:x?}", file_offset, debug_string, slice);
             }
             let is_return = op_code == RETURN || (op_code == END && implicit_return);
@@ -1797,8 +1808,17 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.module.types.look_up(signature_index).0.len()
             };
 
+            let fn_name = self
+                .module
+                .names
+                .function_names
+                .iter()
+                .find(|(idx, _)| *idx == *fn_index as u32)
+                .map(|(_, name)| *name)
+                .unwrap_or("");
+
             // Function and address match wasm-objdump formatting, for easy copy & find
-            writeln!(buffer, "func[{}]", fn_index)?;
+            writeln!(buffer, "func[{}]  {}", fn_index, fn_name)?;
             writeln!(buffer, "  address  {:06x}", execution_addrs.next().unwrap())?;
 
             write!(buffer, "  args     ")?;

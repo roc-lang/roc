@@ -10,7 +10,7 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
-use roc_mono::layout::STLayoutInterner;
+use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
 use roc_std::{RocList, RocStr, U128};
 
@@ -25,7 +25,7 @@ fn width_and_alignment_u8_u8() {
     let t = &[Layout::U8] as &[_];
     let tt = [t, t];
 
-    let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
+    let layout = Layout::no_semantic(LayoutRepr::Union(UnionLayout::NonRecursive(&tt)));
 
     assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
     assert_eq!(layout.stack_size(&interner, target_info), 2);
@@ -907,7 +907,9 @@ fn alignment_in_multi_tag_pattern_match() {
                         { bool, int }
 
                     Empty ->
-                        { bool: Bool.false, int: 0 }
+                        # dev backend codegen bug means we cannot use this inline
+                        false = Bool.false
+                        { bool: false, int: 0 }
                 #"
         ),
         (32i64, true),
@@ -924,7 +926,8 @@ fn alignment_in_multi_tag_pattern_match() {
                     Three bool color int ->
                         { bool, color, int }
                     Empty ->
-                        { bool: Bool.false, color: Red, int: 0 }
+                        false = Bool.false
+                        { bool: false, color: Red, int: 0 }
                 #"
         ),
         (32i64, true, 2u8),

@@ -1,6 +1,6 @@
 use crate::target::{arch_str, target_zig_str};
 use libloading::{Error, Library};
-use roc_command_utils::{cargo, clang, get_lib_path, rustup, zig};
+use roc_command_utils::{cargo, clang, rustup, zig};
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
@@ -63,31 +63,57 @@ pub fn legacy_host_filename(target: &Triple) -> Option<String> {
     )
 }
 
-fn find_zig_str_path() -> PathBuf {
-    // First try using the lib path relative to the executable location.
-    let lib_path_opt = get_lib_path();
+// Attempts to find a file that is stored relative to the roc executable.
+// Since roc is built in target/debug/roc, we may need to drop that path to find the file.
+// This is used to avoid depending on the current working directory.
+pub fn get_relative_path(sub_path: &Path) -> Option<PathBuf> {
+    if sub_path.is_absolute() {
+        internal_error!(
+            "get_relative_path requires sub_path to be relative, instead got {:?}",
+            sub_path
+        );
+    }
+    let exe_relative_str_path_opt = std::env::current_exe().ok();
 
-    if let Some(lib_path) = lib_path_opt {
-        let zig_str_path = lib_path.join("str.zig");
+    if let Some(exe_relative_str_path) = exe_relative_str_path_opt {
+        #[cfg(windows)]
+        let exe_relative_str_path = roc_command_utils::strip_windows_prefix(&exe_relative_str_path);
 
-        if std::path::Path::exists(&zig_str_path) {
-            return zig_str_path;
+        let mut curr_parent_opt = exe_relative_str_path.parent();
+
+        // We need to support paths like ./roc, ./bin/roc, ./target/debug/roc and tests like ./target/debug/deps/valgrind-63c787aa176d1277
+        // This requires dropping up to 3 directories.
+        for _ in 0..=3 {
+            if let Some(curr_parent) = curr_parent_opt {
+                let potential_path = curr_parent.join(sub_path);
+
+                if std::path::Path::exists(&potential_path) {
+                    return Some(potential_path);
+                } else {
+                    curr_parent_opt = curr_parent.parent();
+                }
+            } else {
+                break;
+            }
         }
     }
 
-    let zig_str_path = PathBuf::from("crates/compiler/builtins/bitcode/src/str.zig");
+    None
+}
 
-    if std::path::Path::exists(&zig_str_path) {
-        return zig_str_path;
+fn find_zig_glue_path() -> PathBuf {
+    // First try using the repo path relative to the executable location.
+    let path = get_relative_path(Path::new("crates/compiler/builtins/bitcode/src/glue.zig"));
+    if let Some(path) = path {
+        return path;
+    }
+    // Fallback on a lib path relative to the executable location.
+    let path = get_relative_path(Path::new("lib/glue.zig"));
+    if let Some(path) = path {
+        return path;
     }
 
-    // when running the tests, we start in the /cli directory
-    let zig_str_path = PathBuf::from("../compiler/builtins/bitcode/src/str.zig");
-    if std::path::Path::exists(&zig_str_path) {
-        return zig_str_path;
-    }
-
-    internal_error!("cannot find `str.zig`. Check the source code in find_zig_str_path() to show all the paths I tried.")
+    internal_error!("cannot find `glue.zig`. Check the source code in find_zig_glue_path() to show all the paths I tried.")
 }
 
 fn find_wasi_libc_path() -> PathBuf {
@@ -107,7 +133,6 @@ pub fn build_zig_host_native(
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
-    zig_str_path: &str,
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
@@ -138,8 +163,8 @@ pub fn build_zig_host_native(
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
-        "str",
-        zig_str_path,
+        "glue",
+        find_zig_glue_path().to_str().unwrap(),
         "--pkg-end",
         // include libc
         "-lc",
@@ -180,7 +205,6 @@ pub fn build_zig_host_native(
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
-    zig_str_path: &str,
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
@@ -211,8 +235,8 @@ pub fn build_zig_host_native(
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
-        "str",
-        zig_str_path,
+        "glue",
+        find_zig_glue_path().to_str().unwrap(),
         "--pkg-end",
         // include the zig runtime
         // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
@@ -240,7 +264,6 @@ pub fn build_zig_host_native(
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
-    zig_str_path: &str,
     _target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
@@ -306,8 +329,8 @@ pub fn build_zig_host_native(
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
-        "str",
-        zig_str_path,
+        "glue",
+        find_zig_glue_path().to_str().unwrap(),
         "--pkg-end",
         // include the zig runtime
         "--pkg-begin",
@@ -332,7 +355,6 @@ pub fn build_zig_host_wasm32(
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
-    zig_str_path: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
 ) -> Command {
@@ -340,47 +362,33 @@ pub fn build_zig_host_wasm32(
         unimplemented!("Linking a shared library to wasm not yet implemented");
     }
 
-    let zig_target = if matches!(opt_level, OptLevel::Development) {
-        "wasm32-wasi"
-    } else {
-        // For LLVM backend wasm we are emitting a .bc file anyway so this target is OK
-        "i386-linux-musl"
-    };
-
     // NOTE currently just to get compiler warnings if the host code is invalid.
     // the produced artifact is not used
-    //
-    // NOTE we're emitting LLVM IR here (again, it is not actually used)
-    //
-    // we'd like to compile with `-target wasm32-wasi` but that is blocked on
-    //
-    // https://github.com/ziglang/zig/issues/9414
     let mut zig_cmd = zig();
-    let args = &[
-        "build-obj",
-        zig_host_src,
-        emit_bin,
-        "--pkg-begin",
-        "str",
-        zig_str_path,
-        "--pkg-end",
-        // include the zig runtime
-        // "-fcompiler-rt",
-        // include libc
-        "--library",
-        "c",
-        "-target",
-        zig_target,
-        // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
-        "-fPIC",
-        "--strip",
-    ];
 
     zig_cmd
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home)
-        .args(args);
+        .args([
+            "build-obj",
+            zig_host_src,
+            emit_bin,
+            "--pkg-begin",
+            "glue",
+            find_zig_glue_path().to_str().unwrap(),
+            "--pkg-end",
+            // include the zig runtime
+            // "-fcompiler-rt",
+            // include libc
+            "--library",
+            "c",
+            "-target",
+            "wasm32-wasi",
+            // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
+            "-fPIC",
+            "--strip",
+        ]);
 
     if matches!(opt_level, OptLevel::Optimize) {
         zig_cmd.args(["-O", "ReleaseSafe"]);
@@ -424,7 +432,6 @@ pub fn build_c_host_native(
                     env_home,
                     dest,
                     sources[0],
-                    find_zig_str_path().to_str().unwrap(),
                     get_target_str(target),
                     opt_level,
                     Some(shared_lib_path),
@@ -558,15 +565,6 @@ pub fn rebuild_host(
 
     if zig_host_src.exists() {
         // Compile host.zig
-
-        let zig_str_path = find_zig_str_path();
-
-        debug_assert!(
-            std::path::Path::exists(&zig_str_path),
-            "Cannot find str.zig, looking at {:?}",
-            &zig_str_path
-        );
-
         let zig_cmd = match target.architecture {
             Architecture::Wasm32 => {
                 let emit_bin = if matches!(opt_level, OptLevel::Development) {
@@ -579,7 +577,6 @@ pub fn rebuild_host(
                     &env_home,
                     &emit_bin,
                     zig_host_src.to_str().unwrap(),
-                    zig_str_path.to_str().unwrap(),
                     opt_level,
                     shared_lib_path,
                 )
@@ -589,7 +586,6 @@ pub fn rebuild_host(
                 &env_home,
                 host_dest.to_str().unwrap(),
                 zig_host_src.to_str().unwrap(),
-                zig_str_path.to_str().unwrap(),
                 get_target_str(target),
                 opt_level,
                 shared_lib_path,
@@ -600,7 +596,6 @@ pub fn rebuild_host(
                 &env_home,
                 host_dest.to_str().unwrap(),
                 zig_host_src.to_str().unwrap(),
-                zig_str_path.to_str().unwrap(),
                 "i386-linux-musl",
                 opt_level,
                 shared_lib_path,
@@ -611,7 +606,6 @@ pub fn rebuild_host(
                 &env_home,
                 host_dest.to_str().unwrap(),
                 zig_host_src.to_str().unwrap(),
-                zig_str_path.to_str().unwrap(),
                 target_zig_str(target),
                 opt_level,
                 shared_lib_path,
@@ -629,7 +623,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2022-09-17", "cargo"]);
+            cmd.args(["run", "nightly-2022-10-30", "cargo"]);
 
             cmd
         } else {
@@ -665,7 +659,7 @@ pub fn rebuild_host(
             let mut exe_path = cargo_out_dir.join("host");
             exe_path.set_extension(executable_extension);
             if let Err(e) = std::fs::copy(&exe_path, &host_dest) {
-                panic!(
+                internal_error!(
                     "unable to copy {} => {}: {:?}\n\nIs the file used by another invocation of roc?",
                     exe_path.display(),
                     host_dest.display(),
@@ -719,7 +713,7 @@ pub fn rebuild_host(
         if matches!(opt_level, OptLevel::Optimize) {
             rustc_cmd.arg("-O");
         } else if matches!(opt_level, OptLevel::Size) {
-            rustc_cmd.arg("-C opt-level=s");
+            rustc_cmd.args(["-C", "opt-level=s"]);
         }
 
         run_build_command(rustc_cmd, "host.rs", 0);
@@ -831,7 +825,7 @@ fn find_used_target_sub_folder(opt_level: OptLevel, target_folder: PathBuf) -> P
 
     let mut out_folder = match matching_folders_iter.next() {
         Some(dir_entry) => dir_entry,
-        None => panic!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
+        None => internal_error!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
     };
 
     let mut out_folder_last_change = out_folder.metadata().unwrap().modified().unwrap();
@@ -1100,7 +1094,7 @@ fn link_linux(
         // Keep NIX_ env vars
         .envs(
             env::vars()
-                .filter(|&(ref k, _)| k.starts_with("NIX_"))
+                .filter(|(k, _)| k.starts_with("NIX_"))
                 .collect::<HashMap<String, String>>(),
         )
         .args([
@@ -1151,7 +1145,7 @@ fn link_macos(
 
             output_path.set_extension("dylib");
 
-            (vec!["-dylib"], output_path)
+            (vec!["-dylib", "-undefined", "dynamic_lookup"], output_path)
         }
         LinkType::None => internal_error!("link_macos should not be called with link type of none"),
     };
@@ -1273,9 +1267,6 @@ fn link_wasm32(
     input_paths: &[&str],
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let zig_str_path = find_zig_str_path();
-    let wasi_libc_path = find_wasi_libc_path();
-
     let child = zig()
         // .env_clear()
         // .env("PATH", &env_path)
@@ -1283,14 +1274,15 @@ fn link_wasm32(
         .args(input_paths)
         .args([
             // include wasi libc
+            // TOOD: This now compiles fine with `-lc`. That said, the output file doesn't work.
             // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
-            wasi_libc_path.to_str().unwrap(),
+            find_wasi_libc_path().to_str().unwrap(),
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",
             "--pkg-begin",
-            "str",
-            zig_str_path.to_str().unwrap(),
+            "glue",
+            find_zig_glue_path().to_str().unwrap(),
             "--pkg-end",
             "--strip",
             "-O",
@@ -1309,8 +1301,6 @@ fn link_windows(
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let zig_str_path = find_zig_str_path();
-
     match link_type {
         LinkType::Dylib => {
             let child = zig()
@@ -1322,8 +1312,8 @@ fn link_windows(
                     "-target",
                     "native",
                     "--pkg-begin",
-                    "str",
-                    zig_str_path.to_str().unwrap(),
+                    "glue",
+                    find_zig_glue_path().to_str().unwrap(),
                     "--pkg-end",
                     "--strip",
                     "-O",

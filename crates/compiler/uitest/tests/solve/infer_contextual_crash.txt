@@ -1,6 +1,6 @@
 app "test" provides [getInfallible] to "./platform"
 
 getInfallible = \result -> when result is
-#^^^^^^^^^^^^^{-1} [Ok a]w_b -[[getInfallible(0)]]-> a
+#^^^^^^^^^^^^^{-1} [Ok a]* -[[getInfallible(0)]]-> a
     Ok x -> x
     _ -> crash "turns out this was fallible"

@@ -1343,7 +1343,7 @@ mod debug_types {
     use super::{TypeTag, Types};
     use roc_collections::soa::{Index, Slice};
     use roc_module::ident::TagName;
-    use ven_pretty::{Arena, DocAllocator, DocBuilder};
+    use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
     pub struct DebugTag<'a>(pub &'a Types, pub Index<TypeTag>);
 
@@ -1409,13 +1409,13 @@ mod debug_types {
                 f.text("[")
                     .append(
                         f.intersperse(
-                            Some(f.text(format!("{name:?}")))
+                            Some(text!(f, "{name:?}"))
                                 .into_iter()
                                 .chain(captures.into_iter().map(|c| typ(types, f, Free, c))),
                             f.text(" "),
                         ),
                     )
-                    .append(f.text(format!(", ^{ambient_function:?}")))
+                    .append(text!(f, ", ^{ambient_function:?}"))
                     .append(f.text("]"))
             }
             TypeTag::FunctionOrTagUnion(_, _) => {
@@ -1426,7 +1426,7 @@ mod debug_types {
                 unspecialized: Uls(var, sym, region),
             } => f
                 .text("[")
-                .append(f.text(format!("{var:?}:{sym:?}:{region}")))
+                .append(text!(f, "{var:?}:{sym:?}:{region}"))
                 .append(f.text("]")),
             TypeTag::DelayedAlias { shared } => {
                 maybe_paren!(Free, p, alias(types, f, tag, shared))
@@ -1464,7 +1464,7 @@ mod debug_types {
                     )
                 )
             }
-            TypeTag::Variable(var) => f.text(format!("{var:?}")),
+            TypeTag::Variable(var) => text!(f, "{var:?}"),
             TypeTag::RangedNumber(range) => ranged(f, range),
             TypeTag::Error => f.text("ERROR"),
             TypeTag::TagUnion(tags, _) => {
@@ -1473,7 +1473,7 @@ mod debug_types {
             TypeTag::RecursiveTagUnion(rec, tags, _) => tag_union(
                 types,
                 f,
-                f.text(format!("<rec {rec:?}>")),
+                text!(f, "<rec {rec:?}>"),
                 tags,
                 types.get_type_arguments(tag),
             ),
@@ -1594,15 +1594,13 @@ mod debug_types {
                 }
                 arg.append(f.text(" (+ "))
                     .append(f.intersperse(
-                        abilities.sorted_iter().map(|ab| f.text(format!("{ab:?}"))),
+                        abilities.sorted_iter().map(|ab| text!(f, "{ab:?}")),
                         f.text(", "),
                     ))
                     .append(f.text(")"))
             });
         f.intersperse(
-            Some(f.text(format!("{symbol:?}")))
-                .into_iter()
-                .chain(fmt_args),
+            Some(text!(f, "{symbol:?}")).into_iter().chain(fmt_args),
             f.text(" "),
         )
     }
@@ -3566,6 +3564,7 @@ pub enum Reason {
     FnCall {
         name: Option<Symbol>,
         arity: u8,
+        called_via: CalledVia,
     },
     LowLevelOpArg {
         op: LowLevel,

@@ -85,8 +85,12 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
-                LowLevel::RefCountInc => unimplemented!(),
-                LowLevel::RefCountDec => unimplemented!(),
+                LowLevel::PtrWrite => unimplemented!(),
+                LowLevel::RefCountIncRcPtr => unimplemented!(),
+                LowLevel::RefCountDecRcPtr=> unimplemented!(),
+                LowLevel::RefCountIncDataPtr => unimplemented!(),
+                LowLevel::RefCountDecDataPtr=> unimplemented!(),
+                LowLevel::RefCountIsUnique => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),
@@ -180,6 +184,9 @@ map_symbol_to_lowlevel_and_arity! {
     NumLogUnchecked; NUM_LOG; 1,
     NumRound; NUM_ROUND; 1,
     NumToFrac; NUM_TO_FRAC; 1,
+    NumIsNan; NUM_IS_NAN; 1,
+    NumIsInfinite; NUM_IS_INFINITE; 1,
+    NumIsFinite; NUM_IS_FINITE; 1,
     NumPow; NUM_POW; 2,
     NumCeiling; NUM_CEILING; 1,
     NumPowInt; NUM_POW_INT; 2,

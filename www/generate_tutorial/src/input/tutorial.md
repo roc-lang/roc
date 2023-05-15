@@ -126,7 +126,7 @@ Make a file named `main.roc` and put this in it:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.1/97mY3sUwo433-pcnEQUlMhn-sWiIf_J9bPhcAFZoqY4.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1054,7 +1054,7 @@ You can tell some interesting things about functions based on the type parameter
 
 Similarly, the only way to have a function whose type is `a -> a` is if the function's implementation returns its argument without modifying it in any way. This is known as [the identity function](https://en.wikipedia.org/wiki/Identity_function).
 
-### [Tag Union Types](#tag-union-tyes) {#tag-union-tyes}
+### [Tag Union Types](#tag-union-types) {#tag-union-types}
 
 We can also annotate types that include tags:
 
@@ -1239,7 +1239,7 @@ Ideally, Roc programs would never crash. However, there are some situations wher
 
 1.  When doing normal integer arithmetic (e.g. `x + y`) that [overflows](https://en.wikipedia.org/wiki/Integer_overflow).
 2.  When the system runs out of memory.
-3.  When a variable-length collection (like a `List` or `Str`) gets too long to be representible in the operating system's address space. (A 64-bit operating system's address space can represent several [exabytes](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units) of data, so this case should not come up often.)
+3.  When a variable-length collection (like a `List` or `Str`) gets too long to be representable in the operating system's address space. (A 64-bit operating system's address space can represent several [exabytes](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units) of data, so this case should not come up often.)
 
 Crashes in Roc are not like [try/catch exceptions](https://en.wikipedia.org/wiki/Exception_handling) found in some other programming languages. There is no way to "catch" a crash. It immediately ends the program, and what happens next is defined by the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform). For example, a command-line interface platform might exit with a nonzero [exit code](https://en.wikipedia.org/wiki/Exit_status), whereas a web server platform might have the current request respond with a [HTTP 500 error](https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#500).
 
@@ -1332,7 +1332,7 @@ So you'll want to use `roc dev` or `roc test` to get the output for `expect`.
 
 ## [Modules](#modules) {#modules}
 
-Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc suppports;
+Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc supports;
 
 - **Builtins** provide functions that are automatically imported into every module. 
 - **Applications** are combined with a platform and compiled into an executable.
@@ -1368,7 +1368,7 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.1/97mY3sUwo433-pcnEQUlMhn-sWiIf_J9bPhcAFZoqY4.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
     imports [pf.Stdout]
     provides main to pf
 ```
@@ -1380,7 +1380,7 @@ The line `app "hello"` states that this module defines a Roc application, and th
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
 ```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.1/97mY3sUwo433-pcnEQUlMhn-sWiIf_J9bPhcAFZoqY4.tar.br" }
+packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1466,7 +1466,7 @@ Let's start with a basic "Hello World" program.
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.1/97mY3sUwo433-pcnEQUlMhn-sWiIf_J9bPhcAFZoqY4.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1496,7 +1496,7 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.1/97mY3sUwo433-pcnEQUlMhn-sWiIf_J9bPhcAFZoqY4.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
@@ -1537,7 +1537,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.1/97mY3sUwo433-pcnEQUlMhn-sWiIf_J9bPhcAFZoqY4.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
@@ -1978,3 +1978,8 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | <code>a \|> b</code>          |       `b a`        |
 | <code>a b c \|> f x y</code>  | `f (a b c) x y`    |
 
+ ### [Language Keywords](#language-keywords) {#language-keywords}
+
+These are all of the language keywords supported by Roc;
+
+`if`,`then`,`else`,`when`,`as`,`is`,`dbg`,`expect`,`expect-fx`,`crash`,`interface`,`app`,`package`,`platform`,`hosted`,`exposes`,`imports`,`with`,`generates`,`packages`,`requires`,`provides`,`to`

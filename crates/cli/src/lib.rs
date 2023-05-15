@@ -11,6 +11,7 @@ use roc_build::program::{
     BuildOrdering, BuiltFile, CodeGenBackend, CodeGenOptions, DEFAULT_ROC_FILENAME,
 };
 use roc_error_macros::{internal_error, user_error};
+use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{ExpectMetadata, Threading};
 use roc_mono::ir::OptLevel;
@@ -279,6 +280,7 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .subcommand(Command::new(CMD_GLUE)
             .about("Generate glue code between a platform's Roc API and its host language")
+            .arg(&flag_dev)
             .arg(
                 Arg::new(GLUE_SPEC)
                     .help("The specification for how to translate Roc types into output files.")
@@ -359,6 +361,20 @@ pub enum FormatMode {
     CheckOnly,
 }
 
+fn opt_level_from_flags(matches: &ArgMatches) -> OptLevel {
+    match (
+        matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_OPT_SIZE),
+        matches.is_present(FLAG_DEV),
+    ) {
+        (true, false, false) => OptLevel::Optimize,
+        (false, true, false) => OptLevel::Size,
+        (false, false, true) => OptLevel::Development,
+        (false, false, false) => OptLevel::Normal,
+        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
+    }
+}
+
 #[cfg(windows)]
 pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
     todo!("running tests does not work on windows right now")
@@ -374,17 +390,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let start_time = Instant::now();
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
-    let opt_level = match (
-        matches.is_present(FLAG_OPTIMIZE),
-        matches.is_present(FLAG_OPT_SIZE),
-        matches.is_present(FLAG_DEV),
-    ) {
-        (true, false, false) => OptLevel::Optimize,
-        (false, true, false) => OptLevel::Size,
-        (false, false, true) => OptLevel::Development,
-        (false, false, false) => OptLevel::Normal,
-        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
-    };
+    let opt_level = opt_level_from_flags(matches);
 
     let threading = match matches
         .value_of(FLAG_MAX_THREADS)
@@ -603,35 +609,24 @@ pub fn build(
     let opt_level = if let BuildConfig::BuildAndRunIfNoErrors = config {
         OptLevel::Development
     } else {
-        match (
-            matches.is_present(FLAG_OPTIMIZE),
-            matches.is_present(FLAG_OPT_SIZE),
-        ) {
-            (true, false) => OptLevel::Optimize,
-            (false, true) => OptLevel::Size,
-            (false, false) => OptLevel::Normal,
-            (true, true) => {
-                user_error!("build can be only one of `--optimize` and `--opt-size`")
-            }
-        }
+        opt_level_from_flags(matches)
     };
 
-    let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
-        CodeGenBackend::Wasm
-    } else {
-        match matches.is_present(FLAG_DEV) {
-            true => CodeGenBackend::Assembly,
-            false => {
-                let backend_mode = match opt_level {
-                    OptLevel::Development => LlvmBackendMode::BinaryDev,
-                    OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
-                        LlvmBackendMode::Binary
-                    }
-                };
-
-                CodeGenBackend::Llvm(backend_mode)
-            }
+    // Note: This allows using `--dev` with `--optimize`.
+    // This means frontend optimizations and dev backend.
+    let code_gen_backend = if matches.is_present(FLAG_DEV) {
+        if matches!(triple.architecture, Architecture::Wasm32) {
+            CodeGenBackend::Wasm
+        } else {
+            CodeGenBackend::Assembly(AssemblyBackendMode::Binary)
         }
+    } else {
+        let backend_mode = match opt_level {
+            OptLevel::Development => LlvmBackendMode::BinaryDev,
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+        };
+
+        CodeGenBackend::Llvm(backend_mode)
     };
 
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
@@ -647,8 +642,7 @@ pub fn build(
         Some(n) => Threading::AtMost(n),
     };
 
-    let wasm_dev_backend = matches!(opt_level, OptLevel::Development)
-        && matches!(code_gen_backend, CodeGenBackend::Wasm);
+    let wasm_dev_backend = matches!(code_gen_backend, CodeGenBackend::Wasm);
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
@@ -1234,9 +1228,10 @@ fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path,
     println!("Running wasm files is not supported on this target.");
 }
 
-#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq, Default)]
 pub enum Target {
     #[strum(serialize = "system")]
+    #[default]
     System,
     #[strum(serialize = "linux32")]
     Linux32,
@@ -1246,12 +1241,6 @@ pub enum Target {
     Windows64,
     #[strum(serialize = "wasm32")]
     Wasm32,
-}
-
-impl Default for Target {
-    fn default() -> Self {
-        Target::System
-    }
 }
 
 impl Target {
