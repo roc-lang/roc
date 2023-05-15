@@ -407,7 +407,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     // Spawn the root task
     if !path.exists() {
         let current_dir = env::current_dir().unwrap();
-        let expected_file_path = current_dir.join(filename);
+        let expected_file_path = current_dir.join(path);
 
         let current_dir_string = current_dir.display();
         let expected_file_path_string = expected_file_path.display();
@@ -545,7 +545,7 @@ pub fn build(
         // Spawn the root task
         if !path.exists() {
             let current_dir = env::current_dir().unwrap();
-            let expected_file_path = current_dir.join(filename);
+            let expected_file_path = current_dir.join(path);
 
             let current_dir_string = current_dir.display();
             let expected_file_path_string = expected_file_path.display();
