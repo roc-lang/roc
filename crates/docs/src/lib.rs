@@ -133,6 +133,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
         set
     };
 
+    // TODO fix: as is, this overrides an existing index.html
     // Write index.html for package (/index.html)
     /*{
         let rendered_package = template_html
@@ -195,7 +196,8 @@ fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
 
-fn render_package_index(root_module: &LoadedModule) -> String {
+// TODO re-enable with let rendered_package = template_html...
+/*fn render_package_index(root_module: &LoadedModule) -> String {
     // The list items containing module links
     let mut module_list_buf = String::new();
 
@@ -226,7 +228,7 @@ fn render_package_index(root_module: &LoadedModule) -> String {
     );
 
     index_buf
-}
+}*/
 
 fn render_module_documentation(
     module: &ModuleDocumentation,
