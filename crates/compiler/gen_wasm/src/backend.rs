@@ -560,10 +560,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             // one-element struct.
             let inner_closure_data_layout = match self.layout_interner.get(closure_data_layout).repr
             {
-                LayoutRepr::Struct {
-                    field_layouts: [inner],
-                    ..
-                } => inner,
+                LayoutRepr::Struct([inner]) => inner,
                 other => internal_error!(
                     "Expected a boxed layout for wrapped closure data, got {:?}",
                     other

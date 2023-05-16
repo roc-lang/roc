@@ -562,7 +562,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
             }
         }
 
-        Struct { field_layouts, .. } => {
+        Struct(field_layouts) => {
             let function =
                 modify_refcount_struct(env, layout_interner, layout_ids, field_layouts, mode);
 

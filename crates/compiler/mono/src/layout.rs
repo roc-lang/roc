@@ -664,7 +664,7 @@ pub struct Layout<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LayoutRepr<'a> {
     Builtin(Builtin<'a>),
-    Struct { field_layouts: &'a [InLayout<'a>] },
+    Struct(&'a [InLayout<'a>]),
     Boxed(InLayout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
@@ -1389,7 +1389,7 @@ pub enum ClosureCallOptions<'a> {
     /// One of a few capturing functions can be called to
     Union(UnionLayout<'a>),
     /// The closure is one function, whose captures are represented as a struct.
-    Struct { field_layouts: &'a [InLayout<'a>] },
+    Struct(&'a [InLayout<'a>]),
     /// The closure is one function that captures a single identifier, whose value is unwrapped.
     UnwrappedCapture(InLayout<'a>),
     /// The closure dispatches to multiple possible functions, none of which capture.
@@ -1418,9 +1418,7 @@ impl<'a> LambdaSet<'a> {
         } else {
             let repr = self.representation;
             match interner.get(repr).repr {
-                LayoutRepr::Struct {
-                    field_layouts: &[], ..
-                } => None,
+                LayoutRepr::Struct(&[]) => None,
                 _ => Some(repr),
             }
         }
@@ -1670,9 +1668,9 @@ impl<'a> LambdaSet<'a> {
                 }
                 ClosureCallOptions::Union(union_layout)
             }
-            LayoutRepr::Struct { field_layouts } => {
+            LayoutRepr::Struct(field_layouts) => {
                 debug_assert_eq!(self.set.len(), 1);
-                ClosureCallOptions::Struct { field_layouts }
+                ClosureCallOptions::Struct(field_layouts)
             }
             layout => {
                 debug_assert!(self.has_enum_dispatch_repr());
@@ -2524,7 +2522,7 @@ impl<'a> LayoutRepr<'a> {
     pub const OPAQUE_PTR: Self = LayoutRepr::Boxed(Layout::VOID);
 
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
-        Self::Struct { field_layouts }
+        Self::Struct(field_layouts)
     }
 
     pub fn safe_to_memcpy<I>(&self, interner: &I) -> bool
@@ -2535,7 +2533,7 @@ impl<'a> LayoutRepr<'a> {
 
         match self {
             Builtin(builtin) => builtin.safe_to_memcpy(),
-            Struct { field_layouts, .. } => field_layouts
+            Struct(field_layouts) => field_layouts
                 .iter()
                 .all(|field_layout| interner.get(*field_layout).safe_to_memcpy(interner)),
             Union(variant) => {
@@ -2630,7 +2628,7 @@ impl<'a> LayoutRepr<'a> {
 
         match self {
             Builtin(builtin) => builtin.stack_size(target_info),
-            Struct { field_layouts, .. } => {
+            Struct(field_layouts) => {
                 let mut sum = 0;
 
                 for field_layout in *field_layouts {
@@ -2656,7 +2654,7 @@ impl<'a> LayoutRepr<'a> {
     {
         use LayoutRepr::*;
         match self {
-            Struct { field_layouts, .. } => field_layouts
+            Struct(field_layouts) => field_layouts
                 .iter()
                 .map(|x| interner.get(*x).alignment_bytes(interner, target_info))
                 .max()
@@ -2755,7 +2753,7 @@ impl<'a> LayoutRepr<'a> {
 
         match self {
             Builtin(builtin) => builtin.is_refcounted(),
-            Struct { field_layouts, .. } => field_layouts
+            Struct(field_layouts) => field_layouts
                 .iter()
                 .any(|f| interner.get(*f).contains_refcounted(interner)),
             Union(variant) => {
@@ -2804,7 +2802,7 @@ impl<'a> LayoutRepr<'a> {
                 }
                 }
                 // If there's any layer of indirection (behind a pointer), then it doesn't vary!
-                Struct { field_layouts, .. } => stack.extend(
+                Struct(field_layouts) => stack.extend(
                     field_layouts
                         .iter()
                         .map(|interned| interner.get(*interned).repr),
@@ -3244,9 +3242,7 @@ fn layout_from_flat_type<'a>(
             } else {
                 let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
                 let struct_layout = Layout {
-                    repr: LayoutRepr::Struct {
-                        field_layouts: layouts.into_bump_slice(),
-                    },
+                    repr: LayoutRepr::Struct(layouts.into_bump_slice()),
                     semantic: SemanticRepr::record(ordered_field_names.into_bump_slice()),
                 };
 
@@ -3289,7 +3285,7 @@ fn layout_from_flat_type<'a>(
                 let field_layouts =
                     Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena).into_bump_slice();
                 let struct_layout = Layout {
-                    repr: LayoutRepr::Struct { field_layouts },
+                    repr: LayoutRepr::Struct(field_layouts),
                     semantic: SemanticRepr::tuple(field_layouts.len()),
                 };
 

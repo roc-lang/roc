@@ -199,7 +199,7 @@ pub fn refcount_generic<'a>(
             elem_layout,
             structure,
         ),
-        LayoutRepr::Struct { field_layouts, .. } => refcount_struct(
+        LayoutRepr::Struct(field_layouts) => refcount_struct(
             root,
             ident_ids,
             ctx,

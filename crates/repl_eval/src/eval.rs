@@ -417,7 +417,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 )
             },
         ),
-        LayoutRepr::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct(field_layouts) => {
             let fields = [Layout::U64, layout];
 
             let result_stack_size = LayoutRepr::struct_(env.arena.alloc(fields))
@@ -615,7 +615,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let arena_str = env.arena.alloc_str(string);
             Expr::Str(StrLiteral::PlainLine(arena_str))
         }
-        (_, LayoutRepr::Struct { field_layouts, .. }) => match raw_content {
+        (_, LayoutRepr::Struct (field_layouts)) => match raw_content {
             Content::Structure(FlatType::Record(fields, _)) => {
                 struct_to_ast(env, mem, addr, *fields)
             }

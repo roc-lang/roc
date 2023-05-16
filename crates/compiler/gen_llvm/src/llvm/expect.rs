@@ -307,7 +307,7 @@ fn build_clone<'a, 'ctx>(
             builtin,
         ),
 
-        LayoutRepr::Struct { field_layouts, .. } => build_clone_struct(
+        LayoutRepr::Struct(field_layouts) => build_clone_struct(
             env,
             layout_interner,
             layout_ids,

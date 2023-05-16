@@ -238,7 +238,7 @@ impl<'a> LowLevelCall<'a> {
             StrGetCapacity => self.load_args_and_call_zig(backend, bitcode::STR_CAPACITY),
             StrToNum => {
                 let number_layout = match backend.layout_interner.get(self.ret_layout).repr {
-                    LayoutRepr::Struct { field_layouts, .. } => field_layouts[0],
+                    LayoutRepr::Struct(field_layouts) => field_layouts[0],
                     _ => {
                         internal_error!("Unexpected mono layout {:?} for StrToNum", self.ret_layout)
                     }
@@ -390,10 +390,7 @@ impl<'a> LowLevelCall<'a> {
                 // Byte offsets of each field in the return struct
                 let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout_raw.repr
                 {
-                    LayoutRepr::Struct {
-                        field_layouts: &[f1, f2],
-                        ..
-                    } => {
+                    LayoutRepr::Struct(&[f1, f2]) => {
                         let l1 = backend.layout_interner.get(f1);
                         let l2 = backend.layout_interner.get(f2);
                         match (l1.repr, l2.repr) {
@@ -693,12 +690,9 @@ impl<'a> LowLevelCall<'a> {
 
                 // The refcount function receives a pointer to an element in the list
                 // This is the same as a Struct containing the element
-                let in_memory_layout =
-                    backend
-                        .layout_interner
-                        .insert_no_semantic(LayoutRepr::Struct {
-                            field_layouts: backend.env.arena.alloc([elem_layout]),
-                        });
+                let in_memory_layout = backend
+                    .layout_interner
+                    .insert_no_semantic(LayoutRepr::Struct(backend.env.arena.alloc([elem_layout])));
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
                 let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
 
@@ -741,12 +735,9 @@ impl<'a> LowLevelCall<'a> {
 
                 // The refcount function receives a pointer to an element in the list
                 // This is the same as a Struct containing the element
-                let in_memory_layout =
-                    backend
-                        .layout_interner
-                        .insert_no_semantic(LayoutRepr::Struct {
-                            field_layouts: backend.env.arena.alloc([elem_layout]),
-                        });
+                let in_memory_layout = backend
+                    .layout_interner
+                    .insert_no_semantic(LayoutRepr::Struct(backend.env.arena.alloc([elem_layout])));
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
                 let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
 
@@ -1909,10 +1900,7 @@ impl<'a> LowLevelCall<'a> {
                 ) {
                     (
                         LayoutRepr::Builtin(Builtin::Int(arg_width)),
-                        LayoutRepr::Struct {
-                            field_layouts: &[ret, ..],
-                            ..
-                        },
+                        LayoutRepr::Struct(&[ret, ..]),
                     ) => match backend.layout_interner.get(ret).repr {
                         LayoutRepr::Builtin(Builtin::Int(ret_width)) => (arg_width, ret_width),
                         _ => {
@@ -2029,7 +2017,7 @@ impl<'a> LowLevelCall<'a> {
 
             // Empty record is always equal to empty record.
             // There are no runtime arguments to check, so just emit true or false.
-            LayoutRepr::Struct { field_layouts, .. } if field_layouts.is_empty() => {
+            LayoutRepr::Struct(field_layouts) if field_layouts.is_empty() => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
@@ -2378,9 +2366,7 @@ pub fn call_higher_order_lowlevel<'a>(
                 (Layout::UNIT, false)
             }
         }
-        LayoutRepr::Struct {
-            field_layouts: &[], ..
-        } => (Layout::UNIT, false),
+        LayoutRepr::Struct(&[]) => (Layout::UNIT, false),
         x => internal_error!("Closure data has an invalid layout\n{:?}", x),
     };
 
@@ -2673,9 +2659,7 @@ fn list_map_n<'a>(
             // Here we wrap the layout in a Struct to ensure we get the right code gen
             let el_ptr = backend
                 .layout_interner
-                .insert_no_semantic(LayoutRepr::Struct {
-                    field_layouts: backend.env.arena.alloc([*el]),
-                });
+                .insert_no_semantic(LayoutRepr::Struct(backend.env.arena.alloc([*el])));
             let idx = backend.get_refcount_fn_index(el_ptr, HelperOp::Dec);
             let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
@@ -2714,9 +2698,7 @@ fn ensure_symbol_is_in_memory<'a>(
             );
             let in_memory_layout = backend
                 .layout_interner
-                .insert_no_semantic(LayoutRepr::Struct {
-                    field_layouts: arena.alloc([layout]),
-                });
+                .insert_no_semantic(LayoutRepr::Struct(arena.alloc([layout])));
             (frame_ptr, offset, in_memory_layout)
         }
     }

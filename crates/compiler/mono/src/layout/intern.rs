@@ -123,7 +123,7 @@ impl<'a> Layout<'a> {
         semantic: SemanticRepr::NONE,
     };
     pub(super) const UNIT_NAKED: Self = Layout {
-        repr: LayoutRepr::Struct { field_layouts: &[] },
+        repr: LayoutRepr::Struct(&[]),
         semantic: SemanticRepr::EMPTY_RECORD,
     };
 
@@ -300,7 +300,7 @@ pub trait LayoutInterner<'a>: Sized {
 
         match self.get(layout).repr {
             Builtin(builtin) => builtin.to_doc(alloc, self, seen_rec, parens),
-            Struct { field_layouts, .. } => {
+            Struct(field_layouts) => {
                 let fields_doc = field_layouts
                     .iter()
                     .map(|x| self.to_doc(*x, alloc, seen_rec, parens));
@@ -1050,9 +1050,9 @@ mod reify {
             LayoutRepr::Builtin(builtin) => {
                 LayoutRepr::Builtin(reify_builtin(arena, interner, slot, builtin))
             }
-            LayoutRepr::Struct { field_layouts } => LayoutRepr::Struct {
-                field_layouts: reify_layout_slice(arena, interner, slot, field_layouts),
-            },
+            LayoutRepr::Struct(field_layouts) => {
+                LayoutRepr::Struct(reify_layout_slice(arena, interner, slot, field_layouts))
+            }
             LayoutRepr::Boxed(lay) => LayoutRepr::Boxed(reify_layout(arena, interner, slot, lay)),
             LayoutRepr::Union(un) => LayoutRepr::Union(reify_union(arena, interner, slot, un)),
             LayoutRepr::LambdaSet(ls) => {
@@ -1258,7 +1258,7 @@ mod equiv {
                         }
                     }
                 }
-                (Struct { field_layouts: fl1 }, Struct { field_layouts: fl2 }) => {
+                (Struct(fl1), Struct(fl2)) => {
                     equiv_fields!(fl1, fl2)
                 }
                 (Boxed(b1), Boxed(b2)) => stack.push((b1, b2)),
@@ -1376,7 +1376,7 @@ pub mod dbg {
                     .debug_tuple("Builtin")
                     .field(&DbgBuiltin(self.0, *b))
                     .finish(),
-                LayoutRepr::Struct { field_layouts } => f
+                LayoutRepr::Struct(field_layouts) => f
                     .debug_struct("Struct")
                     .field("fields", &DbgFields(self.0, field_layouts))
                     .finish(),
@@ -1622,19 +1622,19 @@ mod insert_recursive_layout {
         match interner.chase_recursive(layout).repr {
             LayoutRepr::Union(UnionLayout::Recursive(&[&[l1], &[l2]])) => {
                 match (interner.get(l1).repr, interner.get(l2).repr) {
-                    (
-                        LayoutRepr::Builtin(Builtin::List(l1)),
-                        LayoutRepr::Struct {
-                            field_layouts: &[l2],
-                        },
-                    ) => match (interner.get(l1).repr, interner.get(l2).repr) {
-                        (LayoutRepr::RecursivePointer(i1), LayoutRepr::RecursivePointer(i2)) => {
-                            assert_eq!(i1, i2);
-                            assert_ne!(i1, Layout::VOID);
-                            i1.0
+                    (LayoutRepr::Builtin(Builtin::List(l1)), LayoutRepr::Struct(&[l2])) => {
+                        match (interner.get(l1).repr, interner.get(l2).repr) {
+                            (
+                                LayoutRepr::RecursivePointer(i1),
+                                LayoutRepr::RecursivePointer(i2),
+                            ) => {
+                                assert_eq!(i1, i2);
+                                assert_ne!(i1, Layout::VOID);
+                                i1.0
+                            }
+                            _ => unreachable!(),
                         }
-                        _ => unreachable!(),
-                    },
+                    }
                     _ => unreachable!(),
                 }
             }

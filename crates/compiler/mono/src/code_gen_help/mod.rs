@@ -541,14 +541,12 @@ impl<'a> CodeGenHelp<'a> {
 
             LayoutRepr::Builtin(_) => return layout,
 
-            LayoutRepr::Struct { field_layouts } => {
+            LayoutRepr::Struct(field_layouts) => {
                 let mut new_field_layouts = Vec::with_capacity_in(field_layouts.len(), self.arena);
                 for f in field_layouts.iter() {
                     new_field_layouts.push(self.replace_rec_ptr(ctx, layout_interner, *f));
                 }
-                LayoutRepr::Struct {
-                    field_layouts: new_field_layouts.into_bump_slice(),
-                }
+                LayoutRepr::Struct(new_field_layouts.into_bump_slice())
             }
 
             LayoutRepr::Union(UnionLayout::NonRecursive(tags)) => {
