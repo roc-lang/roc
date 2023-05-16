@@ -503,11 +503,19 @@ fn record_builder_arg<'a>(
                 RecordBuilderField::Value(label, spaces, expr) => {
                     break AssignedField::RequiredValue(label, spaces, expr)
                 }
-                RecordBuilderField::ApplyValue(label, _spaces, expr) => {
+                RecordBuilderField::ApplyValue(label, spaces, expr) => {
                     apply_field_names.push(label);
                     apply_exprs.push(expr);
 
-                    break AssignedField::LabelOnly(label);
+                    let var = arena.alloc(Loc {
+                        region: label.region,
+                        value: Expr::Var {
+                            module_name: "",
+                            ident: arena.alloc("#".to_owned() + label.value),
+                        },
+                    });
+
+                    break AssignedField::RequiredValue(label, spaces, var);
                 }
                 RecordBuilderField::LabelOnly(label) => break AssignedField::LabelOnly(label),
                 RecordBuilderField::SpaceBefore(sub_field, _) => {
@@ -537,16 +545,17 @@ fn record_builder_arg<'a>(
 
     // Construct the builder's closure
     //
-    // { x, y, z: 3 }
-    // \y -> { x, y, z: 3 }
-    // \x -> \y -> { x, y, z: 3 }
+    // { x: #x, y: #y, z: 3 }
+    // \#y -> { x: #x, y: #y, z: 3 }
+    // \#x -> \#y -> { x: #x, y: #y, z: 3 }
 
-    for name in apply_field_names.iter().rev() {
-        let ident = roc_parse::ast::Pattern::Identifier(name.value);
+    for label in apply_field_names.iter().rev() {
+        let name = arena.alloc("#".to_owned() + label.value);
+        let ident = roc_parse::ast::Pattern::Identifier(name);
 
         let arg_pattern = arena.alloc(Loc {
             value: ident,
-            region: name.region,
+            region: label.region,
         });
 
         body = arena.alloc(Loc {

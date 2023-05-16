@@ -774,6 +774,46 @@ mod test_can {
     }
 
     #[test]
+    fn record_builder_field_names_do_not_shadow() {
+        let src = indoc!(
+            r#"
+            succeed = \_ -> crash "succeed"
+            parse = \_ -> crash "parse"
+
+            number = "42"
+
+            succeed { 
+                number <- parse number,
+                raw: number,
+            }
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        let (_, number_to_succeed) = simplify_curried_call(&out.loc_expr.value);
+        let (_, number_closure) = simplify_curried_call(number_to_succeed);
+        let (apply_number_sym, record) = simplify_builder_closure(number_closure);
+
+        match record {
+            Record { fields, .. } => {
+                assert_eq!(get_field_var_sym(fields, "number"), apply_number_sym);
+
+                match get_field_expr(fields, "raw") {
+                    Var(number_sym, _) => {
+                        assert_ne!(number_sym.ident_id(), apply_number_sym.ident_id());
+                        assert_eq!(number_sym.as_str(&out.interns), "number")
+                    }
+                    expr => panic!("a is not a Num: {:?}", expr),
+                }
+            }
+            _ => panic!("Closure body wasn't a Record: {:?}", record),
+        }
+    }
+
+    #[test]
     fn multiple_record_builders_error() {
         let src = indoc!(
             r#"
