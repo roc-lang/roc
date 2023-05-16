@@ -1120,7 +1120,7 @@ impl<
         src2: Symbol,
         layout: InLayout<'a>,
     ) {
-        match self.layout_interner.get(layout).repr {
+        match self.layout_interner.get_repr(layout) {
             LayoutRepr::Builtin(Builtin::Int(width @ quadword_and_smaller!())) => {
                 let intrinsic = bitcode::NUM_ADD_SATURATED_INT[width].to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);

@@ -732,14 +732,14 @@ procedure Json.81 (Json.801, Json.802):
 
 procedure Json.831 (Json.1492):
     let Json.1493 : List Str = StructAtIndex 1 Json.1492;
-    let #Derived_gen.19 : List Str = StructAtIndex 0 Json.1492;
-    dec #Derived_gen.19;
+    let #Derived_gen.20 : List Str = StructAtIndex 0 Json.1492;
+    dec #Derived_gen.20;
     ret Json.1493;
 
 procedure Json.839 (Json.1213):
     let Json.1214 : List Str = StructAtIndex 1 Json.1213;
-    let #Derived_gen.20 : List Str = StructAtIndex 0 Json.1213;
-    dec #Derived_gen.20;
+    let #Derived_gen.19 : List Str = StructAtIndex 0 Json.1213;
+    dec #Derived_gen.19;
     ret Json.1214;
 
 procedure Json.86 (Json.808):
