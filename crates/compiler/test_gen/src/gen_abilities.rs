@@ -943,8 +943,8 @@ fn specialize_unique_newtype_records() {
                 provides [main] to "./platform"
 
             main =
-                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} Json.toUtf8) is
-                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} Json.toUtf8) is
+                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} Json.json) is
+                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} Json.json) is
                         Ok t -> "\(s)\(t)"
                         _ -> "<bad>"
                     _ -> "<bad>"
