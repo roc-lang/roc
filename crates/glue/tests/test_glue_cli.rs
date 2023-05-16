@@ -12,7 +12,7 @@ mod helpers;
 #[cfg(test)]
 mod glue_cli_run {
     use crate::helpers::fixtures_dir;
-    use cli_utils::helpers::{run_glue, run_roc, Out};
+    use cli_utils::helpers::{has_error, run_glue, run_roc, Out};
     use std::fs;
     use std::path::Path;
 
@@ -215,8 +215,7 @@ mod glue_cli_run {
 
         let ignorable = "🔨 Rebuilding platform...\n";
         let stderr = glue_out.stderr.replacen(ignorable, "", 1);
-        let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
-        if !(stderr.is_empty() || is_reporting_runtime) {
+        if has_error(&stderr) {
             panic!("`roc glue` command had unexpected stderr: {}", stderr);
         }
 
@@ -238,8 +237,7 @@ mod glue_cli_run {
 
         let ignorable = "🔨 Rebuilding platform...\n";
         let stderr = compile_out.stderr.replacen(ignorable, "", 1);
-        let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
-        if !(stderr.is_empty() || is_reporting_runtime) {
+        if has_error(&stderr) {
             panic!("`roc` command had unexpected stderr: {}", stderr);
         }
 

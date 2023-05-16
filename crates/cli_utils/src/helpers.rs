@@ -104,6 +104,18 @@ where
     run_roc_with_stdin(&path_to_roc_binary(), args, &[])
 }
 
+pub fn has_error(stderr: &str) -> bool {
+    let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
+
+    let is_clean = stderr.is_empty() ||
+        is_reporting_runtime ||
+        // macOS ld reports this warning, but if we remove -undefined dynamic_lookup,
+        // linking stops working properly.
+        stderr.trim() == "ld: warning: -undefined dynamic_lookup may not work with chained fixups";
+
+    !is_clean
+}
+
 pub fn path_to_roc_binary() -> PathBuf {
     path_to_binary(if cfg!(windows) { "roc.exe" } else { "roc" })
 }
