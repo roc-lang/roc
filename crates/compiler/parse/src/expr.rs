@@ -2642,36 +2642,33 @@ impl<'a> Spaceable<'a> for RecordField<'a> {
 pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
     use RecordField::*;
 
-    enum AssignKind {
-        Required,
-        Optional,
-        Apply,
-    }
-
-    use AssignKind::*;
-
     map_with_arena!(
         and!(
             specialize(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
             and!(
                 spaces(),
-                optional(and!(
-                    one_of!(
-                        map!(word1(b':', ERecord::Colon), |_| Required),
-                        map!(word1(b'?', ERecord::QuestionMark), |_| Optional),
-                        map!(word2(b'<', b'-', ERecord::Arrow), |_| Apply),
-                    ),
-                    spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                optional(either!(
+                    and!(word1(b':', ERecord::Colon), record_field_expr()),
+                    and!(
+                        word1(b'?', ERecord::QuestionMark),
+                        spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                    )
                 ))
             )
         ),
         |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
             match opt_loc_val {
-                Some((Required, loc_val)) => RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
+                Some(Either::First((_, RecordFieldExpr::Value(loc_val)))) => {
+                    RequiredValue(loc_label, spaces, arena.alloc(loc_val))
+                }
 
-                Some((Optional, loc_val)) => OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
+                Some(Either::First((_, RecordFieldExpr::Apply(_, loc_val)))) => {
+                    ApplyValue(loc_label, spaces, arena.alloc(loc_val))
+                }
 
-                Some((Apply, loc_val)) => ApplyValue(loc_label, spaces, arena.alloc(loc_val)),
+                Some(Either::Second((_, loc_val))) => {
+                    OptionalValue(loc_label, spaces, arena.alloc(loc_val))
+                }
 
                 // If no value was provided, record it as a Var.
                 // Canonicalize will know what to do with a Var later.
@@ -2682,6 +2679,40 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
                         LabelOnly(loc_label)
                     }
                 }
+            }
+        }
+    )
+}
+
+enum RecordFieldExpr<'a> {
+    Apply(&'a [CommentOrNewline<'a>], Loc<Expr<'a>>),
+    Value(Loc<Expr<'a>>),
+}
+
+fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> {
+    map_with_arena!(
+        and!(
+            spaces(),
+            either!(
+                and!(
+                    word2(b'<', b'-', ERecord::Arrow),
+                    spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                ),
+                specialize_ref(ERecord::Expr, loc_expr(false))
+            )
+        ),
+        |arena: &'a bumpalo::Bump, (spaces, either)| {
+            match either {
+                Either::First((_, loc_expr)) => RecordFieldExpr::Apply(spaces, loc_expr),
+                Either::Second(loc_expr) => RecordFieldExpr::Value({
+                    if spaces.is_empty() {
+                        loc_expr
+                    } else {
+                        arena
+                            .alloc(loc_expr.value)
+                            .with_spaces_before(spaces, loc_expr.region)
+                    }
+                }),
             }
         }
     )

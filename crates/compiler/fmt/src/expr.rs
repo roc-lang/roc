@@ -1552,8 +1552,7 @@ fn format_record_builder_field_multiline(
             }
 
             buf.push_str(separator_prefix);
-            buf.spaces(1);
-            buf.push_str("<-");
+            buf.push_str(": <-");
             buf.spaces(1);
             ann.value.format(buf, indent);
             buf.push(',');

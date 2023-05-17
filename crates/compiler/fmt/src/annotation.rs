@@ -562,8 +562,7 @@ fn format_record_builder_field_help(
             }
 
             buf.spaces(separator_spaces);
-            buf.spaces(1);
-            buf.push_str("<-");
+            buf.push_str(": <-");
             buf.spaces(1);
             ann.value.format(buf, indent);
         }
