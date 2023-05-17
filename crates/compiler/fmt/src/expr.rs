@@ -1544,8 +1544,15 @@ fn format_record_builder_field_multiline(
 
             buf.push_str(separator_prefix);
             buf.push_str(":");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
+
+            if ann.value.is_multiline() {
+                buf.newline();
+                ann.value.format(buf, indent + INDENT);
+            } else {
+                buf.spaces(1);
+                ann.value.format(buf, indent);
+            }
+
             buf.push(',');
         }
         ApplyValue(name, colon_spaces, arrow_spaces, ann) => {
@@ -1564,13 +1571,18 @@ fn format_record_builder_field_multiline(
 
             if !arrow_spaces.is_empty() {
                 fmt_spaces(buf, arrow_spaces.iter(), indent);
-                buf.indent(indent);
+                buf.indent(indent + INDENT);
             }
 
             buf.push_str("<-");
-            buf.spaces(1);
 
-            ann.value.format(buf, indent);
+            if ann.value.is_multiline() {
+                buf.newline();
+                ann.value.format(buf, indent + INDENT);
+            } else {
+                buf.spaces(1);
+                ann.value.format(buf, indent);
+            }
             buf.push(',');
         }
         LabelOnly(name) => {

@@ -1979,6 +1979,58 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_record_builder_field() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                succeed { 
+                    a: <- get "a" |> map (\x -> x * 2)
+                        |> batch,  
+                    b: <- get "b" |> batch,
+                    c: items 
+                        |> List.map \x -> x * 2
+                }
+                "#
+            ),
+            indoc!(
+                r#"
+                succeed {
+                    a: <-
+                        get "a"
+                        |> map (\x -> x * 2)
+                        |> batch,
+                    b: <- get "b" |> batch,
+                    c:
+                        items
+                        |> List.map \x -> x * 2,
+                }
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+                succeed {
+                    a: # I like to comment in weird places
+                        <- get "a" |> batch,
+                    b: <- get "b" |> batch,
+                }
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                succeed {
+                    a:
+                    # I like to comment in weird places
+                        <- get "a" |> batch,
+                    b: <- get "b" |> batch,
+                }
+                "#
+        ));
+    }
+
+    #[test]
     fn outdentable_record_builders() {
         expr_formats_to(
             indoc!(
