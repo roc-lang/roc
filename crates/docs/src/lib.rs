@@ -135,7 +135,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
 
     // TODO fix: as is, this overrides an existing index.html
     // Write index.html for package (/index.html)
-    /*{
+    {
         let rendered_package = template_html
             .replace(
                 "<!-- Page title -->",
@@ -156,7 +156,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 error
             )
         });
-    }*/
+    }
 
     // Write each package module's index.html file
     for module_docs in loaded_module.docs_by_module.values() {
@@ -196,8 +196,7 @@ fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
 
-// TODO re-enable with let rendered_package = template_html...
-/*fn render_package_index(root_module: &LoadedModule) -> String {
+fn render_package_index(root_module: &LoadedModule) -> String {
     // The list items containing module links
     let mut module_list_buf = String::new();
 
@@ -228,7 +227,7 @@ fn page_title(package_name: &str, module_name: &str) -> String {
     );
 
     index_buf
-}*/
+}
 
 fn render_module_documentation(
     module: &ModuleDocumentation,
