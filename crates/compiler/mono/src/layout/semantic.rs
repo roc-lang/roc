@@ -27,20 +27,21 @@ enum Inner<'a> {
 impl<'a> SemanticRepr<'a> {
     pub(super) const NONE: Self = Self(Inner::None);
     pub(super) const EMPTY_RECORD: Self = Self::record(&[]);
+    pub(super) const BOOL: Self = Self::tag_union(&["False", "True"]);
 
     pub(super) const fn record(fields: &'a [&'a str]) -> Self {
         Self(Inner::Record(SemaRecord { fields }))
     }
 
-    pub(super) fn tuple(size: usize) -> Self {
+    pub(super) const fn tuple(size: usize) -> Self {
         Self(Inner::Tuple(SemaTuple { size }))
     }
 
-    pub(super) fn tag_union(tags: &'a [&'a str]) -> Self {
+    pub(super) const fn tag_union(tags: &'a [&'a str]) -> Self {
         Self(Inner::TagUnion(SemaTagUnion { tags }))
     }
 
-    pub(super) fn lambdas(lambdas: &'a [Symbol]) -> Self {
+    pub(super) const fn lambdas(lambdas: &'a [Symbol]) -> Self {
         Self(Inner::Lambdas(SemaLambdas { lambdas }))
     }
 }

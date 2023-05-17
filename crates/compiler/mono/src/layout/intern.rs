@@ -59,7 +59,7 @@ macro_rules! nosema {
 cache_interned_layouts! {
     0,  VOID, pub, Layout::VOID_NAKED
     1,  UNIT, pub, Layout::UNIT_NAKED
-    2,  BOOL, pub, nosema!(LayoutRepr::BOOL)
+    2,  BOOL, pub, Layout { repr: LayoutRepr::BOOL, semantic: SemanticRepr::BOOL }
     3,  U8,   pub, nosema!(LayoutRepr::U8)
     4,  U16,  pub, nosema!(LayoutRepr::U16)
     5,  U32,  pub, nosema!(LayoutRepr::U32)
