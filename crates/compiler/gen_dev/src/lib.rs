@@ -1068,8 +1068,8 @@ trait Backend<'a> {
             }
             LowLevel::Eq => {
                 debug_assert_eq!(2, args.len(), "Eq: expected to have exactly two argument");
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
+                debug_assert!(
+                    self.interner().eq_repr(arg_layouts[0], arg_layouts[1]),
                     "Eq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
@@ -1085,8 +1085,8 @@ trait Backend<'a> {
                     args.len(),
                     "NotEq: expected to have exactly two argument"
                 );
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
+                debug_assert!(
+                    self.interner().eq_repr(arg_layouts[0], arg_layouts[1]),
                     "NotEq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
