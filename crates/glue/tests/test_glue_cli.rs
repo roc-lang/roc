@@ -213,10 +213,11 @@ mod glue_cli_run {
             ),
         );
 
-        let ignorable = "🔨 Rebuilding platform...\n";
-        let stderr = glue_out.stderr.replacen(ignorable, "", 1);
-        if has_error(&stderr) {
-            panic!("`roc glue` command had unexpected stderr: {}", stderr);
+        if has_error(&glue_out.stderr) {
+            panic!(
+                "`roc glue` command had unexpected stderr: {}",
+                glue_out.stderr
+            );
         }
 
         assert!(glue_out.status.success(), "bad status {:?}", glue_out);
@@ -235,10 +236,11 @@ mod glue_cli_run {
             &[],
         );
 
-        let ignorable = "🔨 Rebuilding platform...\n";
-        let stderr = compile_out.stderr.replacen(ignorable, "", 1);
-        if has_error(&stderr) {
-            panic!("`roc` command had unexpected stderr: {}", stderr);
+        if has_error(&compile_out.stderr) {
+            panic!(
+                "`roc` command had unexpected stderr: {}",
+                compile_out.stderr
+            );
         }
 
         assert!(compile_out.status.success(), "bad status {:?}", compile_out);

@@ -105,13 +105,23 @@ where
 }
 
 pub fn has_error(stderr: &str) -> bool {
-    let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
+    let stderr_stripped = stderr
+        .replacen("🔨 Rebuilding platform...\n", "", 1)
+        // for some reason, llvm prints out this warning when targeting windows
+        .replacen(
+            "warning: ignoring debug info with an invalid version (0) in app\r\n",
+            "",
+            1,
+        );
 
-    let is_clean = stderr.is_empty() ||
+    let is_reporting_runtime =
+        stderr_stripped.starts_with("runtime: ") && stderr_stripped.ends_with("ms\n");
+
+    let is_clean = stderr_stripped.is_empty() ||
         is_reporting_runtime ||
         // macOS ld reports this warning, but if we remove -undefined dynamic_lookup,
         // linking stops working properly.
-        stderr.trim() == "ld: warning: -undefined dynamic_lookup may not work with chained fixups";
+        stderr_stripped.trim() == "ld: warning: -undefined dynamic_lookup may not work with chained fixups";
 
     !is_clean
 }
