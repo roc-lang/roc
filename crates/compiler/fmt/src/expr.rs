@@ -228,7 +228,10 @@ impl<'a> Formattable for Expr<'a> {
                             a.extract_spaces().item.is_multiline()
                                 && matches!(
                                     a.value.extract_spaces().item,
-                                    Expr::Tuple(_) | Expr::List(_) | Expr::Record(_)
+                                    Expr::Tuple(_)
+                                        | Expr::List(_)
+                                        | Expr::Record(_)
+                                        | Expr::RecordBuilder(_)
                                 )
                                 && a.extract_spaces().before == [CommentOrNewline::Newline]
                         })
@@ -560,7 +563,11 @@ pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
 fn is_outdentable(expr: &Expr) -> bool {
     matches!(
         expr.extract_spaces().item,
-        Expr::Tuple(_) | Expr::List(_) | Expr::Record(_) | Expr::Closure(..)
+        Expr::Tuple(_)
+            | Expr::List(_)
+            | Expr::Record(_)
+            | Expr::RecordBuilder(_)
+            | Expr::Closure(..)
     )
 }
 

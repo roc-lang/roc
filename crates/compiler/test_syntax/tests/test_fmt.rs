@@ -1979,20 +1979,40 @@ mod test_fmt {
     }
 
     #[test]
-    fn multiline_record_builder_func_arg() {
+    fn outdentable_record_builders() {
         expr_formats_to(
             indoc!(
                 r#"
-                succeed {  a: get "a" |> batch,
-                    b: get "b" |> batch, 
+                succeed {  a: <- get "a" |> batch,
+                    b: <- get "b" |> batch, 
                 }
                 "#
             ),
             indoc!(
                 r#"
                 succeed {
-                    a: get "a" |> batch,
-                    b: get "b" |> batch,
+                    a: <- get "a" |> batch,
+                    b: <- get "b" |> batch,
+                }
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                succeed 
+                    {  
+                        a: <- get "a" |> batch,
+                        b: <- get "b" |> batch, 
+                    }
+                "#
+            ),
+            indoc!(
+                r#"
+                succeed {
+                    a: <- get "a" |> batch,
+                    b: <- get "b" |> batch,
                 }
                 "#
             ),
