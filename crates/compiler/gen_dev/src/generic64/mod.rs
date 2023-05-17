@@ -2744,15 +2744,6 @@ impl<
 
                 match *nullable_id {
                     true => {
-                        ASM::neq_reg_reg_reg(
-                            &mut self.buf,
-                            RegisterWidth::W64,
-                            dst_reg,
-                            src1_reg,
-                            src2_reg,
-                        );
-                    }
-                    false => {
                         ASM::eq_reg_reg_reg(
                             &mut self.buf,
                             RegisterWidth::W64,
@@ -2761,7 +2752,18 @@ impl<
                             src2_reg,
                         );
                     }
+                    false => {
+                        ASM::neq_reg_reg_reg(
+                            &mut self.buf,
+                            RegisterWidth::W64,
+                            dst_reg,
+                            src1_reg,
+                            src2_reg,
+                        );
+                    }
                 }
+
+                self.free_symbol(&tmp);
             }
             x => todo!("getting tag id of union with layout ({:?})", x),
         };
@@ -2778,10 +2780,12 @@ impl<
 
         let layout_interner: &mut STLayoutInterner<'a> = self.layout_interner;
         let buf: &mut Vec<'a, u8> = &mut self.buf;
+
+        let (data_size, data_alignment) =
+            union_layout.data_size_and_alignment(layout_interner, target_info);
+
         match union_layout {
             UnionLayout::NonRecursive(field_layouts) => {
-                let (data_size, data_alignment) =
-                    union_layout.data_size_and_alignment(layout_interner, target_info);
                 let id_offset = data_size - data_alignment;
                 let base_offset = self.storage_manager.claim_stack_area(sym, data_size);
                 let mut current_offset = base_offset;
@@ -2820,23 +2824,28 @@ impl<
                 other_fields,
             } => {
                 if tag_id == *nullable_id as TagIdIntType {
-                    // step 1: make the struct
+                    // it's just a null pointer
+                    self.load_literal_i64(sym, 0);
+                } else {
+                    // construct the payload as a struct on the stack
                     let temp_sym = Symbol::DEV_TMP5;
-                    let layout =
-                        layout_interner.insert_no_semantic(LayoutRepr::Struct(other_fields));
+                    let layout = self
+                        .layout_interner
+                        .insert_no_semantic(LayoutRepr::Struct(other_fields));
+
+                    self.load_literal_symbols(fields);
                     self.storage_manager.create_struct(
-                        layout_interner,
-                        buf,
+                        self.layout_interner,
+                        &mut self.buf,
                         &temp_sym,
                         &layout,
                         fields,
                     );
 
                     // now effectively box this struct
-                    self.expr_box(*sym, Symbol::DEV_TMP5, layout)
-                } else {
-                    // it's just a null pointer
-                    self.load_literal_i64(sym, 0);
+                    self.expr_box(*sym, temp_sym, layout);
+
+                    self.free_symbol(&temp_sym);
                 }
             }
             x => todo!("creating unions with layout: {:?}", x),
