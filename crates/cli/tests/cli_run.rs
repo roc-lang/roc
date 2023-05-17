@@ -10,8 +10,9 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, known_bad_file,
-        run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError, ValgrindErrorXWhat,
+        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError,
+        ValgrindErrorXWhat,
     };
     use const_format::concatcp;
     use indoc::indoc;
@@ -143,20 +144,8 @@ mod cli_run {
             env,
         );
 
-        let ignorable = "🔨 Rebuilding platform...\n";
-        let stderr = compile_out.stderr.replacen(ignorable, "", 1);
-
-        // for some reason, llvm prints out this warning when targeting windows
-        let ignorable = "warning: ignoring debug info with an invalid version (0) in app\r\n";
-        let stderr = stderr.replacen(ignorable, "", 1);
-
-        let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
-        if !(stderr.is_empty() || is_reporting_runtime
-            // macOS ld reports this warning, but if we remove -undefined dynamic_lookup,
-            // linking stops working properly.
-            || stderr.trim() == "ld: warning: -undefined dynamic_lookup may not work with chained fixups")
-        {
-            panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
+        if has_error(&compile_out.stderr) {
+            panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, compile_out.stderr);
         }
 
         compile_out
