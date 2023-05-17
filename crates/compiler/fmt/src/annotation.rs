@@ -505,7 +505,7 @@ impl<'a> Formattable for RecordBuilderField<'a> {
 
     fn format_with_options(&self, buf: &mut Buf, _parens: Parens, newlines: Newlines, indent: u16) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_record_builder_field_help(self, buf, indent, 0, newlines == Newlines::Yes);
+        format_record_builder_field_help(self, buf, indent, newlines == Newlines::Yes);
     }
 }
 
@@ -527,7 +527,6 @@ fn format_record_builder_field_help(
     zelf: &RecordBuilderField,
     buf: &mut Buf,
     indent: u16,
-    separator_spaces: usize,
     is_multiline: bool,
 ) {
     use self::RecordBuilderField::*;
@@ -545,7 +544,6 @@ fn format_record_builder_field_help(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.spaces(separator_spaces);
             buf.push(':');
             buf.spaces(1);
             ann.value.format(buf, indent);
@@ -562,7 +560,6 @@ fn format_record_builder_field_help(
                 fmt_spaces(buf, colon_spaces.iter(), indent);
             }
 
-            buf.spaces(separator_spaces);
             buf.push(':');
             buf.spaces(1);
 
@@ -584,22 +581,10 @@ fn format_record_builder_field_help(
         }
         SpaceBefore(sub_field, spaces) => {
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-            format_record_builder_field_help(
-                sub_field,
-                buf,
-                indent,
-                separator_spaces,
-                is_multiline,
-            );
+            format_record_builder_field_help(sub_field, buf, indent, is_multiline);
         }
         SpaceAfter(sub_field, spaces) => {
-            format_record_builder_field_help(
-                sub_field,
-                buf,
-                indent,
-                separator_spaces,
-                is_multiline,
-            );
+            format_record_builder_field_help(sub_field, buf, indent, is_multiline);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
         Malformed(raw) => {
