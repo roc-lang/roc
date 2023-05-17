@@ -2213,6 +2213,7 @@ impl<
                         storage_manager,
                         self.layout_interner,
                         element_ptr,
+                        0,
                         *ret_layout,
                         *dst,
                     );
@@ -2684,11 +2685,14 @@ impl<
             .storage_manager
             .load_to_general_reg(&mut self.buf, &ptr);
 
+        let offset = 0;
+
         Self::ptr_read(
             &mut self.buf,
             &mut self.storage_manager,
             self.layout_interner,
             ptr_reg,
+            offset,
             element_layout,
             dst,
         );
@@ -3303,16 +3307,17 @@ impl<
         dst: Symbol,
         ptr_reg: GeneralReg,
         tmp_reg: GeneralReg,
+        offset: i32,
     ) {
         let base_offset = storage_manager.claim_stack_area(&dst, 24);
 
-        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 0);
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 0);
         ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
 
-        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 8);
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 8);
         ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
 
-        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 16);
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 16);
         ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
     }
 
@@ -3323,6 +3328,7 @@ impl<
         stack_size: u32,
         ptr_reg: GeneralReg,
         tmp_reg: GeneralReg,
+        read_offset: i32,
     ) {
         let mut copied = 0;
         let size = stack_size as i32;
@@ -3336,7 +3342,7 @@ impl<
 
         if size - copied >= 8 {
             for _ in (0..(size - copied)).step_by(8) {
-                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
                 ASM::mov_base32_reg64(buf, base_offset + copied, tmp_reg);
 
                 copied += 8;
@@ -3345,7 +3351,7 @@ impl<
 
         if size - copied >= 4 {
             for _ in (0..(size - copied)).step_by(4) {
-                ASM::mov_reg32_mem32_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_reg32_mem32_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
                 ASM::mov_base32_reg32(buf, base_offset + copied, tmp_reg);
 
                 copied += 4;
@@ -3354,7 +3360,7 @@ impl<
 
         if size - copied >= 2 {
             for _ in (0..(size - copied)).step_by(2) {
-                ASM::mov_reg16_mem16_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_reg16_mem16_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
                 ASM::mov_base32_reg16(buf, base_offset + copied, tmp_reg);
 
                 copied += 2;
@@ -3363,7 +3369,7 @@ impl<
 
         if size - copied >= 1 {
             for _ in (0..(size - copied)).step_by(1) {
-                ASM::mov_reg8_mem8_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_reg8_mem8_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
                 ASM::mov_base32_reg8(buf, base_offset + copied, tmp_reg);
 
                 copied += 1;
@@ -3376,6 +3382,7 @@ impl<
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
         layout_interner: &STLayoutInterner<'a>,
         ptr_reg: GeneralReg,
+        offset: i32,
         element_in_layout: InLayout<'a>,
         dst: Symbol,
     ) {
@@ -3388,40 +3395,47 @@ impl<
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                        ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                        ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                     IntWidth::I32 | IntWidth::U32 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                        ASM::mov_reg32_mem32_offset32(buf, dst_reg, ptr_reg, 0);
+                        ASM::mov_reg32_mem32_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                     IntWidth::I16 | IntWidth::U16 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                        ASM::mov_reg16_mem16_offset32(buf, dst_reg, ptr_reg, 0);
+                        ASM::mov_reg16_mem16_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                     IntWidth::I8 | IntWidth::U8 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                        ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, 0);
+                        ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                 },
                 Builtin::Float(FloatWidth::F64) => {
                     let dst_reg = storage_manager.claim_float_reg(buf, &dst);
-                    ASM::mov_freg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                    ASM::mov_freg64_mem64_offset32(buf, dst_reg, ptr_reg, offset);
                 }
                 Builtin::Float(FloatWidth::F32) => {
                     let dst_reg = storage_manager.claim_float_reg(buf, &dst);
-                    ASM::mov_freg32_mem32_offset32(buf, dst_reg, ptr_reg, 0);
+                    ASM::mov_freg32_mem32_offset32(buf, dst_reg, ptr_reg, offset);
                 }
                 Builtin::Bool => {
                     // the same as an 8-bit integer
                     let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                    ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, 0);
+                    ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, offset);
                 }
                 Builtin::Decimal => {
                     // same as 128-bit integer
                 }
                 Builtin::Str | Builtin::List(_) => {
                     storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
-                        Self::unbox_str_or_list(buf, storage_manager, dst, ptr_reg, tmp_reg);
+                        Self::unbox_str_or_list(
+                            buf,
+                            storage_manager,
+                            dst,
+                            ptr_reg,
+                            tmp_reg,
+                            offset,
+                        );
                     });
                 }
             },
@@ -3429,7 +3443,7 @@ impl<
             LayoutRepr::Boxed(_) => {
                 // the same as 64-bit integer (for 64-bit targets)
                 let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, offset);
             }
 
             LayoutRepr::Struct { .. } => {
@@ -3437,7 +3451,15 @@ impl<
                 let stack_size = layout_interner.stack_size(element_in_layout);
 
                 storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
-                    Self::unbox_to_stack(buf, storage_manager, dst, stack_size, ptr_reg, tmp_reg);
+                    Self::unbox_to_stack(
+                        buf,
+                        storage_manager,
+                        dst,
+                        stack_size,
+                        ptr_reg,
+                        tmp_reg,
+                        offset,
+                    );
                 });
             }
 
@@ -3446,7 +3468,15 @@ impl<
                 let stack_size = layout_interner.stack_size(element_in_layout);
 
                 storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
-                    Self::unbox_to_stack(buf, storage_manager, dst, stack_size, ptr_reg, tmp_reg);
+                    Self::unbox_to_stack(
+                        buf,
+                        storage_manager,
+                        dst,
+                        stack_size,
+                        ptr_reg,
+                        tmp_reg,
+                        offset,
+                    );
                 });
             }
 
@@ -3456,6 +3486,7 @@ impl<
                     storage_manager,
                     layout_interner,
                     ptr_reg,
+                    offset,
                     lambda_set.runtime_representation(),
                     dst,
                 );
