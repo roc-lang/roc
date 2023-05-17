@@ -1189,10 +1189,8 @@ fn to_expr_report<'b>(
                                 CalledVia::RecordBuilder => {
                                     alloc.concat([
                                         alloc.tip(),
-                                        alloc.reflow("Replace "),
+                                        alloc.reflow("Remove "),
                                         alloc.keyword("<-"),
-                                        alloc.reflow(" with "),
-                                        alloc.keyword(":"),
                                         alloc.reflow(" to assign the field directly.")
                                     ])
                                 }
