@@ -4134,9 +4134,7 @@ where
         Unit => env
             .cache
             .put_in(Layout::new(LayoutRepr::UNIT, compute_semantic())),
-        BoolUnion { .. } => env
-            .cache
-            .put_in(Layout::new(LayoutRepr::BOOL, compute_semantic())),
+        BoolUnion { .. } => Layout::BOOL,
         ByteUnion(_) => env
             .cache
             .put_in(Layout::new(LayoutRepr::U8, compute_semantic())),
