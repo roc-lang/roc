@@ -669,8 +669,8 @@ mod test_can {
 
                 succeed {
                     a: 1,
-                    b <- apply "b",
-                    c <- apply "c",
+                    b: <- apply "b",
+                    c: <- apply "c",
                     d
                 }
             "#
@@ -783,7 +783,7 @@ mod test_can {
             number = "42"
 
             succeed { 
-                number <- parse number,
+                number: <- parse number,
                 raw: number,
             }
             "#
@@ -818,8 +818,8 @@ mod test_can {
         let src = indoc!(
             r#"
                 succeed 
-                    { a <- apply "a" }
-                    { b <- apply "b" }
+                    { a: <- apply "a" }
+                    { b: <- apply "b" }
             "#
         );
         let arena = Bump::new();
@@ -843,7 +843,7 @@ mod test_can {
     fn hanging_record_builder() {
         let src = indoc!(
             r#"
-                { a <- apply "a" }
+                { a: <- apply "a" }
             "#
         );
         let arena = Bump::new();

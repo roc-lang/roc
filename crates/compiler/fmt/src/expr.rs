@@ -228,7 +228,10 @@ impl<'a> Formattable for Expr<'a> {
                             a.extract_spaces().item.is_multiline()
                                 && matches!(
                                     a.value.extract_spaces().item,
-                                    Expr::Tuple(_) | Expr::List(_) | Expr::Record(_)
+                                    Expr::Tuple(_)
+                                        | Expr::List(_)
+                                        | Expr::Record(_)
+                                        | Expr::RecordBuilder(_)
                                 )
                                 && a.extract_spaces().before == [CommentOrNewline::Newline]
                         })
@@ -560,7 +563,11 @@ pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
 fn is_outdentable(expr: &Expr) -> bool {
     matches!(
         expr.extract_spaces().item,
-        Expr::Tuple(_) | Expr::List(_) | Expr::Record(_) | Expr::Closure(..)
+        Expr::Tuple(_)
+            | Expr::List(_)
+            | Expr::Record(_)
+            | Expr::RecordBuilder(_)
+            | Expr::Closure(..)
     )
 }
 
@@ -1537,25 +1544,45 @@ fn format_record_builder_field_multiline(
 
             buf.push_str(separator_prefix);
             buf.push_str(":");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
+
+            if ann.value.is_multiline() {
+                buf.newline();
+                ann.value.format(buf, indent + INDENT);
+            } else {
+                buf.spaces(1);
+                ann.value.format(buf, indent);
+            }
+
             buf.push(',');
         }
-        ApplyValue(name, spaces, ann) => {
+        ApplyValue(name, colon_spaces, arrow_spaces, ann) => {
             buf.newline();
             buf.indent(indent);
             buf.push_str(name.value);
 
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
+            if !colon_spaces.is_empty() {
+                fmt_spaces(buf, colon_spaces.iter(), indent);
                 buf.indent(indent);
             }
 
             buf.push_str(separator_prefix);
+            buf.push(':');
             buf.spaces(1);
+
+            if !arrow_spaces.is_empty() {
+                fmt_spaces(buf, arrow_spaces.iter(), indent);
+                buf.indent(indent + INDENT);
+            }
+
             buf.push_str("<-");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
+
+            if ann.value.is_multiline() {
+                buf.newline();
+                ann.value.format(buf, indent + INDENT);
+            } else {
+                buf.spaces(1);
+                ann.value.format(buf, indent);
+            }
             buf.push(',');
         }
         LabelOnly(name) => {

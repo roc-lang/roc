@@ -10184,7 +10184,7 @@ I recommend using camelCase. It's the standard style in Roc code!
         indoc!(
             r#"
             { 
-                a <- apply "a",
+                a: <- apply "a",
                 b,
                 c ? "optional"
             }
@@ -10200,7 +10200,7 @@ I recommend using camelCase. It's the standard style in Roc code!
     2│
     3│  main =
     4│      { 
-    5│          a <- apply "a",
+    5│          a: <- apply "a",
     6│          b,
     7│          c ? "optional"
                 ^^^^^^^^^^^^^^
@@ -10214,7 +10214,7 @@ I recommend using camelCase. It's the standard style in Roc code!
         indoc!(
             r#"
             { rec &
-                a <- apply "a",
+                a: <- apply "a",
                 b: 3
             }
             "#
@@ -10229,8 +10229,8 @@ I recommend using camelCase. It's the standard style in Roc code!
     2│
     3│  main =
     4│      { rec &
-    5│          a <- apply "a",
-                ^^^^^^^^^^^^^^
+    5│          a: <- apply "a",
+                ^^^^^^^^^^^^^^^
 
     Record builders cannot be updated like records.
     "###
@@ -10241,8 +10241,8 @@ I recommend using camelCase. It's the standard style in Roc code!
         indoc!(
             r#"
             succeed
-                { a <- apply "a" }
-                { b <- apply "b" }
+                { a: <- apply "a" }
+                { b: <- apply "b" }
             "#
         ),
         @r###"
@@ -10251,8 +10251,8 @@ I recommend using camelCase. It's the standard style in Roc code!
     This function is applied to multiple record builders:
 
     4│>      succeed
-    5│>          { a <- apply "a" }
-    6│>          { b <- apply "b" }
+    5│>          { a: <- apply "a" }
+    6│>          { b: <- apply "b" }
 
     Note: Functions can only take at most one record builder!
 
@@ -10265,7 +10265,7 @@ I recommend using camelCase. It's the standard style in Roc code!
         unapplied_record_builder,
         indoc!(
             r#"
-            { a <- apply "a" }
+            { a: <- apply "a" }
             "#
         ),
         @r###"
@@ -10273,8 +10273,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This record builder was not applied to a function:
 
-    4│      { a <- apply "a" }
-            ^^^^^^^^^^^^^^^^^^
+    4│      { a: <- apply "a" }
+            ^^^^^^^^^^^^^^^^^^^
 
     However, we need a function to construct the record.
 
@@ -10289,7 +10289,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             succeed = \_ -> crash ""
 
             succeed { 
-                a <- "a",
+                a: <- "a",
             }
             "#
         ),
@@ -10298,10 +10298,10 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This value is not a function, but it was given 1 argument:
 
-    7│          a <- "a",
-                     ^^^
+    7│          a: <- "a",
+                      ^^^
 
-    Tip: Replace `<-` with `:` to assign the field directly.
+    Tip: Remove `<-` to assign the field directly.
     "###
     );
 
@@ -10320,7 +10320,7 @@ I recommend using camelCase. It's the standard style in Roc code!
     //         get = \_ -> @Decode {}
 
     //         succeed {
-    //             a <- get "a",
+    //             a: <- get "a",
     //             # missing |> apply ^
     //         }
     //         "#
@@ -10330,8 +10330,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     // This value is an opaque type, so it cannot be called with an argument:
 
-    // 12│          a <- get "a",
-    //                   ^^^^^^^
+    // 12│          a: <- get "a",
+    //                    ^^^^^^^
 
     // Hint: Did you mean to apply it to a function first?
     //     "###

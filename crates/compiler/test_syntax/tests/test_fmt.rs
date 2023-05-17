@@ -1930,19 +1930,19 @@ mod test_fmt {
     fn record_builder() {
         expr_formats_same(indoc!(
             r#"
-            { a: 1, b <- get "b" |> batch, c <- get "c" |> batch, d }
+            { a: 1, b: <- get "b" |> batch, c: <- get "c" |> batch, d }
             "#
         ));
 
         expr_formats_to(
             indoc!(
                 r#"
-                {   a: 1, b <-  get "b" |> batch,   c <- get "c" |> batch }
+                {   a: 1, b:   <-  get "b" |> batch,   c:<- get "c" |> batch }
                 "#
             ),
             indoc!(
                 r#"
-                { a: 1, b <- get "b" |> batch, c <- get "c" |> batch }
+                { a: 1, b: <- get "b" |> batch, c: <- get "c" |> batch }
                 "#
             ),
         );
@@ -1951,8 +1951,8 @@ mod test_fmt {
             r#"
             {
                 a: 1,
-                b <- get "b" |> batch,
-                c <- get "c" |> batch,
+                b: <- get "b" |> batch,
+                c: <- get "c" |> batch,
                 d,
             }
             "#
@@ -1961,16 +1961,16 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                {   a: 1, b <-  get "b" |> batch,
-                c <- get "c" |> batch, d }
+                {   a: 1, b:  <-  get "b" |> batch,
+                c: <- get "c" |> batch, d }
                 "#
             ),
             indoc!(
                 r#"
                 {
                     a: 1,
-                    b <- get "b" |> batch,
-                    c <- get "c" |> batch,
+                    b: <- get "b" |> batch,
+                    c: <- get "c" |> batch,
                     d,
                 }
                 "#
@@ -1979,20 +1979,92 @@ mod test_fmt {
     }
 
     #[test]
-    fn multiline_record_builder_func_arg() {
+    fn multiline_record_builder_field() {
         expr_formats_to(
             indoc!(
                 r#"
-                succeed {  a: get "a" |> batch,
-                    b: get "b" |> batch, 
+                succeed { 
+                    a: <- get "a" |> map (\x -> x * 2)
+                        |> batch,  
+                    b: <- get "b" |> batch,
+                    c: items 
+                        |> List.map \x -> x * 2
                 }
                 "#
             ),
             indoc!(
                 r#"
                 succeed {
-                    a: get "a" |> batch,
-                    b: get "b" |> batch,
+                    a: <-
+                        get "a"
+                        |> map (\x -> x * 2)
+                        |> batch,
+                    b: <- get "b" |> batch,
+                    c:
+                        items
+                        |> List.map \x -> x * 2,
+                }
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+                succeed {
+                    a: # I like to comment in weird places
+                        <- get "a" |> batch,
+                    b: <- get "b" |> batch,
+                }
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                succeed {
+                    a:
+                    # I like to comment in weird places
+                        <- get "a" |> batch,
+                    b: <- get "b" |> batch,
+                }
+                "#
+        ));
+    }
+
+    #[test]
+    fn outdentable_record_builders() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                succeed {  a: <- get "a" |> batch,
+                    b: <- get "b" |> batch, 
+                }
+                "#
+            ),
+            indoc!(
+                r#"
+                succeed {
+                    a: <- get "a" |> batch,
+                    b: <- get "b" |> batch,
+                }
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                succeed 
+                    {  
+                        a: <- get "a" |> batch,
+                        b: <- get "b" |> batch, 
+                    }
+                "#
+            ),
+            indoc!(
+                r#"
+                succeed {
+                    a: <- get "a" |> batch,
+                    b: <- get "b" |> batch,
                 }
                 "#
             ),
@@ -2004,15 +2076,15 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                succeed { a <- get "a" } 
-                    { b <- get "b" }
+                succeed { a: <- get "a" } 
+                    { b: <- get "b" }
                 "#
             ),
             indoc!(
                 r#"
                 succeed
-                    { a <- get "a" }
-                    { b <- get "b" }
+                    { a: <- get "a" }
+                    { b: <- get "b" }
                 "#
             ),
         );
