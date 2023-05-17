@@ -1937,7 +1937,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                {   a: 1, b: <-  get "b" |> batch,   c: <- get "c" |> batch }
+                {   a: 1, b:   <-  get "b" |> batch,   c:<- get "c" |> batch }
                 "#
             ),
             indoc!(
@@ -1961,7 +1961,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                {   a: 1, b: <-  get "b" |> batch,
+                {   a: 1, b:  <-  get "b" |> batch,
                 c: <- get "c" |> batch, d }
                 "#
             ),

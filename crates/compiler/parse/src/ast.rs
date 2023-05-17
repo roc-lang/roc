@@ -694,8 +694,13 @@ pub enum RecordBuilderField<'a> {
     // A field with a value, e.g. `{ name: "blah" }`
     Value(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
 
-    // A field with a function we can apply to build part of the record, e.g. `{ name <- apply getName }`
-    ApplyValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+    // A field with a function we can apply to build part of the record, e.g. `{ name: <- apply getName }`
+    ApplyValue(
+        Loc<&'a str>,
+        &'a [CommentOrNewline<'a>],
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<Expr<'a>>,
+    ),
 
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
     LabelOnly(Loc<&'a str>),
@@ -1615,9 +1620,8 @@ impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
 impl<'a> Malformed for RecordBuilderField<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            RecordBuilderField::Value(_, _, expr) | RecordBuilderField::ApplyValue(_, _, expr) => {
-                expr.is_malformed()
-            }
+            RecordBuilderField::Value(_, _, expr)
+            | RecordBuilderField::ApplyValue(_, _, _, expr) => expr.is_malformed(),
             RecordBuilderField::LabelOnly(_) => false,
             RecordBuilderField::SpaceBefore(field, _)
             | RecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),

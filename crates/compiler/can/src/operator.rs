@@ -503,7 +503,7 @@ fn record_builder_arg<'a>(
                 RecordBuilderField::Value(label, spaces, expr) => {
                     break AssignedField::RequiredValue(label, spaces, expr)
                 }
-                RecordBuilderField::ApplyValue(label, spaces, expr) => {
+                RecordBuilderField::ApplyValue(label, _, _, expr) => {
                     apply_field_names.push(label);
                     apply_exprs.push(expr);
 
@@ -515,7 +515,7 @@ fn record_builder_arg<'a>(
                         },
                     });
 
-                    break AssignedField::RequiredValue(label, spaces, var);
+                    break AssignedField::RequiredValue(label, &[], var);
                 }
                 RecordBuilderField::LabelOnly(label) => break AssignedField::LabelOnly(label),
                 RecordBuilderField::SpaceBefore(sub_field, _) => {

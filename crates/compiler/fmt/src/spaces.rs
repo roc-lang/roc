@@ -620,12 +620,13 @@ impl<'a> RemoveSpaces<'a> for RecordBuilderField<'a> {
         match *self {
             RecordBuilderField::Value(a, _, c) => RecordBuilderField::Value(
                 a.remove_spaces(arena),
-                arena.alloc([]),
+                &[],
                 arena.alloc(c.remove_spaces(arena)),
             ),
-            RecordBuilderField::ApplyValue(a, _, c) => RecordBuilderField::ApplyValue(
+            RecordBuilderField::ApplyValue(a, _, _, c) => RecordBuilderField::ApplyValue(
                 a.remove_spaces(arena),
-                arena.alloc([]),
+                &[],
+                &[],
                 arena.alloc(c.remove_spaces(arena)),
             ),
             RecordBuilderField::LabelOnly(a) => {

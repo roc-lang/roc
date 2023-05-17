@@ -1541,19 +1541,28 @@ fn format_record_builder_field_multiline(
             ann.value.format(buf, indent);
             buf.push(',');
         }
-        ApplyValue(name, spaces, ann) => {
+        ApplyValue(name, colon_spaces, arrow_spaces, ann) => {
             buf.newline();
             buf.indent(indent);
             buf.push_str(name.value);
 
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
+            if !colon_spaces.is_empty() {
+                fmt_spaces(buf, colon_spaces.iter(), indent);
                 buf.indent(indent);
             }
 
             buf.push_str(separator_prefix);
-            buf.push_str(": <-");
+            buf.push(':');
             buf.spaces(1);
+
+            if !arrow_spaces.is_empty() {
+                fmt_spaces(buf, arrow_spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str("<-");
+            buf.spaces(1);
+
             ann.value.format(buf, indent);
             buf.push(',');
         }

@@ -2539,7 +2539,12 @@ pub enum RecordField<'a> {
     LabelOnly(Loc<&'a str>),
     SpaceBefore(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
-    ApplyValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+    ApplyValue(
+        Loc<&'a str>,
+        &'a [CommentOrNewline<'a>],
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<Expr<'a>>,
+    ),
 }
 
 #[derive(Debug)]
@@ -2554,7 +2559,7 @@ impl<'a> RecordField<'a> {
 
         loop {
             match current {
-                RecordField::ApplyValue(_, _, _) => break true,
+                RecordField::ApplyValue(_, _, _, _) => break true,
                 RecordField::SpaceBefore(field, _) | RecordField::SpaceAfter(field, _) => {
                     current = *field;
                 }
@@ -2580,7 +2585,7 @@ impl<'a> RecordField<'a> {
 
             RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
 
-            RecordField::ApplyValue(_, _, _) => Err(FoundApplyValue),
+            RecordField::ApplyValue(_, _, _, _) => Err(FoundApplyValue),
 
             RecordField::SpaceBefore(field, spaces) => {
                 let assigned_field = field.to_assigned_field(arena)?;
@@ -2611,8 +2616,8 @@ impl<'a> RecordField<'a> {
 
             RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
 
-            RecordField::ApplyValue(loc_label, spaces, loc_expr) => {
-                Ok(ApplyValue(loc_label, spaces, loc_expr))
+            RecordField::ApplyValue(loc_label, colon_spaces, arrow_spaces, loc_expr) => {
+                Ok(ApplyValue(loc_label, colon_spaces, arrow_spaces, loc_expr))
             }
 
             RecordField::SpaceBefore(field, spaces) => {
@@ -2662,8 +2667,8 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
                     RequiredValue(loc_label, spaces, arena.alloc(loc_val))
                 }
 
-                Some(Either::First((_, RecordFieldExpr::Apply(_, loc_val)))) => {
-                    ApplyValue(loc_label, spaces, arena.alloc(loc_val))
+                Some(Either::First((_, RecordFieldExpr::Apply(arrow_spaces, loc_val)))) => {
+                    ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
                 }
 
                 Some(Either::Second((_, loc_val))) => {

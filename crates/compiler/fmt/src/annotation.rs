@@ -513,8 +513,9 @@ fn is_multiline_record_builder_field_help(afield: &RecordBuilderField<'_>) -> bo
     use self::RecordBuilderField::*;
 
     match afield {
-        Value(_, spaces, ann) | ApplyValue(_, spaces, ann) => {
-            !spaces.is_empty() || ann.value.is_multiline()
+        Value(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
+        ApplyValue(_, colon_spaces, arrow_spaces, ann) => {
+            !colon_spaces.is_empty() || !arrow_spaces.is_empty() || ann.value.is_multiline()
         }
         LabelOnly(_) => false,
         SpaceBefore(_, _) | SpaceAfter(_, _) => true,
@@ -549,7 +550,7 @@ fn format_record_builder_field_help(
             buf.spaces(1);
             ann.value.format(buf, indent);
         }
-        ApplyValue(name, spaces, ann) => {
+        ApplyValue(name, colon_spaces, arrow_spaces, ann) => {
             if is_multiline {
                 buf.newline();
                 buf.indent(indent);
@@ -557,12 +558,19 @@ fn format_record_builder_field_help(
 
             buf.push_str(name.value);
 
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
+            if !colon_spaces.is_empty() {
+                fmt_spaces(buf, colon_spaces.iter(), indent);
             }
 
             buf.spaces(separator_spaces);
-            buf.push_str(": <-");
+            buf.push(':');
+            buf.spaces(1);
+
+            if !arrow_spaces.is_empty() {
+                fmt_spaces(buf, arrow_spaces.iter(), indent);
+            }
+
+            buf.push_str("<-");
             buf.spaces(1);
             ann.value.format(buf, indent);
         }
