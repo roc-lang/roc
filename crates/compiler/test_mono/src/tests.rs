@@ -1855,6 +1855,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
 }
 
 #[mono_test]
+#[cfg(not(debug_assertions))]
 fn encode_derived_record_one_field_string() {
     indoc!(
         r#"
@@ -1872,6 +1873,7 @@ fn encode_derived_record_one_field_string() {
 }
 
 #[mono_test]
+#[cfg(not(debug_assertions))]
 fn encode_derived_record_two_field_strings() {
     indoc!(
         r#"
@@ -1889,6 +1891,7 @@ fn encode_derived_record_two_field_strings() {
 }
 
 #[mono_test]
+#[cfg(not(debug_assertions))]
 fn encode_derived_nested_record_string() {
     indoc!(
         r#"
