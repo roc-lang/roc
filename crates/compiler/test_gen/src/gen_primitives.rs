@@ -1279,7 +1279,7 @@ fn linked_list_is_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_is_empty_1() {
     assert_evals_to!(
         indoc!(

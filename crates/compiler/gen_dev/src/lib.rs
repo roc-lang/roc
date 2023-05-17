@@ -815,7 +815,13 @@ trait Backend<'a> {
                 self.load_literal_symbols([*ptr].as_slice());
                 self.expr_unbox(*sym, *ptr, element_layout)
             }
-            x => todo!("the expression, {:?}", x),
+            Expr::NullPointer => {
+                self.load_literal_i64(sym, 0);
+            }
+            Expr::Reuse { .. } => todo!(),
+            Expr::Reset { .. } => todo!(),
+            Expr::ResetRef { .. } => todo!(),
+            Expr::RuntimeErrorFunction(_) => todo!(),
         }
     }
 
