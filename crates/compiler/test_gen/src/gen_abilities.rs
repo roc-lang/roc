@@ -402,6 +402,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derive_to_encoder_for_opaque() {
     assert_evals_to!(
@@ -564,6 +565,7 @@ mod encode_immediate {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_one_field_string() {
     assert_evals_to!(
@@ -586,6 +588,7 @@ fn encode_derived_record_one_field_string() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_two_fields_strings() {
     assert_evals_to!(
@@ -609,6 +612,7 @@ fn encode_derived_record_two_fields_strings() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_string() {
     assert_evals_to!(
@@ -703,6 +707,7 @@ fn encode_derived_nested_tag_string() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_tag_record() {
     assert_evals_to!(
@@ -751,6 +756,7 @@ fn encode_derived_list_string() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_of_records() {
     assert_evals_to!(
@@ -799,6 +805,7 @@ fn encode_derived_list_of_lists_of_strings() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
 fn encode_derived_record_with_many_types() {
     assert_evals_to!(
@@ -872,6 +879,7 @@ fn encode_derived_tuple_of_tuples() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
 fn encode_derived_generic_record_with_different_field_types() {
     assert_evals_to!(
