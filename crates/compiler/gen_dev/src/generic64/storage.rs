@@ -11,8 +11,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
     layout::{
-        Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
-        UnionLayout,
+        Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
     },
 };
 use roc_target::TargetInfo;
