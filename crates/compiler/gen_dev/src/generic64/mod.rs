@@ -2677,7 +2677,13 @@ impl<
         ASM::mov_base32_reg64(&mut self.buf, base_offset, ptr_reg);
     }
 
-    fn expr_box(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>) {
+    fn expr_box(
+        &mut self,
+        sym: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+        reuse: Option<Symbol>,
+    ) {
         let element_width_symbol = Symbol::DEV_TMP;
         self.load_layout_stack_size(element_layout, element_width_symbol);
 
@@ -2685,18 +2691,32 @@ impl<
         let element_alignment_symbol = Symbol::DEV_TMP2;
         self.load_layout_alignment(Layout::U32, element_alignment_symbol);
 
-        self.allocate_with_refcount(
-            Symbol::DEV_TMP3,
-            element_width_symbol,
-            element_alignment_symbol,
-        );
+        let allocation = match reuse {
+            None => {
+                self.allocate_with_refcount(
+                    Symbol::DEV_TMP3,
+                    element_width_symbol,
+                    element_alignment_symbol,
+                );
+
+                Symbol::DEV_TMP3
+            }
+            Some(reuse) => {
+                // check for null
+                self.allocate_with_refcount_if_null(reuse, element_layout);
+
+                reuse
+            }
+        };
 
         self.free_symbol(&element_width_symbol);
         self.free_symbol(&element_alignment_symbol);
 
-        self.build_ptr_write(sym, Symbol::DEV_TMP3, value, element_layout);
+        self.build_ptr_write(sym, allocation, value, element_layout);
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        if allocation == Symbol::DEV_TMP3 {
+            self.free_symbol(&Symbol::DEV_TMP3);
+        }
     }
 
     fn expr_unbox(&mut self, dst: Symbol, ptr: Symbol, element_layout: InLayout<'a>) {
@@ -2775,6 +2795,7 @@ impl<
         fields: &'a [Symbol],
         union_layout: &UnionLayout<'a>,
         tag_id: TagIdIntType,
+        reuse: Option<Symbol>,
     ) {
         let target_info = self.storage_manager.target_info;
 
@@ -2843,7 +2864,7 @@ impl<
                     );
 
                     // now effectively box this struct
-                    self.expr_box(*sym, temp_sym, layout);
+                    self.expr_box(*sym, temp_sym, layout, reuse);
 
                     self.free_symbol(&temp_sym);
                 }
@@ -3420,6 +3441,36 @@ impl<
         );
     }
 
+    fn allocate_with_refcount_if_null(&mut self, dst: Symbol, layout: InLayout) {
+        let reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &dst);
+
+        // jump to where the pointer is valid, because it is already valid if non-zero
+        let jmp_index = ASM::jne_reg64_imm64_imm32(&mut self.buf, reg, 0x0, 0);
+
+        // so, the pointer is NULL, allocate
+
+        let data_bytes = Symbol::DEV_TMP;
+        self.load_layout_stack_size(layout, data_bytes);
+
+        // Load allocation alignment (u32)
+        let element_alignment = Symbol::DEV_TMP2;
+        self.load_layout_alignment(Layout::U32, element_alignment);
+
+        self.allocate_with_refcount(dst, data_bytes, element_alignment);
+
+        self.free_symbol(&data_bytes);
+        self.free_symbol(&element_alignment);
+
+        // update the jump
+        let destination_index = self.buf.len();
+        let mut tmp = bumpalo::vec![in self.env.arena];
+        ASM::jne_reg64_imm64_imm32(&mut tmp, reg, 0x0, (destination_index - jmp_index) as i32);
+
+        self.buf[jmp_index..][..tmp.len()].copy_from_slice(tmp.as_slice());
+    }
+
     fn unbox_str_or_list(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
@@ -3753,7 +3804,7 @@ impl<
     }
 
     /// Loads the alignment bytes of `layout` into the given `symbol`
-    fn load_layout_alignment(&mut self, layout: InLayout<'a>, symbol: Symbol) {
+    fn load_layout_alignment(&mut self, layout: InLayout<'_>, symbol: Symbol) {
         let u32_layout = Layout::U32;
         let alignment = self.layout_interner.alignment_bytes(layout);
         let alignment_literal = Literal::Int((alignment as i128).to_ne_bytes());
@@ -3762,7 +3813,7 @@ impl<
     }
 
     /// Loads the stack size of `layout` into the given `symbol`
-    fn load_layout_stack_size(&mut self, layout: InLayout<'a>, symbol: Symbol) {
+    fn load_layout_stack_size(&mut self, layout: InLayout<'_>, symbol: Symbol) {
         let u64_layout = Layout::U64;
         let width = self.layout_interner.stack_size(layout);
         let width_literal = Literal::Int((width as i128).to_ne_bytes());

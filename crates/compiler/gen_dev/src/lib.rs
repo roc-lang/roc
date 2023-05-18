@@ -798,7 +798,7 @@ trait Backend<'a> {
                 ..
             } => {
                 self.load_literal_symbols(arguments);
-                self.tag(sym, arguments, tag_layout, *tag_id);
+                self.tag(sym, arguments, tag_layout, *tag_id, None);
             }
             Expr::ExprBox { symbol: value } => {
                 let element_layout = match self.interner().get(*layout).repr {
@@ -807,7 +807,7 @@ trait Backend<'a> {
                 };
 
                 self.load_literal_symbols([*value].as_slice());
-                self.expr_box(*sym, *value, element_layout)
+                self.expr_box(*sym, *value, element_layout, None)
             }
             Expr::ExprUnbox { symbol: ptr } => {
                 let element_layout = *layout;
@@ -818,9 +818,56 @@ trait Backend<'a> {
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
             }
-            Expr::Reuse { .. } => todo!(),
-            Expr::Reset { .. } => todo!(),
-            Expr::ResetRef { .. } => todo!(),
+            Expr::Reuse {
+                tag_layout,
+                tag_id,
+                symbol: reused,
+                arguments,
+                ..
+            } => {
+                self.load_literal_symbols(arguments);
+                self.tag(sym, arguments, tag_layout, *tag_id, Some(*reused));
+            }
+            Expr::Reset { symbol, .. } => {
+                let layout = *self.layout_map().get(symbol).unwrap();
+
+                // Expand the Refcounting statement into more detailed IR with a function call
+                // If this layout requires a new RC proc, we get enough info to create a linker symbol
+                // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
+                let (new_expr, new_specializations) = {
+                    let (module_id, layout_interner, interns, rc_proc_gen, _) =
+                        self.module_interns_helpers_mut();
+                    let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+
+                    rc_proc_gen.call_reset_refcount(ident_ids, layout_interner, layout, *symbol)
+                };
+
+                for spec in new_specializations.into_iter() {
+                    self.helper_proc_symbols_mut().push(spec);
+                }
+
+                self.build_expr(sym, &new_expr, &Layout::BOOL)
+            }
+            Expr::ResetRef { symbol, .. } => {
+                let layout = *self.layout_map().get(symbol).unwrap();
+
+                // Expand the Refcounting statement into more detailed IR with a function call
+                // If this layout requires a new RC proc, we get enough info to create a linker symbol
+                // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
+                let (new_expr, new_specializations) = {
+                    let (module_id, layout_interner, interns, rc_proc_gen, _) =
+                        self.module_interns_helpers_mut();
+                    let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+
+                    rc_proc_gen.call_resetref_refcount(ident_ids, layout_interner, layout, *symbol)
+                };
+
+                for spec in new_specializations.into_iter() {
+                    self.helper_proc_symbols_mut().push(spec);
+                }
+
+                self.build_expr(sym, &new_expr, &Layout::BOOL)
+            }
             Expr::RuntimeErrorFunction(_) => todo!(),
         }
     }
@@ -2211,13 +2258,20 @@ trait Backend<'a> {
         args: &'a [Symbol],
         tag_layout: &UnionLayout<'a>,
         tag_id: TagIdIntType,
+        reuse: Option<Symbol>,
     );
 
     /// load a value from a pointer
     fn expr_unbox(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>);
 
     /// store a refcounted value on the heap
-    fn expr_box(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>);
+    fn expr_box(
+        &mut self,
+        sym: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+        reuse: Option<Symbol>,
+    );
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &InLayout<'a>);
