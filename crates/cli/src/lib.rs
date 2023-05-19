@@ -566,7 +566,7 @@ pub fn build(
                         expected_file_path_string
                     ));
                     // Add some additional hints if run as `roc [FILENAME]`.
-                    if let None = matches.subcommand() {
+                    if matches.subcommand().is_none() {
                         error_lines.push("Did you misspell a subcommand?".to_string());
                     }
                     error_lines.push("You can run `roc help` to see the list of available subcommands and for more information on how to provide a .roc file.".to_string());
