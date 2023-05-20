@@ -555,22 +555,22 @@ pub enum AbilityImpls<'a> {
 
 /// `Eq` or `Eq { eq: myEq }`
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasAbility<'a> {
-    HasAbility {
+pub enum ImplementsAbility<'a> {
+    ImplementsAbility {
         /// Should be a zero-argument `Apply` or an error; we'll check this in canonicalization
         ability: Loc<TypeAnnotation<'a>>,
         impls: Option<Loc<AbilityImpls<'a>>>,
     },
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasAbility<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasAbility<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a ImplementsAbility<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ImplementsAbility<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum HasAbilities<'a> {
     /// `has [Eq { eq: myEq }, Hash]`
-    Has(Collection<'a, Loc<HasAbility<'a>>>),
+    Has(Collection<'a, Loc<ImplementsAbility<'a>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
@@ -578,7 +578,7 @@ pub enum HasAbilities<'a> {
 }
 
 impl HasAbilities<'_> {
-    pub fn collection(&self) -> &Collection<Loc<HasAbility>> {
+    pub fn collection(&self) -> &Collection<Loc<ImplementsAbility>> {
         let mut it = self;
         loop {
             match it {
@@ -1263,12 +1263,12 @@ impl<'a> Spaceable<'a> for AbilityImpls<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for HasAbility<'a> {
+impl<'a> Spaceable<'a> for ImplementsAbility<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbility::SpaceBefore(self, spaces)
+        ImplementsAbility::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbility::SpaceAfter(self, spaces)
+        ImplementsAbility::SpaceAfter(self, spaces)
     }
 }
 
@@ -1368,7 +1368,7 @@ impl_extract_spaces!(Pattern);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
-impl_extract_spaces!(HasAbility);
+impl_extract_spaces!(ImplementsAbility);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -1707,13 +1707,15 @@ impl<'a> Malformed for Implements<'a> {
     }
 }
 
-impl<'a> Malformed for HasAbility<'a> {
+impl<'a> Malformed for ImplementsAbility<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            HasAbility::HasAbility { ability, impls } => {
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
                 ability.is_malformed() || impls.iter().any(|impl_| impl_.is_malformed())
             }
-            HasAbility::SpaceBefore(has, _) | HasAbility::SpaceAfter(has, _) => has.is_malformed(),
+            ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
+                has.is_malformed()
+            }
         }
     }
 }

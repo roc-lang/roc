@@ -1,5 +1,5 @@
 use crate::ast::{
-    AbilityImpls, AssignedField, CommentOrNewline, Expr, HasAbilities, HasAbility,
+    AbilityImpls, AssignedField, CommentOrNewline, Expr, HasAbilities, ImplementsAbility,
     ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
@@ -545,7 +545,7 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, ETyp
                     loc!(parse_implements_ability()),
                     word1(b',', EType::TEnd),
                     word1(b']', EType::TEnd),
-                    HasAbility::SpaceBefore
+                    ImplementsAbility::SpaceBefore
                 ),
                 HasAbilities::Has
             )),
@@ -554,8 +554,8 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, ETyp
     ))
 }
 
-fn parse_implements_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
-    increment_min_indent(record!(HasAbility::HasAbility {
+fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, EType<'a>> {
+    increment_min_indent(record!(ImplementsAbility::ImplementsAbility {
         ability: loc!(specialize(EType::TApply, concrete_type())),
         impls: optional(backtrackable(space0_before_e(
             loc!(map!(

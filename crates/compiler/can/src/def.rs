@@ -695,7 +695,7 @@ fn canonicalize_opaque<'a>(
         for has_ability in has_abilities.items {
             let region = has_ability.region;
             let (ability, opt_impls) = match has_ability.value.extract_spaces().item {
-                ast::HasAbility::HasAbility { ability, impls } => (ability, impls),
+                ast::ImplementsAbility::ImplementsAbility { ability, impls } => (ability, impls),
                 _ => internal_error!("spaces not extracted"),
             };
 

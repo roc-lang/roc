@@ -4,7 +4,7 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
-        HasAbilities, HasAbility, Header, Implements, ImplementsClause, Module, Pattern,
+        HasAbilities, Header, Implements, ImplementsAbility, ImplementsClause, Module, Pattern,
         RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
         TypeHeader, ValueDef, WhenBranch,
     },
@@ -898,14 +898,16 @@ impl<'a> RemoveSpaces<'a> for AbilityImpls<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasAbility<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsAbility<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasAbility::HasAbility { ability, impls } => HasAbility::HasAbility {
-                ability: ability.remove_spaces(arena),
-                impls: impls.remove_spaces(arena),
-            },
-            HasAbility::SpaceBefore(has, _) | HasAbility::SpaceAfter(has, _) => {
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
+                ImplementsAbility::ImplementsAbility {
+                    ability: ability.remove_spaces(arena),
+                    impls: impls.remove_spaces(arena),
+                }
+            }
+            ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
                 has.remove_spaces(arena)
             }
         }
