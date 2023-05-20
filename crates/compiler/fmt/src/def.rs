@@ -123,7 +123,7 @@ impl<'a> Formattable for TypeDef<'a> {
             }
             Ability {
                 header: TypeHeader { name, vars },
-                loc_has: _,
+                loc_implements: _,
                 members,
             } => {
                 buf.indent(indent);

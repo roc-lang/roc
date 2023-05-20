@@ -2611,7 +2611,7 @@ fn to_pending_type_def<'a>(
         Ability {
             header: TypeHeader { name, vars },
             members,
-            loc_has: _,
+            loc_implements: _,
         } => {
             let name = match scope
                 .introduce_without_shadow_symbol(&Ident::from(name.value), name.region)

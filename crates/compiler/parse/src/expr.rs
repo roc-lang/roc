@@ -1408,7 +1408,7 @@ fn finish_parsing_ability_def_help<'a>(
     let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
     let type_def = TypeDef::Ability {
         header: TypeHeader { name, vars: args },
-        loc_has,
+        loc_implements: loc_has,
         members: demands.into_bump_slice(),
     };
 

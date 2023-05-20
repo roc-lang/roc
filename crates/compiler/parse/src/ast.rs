@@ -402,7 +402,7 @@ pub enum TypeDef<'a> {
     ///     hash : a -> U64 | a implements Hash
     Ability {
         header: TypeHeader<'a>,
-        loc_has: Loc<Implements<'a>>,
+        loc_implements: Loc<Implements<'a>>,
         members: &'a [AbilityMember<'a>],
     },
 }
@@ -1681,7 +1681,7 @@ impl<'a> Malformed for TypeDef<'a> {
             } => header.is_malformed() || typ.is_malformed() || derived.is_malformed(),
             TypeDef::Ability {
                 header,
-                loc_has,
+                loc_implements: loc_has,
                 members,
             } => {
                 header.is_malformed()

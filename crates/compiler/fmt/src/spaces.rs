@@ -507,14 +507,14 @@ impl<'a> RemoveSpaces<'a> for TypeDef<'a> {
             },
             Ability {
                 header: TypeHeader { name, vars },
-                loc_has,
+                loc_implements: loc_has,
                 members,
             } => Ability {
                 header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
-                loc_has: loc_has.remove_spaces(arena),
+                loc_implements: loc_has.remove_spaces(arena),
                 members: members.remove_spaces(arena),
             },
         }
