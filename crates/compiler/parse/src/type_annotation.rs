@@ -12,8 +12,8 @@ use crate::parser::{
     absolute_column_min_indent, increment_min_indent, then, ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
-    allocated, backtrackable, fail, optional, specialize, specialize_ref, word1, word2, word3,
-    EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
+    allocated, backtrackable, fail, optional, specialize, specialize_ref, word1, word10, word2,
+    word3, EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
     Progress::{self, *},
 };
 use crate::state::State;
@@ -444,9 +444,9 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
     )
 }
 
-fn has_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
+fn implements_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
     map!(
-        // Suppose we are trying to parse "a has Hash"
+        // Suppose we are trying to parse "a implements Hash"
         and!(
             space0_around_ee(
                 // Parse "a", with appropriate spaces
@@ -458,8 +458,20 @@ fn has_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
                 EType::TIndentEnd
             ),
             skip_first!(
-                // Parse "has"; we don't care about this keyword
-                word3(b'h', b'a', b's', EType::THasClause),
+                // Parse "implements"; we don't care about this keyword
+                word10(
+                    b'i',
+                    b'm',
+                    b'p',
+                    b'l',
+                    b'e',
+                    b'm',
+                    b'e',
+                    b'n',
+                    b't',
+                    b's',
+                    EType::THasClause
+                ),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
                 absolute_column_min_indent(ability_chain())
             )
@@ -470,18 +482,18 @@ fn has_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
                 &abilities.last().unwrap().region,
             );
             let region = Region::span_across(&var.region, &abilities_region);
-            let has_clause = HasClause {
+            let implements_clause = HasClause {
                 var,
                 abilities: abilities.into_bump_slice(),
             };
-            Loc::at(region, has_clause)
+            Loc::at(region, implements_clause)
         }
     )
 }
 
-/// Parse a chain of `has` clauses, e.g. " | a has Hash, b has Eq".
+/// Parse a chain of `implements` clauses, e.g. " | a implements Hash, b implements Eq".
 /// Returns the clauses and spaces before the starting "|", if there were any.
-fn has_clause_chain<'a>(
+fn implements_clause_chain<'a>(
 ) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<HasClause<'a>>]), EType<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
         let (_, (spaces_before, ()), state) =
@@ -489,11 +501,13 @@ fn has_clause_chain<'a>(
                 .parse(arena, state, min_indent)?;
 
         // Parse the first clause (there must be one), then the rest
-        let (_, first_clause, state) = has_clause().parse(arena, state, min_indent)?;
+        let (_, first_clause, state) = implements_clause().parse(arena, state, min_indent)?;
 
-        let (_, mut clauses, state) =
-            zero_or_more!(skip_first!(word1(b',', EType::THasClause), has_clause()))
-                .parse(arena, state, min_indent)?;
+        let (_, mut clauses, state) = zero_or_more!(skip_first!(
+            word1(b',', EType::THasClause),
+            implements_clause()
+        ))
+        .parse(arena, state, min_indent)?;
 
         // Usually the number of clauses shouldn't be too large, so this is okay
         clauses.insert(0, first_clause);
@@ -642,7 +656,7 @@ fn expression<'a>(
 
         // Finally, try to parse a where clause if there is one.
         // The where clause must be at least as deep as where the type annotation started.
-        match has_clause_chain().parse(arena, state.clone(), min_indent) {
+        match implements_clause_chain().parse(arena, state.clone(), min_indent) {
             Ok((where_progress, (spaces_before, has_chain), state)) => {
                 let region = Region::span_across(&annot.region, &has_chain.last().unwrap().region);
                 let type_annot = if !spaces_before.is_empty() {

@@ -30,7 +30,7 @@ Eq has
     ## for more detail.
     ## 5. Functions cannot be compared for structural equality, therefore Roc
     ## cannot derive `isEq` for types that contain functions.
-    isEq : a, a -> Bool | a has Eq
+    isEq : a, a -> Bool | a implements Eq
 
 ## Represents the boolean true and false using an opaque type.
 ## `Bool` implements the `Eq` ability.
@@ -116,7 +116,7 @@ not : Bool -> Bool
 ## expect (Bool.false != Bool.false) == Bool.false
 ## expect "Apples" != "Oranges"
 ## ```
-isNotEq : a, a -> Bool | a has Eq
+isNotEq : a, a -> Bool | a implements Eq
 isNotEq = \a, b -> structuralNotEq a b
 
 # INTERNAL COMPILER USE ONLY: used to lower calls to `isEq` to structural
