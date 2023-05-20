@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, CommentOrNewline, Expr, HasAbilities, HasAbility, HasImpls, ImplementsClause,
-    Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
+    AbilityImpls, AssignedField, CommentOrNewline, Expr, HasAbilities, HasAbility,
+    ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
@@ -569,7 +569,7 @@ fn parse_implements_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> 
                         AssignedField::SpaceBefore
                     )
                 ),
-                HasImpls::HasImpls
+                AbilityImpls::AbilityImpls
             )),
             EType::TIndentEnd
         )))

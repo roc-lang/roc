@@ -3,8 +3,8 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, HasAbilities,
-        HasAbility, HasImpls, Header, Implements, ImplementsClause, Module, Pattern,
+        AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
+        HasAbilities, HasAbility, Header, Implements, ImplementsClause, Module, Pattern,
         RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
         TypeHeader, ValueDef, WhenBranch,
     },
@@ -885,11 +885,13 @@ impl<'a> RemoveSpaces<'a> for Tag<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasImpls<'a> {
+impl<'a> RemoveSpaces<'a> for AbilityImpls<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasImpls::HasImpls(impls) => HasImpls::HasImpls(impls.remove_spaces(arena)),
-            HasImpls::SpaceBefore(has, _) | HasImpls::SpaceAfter(has, _) => {
+            AbilityImpls::AbilityImpls(impls) => {
+                AbilityImpls::AbilityImpls(impls.remove_spaces(arena))
+            }
+            AbilityImpls::SpaceBefore(has, _) | AbilityImpls::SpaceAfter(has, _) => {
                 has.remove_spaces(arena)
             }
         }

@@ -544,13 +544,13 @@ pub struct ImplementsClause<'a> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasImpls<'a> {
+pub enum AbilityImpls<'a> {
     // `{ eq: myEq }`
-    HasImpls(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
+    AbilityImpls(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a AbilityImpls<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a AbilityImpls<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 /// `Eq` or `Eq { eq: myEq }`
@@ -559,7 +559,7 @@ pub enum HasAbility<'a> {
     HasAbility {
         /// Should be a zero-argument `Apply` or an error; we'll check this in canonicalization
         ability: Loc<TypeAnnotation<'a>>,
-        impls: Option<Loc<HasImpls<'a>>>,
+        impls: Option<Loc<AbilityImpls<'a>>>,
     },
 
     // We preserve this for the formatter; canonicalization ignores it.
@@ -1254,12 +1254,12 @@ impl<'a> Spaceable<'a> for Implements<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for HasImpls<'a> {
+impl<'a> Spaceable<'a> for AbilityImpls<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasImpls::SpaceBefore(self, spaces)
+        AbilityImpls::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasImpls::SpaceAfter(self, spaces)
+        AbilityImpls::SpaceAfter(self, spaces)
     }
 }
 
@@ -1422,43 +1422,43 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     }
 }
 
-impl<'a> ExtractSpaces<'a> for HasImpls<'a> {
+impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
     type Item = Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>;
 
     fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
         match self {
-            HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::AbilityImpls(inner) => Spaces {
                 before: &[],
                 item: *inner,
                 after: &[],
             },
-            HasImpls::SpaceBefore(item, before) => match item {
-                HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::SpaceBefore(item, before) => match item {
+                AbilityImpls::AbilityImpls(inner) => Spaces {
                     before,
                     item: *inner,
                     after: &[],
                 },
-                HasImpls::SpaceBefore(_, _) => todo!(),
-                HasImpls::SpaceAfter(HasImpls::HasImpls(inner), after) => Spaces {
+                AbilityImpls::SpaceBefore(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(AbilityImpls::AbilityImpls(inner), after) => Spaces {
                     before,
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceAfter(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(_, _) => todo!(),
             },
-            HasImpls::SpaceAfter(item, after) => match item {
-                HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::SpaceAfter(item, after) => match item {
+                AbilityImpls::AbilityImpls(inner) => Spaces {
                     before: &[],
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceBefore(HasImpls::HasImpls(inner), before) => Spaces {
+                AbilityImpls::SpaceBefore(AbilityImpls::AbilityImpls(inner), before) => Spaces {
                     before,
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceBefore(_, _) => todo!(),
-                HasImpls::SpaceAfter(_, _) => todo!(),
+                AbilityImpls::SpaceBefore(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(_, _) => todo!(),
             },
         }
     }
@@ -1729,11 +1729,13 @@ impl<'a> Malformed for HasAbilities<'a> {
     }
 }
 
-impl<'a> Malformed for HasImpls<'a> {
+impl<'a> Malformed for AbilityImpls<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            HasImpls::HasImpls(impls) => impls.iter().any(|ability| ability.is_malformed()),
-            HasImpls::SpaceBefore(has, _) | HasImpls::SpaceAfter(has, _) => has.is_malformed(),
+            AbilityImpls::AbilityImpls(impls) => impls.iter().any(|ability| ability.is_malformed()),
+            AbilityImpls::SpaceBefore(has, _) | AbilityImpls::SpaceAfter(has, _) => {
+                has.is_malformed()
+            }
         }
     }
 }
