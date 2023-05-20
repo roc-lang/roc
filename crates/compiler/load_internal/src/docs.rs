@@ -553,7 +553,7 @@ fn ability_member_type_to_docs(
             let has_clauses = has_clauses
                 .iter()
                 .map(|hc| {
-                    let ast::HasClause { var, abilities } = hc.value;
+                    let ast::ImplementsClause { var, abilities } = hc.value;
                     (
                         var.value.extract_spaces().item.to_string(),
                         abilities

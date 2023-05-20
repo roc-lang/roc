@@ -4,8 +4,8 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, ExtractSpaces, HasAbilities, HasAbility, HasClause, HasImpls,
-    RecordBuilderField, Tag, TypeAnnotation, TypeHeader,
+    AssignedField, Collection, Expr, ExtractSpaces, HasAbilities, HasAbility, HasImpls,
+    ImplementsClause, RecordBuilderField, Tag, TypeAnnotation, TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -645,7 +645,7 @@ impl<'a> Formattable for Tag<'a> {
     }
 }
 
-impl<'a> Formattable for HasClause<'a> {
+impl<'a> Formattable for ImplementsClause<'a> {
     fn is_multiline(&self) -> bool {
         // No, always put abilities in a "has" clause on one line
         false

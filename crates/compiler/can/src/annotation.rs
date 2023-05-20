@@ -1064,13 +1064,13 @@ fn canonicalize_has_clause(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    clause: &Loc<roc_parse::ast::HasClause<'_>>,
+    clause: &Loc<roc_parse::ast::ImplementsClause<'_>>,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
         region,
-        value: roc_parse::ast::HasClause { var, abilities },
+        value: roc_parse::ast::ImplementsClause { var, abilities },
     } = clause;
     let region = *region;
 

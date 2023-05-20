@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, CommentOrNewline, Expr, HasAbilities, HasAbility, HasClause, HasImpls, Pattern,
-    Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
+    AssignedField, CommentOrNewline, Expr, HasAbilities, HasAbility, HasImpls, ImplementsClause,
+    Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
@@ -444,7 +444,7 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
     )
 }
 
-fn implements_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
+fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'a>> {
     map!(
         // Suppose we are trying to parse "a implements Hash"
         and!(
@@ -482,7 +482,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
                 &abilities.last().unwrap().region,
             );
             let region = Region::span_across(&var.region, &abilities_region);
-            let implements_clause = HasClause {
+            let implements_clause = ImplementsClause {
                 var,
                 abilities: abilities.into_bump_slice(),
             };
@@ -494,7 +494,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
 /// Parse a chain of `implements` clauses, e.g. " | a implements Hash, b implements Eq".
 /// Returns the clauses and spaces before the starting "|", if there were any.
 fn implements_clause_chain<'a>(
-) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<HasClause<'a>>]), EType<'a>> {
+) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<ImplementsClause<'a>>]), EType<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
         let (_, (spaces_before, ()), state) =
             and!(space0_e(EType::TIndentStart), word1(b'|', EType::TWhereBar))

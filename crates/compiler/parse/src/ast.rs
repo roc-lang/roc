@@ -538,7 +538,7 @@ impl<'a> Defs<'a> {
 pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub struct HasClause<'a> {
+pub struct ImplementsClause<'a> {
     pub var: Loc<Spaced<'a, &'a str>>,
     pub abilities: &'a [AbilityName<'a>],
 }
@@ -642,7 +642,7 @@ pub enum TypeAnnotation<'a> {
     Wildcard,
 
     /// A "where" clause demanding abilities designated by a `|`, e.g. `a -> U64 | a has Hash`
-    Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<HasClause<'a>>]),
+    Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<ImplementsClause<'a>>]),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
@@ -1823,7 +1823,7 @@ impl<'a> Malformed for Tag<'a> {
     }
 }
 
-impl<'a> Malformed for HasClause<'a> {
+impl<'a> Malformed for ImplementsClause<'a> {
     fn is_malformed(&self) -> bool {
         self.abilities.iter().any(|ability| ability.is_malformed())
     }

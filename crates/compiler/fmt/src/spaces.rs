@@ -4,9 +4,9 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, HasAbilities,
-        HasAbility, HasClause, HasImpls, Header, Implements, Module, Pattern, RecordBuilderField,
-        Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
-        WhenBranch,
+        HasAbility, HasImpls, Header, Implements, ImplementsClause, Module, Pattern,
+        RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
+        TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -862,9 +862,9 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasClause<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsClause<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        HasClause {
+        ImplementsClause {
             var: self.var.remove_spaces(arena),
             abilities: self.abilities.remove_spaces(arena),
         }
