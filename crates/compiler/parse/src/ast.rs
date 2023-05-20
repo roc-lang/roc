@@ -570,7 +570,7 @@ pub enum ImplementsAbility<'a> {
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ImplementsAbilities<'a> {
     /// `has [Eq { eq: myEq }, Hash]`
-    Has(Collection<'a, Loc<ImplementsAbility<'a>>>),
+    Implements(Collection<'a, Loc<ImplementsAbility<'a>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
@@ -585,7 +585,7 @@ impl ImplementsAbilities<'_> {
                 Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
                     it = inner;
                 }
-                Self::Has(collection) => return collection,
+                Self::Implements(collection) => return collection,
             }
         }
     }
@@ -1723,7 +1723,7 @@ impl<'a> Malformed for ImplementsAbility<'a> {
 impl<'a> Malformed for ImplementsAbilities<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            ImplementsAbilities::Has(abilities) => {
+            ImplementsAbilities::Implements(abilities) => {
                 abilities.iter().any(|ability| ability.is_malformed())
             }
             ImplementsAbilities::SpaceBefore(has, _) | ImplementsAbilities::SpaceAfter(has, _) => {

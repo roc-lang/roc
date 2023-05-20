@@ -547,7 +547,7 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>
                     word1(b']', EType::TEnd),
                     ImplementsAbility::SpaceBefore
                 ),
-                ImplementsAbilities::Has
+                ImplementsAbilities::Implements
             )),
             EType::TIndentEnd,
         )

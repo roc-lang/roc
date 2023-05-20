@@ -740,13 +740,15 @@ impl<'a> Formattable for ImplementsAbilities<'a> {
     fn is_multiline(&self) -> bool {
         match self {
             ImplementsAbilities::SpaceAfter(..) | ImplementsAbilities::SpaceBefore(..) => true,
-            ImplementsAbilities::Has(has_abilities) => is_collection_multiline(has_abilities),
+            ImplementsAbilities::Implements(has_abilities) => {
+                is_collection_multiline(has_abilities)
+            }
         }
     }
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
-            ImplementsAbilities::Has(has_abilities) => {
+            ImplementsAbilities::Implements(has_abilities) => {
                 if newlines == Newlines::Yes {
                     buf.newline();
                     buf.indent(indent);

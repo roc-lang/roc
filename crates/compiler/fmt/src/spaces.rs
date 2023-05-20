@@ -917,8 +917,8 @@ impl<'a> RemoveSpaces<'a> for ImplementsAbility<'a> {
 impl<'a> RemoveSpaces<'a> for ImplementsAbilities<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            ImplementsAbilities::Has(derived) => {
-                ImplementsAbilities::Has(derived.remove_spaces(arena))
+            ImplementsAbilities::Implements(derived) => {
+                ImplementsAbilities::Implements(derived.remove_spaces(arena))
             }
             ImplementsAbilities::SpaceBefore(derived, _)
             | ImplementsAbilities::SpaceAfter(derived, _) => derived.remove_spaces(arena),
