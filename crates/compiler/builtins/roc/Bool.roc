@@ -34,7 +34,7 @@ Eq has
 
 ## Represents the boolean true and false using an opaque type.
 ## `Bool` implements the `Eq` ability.
-Bool := [True, False] has [Eq { isEq: boolIsEq }]
+Bool := [True, False] implements [Eq { isEq: boolIsEq }]
 
 boolIsEq = \@Bool b1, @Bool b2 -> structuralEq b1 b2
 

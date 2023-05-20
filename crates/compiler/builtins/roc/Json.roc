@@ -79,7 +79,7 @@ interface Json
 ## An opaque type with the `EncoderFormatting` and
 ## `DecoderFormatting` abilities.
 Json := { fieldNameMapping : FieldNameMapping }
-     has [
+     implements [
          EncoderFormatting {
              u8: encodeU8,
              u16: encodeU16,

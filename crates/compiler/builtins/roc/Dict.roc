@@ -92,7 +92,7 @@ Dict k v := {
     # TODO: As an optimization, we can make all of these lists in one allocation
     # TODO: Grow data with the rest of the hashmap. This will require creating a list of garbage data.
     # TODO: Change remove to use tombstones. Store the tombstones in a bitmap.
-    # TODO: define Eq and Hash that are unordered. Only if value has hash/eq?
+    # TODO: define Eq and Hash that are unordered. Only if value implements hash/eq?
     metadata : List I8,
     dataIndices : List Nat,
     data : List (T k v),
@@ -888,7 +888,7 @@ expect
 # TODO: wyhash is slow for large keys, use something like cityhash if the keys are too long.
 # TODO: Add a builtin to distinguish big endian systems and change loading orders.
 # TODO: Switch out Wymum on systems with slow 128bit multiplication.
-LowLevelHasher := { originalSeed : U64, state : U64 } has [
+LowLevelHasher := { originalSeed : U64, state : U64 } implements [
          Hasher {
              addBytes,
              addU8,
