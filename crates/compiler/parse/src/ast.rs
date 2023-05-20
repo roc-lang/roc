@@ -394,7 +394,7 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
-        derived: Option<Loc<HasAbilities<'a>>>,
+        derived: Option<Loc<ImplementsAbilities<'a>>>,
     },
 
     /// An ability definition. E.g.
@@ -568,16 +568,16 @@ pub enum ImplementsAbility<'a> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasAbilities<'a> {
+pub enum ImplementsAbilities<'a> {
     /// `has [Eq { eq: myEq }, Hash]`
     Has(Collection<'a, Loc<ImplementsAbility<'a>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-impl HasAbilities<'_> {
+impl ImplementsAbilities<'_> {
     pub fn collection(&self) -> &Collection<Loc<ImplementsAbility>> {
         let mut it = self;
         loop {
@@ -1272,12 +1272,12 @@ impl<'a> Spaceable<'a> for ImplementsAbility<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for HasAbilities<'a> {
+impl<'a> Spaceable<'a> for ImplementsAbilities<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbilities::SpaceBefore(self, spaces)
+        ImplementsAbilities::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbilities::SpaceAfter(self, spaces)
+        ImplementsAbilities::SpaceAfter(self, spaces)
     }
 }
 
@@ -1720,11 +1720,13 @@ impl<'a> Malformed for ImplementsAbility<'a> {
     }
 }
 
-impl<'a> Malformed for HasAbilities<'a> {
+impl<'a> Malformed for ImplementsAbilities<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            HasAbilities::Has(abilities) => abilities.iter().any(|ability| ability.is_malformed()),
-            HasAbilities::SpaceBefore(has, _) | HasAbilities::SpaceAfter(has, _) => {
+            ImplementsAbilities::Has(abilities) => {
+                abilities.iter().any(|ability| ability.is_malformed())
+            }
+            ImplementsAbilities::SpaceBefore(has, _) | ImplementsAbilities::SpaceAfter(has, _) => {
                 has.is_malformed()
             }
         }

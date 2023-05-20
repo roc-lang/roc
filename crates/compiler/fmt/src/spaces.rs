@@ -4,9 +4,9 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
-        HasAbilities, Header, Implements, ImplementsAbility, ImplementsClause, Module, Pattern,
-        RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
-        TypeHeader, ValueDef, WhenBranch,
+        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, Module,
+        Pattern, RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation,
+        TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -914,13 +914,14 @@ impl<'a> RemoveSpaces<'a> for ImplementsAbility<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasAbilities<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsAbilities<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasAbilities::Has(derived) => HasAbilities::Has(derived.remove_spaces(arena)),
-            HasAbilities::SpaceBefore(derived, _) | HasAbilities::SpaceAfter(derived, _) => {
-                derived.remove_spaces(arena)
+            ImplementsAbilities::Has(derived) => {
+                ImplementsAbilities::Has(derived.remove_spaces(arena))
             }
+            ImplementsAbilities::SpaceBefore(derived, _)
+            | ImplementsAbilities::SpaceAfter(derived, _) => derived.remove_spaces(arena),
         }
     }
 }

@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, HasAbilities,
-    Implements, Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef,
+    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
+    ImplementsAbilities, Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef,
     TypeHeader, ValueDef,
 };
 use crate::blankspace::{
@@ -1064,8 +1064,14 @@ fn alias_signature_with_space_before<'a>() -> impl Parser<'a, Loc<TypeAnnotation
     ))
 }
 
-fn opaque_signature_with_space_before<'a>(
-) -> impl Parser<'a, (Loc<TypeAnnotation<'a>>, Option<Loc<HasAbilities<'a>>>), EExpr<'a>> {
+fn opaque_signature_with_space_before<'a>() -> impl Parser<
+    'a,
+    (
+        Loc<TypeAnnotation<'a>>,
+        Option<Loc<ImplementsAbilities<'a>>>,
+    ),
+    EExpr<'a>,
+> {
     and!(
         specialize(
             EExpr::Type,

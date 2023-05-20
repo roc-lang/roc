@@ -1,5 +1,5 @@
 use crate::ast::{
-    AbilityImpls, AssignedField, CommentOrNewline, Expr, HasAbilities, ImplementsAbility,
+    AbilityImpls, AssignedField, CommentOrNewline, Expr, ImplementsAbilities, ImplementsAbility,
     ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
@@ -521,7 +521,7 @@ fn implements_clause_chain<'a>(
 }
 
 /// Parse a implements-abilities clause, e.g. `implements [Eq, Hash]`.
-pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> {
+pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>>, EType<'a>> {
     increment_min_indent(skip_first!(
         // Parse "implements"; we don't care about this keyword
         word10(
@@ -547,7 +547,7 @@ pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, ETyp
                     word1(b']', EType::TEnd),
                     ImplementsAbility::SpaceBefore
                 ),
-                HasAbilities::Has
+                ImplementsAbilities::Has
             )),
             EType::TIndentEnd,
         )

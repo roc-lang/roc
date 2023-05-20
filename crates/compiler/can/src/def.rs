@@ -174,7 +174,7 @@ enum PendingTypeDef<'a> {
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
-        derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
+        derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
     },
 
     Ability {
@@ -672,7 +672,7 @@ fn canonicalize_opaque<'a>(
     name_str: &'a str,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
-    has_abilities: Option<&'a Loc<ast::HasAbilities<'a>>>,
+    has_abilities: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
 ) -> Result<CanonicalizedOpaque<'a>, ()> {
     let alias = canonicalize_alias(
         env,
@@ -1182,7 +1182,7 @@ fn canonicalize_type_defs<'a>(
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
-            Option<&'a Loc<ast::HasAbilities<'a>>>,
+            Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
         ),
         Ability(Loc<Symbol>, Vec<PendingAbilityMember<'a>>),
     }
@@ -2492,7 +2492,7 @@ fn to_pending_alias_or_opaque<'a>(
     name: &'a Loc<&'a str>,
     vars: &'a [Loc<ast::Pattern<'a>>],
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    opt_derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
+    opt_derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
     kind: AliasKind,
 ) -> PendingTypeDef<'a> {
     let region = Region::span_across(&name.region, &ann.region);

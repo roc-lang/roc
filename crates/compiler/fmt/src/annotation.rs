@@ -4,8 +4,8 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{
-    AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, HasAbilities, ImplementsAbility,
-    ImplementsClause, RecordBuilderField, Tag, TypeAnnotation, TypeHeader,
+    AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, ImplementsAbilities,
+    ImplementsAbility, ImplementsClause, RecordBuilderField, Tag, TypeAnnotation, TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -736,17 +736,17 @@ impl<'a> Formattable for ImplementsAbility<'a> {
     }
 }
 
-impl<'a> Formattable for HasAbilities<'a> {
+impl<'a> Formattable for ImplementsAbilities<'a> {
     fn is_multiline(&self) -> bool {
         match self {
-            HasAbilities::SpaceAfter(..) | HasAbilities::SpaceBefore(..) => true,
-            HasAbilities::Has(has_abilities) => is_collection_multiline(has_abilities),
+            ImplementsAbilities::SpaceAfter(..) | ImplementsAbilities::SpaceBefore(..) => true,
+            ImplementsAbilities::Has(has_abilities) => is_collection_multiline(has_abilities),
         }
     }
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
-            HasAbilities::Has(has_abilities) => {
+            ImplementsAbilities::Has(has_abilities) => {
                 if newlines == Newlines::Yes {
                     buf.newline();
                     buf.indent(indent);
@@ -755,13 +755,13 @@ impl<'a> Formattable for HasAbilities<'a> {
                 buf.spaces(1);
                 fmt_collection(buf, indent, Braces::Square, *has_abilities, Newlines::No);
             }
-            HasAbilities::SpaceBefore(has_abilities, spaces) => {
+            ImplementsAbilities::SpaceBefore(has_abilities, spaces) => {
                 buf.newline();
                 buf.indent(indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 has_abilities.format_with_options(buf, parens, Newlines::No, indent)
             }
-            HasAbilities::SpaceAfter(has_abilities, spaces) => {
+            ImplementsAbilities::SpaceAfter(has_abilities, spaces) => {
                 has_abilities.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }
