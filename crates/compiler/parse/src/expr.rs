@@ -1,6 +1,7 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Has, HasAbilities,
-    Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, HasAbilities,
+    Implements, Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef,
+    TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -1075,7 +1076,7 @@ fn opaque_signature_with_space_before<'a>(
         ),
         optional(backtrackable(specialize(
             EExpr::Type,
-            space0_before_e(type_annotation::has_abilities(), EType::TIndentStart,),
+            space0_before_e(type_annotation::implements_abilities(), EType::TIndentStart,),
         )))
     )
 }
@@ -1363,7 +1364,7 @@ fn finish_parsing_ability_def_help<'a>(
     start_column: u32,
     name: Loc<&'a str>,
     args: &'a [Loc<Pattern<'a>>],
-    loc_has: Loc<Has<'a>>,
+    loc_has: Loc<Implements<'a>>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, (TypeDef<'a>, Region), EExpr<'a>> {
@@ -1664,10 +1665,10 @@ fn parse_expr_end<'a>(
             // Attach any spaces to the `has` keyword
             let has = if !expr_state.spaces_after.is_empty() {
                 arena
-                    .alloc(Has::Has)
+                    .alloc(Implements::Implements)
                     .with_spaces_before(expr_state.spaces_after, has.region)
             } else {
-                Loc::at(has.region, Has::Has)
+                Loc::at(has.region, Implements::Implements)
             };
 
             let args = arguments.into_bump_slice();

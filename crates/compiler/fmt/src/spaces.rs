@@ -3,9 +3,9 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Header, Module, Pattern, RecordBuilderField, Spaced,
-        Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, HasAbilities,
+        HasAbility, HasClause, HasImpls, Header, Implements, Module, Pattern, RecordBuilderField,
+        Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
         WhenBranch,
     },
     header::{
@@ -569,9 +569,9 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Has<'a> {
+impl<'a> RemoveSpaces<'a> for Implements<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
-        Has::Has
+        Implements::Implements
     }
 }
 

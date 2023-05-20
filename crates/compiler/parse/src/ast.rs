@@ -357,12 +357,12 @@ impl<'a> TypeHeader<'a> {
     }
 }
 
-/// The `has` keyword associated with ability definitions.
+/// The `implements` keyword associated with ability definitions.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Has<'a> {
-    Has,
-    SpaceBefore(&'a Has<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a Has<'a>, &'a [CommentOrNewline<'a>]),
+pub enum Implements<'a> {
+    Implements,
+    SpaceBefore(&'a Implements<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Implements<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 /// An ability demand is a value defining the ability; for example `hash : a -> U64 | a has Hash`
@@ -402,7 +402,7 @@ pub enum TypeDef<'a> {
     ///     hash : a -> U64 | a has Hash
     Ability {
         header: TypeHeader<'a>,
-        loc_has: Loc<Has<'a>>,
+        loc_has: Loc<Implements<'a>>,
         members: &'a [AbilityMember<'a>],
     },
 }
@@ -1245,12 +1245,12 @@ impl<'a> Spaceable<'a> for Tag<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for Has<'a> {
+impl<'a> Spaceable<'a> for Implements<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Has::SpaceBefore(self, spaces)
+        Implements::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Has::SpaceAfter(self, spaces)
+        Implements::SpaceAfter(self, spaces)
     }
 }
 
@@ -1698,11 +1698,11 @@ impl<'a> Malformed for AbilityMember<'a> {
     }
 }
 
-impl<'a> Malformed for Has<'a> {
+impl<'a> Malformed for Implements<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            Has::Has => false,
-            Has::SpaceBefore(has, _) | Has::SpaceAfter(has, _) => has.is_malformed(),
+            Implements::Implements => false,
+            Implements::SpaceBefore(has, _) | Implements::SpaceAfter(has, _) => has.is_malformed(),
         }
     }
 }
