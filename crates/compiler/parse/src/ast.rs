@@ -365,7 +365,7 @@ pub enum Implements<'a> {
     SpaceAfter(&'a Implements<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-/// An ability demand is a value defining the ability; for example `hash : a -> U64 | a has Hash`
+/// An ability demand is a value defining the ability; for example `hash : a -> U64 | a implements Hash`
 /// for a `Hash` ability.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AbilityMember<'a> {
@@ -398,8 +398,8 @@ pub enum TypeDef<'a> {
     },
 
     /// An ability definition. E.g.
-    ///   Hash has
-    ///     hash : a -> U64 | a has Hash
+    ///   Hash implements
+    ///     hash : a -> U64 | a implements Hash
     Ability {
         header: TypeHeader<'a>,
         loc_has: Loc<Implements<'a>>,
@@ -569,7 +569,7 @@ pub enum ImplementsAbility<'a> {
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ImplementsAbilities<'a> {
-    /// `has [Eq { eq: myEq }, Hash]`
+    /// `implements [Eq { eq: myEq }, Hash]`
     Implements(Collection<'a, Loc<ImplementsAbility<'a>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
@@ -641,7 +641,7 @@ pub enum TypeAnnotation<'a> {
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
 
-    /// A "where" clause demanding abilities designated by a `|`, e.g. `a -> U64 | a has Hash`
+    /// A "where" clause demanding abilities designated by a `|`, e.g. `a -> U64 | a implements Hash`
     Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<ImplementsClause<'a>>]),
 
     // We preserve this for the formatter; canonicalization ignores it.
