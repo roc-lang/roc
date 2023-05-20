@@ -13,7 +13,7 @@ use crate::parser::{
 };
 use crate::parser::{
     allocated, backtrackable, fail, optional, specialize, specialize_ref, word1, word10, word2,
-    word3, EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
+    EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
     Progress::{self, *},
 };
 use crate::state::State;
@@ -520,17 +520,29 @@ fn implements_clause_chain<'a>(
     }
 }
 
-/// Parse a has-abilities clause, e.g. `has [Eq, Hash]`.
-pub fn has_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> {
+/// Parse a implements-abilities clause, e.g. `implements [Eq, Hash]`.
+pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> {
     increment_min_indent(skip_first!(
-        // Parse "has"; we don't care about this keyword
-        word3(b'h', b'a', b's', EType::THasClause),
+        // Parse "implements"; we don't care about this keyword
+        word10(
+            b'i',
+            b'm',
+            b'p',
+            b'l',
+            b'e',
+            b'm',
+            b'e',
+            b'n',
+            b't',
+            b's',
+            EType::THasClause
+        ),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
             loc!(map!(
                 collection_trailing_sep_e!(
                     word1(b'[', EType::TStart),
-                    loc!(parse_has_ability()),
+                    loc!(parse_implements_ability()),
                     word1(b',', EType::TEnd),
                     word1(b']', EType::TEnd),
                     HasAbility::SpaceBefore
@@ -542,7 +554,7 @@ pub fn has_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> 
     ))
 }
 
-fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
+fn parse_implements_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
     increment_min_indent(record!(HasAbility::HasAbility {
         ability: loc!(specialize(EType::TApply, concrete_type())),
         impls: optional(backtrackable(space0_before_e(
