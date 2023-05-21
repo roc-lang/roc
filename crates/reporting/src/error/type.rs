@@ -373,7 +373,7 @@ fn underivable_hint<'b>(
                         alloc.concat([
                             alloc.reflow(" or "),
                             alloc.inline_type_block(alloc.concat([
-                                alloc.keyword("has"),
+                                alloc.keyword("implements"),
                                 alloc.space(),
                                 alloc.symbol_qualified(ability),
                             ])),
@@ -400,13 +400,13 @@ fn underivable_hint<'b>(
                 alloc.reflow("This type variable is not bound to "),
                 alloc.symbol_unqualified(ability),
                 alloc.reflow(". Consider adding a "),
-                alloc.keyword("has"),
+                alloc.keyword("implements"),
                 alloc.reflow(" clause to bind the type variable, like "),
                 alloc.inline_type_block(alloc.concat([
                     alloc.string("| ".to_string()),
                     alloc.type_variable(v.clone()),
                     alloc.space(),
-                    alloc.keyword("has"),
+                    alloc.keyword("implements"),
                     alloc.space(),
                     alloc.symbol_qualified(ability),
                 ])),
@@ -2758,7 +2758,7 @@ fn type_with_able_vars<'b>(
         doc.push(alloc.string(if i == 0 { " | " } else { ", " }.to_string()));
         doc.push(alloc.type_variable(var));
         doc.push(alloc.space());
-        doc.push(alloc.keyword("has"));
+        doc.push(alloc.keyword("implements"));
 
         for (i, ability) in abilities.into_sorted_iter().enumerate() {
             if i > 0 {
@@ -4468,7 +4468,7 @@ fn type_problem_to_pretty<'b>(
                         .note("")
                         .append(alloc.reflow("The type variable "))
                         .append(alloc.type_variable(name.clone()))
-                        .append(alloc.reflow(" says it can take on any value that has the "))
+                        .append(alloc.reflow(" says it can take on any value that implements the "))
                         .append(list_abilities(alloc, &abilities))
                         .append(alloc.reflow(".")),
                     alloc.concat([
@@ -4509,11 +4509,13 @@ fn type_problem_to_pretty<'b>(
                         alloc
                             .note("")
                             .append(type_var_doc)
-                            .append(alloc.reflow(" can take on any value that has only the "))
+                            .append(
+                                alloc.reflow(" can take on any value that implements only the "),
+                            )
                             .append(list_abilities(alloc, &abilities))
                             .append(alloc.reflow(".")),
                         alloc.concat([
-                            alloc.reflow("But, I see that it's also used as if it has the "),
+                            alloc.reflow("But, I see that it's also used as if it implements the "),
                             list_abilities(alloc, &extra_abilities),
                             alloc.reflow(". Can you use "),
                             alloc.type_variable(name.clone()),
@@ -4530,7 +4532,7 @@ fn type_problem_to_pretty<'b>(
                                 alloc.reflow("it")
                             },
                             alloc.reflow(" to the "),
-                            alloc.keyword("has"),
+                            alloc.keyword("implements"),
                             alloc.reflow(" clause of "),
                             alloc.type_variable(name),
                             alloc.reflow("."),
