@@ -399,7 +399,7 @@ fn underivable_hint<'b>(
             Some(alloc.tip().append(alloc.concat([
                 alloc.reflow("This type variable is not bound to "),
                 alloc.symbol_unqualified(ability),
-                alloc.reflow(". Consider adding a "),
+                alloc.reflow(". Consider adding an "),
                 alloc.keyword("implements"),
                 alloc.reflow(" clause to bind the type variable, like "),
                 alloc.inline_type_block(alloc.concat([
