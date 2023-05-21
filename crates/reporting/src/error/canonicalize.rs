@@ -648,7 +648,7 @@ pub fn can_problem<'b>(
             title = ABILITY_HAS_TYPE_VARIABLES.to_string();
         }
 
-        Problem::HasClauseIsNotAbility {
+        Problem::ImplementsClauseIsNotAbility {
             region: clause_region,
         } => {
             doc = alloc.stack([
@@ -660,7 +660,7 @@ pub fn can_problem<'b>(
             title = IMPLEMENTS_CLAUSE_IS_NOT_AN_ABILITY.to_string();
         }
 
-        Problem::IllegalHasClause { region } => {
+        Problem::IllegalImplementsClause { region } => {
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("An "),
@@ -678,7 +678,7 @@ pub fn can_problem<'b>(
             title = ILLEGAL_IMPLEMENTS_CLAUSE.to_string();
         }
 
-        Problem::DuplicateHasAbility { ability, region } => {
+        Problem::DuplicateImplementsAbility { ability, region } => {
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("I already saw that this type variable is bound to the "),
@@ -695,7 +695,7 @@ pub fn can_problem<'b>(
             title = "DUPLICATE BOUND ABILITY".to_string();
         }
 
-        Problem::AbilityMemberMissingHasClause {
+        Problem::AbilityMemberMissingImplementsClause {
             member,
             ability,
             region,
@@ -732,7 +732,7 @@ pub fn can_problem<'b>(
         Problem::AbilityMemberMultipleBoundVars {
             member,
             ability,
-            span_has_clauses,
+            span_implements_clauses: span_has_clauses,
             mut bound_var_names,
         } => {
             doc = alloc.stack([

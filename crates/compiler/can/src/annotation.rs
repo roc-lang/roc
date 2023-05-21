@@ -1041,7 +1041,7 @@ fn can_annotation_help(
             debug_assert!(!clauses.is_empty());
 
             // Has clauses are allowed only on the top level of a signature, which we handle elsewhere.
-            env.problem(roc_problem::can::Problem::IllegalHasClause {
+            env.problem(roc_problem::can::Problem::IllegalImplementsClause {
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });
 
@@ -1096,13 +1096,13 @@ fn canonicalize_has_clause(
                 // or an ability that was imported from elsewhere
                 && !scope.abilities_store.is_ability(symbol)
                 {
-                    env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                    env.problem(roc_problem::can::Problem::ImplementsClauseIsNotAbility { region });
                     return Err(Type::Error);
                 }
                 symbol
             }
             _ => {
-                env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                env.problem(roc_problem::can::Problem::ImplementsClauseIsNotAbility { region });
                 return Err(Type::Error);
             }
         };
@@ -1111,7 +1111,7 @@ fn canonicalize_has_clause(
         let already_seen = can_abilities.insert(ability);
 
         if already_seen {
-            env.problem(roc_problem::can::Problem::DuplicateHasAbility { ability, region });
+            env.problem(roc_problem::can::Problem::DuplicateImplementsAbility { ability, region });
         }
     }
 

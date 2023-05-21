@@ -117,17 +117,17 @@ pub enum Problem {
         name: Symbol,
         variables_region: Region,
     },
-    HasClauseIsNotAbility {
+    ImplementsClauseIsNotAbility {
         region: Region,
     },
-    IllegalHasClause {
+    IllegalImplementsClause {
         region: Region,
     },
-    DuplicateHasAbility {
+    DuplicateImplementsAbility {
         ability: Symbol,
         region: Region,
     },
-    AbilityMemberMissingHasClause {
+    AbilityMemberMissingImplementsClause {
         member: Symbol,
         ability: Symbol,
         region: Region,
@@ -135,7 +135,7 @@ pub enum Problem {
     AbilityMemberMultipleBoundVars {
         member: Symbol,
         ability: Symbol,
-        span_has_clauses: Region,
+        span_implements_clauses: Region,
         bound_var_names: Vec<Lowercase>,
     },
     AbilityNotOnToplevel {
@@ -245,10 +245,10 @@ impl Problem {
             Problem::NestedDatatype { .. } => RuntimeError,
             Problem::InvalidExtensionType { .. } => RuntimeError,
             Problem::AbilityHasTypeVariables { .. } => RuntimeError,
-            Problem::HasClauseIsNotAbility { .. } => RuntimeError,
-            Problem::IllegalHasClause { .. } => RuntimeError,
-            Problem::DuplicateHasAbility { .. } => Warning,
-            Problem::AbilityMemberMissingHasClause { .. } => RuntimeError,
+            Problem::ImplementsClauseIsNotAbility { .. } => RuntimeError,
+            Problem::IllegalImplementsClause { .. } => RuntimeError,
+            Problem::DuplicateImplementsAbility { .. } => Warning,
+            Problem::AbilityMemberMissingImplementsClause { .. } => RuntimeError,
             Problem::AbilityMemberMultipleBoundVars { .. } => RuntimeError,
             Problem::AbilityNotOnToplevel { .. } => RuntimeError, // Ideally, could be compiled
             Problem::AbilityUsedAsType(_, _, _) => RuntimeError,
@@ -375,12 +375,12 @@ impl Problem {
                 variables_region: region,
                 ..
             }
-            | Problem::HasClauseIsNotAbility { region }
-            | Problem::IllegalHasClause { region }
-            | Problem::DuplicateHasAbility { region, .. }
-            | Problem::AbilityMemberMissingHasClause { region, .. }
+            | Problem::ImplementsClauseIsNotAbility { region }
+            | Problem::IllegalImplementsClause { region }
+            | Problem::DuplicateImplementsAbility { region, .. }
+            | Problem::AbilityMemberMissingImplementsClause { region, .. }
             | Problem::AbilityMemberMultipleBoundVars {
-                span_has_clauses: region,
+                span_implements_clauses: region,
                 ..
             }
             | Problem::AbilityNotOnToplevel { region }

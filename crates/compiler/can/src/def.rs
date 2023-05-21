@@ -1388,7 +1388,7 @@ fn resolve_abilities(
                 [] => {
                     // There are no variables bound to the parent ability - then this member doesn't
                     // need to be a part of the ability.
-                    env.problem(Problem::AbilityMemberMissingHasClause {
+                    env.problem(Problem::AbilityMemberMissingImplementsClause {
                         member: member_sym,
                         ability,
                         region: member_name_region,
@@ -1411,7 +1411,7 @@ fn resolve_abilities(
                     env.problem(Problem::AbilityMemberMultipleBoundVars {
                         member: member_sym,
                         ability,
-                        span_has_clauses,
+                        span_implements_clauses: span_has_clauses,
                         bound_var_names,
                     });
                     // Pretend the member isn't a part of the ability
