@@ -103,8 +103,8 @@ interface Str
         startsWith,
         endsWith,
         trim,
-        trimLeft,
-        trimRight,
+        trimStart,
+        trimEnd,
         toDec,
         toF64,
         toF32,
@@ -448,15 +448,15 @@ trim : Str -> Str
 
 ## Return the [Str] with all whitespace removed from the beginning.
 ## ```
-## expect Str.trimLeft "   Hello      \n\n" == "Hello      \n\n"
+## expect Str.trimStart "   Hello      \n\n" == "Hello      \n\n"
 ## ```
-trimLeft : Str -> Str
+trimStart : Str -> Str
 
 ## Return the [Str] with all whitespace removed from the end.
 ## ```
-## expect Str.trimRight "   Hello      \n\n" == "   Hello"
+## expect Str.trimEnd "   Hello      \n\n" == "   Hello"
 ## ```
-trimRight : Str -> Str
+trimEnd : Str -> Str
 
 ## Encode a [Str] to a [Dec]. A [Dec] value is a 128-bit decimal
 ## [fixed-point number](https://en.wikipedia.org/wiki/Fixed-point_arithmetic).

@@ -617,7 +617,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             call_str_bitcode_fn(env, &[string], &[], BitcodeReturns::Str, bitcode::STR_TRIM)
         }
-        StrTrimLeft => {
+        StrTrimStart => {
             // Str.trim : Str -> Str
             arguments!(string);
 
@@ -626,10 +626,10 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[string],
                 &[],
                 BitcodeReturns::Str,
-                bitcode::STR_TRIM_LEFT,
+                bitcode::STR_TRIM_START,
             )
         }
-        StrTrimRight => {
+        StrTrimEnd => {
             // Str.trim : Str -> Str
             arguments!(string);
 
@@ -638,7 +638,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[string],
                 &[],
                 BitcodeReturns::Str,
-                bitcode::STR_TRIM_RIGHT,
+                bitcode::STR_TRIM_END,
             )
         }
         StrWithCapacity => {
