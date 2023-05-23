@@ -807,24 +807,55 @@ fn specialize_boxed<'a, 'i>(
     incremented_children: &mut MutSet<Child>,
     symbol: &Symbol,
     continuation: &'a Stmt<'a>,
-) -> &'a mut Stmt<'a> {
+) -> &'a Stmt<'a> {
     let removed = match incremented_children.iter().next() {
-        Some(s) => incremented_children.remove(&s.clone()),
-        None => false,
+        Some(s) => {
+            let s = *s;
+            incremented_children.remove(&s);
+            Some(s)
+        }
+        None => None,
     };
 
     let new_continuation =
         specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
 
-    if removed {
-        // No need to decrement the containing value since we already decremented the child.
-        arena.alloc(Stmt::Refcounting(
-            ModifyRc::DecRef(*symbol),
-            new_continuation,
-        ))
-    } else {
-        // No known children, keep decrementing the symbol.
-        arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
+    match removed {
+        Some(s) => {
+            branch_uniqueness(
+                arena,
+                ident_ids,
+                layout_interner,
+                environment,
+                *symbol,
+                // If the symbol is unique:
+                // - free the box
+                |_, _, _| {
+                    arena.alloc(Stmt::Refcounting(
+                        // TODO can be replaced by free if ever added to the IR.
+                        ModifyRc::DecRef(*symbol),
+                        new_continuation,
+                    ))
+                },
+                // If the symbol is not unique:
+                // - increment the child
+                // - decref the box
+                |_, _, _| {
+                    arena.alloc(Stmt::Refcounting(
+                        ModifyRc::Inc(s, 1),
+                        arena.alloc(Stmt::Refcounting(
+                            ModifyRc::DecRef(*symbol),
+                            new_continuation,
+                        )),
+                    ))
+                },
+                new_continuation,
+            )
+        }
+        None => {
+            // No known children, keep decrementing the symbol.
+            arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
+        }
     }
 }
 
