@@ -1524,6 +1524,23 @@ where
     }
 }
 
+pub fn word<'a, ToError, E>(word: &'static str, to_error: ToError) -> impl Parser<'a, (), E>
+where
+    ToError: Fn(Position) -> E,
+    E: 'a,
+{
+    debug_assert!(!word.contains('\n'));
+
+    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
+        if state.bytes().starts_with(word.as_bytes()) {
+            let state = state.advance(word.len());
+            Ok((MadeProgress, (), state))
+        } else {
+            Err((NoProgress, to_error(state.pos())))
+        }
+    }
+}
+
 pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
@@ -1601,48 +1618,6 @@ where
     move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
         if state.bytes().starts_with(&needle) {
             let state = state.advance(3);
-            Ok((MadeProgress, (), state))
-        } else {
-            Err((NoProgress, to_error(state.pos())))
-        }
-    }
-}
-
-pub fn word10<'a, ToError, E>(
-    word_1: u8,
-    word_2: u8,
-    word_3: u8,
-    word_4: u8,
-    word_5: u8,
-    word_6: u8,
-    word_7: u8,
-    word_8: u8,
-    word_9: u8,
-    word_10: u8,
-    to_error: ToError,
-) -> impl Parser<'a, (), E>
-where
-    ToError: Fn(Position) -> E,
-    E: 'a,
-{
-    debug_assert_ne!(word_1, b'\n');
-    debug_assert_ne!(word_2, b'\n');
-    debug_assert_ne!(word_3, b'\n');
-    debug_assert_ne!(word_4, b'\n');
-    debug_assert_ne!(word_5, b'\n');
-    debug_assert_ne!(word_6, b'\n');
-    debug_assert_ne!(word_7, b'\n');
-    debug_assert_ne!(word_8, b'\n');
-    debug_assert_ne!(word_9, b'\n');
-    debug_assert_ne!(word_10, b'\n');
-
-    let needle = [
-        word_1, word_2, word_3, word_4, word_5, word_6, word_7, word_8, word_9, word_10,
-    ];
-
-    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
-        if state.bytes().starts_with(&needle) {
-            let state = state.advance(10);
             Ok((MadeProgress, (), state))
         } else {
             Err((NoProgress, to_error(state.pos())))

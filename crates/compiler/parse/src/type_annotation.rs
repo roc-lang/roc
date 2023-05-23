@@ -12,7 +12,7 @@ use crate::parser::{
     absolute_column_min_indent, increment_min_indent, then, ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
-    allocated, backtrackable, fail, optional, specialize, specialize_ref, word1, word10, word2,
+    allocated, backtrackable, fail, optional, specialize, specialize_ref, word, word1, word2,
     EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
     Progress::{self, *},
 };
@@ -459,19 +459,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
             ),
             skip_first!(
                 // Parse "implements"; we don't care about this keyword
-                word10(
-                    b'i',
-                    b'm',
-                    b'p',
-                    b'l',
-                    b'e',
-                    b'm',
-                    b'e',
-                    b'n',
-                    b't',
-                    b's',
-                    EType::THasClause
-                ),
+                word("implements", EType::THasClause),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
                 absolute_column_min_indent(ability_chain())
             )
@@ -524,19 +512,7 @@ fn implements_clause_chain<'a>(
 pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>>, EType<'a>> {
     increment_min_indent(skip_first!(
         // Parse "implements"; we don't care about this keyword
-        word10(
-            b'i',
-            b'm',
-            b'p',
-            b'l',
-            b'e',
-            b'm',
-            b'e',
-            b'n',
-            b't',
-            b's',
-            EType::THasClause
-        ),
+        word("implements", EType::THasClause),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
             loc!(map!(
