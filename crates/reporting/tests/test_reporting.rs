@@ -8747,7 +8747,7 @@ In roc, functions are always written as a lambda, like{}
 
     But the type annotation on `hash` says it must match:
 
-        a -> U64 | a has MHash
+        a -> U64 | a implements MHash
 
     Note: The specialized type is too general, and does not provide a
     concrete type where a type variable is bound to an ability.
@@ -8867,7 +8867,7 @@ In roc, functions are always written as a lambda, like{}
             MHash has
                 hash : a -> U64 | a implements MHash
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -8939,7 +8939,7 @@ In roc, functions are always written as a lambda, like{}
             MHash has
                 hash : a -> U64 | a implements MHash
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
             hash = \@Id n -> n
 
             hashable : a | a implements MHash
@@ -8961,7 +8961,7 @@ In roc, functions are always written as a lambda, like{}
 
     But the type annotation on `hashable` says it should be:
 
-        a | a has MHash
+        a | a implements MHash
 
     Note: The type variable `a` says it can take on any value that implements the
     ability `MHash`.
@@ -8983,10 +8983,10 @@ In roc, functions are always written as a lambda, like{}
             mulMHashes : MHash, MHash -> U64
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash {hash: hashId}]
+            Id := U64 implements [MHash {hash: hashId}]
             hashId = \@Id n -> n
 
-            Three := {} has [MHash {hash: hashThree}]
+            Three := {} implements [MHash {hash: hashThree}]
             hashThree = \@Three _ -> 3
 
             result = mulMHashes (@Id 100) (@Three {})
@@ -9156,7 +9156,7 @@ In roc, functions are always written as a lambda, like{}
             Default has default : {} -> a | a implements Default
 
             main =
-                A := {} has [Default {default}]
+                A := {} implements [Default {default}]
                 default = \{} -> @A {}
                 default {}
             "#
@@ -9406,7 +9406,7 @@ In roc, functions are always written as a lambda, like{}
 
             MEq has eq : a, a -> U64 | a implements MEq
 
-            A := U8 has [MEq {eq}]
+            A := U8 implements [MEq {eq}]
             "#
         ),
         @r###"
@@ -9414,8 +9414,8 @@ In roc, functions are always written as a lambda, like{}
 
     An implementation of `eq` could not be found in this scope:
 
-    5│  A := U8 has [MEq {eq}]
-                          ^^
+    5│  A := U8 implements [MEq {eq}]
+                                 ^^
 
     Tip: consider adding a value of name `eq` in this scope, or using
     another variable that implements this ability member, like
@@ -9425,8 +9425,8 @@ In roc, functions are always written as a lambda, like{}
 
     This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [MEq {eq}]
-                     ^^^^^^^^
+    5│  A := U8 implements [MEq {eq}]
+                            ^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9442,7 +9442,7 @@ In roc, functions are always written as a lambda, like{}
 
             MEq has eq : a, a -> Bool | a implements MEq
 
-            A := U8 has [ MEq {eq: aMEq} ]
+            A := U8 implements [ MEq {eq: aMEq} ]
 
             myMEq = \m, n -> m == n
             "#
@@ -9452,8 +9452,8 @@ In roc, functions are always written as a lambda, like{}
 
     Nothing is named `aMEq` in this scope.
 
-    5│  A := U8 has [ MEq {eq: aMEq} ]
-                               ^^^^
+    5│  A := U8 implements [ MEq {eq: aMEq} ]
+                                      ^^^^
 
     Did you mean one of these?
 
@@ -9466,8 +9466,8 @@ In roc, functions are always written as a lambda, like{}
 
     This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [ MEq {eq: aMEq} ]
-                      ^^^^^^^^^^^^^^
+    5│  A := U8 implements [ MEq {eq: aMEq} ]
+                             ^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9483,7 +9483,7 @@ In roc, functions are always written as a lambda, like{}
 
             MEq has eq : a, a -> Bool | a implements MEq
 
-            A := U8 has [ MEq {eq ? aMEq} ]
+            A := U8 implements [ MEq {eq ? aMEq} ]
 
             myMEq = \m, n -> m == n
             "#
@@ -9493,8 +9493,8 @@ In roc, functions are always written as a lambda, like{}
 
     Ability implementations cannot be optional:
 
-    5│  A := U8 has [ MEq {eq ? aMEq} ]
-                           ^^^^^^^^^
+    5│  A := U8 implements [ MEq {eq ? aMEq} ]
+                                  ^^^^^^^^^
 
     Custom implementations must be supplied fully.
 
@@ -9504,8 +9504,8 @@ In roc, functions are always written as a lambda, like{}
 
     This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [ MEq {eq ? aMEq} ]
-                      ^^^^^^^^^^^^^^^
+    5│  A := U8 implements [ MEq {eq ? aMEq} ]
+                             ^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9521,7 +9521,7 @@ In roc, functions are always written as a lambda, like{}
                 imports []
                 provides [A, myEncoder] to "./platform"
 
-            A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+            A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
 
             myEncoder = 1
             "#
@@ -9531,21 +9531,21 @@ In roc, functions are always written as a lambda, like{}
 
     Ability implementations cannot be optional:
 
-    5│  A := U8 has [ Encoding {toEncoder ? myEncoder} ]
-                                ^^^^^^^^^^^^^^^^^^^^^
+    5│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
+                                       ^^^^^^^^^^^^^^^^^^^^^
 
     Custom implementations must be supplied fully.
 
     Hint: if you want this implementation to be derived, don't include a
-    record of implementations. For example,    has [Encoding] will attempt
+    record of implementations. For example,    implements [Encoding] will attempt
     to derive `Encoding`
 
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
     This type does not fully implement the `Encoding` ability:
 
-    5│  A := U8 has [ Encoding {toEncoder ? myEncoder} ]
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    5│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9561,7 +9561,7 @@ In roc, functions are always written as a lambda, like{}
 
             MEq has eq : a, a -> Bool | a implements MEq
 
-            A := U8 has [ MEq {eq : Bool.eq} ]
+            A := U8 implements [ MEq {eq : Bool.eq} ]
             "#
         ),
         @r###"
@@ -9569,8 +9569,8 @@ In roc, functions are always written as a lambda, like{}
 
     This ability implementation is qualified:
 
-    5│  A := U8 has [ MEq {eq : Bool.eq} ]
-                                ^^^^^^^
+    5│  A := U8 implements [ MEq {eq : Bool.eq} ]
+                                       ^^^^^^^
 
     Custom implementations must be defined in the local scope, and
     unqualified.
@@ -9579,8 +9579,8 @@ In roc, functions are always written as a lambda, like{}
 
     This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [ MEq {eq : Bool.eq} ]
-                      ^^^^^^^^^^^^^^^^^^
+    5│  A := U8 implements [ MEq {eq : Bool.eq} ]
+                             ^^^^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9596,7 +9596,7 @@ In roc, functions are always written as a lambda, like{}
 
             MEq has eq : a, a -> Bool | a implements MEq
 
-            A := U8 has [ MEq {eq : \m, n -> m == n} ]
+            A := U8 implements [ MEq {eq : \m, n -> m == n} ]
             "#
         ),
         @r###"
@@ -9604,8 +9604,8 @@ In roc, functions are always written as a lambda, like{}
 
     This ability implementation is not an identifier:
 
-    5│  A := U8 has [ MEq {eq : \m, n -> m == n} ]
-                                ^^^^^^^^^^^^^^^
+    5│  A := U8 implements [ MEq {eq : \m, n -> m == n} ]
+                                       ^^^^^^^^^^^^^^^
 
     Custom ability implementations defined in this position can only be
     unqualified identifiers, not arbitrary expressions.
@@ -9616,8 +9616,8 @@ In roc, functions are always written as a lambda, like{}
 
     This type does not fully implement the `MEq` ability:
 
-    5│  A := U8 has [ MEq {eq : \m, n -> m == n} ]
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    5│  A := U8 implements [ MEq {eq : \m, n -> m == n} ]
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
 
@@ -9633,7 +9633,7 @@ In roc, functions are always written as a lambda, like{}
 
             MEq has eq : a, a -> Bool | a implements MEq
 
-            A := U8 has [ MEq {eq: eqA, eq: eqA} ]
+            A := U8 implements [ MEq {eq: eqA, eq: eqA} ]
 
             eqA = \@A m, @A n -> m == n
             "#
@@ -9643,13 +9643,13 @@ In roc, functions are always written as a lambda, like{}
 
     This ability member implementation is duplicate:
 
-    5│  A := U8 has [ MEq {eq: eqA, eq: eqA} ]
-                                    ^^^^^^^
+    5│  A := U8 implements [ MEq {eq: eqA, eq: eqA} ]
+                                           ^^^^^^^
 
     The first implementation was defined here:
 
-    5│  A := U8 has [ MEq {eq: eqA, eq: eqA} ]
-                           ^^^^^^^
+    5│  A := U8 implements [ MEq {eq: eqA, eq: eqA} ]
+                                  ^^^^^^^
 
     Only one custom implementation can be defined for an ability member.
     "###
@@ -9663,7 +9663,7 @@ In roc, functions are always written as a lambda, like{}
 
             Foo := {}
 
-            A := U8 has [ Foo {} ]
+            A := U8 implements [ Foo {} ]
             "#
         ),
         @r###"
@@ -9671,8 +9671,8 @@ In roc, functions are always written as a lambda, like{}
 
     This identifier is not an ability in scope:
 
-    5│  A := U8 has [ Foo {} ]
-                      ^^^
+    5│  A := U8 implements [ Foo {} ]
+                             ^^^
 
     Only abilities can be implemented.
     "###
@@ -9686,7 +9686,7 @@ In roc, functions are always written as a lambda, like{}
 
             Ab has ab : a -> a | a implements Ab
 
-            A := {} has [Ab]
+            A := {} implements [Ab]
             "#
         ),
         @r###"
@@ -9694,8 +9694,8 @@ In roc, functions are always written as a lambda, like{}
 
     This ability cannot be derived:
 
-    5│  A := {} has [Ab]
-                     ^^
+    5│  A := {} implements [Ab]
+                            ^^
 
     Only builtin abilities can be derived.
 
@@ -9709,7 +9709,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" imports [] provides [A] to "./platform"
 
-            A a := a -> a has [Encode.Encoding]
+            A a := a -> a implements [Encode.Encoding]
             "#
         ),
         @r###"
@@ -9717,8 +9717,8 @@ In roc, functions are always written as a lambda, like{}
 
     I can't derive an implementation of the `Encoding` ability for `A`:
 
-    3│  A a := a -> a has [Encode.Encoding]
-                           ^^^^^^^^^^^^^^^
+    3│  A a := a -> a implements [Encode.Encoding]
+                                  ^^^^^^^^^^^^^^^
 
     Note: `Encoding` cannot be generated for functions.
 
@@ -9732,7 +9732,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" imports [] provides [A] to "./platform"
 
-            A := B has [Encode.Encoding]
+            A := B implements [Encode.Encoding]
 
             B := {}
             "#
@@ -9742,8 +9742,8 @@ In roc, functions are always written as a lambda, like{}
 
     I can't derive an implementation of the `Encoding` ability for `A`:
 
-    3│  A := B has [Encode.Encoding]
-                    ^^^^^^^^^^^^^^^
+    3│  A := B implements [Encode.Encoding]
+                           ^^^^^^^^^^^^^^^
 
     Tip: `B` does not implement `Encoding`. Consider adding a custom
     implementation or `has Encode.Encoding` to the definition of `B`.
@@ -9758,9 +9758,9 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" imports [] provides [A] to "./platform"
 
-            A := B has [Encode.Encoding]
+            A := B implements [Encode.Encoding]
 
-            B := {} has [Encode.Encoding]
+            B := {} implements [Encode.Encoding]
             "#
         ),
         @"" // no error
@@ -9772,7 +9772,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" imports [] provides [MyNat] to "./platform"
 
-            MyNat := [S MyNat, Z] has [Encode.Encoding]
+            MyNat := [S MyNat, Z] implements [Encode.Encoding]
             "#
         ),
         @"" // no error
@@ -10501,9 +10501,9 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [hash, Id, Id2] to "./platform"
 
-            MHash has hash : a -> U64 | a implements MHash
+            MHash implements hash : a -> U64 | a implements MHash
 
-            Id := {} has [MHash {hash}]
+            Id := {} implements [MHash {hash}]
             Id2 := {}
 
             hash = \@Id2 _ -> 0
@@ -10581,7 +10581,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" imports [] provides [A] to "./platform"
 
-            A a := a -> a has [Decode.Decoding]
+            A a := a -> a implements [Decode.Decoding]
             "#
         ),
         @r###"
@@ -10589,8 +10589,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Decoding` ability for `A`:
 
-    3│  A a := a -> a has [Decode.Decoding]
-                           ^^^^^^^^^^^^^^^
+    3│  A a := a -> a implements [Decode.Decoding]
+                                  ^^^^^^^^^^^^^^^
 
     Note: `Decoding` cannot be generated for functions.
 
@@ -10604,7 +10604,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" imports [] provides [A] to "./platform"
 
-            A := B has [Decode.Decoding]
+            A := B implements [Decode.Decoding]
 
             B := {}
             "#
@@ -10614,8 +10614,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Decoding` ability for `A`:
 
-    3│  A := B has [Decode.Decoding]
-                    ^^^^^^^^^^^^^^^
+    3│  A := B implements [Decode.Decoding]
+                           ^^^^^^^^^^^^^^^
 
     Tip: `B` does not implement `Decoding`. Consider adding a custom
     implementation or `has Decode.Decoding` to the definition of `B`.
@@ -10630,9 +10630,9 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" imports [] provides [A] to "./platform"
 
-            A := B has [Decode.Decoding]
+            A := B implements [Decode.Decoding]
 
-            B := {} has [Decode.Decoding]
+            B := {} implements [Decode.Decoding]
             "#
         ),
         @"" // no error
@@ -10644,7 +10644,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" imports [] provides [MyNat] to "./platform"
 
-            MyNat := [S MyNat, Z] has [Decode.Decoding]
+            MyNat := [S MyNat, Z] implements [Decode.Decoding]
             "#
         ),
         @"" // no error
@@ -11245,7 +11245,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [A] to "./platform"
 
-             A a := a -> a has [Hash]
+             A a := a -> a implements [Hash]
              "#
         ),
         @r###"
@@ -11253,8 +11253,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Hash` ability for `A`:
 
-    3│  A a := a -> a has [Hash]
-                           ^^^^
+    3│  A a := a -> a implements [Hash]
+                                  ^^^^
 
     Note: `Hash` cannot be generated for functions.
 
@@ -11268,7 +11268,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [A] to "./platform"
 
-             A := B has [Hash]
+             A := B implements [Hash]
 
              B := {}
              "#
@@ -11278,8 +11278,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Hash` ability for `A`:
 
-    3│  A := B has [Hash]
-                    ^^^^
+    3│  A := B implements [Hash]
+                           ^^^^
 
     Tip: `B` does not implement `Hash`. Consider adding a custom
     implementation or `has Hash.Hash` to the definition of `B`.
@@ -11294,9 +11294,9 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [A] to "./platform"
 
-             A := B has [Hash]
+             A := B implements [Hash]
 
-             B := {} has [Hash]
+             B := {} implements [Hash]
              "#
         ),
         @"" // no error
@@ -11308,7 +11308,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [MyNat] to "./platform"
 
-             MyNat := [S MyNat, Z] has [Hash]
+             MyNat := [S MyNat, Z] implements [Hash]
              "#
         ),
         @"" // no error
@@ -11546,7 +11546,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [A] to "./platform"
 
-             A a := a -> a has [Eq]
+             A a := a -> a implements [Eq]
              "#
         ),
         @r###"
@@ -11554,8 +11554,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Eq` ability for `A`:
 
-    3│  A a := a -> a has [Eq]
-                           ^^
+    3│  A a := a -> a implements [Eq]
+                                  ^^
 
     Note: `Eq` cannot be generated for functions.
 
@@ -11601,7 +11601,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [A] to "./platform"
 
-             A := F32 has [Eq]
+             A := F32 implements [Eq]
              "#
         ),
         @r###"
@@ -11609,8 +11609,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Eq` ability for `A`:
 
-    3│  A := F32 has [Eq]
-                      ^^
+    3│  A := F32 implements [Eq]
+                             ^^
 
     Note: I can't derive `Bool.isEq` for floating-point types. That's
     because Roc's floating-point numbers cannot be compared for total
@@ -11627,7 +11627,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [A] to "./platform"
 
-             A := F64 has [Eq]
+             A := F64 implements [Eq]
              "#
         ),
         @r###"
@@ -11635,8 +11635,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Eq` ability for `A`:
 
-    3│  A := F64 has [Eq]
-                      ^^
+    3│  A := F64 implements [Eq]
+                             ^^
 
     Note: I can't derive `Bool.isEq` for floating-point types. That's
     because Roc's floating-point numbers cannot be compared for total
@@ -11653,7 +11653,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [A] to "./platform"
 
-             A := B has [Eq]
+             A := B implements [Eq]
 
              B := {}
              "#
@@ -11663,8 +11663,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Eq` ability for `A`:
 
-    3│  A := B has [Eq]
-                    ^^
+    3│  A := B implements [Eq]
+                           ^^
 
     Tip: `B` does not implement `Eq`. Consider adding a custom implementation
     or `has Bool.Eq` to the definition of `B`.
@@ -11679,9 +11679,9 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [A] to "./platform"
 
-             A := B has [Eq]
+             A := B implements [Eq]
 
-             B := {} has [Eq]
+             B := {} implements [Eq]
              "#
         ),
         @"" // no error
@@ -11693,7 +11693,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [MyNat] to "./platform"
 
-             MyNat := [S MyNat, Z] has [Eq]
+             MyNat := [S MyNat, Z] implements [Eq]
              "#
         ),
         @"" // no error
@@ -11988,7 +11988,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [main] to "./platform"
 
-            F := U8 -> U8 has [Hash, Eq, Encoding]
+            F := U8 -> U8 implements [Hash, Eq, Encoding]
 
             main = ""
             "#
@@ -11998,8 +11998,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Hash` ability for `F`:
 
-    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
-                           ^^^^
+    3│  F := U8 -> U8 implements [Hash, Eq, Encoding]
+                                  ^^^^
 
     Note: `Hash` cannot be generated for functions.
 
@@ -12009,8 +12009,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Eq` ability for `F`:
 
-    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
-                                 ^^
+    3│  F := U8 -> U8 implements [Hash, Eq, Encoding]
+                                        ^^
 
     Note: `Eq` cannot be generated for functions.
 
@@ -12020,8 +12020,8 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't derive an implementation of the `Encoding` ability for `F`:
 
-    3│  F := U8 -> U8 has [Hash, Eq, Encoding]
-                                     ^^^^^^^^
+    3│  F := U8 -> U8 implements [Hash, Eq, Encoding]
+                                            ^^^^^^^^
 
     Note: `Encoding` cannot be generated for functions.
 
