@@ -38,7 +38,7 @@ Execute `cargo fmt --all` to fix the formatting.
 If you make changes to [Roc's Standard Library](https://www.roc-lang.org/builtins/Str), you can add comments to the code following [the CommonMark Spec](https://spec.commonmark.org/current/) to further explain your intentions. You can view these changes locally with:
 
 ```sh
-cargo run docs crates/compiler/builtins/roc
+roc docs crates/compiler/builtins/roc/main.roc
 ```
 
 This command will generate the documentation in the [`generated-docs`](generated-docs) directory.
@@ -93,7 +93,7 @@ In case you have multiple commits, you can sign them in two ways:
            ```
        - On a new line below a commit you want to sign, add `exec git commit --amend --no-edit -S`. Do this for all your unsigned commits.
  2. Or run git rebase recursively:
-       - Find the oldest commit you want to sign, using the `git log --show-signature` command. 
+       - Find the oldest commit you want to sign, using the `git log --show-signature` command.
        - Run the command `git rebase --exec 'git commit --amend --no-edit -n -S' -i HASH` which would sign all commits up to commit `HASH`.
 
 If you already pushed unsigned commits, you may have to do a force push with `git push origin -f <branch_name>`.
