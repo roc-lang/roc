@@ -98,6 +98,30 @@ Dict k v := {
     data : List (T k v),
     size : Nat,
 } | k has Hash & Eq
+     has [
+         Eq {
+             isEq,
+         },
+         Hash {
+             hash: hashDict,
+         },
+     ]
+
+isEq : Dict k v, Dict k v -> Bool | k has Hash & Eq, v has Eq
+isEq = \xs, ys ->
+    if len xs != len ys then
+        Bool.false
+    else
+        walkUntil xs Bool.true \_, k, xVal ->
+            when get ys k is
+                Ok yVal if yVal == xVal ->
+                    Continue Bool.true
+
+                _ ->
+                    Break Bool.false
+
+hashDict : hasher, Dict k v -> hasher | k has Hash & Eq, v has Hash, hasher has Hasher
+hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
 
 ## Return an empty dictionary.
 ## ```
@@ -746,6 +770,71 @@ expect
         |> get "foo"
 
     val == Ok "bar"
+
+expect
+    dict1 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz"
+
+    dict2 =
+        empty {}
+        |> insert 2 "baz"
+        |> insert 1 "bar"
+
+    dict1 == dict2
+
+expect
+    dict1 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz"
+
+    dict2 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz!"
+
+    dict1 != dict2
+
+expect
+    inner1 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz"
+
+    inner2 =
+        empty {}
+        |> insert 2 "baz"
+        |> insert 1 "bar"
+
+    outer =
+        empty {}
+        |> insert inner1 "wrong"
+        |> insert inner2 "right"
+
+    get outer inner1 == Ok "right"
+
+expect
+    inner1 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz"
+
+    inner2 =
+        empty {}
+        |> insert 2 "baz"
+        |> insert 1 "bar"
+
+    outer1 =
+        empty {}
+        |> insert inner1 "val"
+
+    outer2 =
+        empty {}
+        |> insert inner2 "val"
+
+    outer1 == outer2
 
 expect
     val =

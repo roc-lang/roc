@@ -20,7 +20,7 @@ interface Set
         Bool.{ Bool, Eq },
         Dict.{ Dict },
         Num.{ Nat },
-        Hash.{ Hash },
+        Hash.{ Hash, Hasher },
     ]
 
 # We should have this line above the next has.
@@ -28,10 +28,13 @@ interface Set
 # | k has Hash & Eq
 ## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
 ## type which stores a collection of unique values, without any ordering
-Set k := Dict.Dict k {}
+Set k := Dict.Dict k {} | k has Hash & Eq
      has [
          Eq {
              isEq,
+         },
+         Hash {
+             hash: hashSet,
          },
      ]
 
@@ -45,6 +48,9 @@ isEq = \xs, ys ->
                 Continue Bool.true
             else
                 Break Bool.false
+
+hashSet : hasher, Set k -> hasher | k has Hash & Eq, hasher has Hasher
+hashSet = \hasher, @Set inner -> Hash.hash hasher inner
 
 ## Creates a new empty `Set`.
 ## ```
@@ -353,3 +359,27 @@ expect
         |> insert 9
 
     x == fromList (toList x)
+
+# TODO: This test that puts a Set in a Set fails to unify.
+# expect
+#     orderOne : Set Nat
+#     orderOne =
+#         single 1
+#         |> insert 2
+
+#     orderTwo : Set Nat
+#     orderTwo =
+#         single 2
+#         |> insert 1
+
+#     wrapperOne : Set (Set Nat)
+#     wrapperOne =
+#         single orderOne
+#         |> insert orderTwo
+
+#     wrapperTwo : Set (Set Nat)
+#     wrapperTwo =
+#         single orderTwo
+#         |> insert orderOne
+
+#     wrapperOne == wrapperTwo
