@@ -2736,11 +2736,11 @@ impl<'a> LayoutRepr<'a> {
 
             RecursivePointer(_) => true,
 
-            Builtin(builtin ) => match builtin {
-                Int(_) | Float(_) | Bool |  Decimal => false,
+            Builtin(builtin) => match builtin {
+                Int(_) | Float(_) | Bool | Decimal => false,
                 Str | List(_) => true,
-            } 
-          
+            },
+
             Boxed(_) => true,
 
             Struct(_) => false,

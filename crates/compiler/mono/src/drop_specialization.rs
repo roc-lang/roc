@@ -290,7 +290,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         .min()
                         .unwrap();
 
-                    // TODO verify this works.
+                    // Update the existing env to match the lowest count.
                     *count = *consumed;
                 }
             }
@@ -321,7 +321,7 @@ fn specialize_drops_stmt<'a, 'i>(
             }
 
             let newer_branches = new_branches
-                .into_iter()
+                .iter()
                 .map(|(label, info, branch, branch_env)| {
                     let new_branch = insert_incs!(branch_env, branch);
 
