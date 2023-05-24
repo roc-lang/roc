@@ -121,16 +121,18 @@ impl<'a> Env<'a> {
 
                             Ok(symbol)
                         }
-                        None => Err(RuntimeError::LookupNotInScope(
-                            Loc {
+                        None => Err(RuntimeError::LookupNotInScope {
+                            loc_name: Loc {
                                 value: Ident::from(ident),
                                 region,
                             },
-                            self.ident_ids
+                            suggestion_options: self
+                                .ident_ids
                                 .ident_strs()
                                 .map(|(_, string)| string.into())
                                 .collect(),
-                        )),
+                            underscored_suggestion_region: None,
+                        }),
                     }
                 } else {
                     match self.dep_idents.get(&module_id) {

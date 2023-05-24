@@ -1019,9 +1019,18 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
+
             let problem = roc_problem::can::RuntimeError::MalformedIdentifier(
                 (*name).into(),
-                roc_parse::ident::BadIdent::Underscore(region.start()),
+                if name.is_empty() {
+                    roc_parse::ident::BadIdent::UnderscoreAlone(region.start())
+                } else {
+                    roc_parse::ident::BadIdent::UnderscoreAtStart {
+                        position: region.start(),
+                        // Check if there's an ignored identifier with this name in scope (for better error messages)
+                        declaration_region: scope.lookup_ignored_local(name),
+                    }
+                },
                 region,
             );
 

@@ -1254,16 +1254,46 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        Underscore(pos) => {
-            let region = Region::new(surroundings.start(), pos);
+        UnderscoreAlone(_pos) => {
+            alloc.stack([
+                alloc.reflow("An underscore is being used as a variable here:"),
+                alloc.region(lines.convert_region(surroundings)),
+                alloc.concat([alloc
+                    .reflow(r"An underscore can be used to ignore a value when pattern matching, but it cannot be used as a variable.")]),
+            ])
+        }
+
+        UnderscoreInMiddle(_pos) => {
             alloc.stack([
                 alloc.reflow("Underscores are not allowed in identifier names:"),
-                alloc.region_with_subregion(
-                    lines.convert_region(surroundings),
-                    lines.convert_region(region),
-                ),
+                alloc.region(lines.convert_region(surroundings)),
                 alloc.concat([alloc
                     .reflow(r"I recommend using camelCase. It's the standard style in Roc code!")]),
+            ])
+        }
+
+        UnderscoreAtStart {
+            position: _pos,
+            declaration_region,
+        } => {
+            let line = "This variable's name starts with an underscore:";
+            alloc.stack([
+                match declaration_region {
+                    None => alloc.reflow(line),
+                    Some(declaration_region) => alloc.stack([
+                        alloc.reflow(line),
+                        alloc.region(lines.convert_region(declaration_region)),
+                        alloc.reflow("But then it is used here:"),
+                    ])
+                },
+                alloc.region(lines.convert_region(surroundings)),
+                alloc.concat([
+                    alloc.reflow(r"A variable's name can only start with an underscore if the variable is unused. "),
+                    match declaration_region {
+                        None => alloc.reflow(r"But it looks like the variable is being used here!"),
+                        Some(_) => alloc.reflow(r"Since you are using this variable, you could remove the underscore from its name in both places."),
+                    }
+                ]),
             ])
         }
 
@@ -1409,7 +1439,13 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        Underscore(pos) => {
+        UnderscoreAlone(..) | UnderscoreAtStart { .. } => {
+            unreachable!(
+                "it's fine to have an underscore at the beginning of an identifier in a pattern"
+            )
+        }
+
+        UnderscoreInMiddle(pos) => {
             let region = Region::from_pos(pos.sub(1));
 
             alloc.stack([
@@ -1580,8 +1616,19 @@ fn pretty_runtime_error<'b>(
             (title, doc) = report_shadowing(alloc, lines, original_region, shadow, kind);
         }
 
-        RuntimeError::LookupNotInScope(loc_name, options) => {
-            doc = not_found(alloc, lines, loc_name.region, &loc_name.value, options);
+        RuntimeError::LookupNotInScope {
+            loc_name,
+            suggestion_options: options,
+            underscored_suggestion_region,
+        } => {
+            doc = not_found(
+                alloc,
+                lines,
+                loc_name.region,
+                &loc_name.value,
+                options,
+                underscored_suggestion_region,
+            );
             title = UNRECOGNIZED_NAME;
         }
         RuntimeError::CircularDef(entries) => {
@@ -2219,6 +2266,7 @@ fn not_found<'b>(
     region: roc_region::all::Region,
     name: &Ident,
     options: MutSet<Box<str>>,
+    underscored_suggestion_region: Option<Region>,
 ) -> RocDocBuilder<'b> {
     let mut suggestions = suggest::sort(
         name.as_inline_str().as_str(),
@@ -2234,7 +2282,15 @@ fn not_found<'b>(
         alloc.reflow(" missing up-top"),
     ]);
 
-    let default_yes = alloc.reflow("Did you mean one of these?");
+    let default_yes = match underscored_suggestion_region {
+        Some(underscored_region) => alloc.stack([
+            alloc.reflow("There is an ignored identifier of a similar name here:"),
+            alloc.region(lines.convert_region(underscored_region)),
+            alloc.reflow("Did you mean to remove the leading underscore?"),
+            alloc.reflow("If not, did you mean one of these?"),
+        ]),
+        None => alloc.reflow("Did you mean one of these?"),
+    };
 
     let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {
