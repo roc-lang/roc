@@ -305,15 +305,15 @@ fn specialize_drops_stmt<'a, 'i>(
                                 let branch_count =
                                     $branch_env.incremented_symbols.get(symbol).unwrap_or(&0);
 
-                                match count - branch_count {
+                                match branch_count - count {
                                     0 => None,
-                                    difference => Some(difference),
+                                    difference => Some((symbol, difference)),
                                 }
                             });
 
-                    symbol_differences.fold($branch, |new_branch, difference| {
+                    symbol_differences.fold($branch, |new_branch, (symbol, difference)| {
                         arena.alloc(Stmt::Refcounting(
-                            ModifyRc::Inc(*cond_symbol, difference),
+                            ModifyRc::Inc(*symbol, difference),
                             new_branch,
                         ))
                     })
@@ -393,7 +393,20 @@ fn specialize_drops_stmt<'a, 'i>(
                 // dec a
                 // dec b
 
-                if environment.pop_incremented(symbol) {
+                // Collect all children that were incremented and make sure that one increment remains in the environment afterwards.
+                // To prevent
+                // let a = index b; inc a; dec b; ...; dec a
+                // from being translated to
+                // let a = index b; dec b
+                // As a might get dropped as a result of the decrement of b.
+                let mut incremented_children = environment
+                    .get_children(symbol)
+                    .iter()
+                    .copied()
+                    .filter_map(|child| environment.pop_incremented(&child).then_some(child))
+                    .collect::<MutSet<_>>();
+
+                let updated_stmt = if environment.pop_incremented(symbol) {
                     // This decremented symbol was incremented before, so we can remove it.
                     specialize_drops_stmt(
                         arena,
@@ -403,24 +416,11 @@ fn specialize_drops_stmt<'a, 'i>(
                         continuation,
                     )
                 } else {
-                    // Collect all children that were incremented and make sure that one increment remains in the environment afterwards.
-                    // To prevent
-                    // let a = index b; inc a; dec b; ...; dec a
-                    // from being translated to
-                    // let a = index b; dec b
-                    // As a might get dropped as a result of the decrement of b.
-                    let mut incremented_children = environment
-                        .get_children(symbol)
-                        .iter()
-                        .copied()
-                        .filter_map(|child| environment.pop_incremented(&child).then_some(child))
-                        .collect::<MutSet<_>>();
-
                     // This decremented symbol was not incremented before, perhaps the children were.
                     let in_layout = environment.get_symbol_layout(symbol);
                     let runtime_layout = layout_interner.runtime_representation(*in_layout);
 
-                    let new_dec = match runtime_layout.repr {
+                    match runtime_layout.repr {
                         // Layout has children, try to inline them.
                         LayoutRepr::Struct(field_layouts) => specialize_struct(
                             arena,
@@ -474,15 +474,15 @@ fn specialize_drops_stmt<'a, 'i>(
                             // No children, keep decrementing the symbol.
                             arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
                         }
-                    };
-
-                    // Add back the increments for the children to the environment.
-                    for child_symbol in incremented_children.iter() {
-                        environment.add_incremented(*child_symbol, 1)
                     }
+                };
 
-                    new_dec
+                // Add back the increments for the children to the environment.
+                for child_symbol in incremented_children.iter() {
+                    environment.add_incremented(*child_symbol, 1)
                 }
+
+                updated_stmt
             }
             ModifyRc::DecRef(_) => {
                 // Inlining has no point, since it doesn't decrement it's children
@@ -1363,10 +1363,7 @@ impl<'a> DropSpecializationEnvironment<'a> {
 
     fn pop_incremented(&mut self, symbol: &Symbol) -> bool {
         match self.incremented_symbols.get_mut(symbol) {
-            Some(1) => {
-                self.incremented_symbols.remove(symbol);
-                true
-            }
+            Some(0) => false,
             Some(c) => {
                 *c -= 1;
                 true
@@ -1374,8 +1371,6 @@ impl<'a> DropSpecializationEnvironment<'a> {
             None => false,
         }
     }
-
-    // TODO assert that a parent is only inlined once / assert max single dec per parent.
 }
 
 /**
