@@ -32,13 +32,19 @@ use roc_cli::build;
 fn main() -> io::Result<()> {
     let _tracing_guards = roc_tracing::setup_tracing!();
 
-    let matches = build_app().get_matches();
+    let app = build_app();
+    let subcommands: Vec<String> = app
+        .get_subcommands()
+        .map(|c| c.get_name().to_owned())
+        .collect();
+    let matches = app.get_matches();
 
     let exit_code = match matches.subcommand() {
         None => {
             if matches.contains_id(ROC_FILE) {
                 build(
                     &matches,
+                    &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -54,6 +60,7 @@ fn main() -> io::Result<()> {
             if matches.contains_id(ROC_FILE) {
                 build(
                     matches,
+                    &subcommands,
                     BuildConfig::BuildAndRun,
                     Triple::host(),
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -78,6 +85,7 @@ fn main() -> io::Result<()> {
             if matches.contains_id(ROC_FILE) {
                 build(
                     matches,
+                    &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -136,6 +144,7 @@ fn main() -> io::Result<()> {
 
             Ok(build(
                 matches,
+                &subcommands,
                 BuildConfig::BuildOnly,
                 target.to_triple(),
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),

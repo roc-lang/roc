@@ -530,8 +530,19 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     }
 }
 
+// Find the element of `options` with the smallest edit distance to
+// `reference`. Returns a tuple containing the element and the distance, or
+// `None` if the `options` `Vec` is empty.
+fn nearest_match<'a>(reference: &str, options: &'a [String]) -> Option<(&'a String, usize)> {
+    options
+        .iter()
+        .map(|s| (s, distance::damerau_levenshtein(reference, s)))
+        .min_by(|(_, a), (_, b)| a.cmp(b))
+}
+
 pub fn build(
     matches: &ArgMatches,
+    subcommands: &[String],
     config: BuildConfig,
     triple: Triple,
     roc_cache_dir: RocCacheDir<'_>,
@@ -567,7 +578,16 @@ pub fn build(
                     ));
                     // Add some additional hints if run as `roc [FILENAME]`.
                     if matches.subcommand().is_none() {
-                        error_lines.push("Did you misspell a subcommand?".to_string());
+                        if let Some(possible_typo) = path.to_str() {
+                            if let Some((nearest_command, _)) =
+                                nearest_match(possible_typo, subcommands)
+                            {
+                                error_lines.push(format!(
+                                    "Did you mean to use the {} subcommand?",
+                                    nearest_command
+                                ));
+                            }
+                        }
                     }
                     error_lines.push("You can run `roc help` to see the list of available subcommands and for more information on how to provide a .roc file.".to_string());
 
