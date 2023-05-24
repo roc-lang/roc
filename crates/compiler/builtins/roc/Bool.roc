@@ -12,7 +12,7 @@ interface Bool
 ## be a `NaN` ([Not a Number](https://en.wikipedia.org/wiki/NaN)), and the
 ## [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754) floating point standard
 ## specifies that two `NaN`s are not equal.
-Eq has
+Eq implements
     ## Returns `Bool.true` if the input values are equal. This is
     ## equivalent to the logic
     ## [XNOR](https://en.wikipedia.org/wiki/Logical_equality) gate. The infix

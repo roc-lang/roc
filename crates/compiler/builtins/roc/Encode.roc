@@ -49,10 +49,10 @@ interface Encode
 
 Encoder fmt := List U8, fmt -> List U8 | fmt implements EncoderFormatting
 
-Encoding has
+Encoding implements
     toEncoder : val -> Encoder fmt | val implements Encoding, fmt implements EncoderFormatting
 
-EncoderFormatting has
+EncoderFormatting implements
     u8 : U8 -> Encoder fmt | fmt implements EncoderFormatting
     u16 : U16 -> Encoder fmt | fmt implements EncoderFormatting
     u32 : U32 -> Encoder fmt | fmt implements EncoderFormatting

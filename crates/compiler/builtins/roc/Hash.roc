@@ -28,7 +28,7 @@ interface Hash
     ]
 
 ## A value that can hashed.
-Hash has
+Hash implements
     ## Hashes a value into a [Hasher].
     ## Note that [hash] does not produce a hash value itself; the hasher must be
     ## [complete]d in order to extract the hash value.
@@ -39,7 +39,7 @@ Hash has
 ## The [Hasher] ability describes general-purpose hashers. It only allows
 ## emission of 64-bit unsigned integer hashes. It is not suitable for
 ## cryptographically-secure hashing.
-Hasher has
+Hasher implemenets
     ## Adds a list of bytes to the hasher.
     addBytes : a, List U8 -> a | a implements Hasher
 

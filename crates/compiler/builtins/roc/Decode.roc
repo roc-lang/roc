@@ -76,11 +76,11 @@ DecodeResult val : { result : Result val DecodeError, rest : List U8 }
 Decoder val fmt := List U8, fmt -> DecodeResult val | fmt implements DecoderFormatting
 
 ## Definition of the [Decoding] ability
-Decoding has
+Decoding implements
     decoder : Decoder val fmt | val implements Decoding, fmt implements DecoderFormatting
 
 ## Definition of the [DecoderFormatting] ability
-DecoderFormatting has
+DecoderFormatting implements
     u8 : Decoder U8 fmt | fmt implements DecoderFormatting
     u16 : Decoder U16 fmt | fmt implements DecoderFormatting
     u32 : Decoder U32 fmt | fmt implements DecoderFormatting
