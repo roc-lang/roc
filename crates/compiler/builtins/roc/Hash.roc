@@ -39,7 +39,7 @@ Hash implements
 ## The [Hasher] ability describes general-purpose hashers. It only allows
 ## emission of 64-bit unsigned integer hashes. It is not suitable for
 ## cryptographically-secure hashing.
-Hasher implemenets
+Hasher implements
     ## Adds a list of bytes to the hasher.
     addBytes : a, List U8 -> a | a implements Hasher
 
