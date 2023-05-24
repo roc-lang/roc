@@ -393,20 +393,7 @@ fn specialize_drops_stmt<'a, 'i>(
                 // dec a
                 // dec b
 
-                // Collect all children that were incremented and make sure that one increment remains in the environment afterwards.
-                // To prevent
-                // let a = index b; inc a; dec b; ...; dec a
-                // from being translated to
-                // let a = index b; dec b
-                // As a might get dropped as a result of the decrement of b.
-                let mut incremented_children = environment
-                    .get_children(symbol)
-                    .iter()
-                    .copied()
-                    .filter_map(|child| environment.pop_incremented(&child).then_some(child))
-                    .collect::<MutSet<_>>();
-
-                let updated_stmt = if environment.pop_incremented(symbol) {
+                if environment.pop_incremented(symbol) {
                     // This decremented symbol was incremented before, so we can remove it.
                     specialize_drops_stmt(
                         arena,
@@ -416,11 +403,32 @@ fn specialize_drops_stmt<'a, 'i>(
                         continuation,
                     )
                 } else {
+                    // Collect all children (recursively) that were incremented and make sure that one increment remains in the environment afterwards.
+                    // To prevent
+                    // let a = index b; inc a; dec b; ...; dec a
+                    // from being translated to
+                    // let a = index b; dec b
+                    // As a might get dropped as a result of the decrement of b.
+                    let mut incremented_children = {
+                        let mut todo_children = bumpalo::vec![in &arena; *symbol];
+                        let mut incremented_children = MutSet::default();
+
+                        while let Some(child) = todo_children.pop() {
+                            if environment.pop_incremented(&child) {
+                                incremented_children.insert(child);
+                            } else {
+                                todo_children.extend(environment.get_children(&child));
+                            }
+                        }
+
+                        incremented_children
+                    };
+
                     // This decremented symbol was not incremented before, perhaps the children were.
                     let in_layout = environment.get_symbol_layout(symbol);
                     let runtime_layout = layout_interner.runtime_representation(*in_layout);
 
-                    match runtime_layout.repr {
+                    let updated_stmt = match runtime_layout.repr {
                         // Layout has children, try to inline them.
                         LayoutRepr::Struct(field_layouts) => specialize_struct(
                             arena,
@@ -474,15 +482,15 @@ fn specialize_drops_stmt<'a, 'i>(
                             // No children, keep decrementing the symbol.
                             arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
                         }
+                    };
+
+                    // Add back the increments for the children to the environment.
+                    for child_symbol in incremented_children.iter() {
+                        environment.add_incremented(*child_symbol, 1)
                     }
-                };
 
-                // Add back the increments for the children to the environment.
-                for child_symbol in incremented_children.iter() {
-                    environment.add_incremented(*child_symbol, 1)
+                    updated_stmt
                 }
-
-                updated_stmt
             }
             ModifyRc::DecRef(_) => {
                 // Inlining has no point, since it doesn't decrement it's children
