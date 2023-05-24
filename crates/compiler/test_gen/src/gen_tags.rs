@@ -2189,3 +2189,34 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
         bool
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn nullable_wrapped_eq_issue_5434() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            Value : [
+                A,
+                B I64,
+                C,
+                D (List [T Str Value]),
+            ]
+
+            main =
+                x : Value
+                x = B 32
+                y : Value
+                y = B 0
+                if x == y then
+                    "OK"
+                else
+                    "FAIL"
+            "###
+        ),
+        RocStr::from("FAIL"),
+        RocStr
+    );
+}
