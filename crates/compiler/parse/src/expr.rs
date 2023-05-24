@@ -1286,7 +1286,7 @@ mod ability {
         Exact(u32),
     }
 
-    /// Parses an ability demand like `hash : a -> U64 | a has Hash`, in the context of a larger
+    /// Parses an ability demand like `hash : a -> U64 | a implements Hash`, in the context of a larger
     /// ability definition.
     /// This is basically the same as parsing a free-floating annotation, but with stricter rules.
     pub fn parse_demand<'a>(
@@ -1641,13 +1641,13 @@ fn parse_expr_end<'a>(
                 value:
                     Expr::Var {
                         module_name: "",
-                        ident: "has",
+                        ident: "implements",
                     },
                 ..
             },
             state,
         )) if matches!(expr_state.expr.value, Expr::Tag(..)) => {
-            // This is an ability definition, `Ability arg1 ... has ...`.
+            // This is an ability definition, `Ability arg1 ... implements ...`.
 
             let name = expr_state.expr.map_owned(|e| match e {
                 Expr::Tag(name) => name,
@@ -1668,7 +1668,7 @@ fn parse_expr_end<'a>(
                 }
             }
 
-            // Attach any spaces to the `has` keyword
+            // Attach any spaces to the `implements` keyword
             let has = if !expr_state.spaces_after.is_empty() {
                 arena
                     .alloc(Implements::Implements)
