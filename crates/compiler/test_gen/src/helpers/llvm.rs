@@ -298,6 +298,10 @@ fn create_llvm_module<'a>(
         );
     }
 
+    if let Ok(path) = std::env::var("ROC_DEBUG_LLVM") {
+        env.module.print_to_file(path).unwrap();
+    }
+
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
