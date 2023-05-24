@@ -108,9 +108,18 @@ fn specialize_drops_stmt<'a, 'i>(
 
                             alloc_let_with_continuation!(environment)
                         }
-                        _ => {
-                            // TODO perhaps allow for some e.g. lowlevel functions to be called if they cannot modify the RC of the symbol.
+                        // Check whether the increments can be passed to the continuation.
+                        CallType::LowLevel { op, .. } => match low_level_no_rc(&op) {
+                            // It should be safe to pass the increments to the continuation.
+                            RC::NoRc => alloc_let_with_continuation!(environment),
+                            // We probably should not pass the increments to the continuation.
+                            RC::Rc | RC::Uknown => {
+                                let mut new_environment = environment.clone_without_incremented();
 
+                                alloc_let_with_continuation!(&mut new_environment)
+                            }
+                        },
+                        _ => {
                             // Calls can modify the RC of the symbol.
                             // If we move a increment of children after the function,
                             // the function might deallocate the child before we can use it after the function.
@@ -222,7 +231,7 @@ fn specialize_drops_stmt<'a, 'i>(
             let new_branches = branches
                 .iter()
                 .map(|(label, info, branch)| {
-                    let mut branch_env = environment.clone_without_incremented();
+                    let mut branch_env = environment.clone();
 
                     insert_branch_info!(branch_env, info);
 
@@ -234,7 +243,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         branch,
                     );
 
-                    (*label, info.clone(), new_branch.clone())
+                    (*label, info.clone(), new_branch.clone(), branch_env)
                 })
                 .collect_in::<Vec<_>>(arena)
                 .into_bump_slice();
@@ -242,7 +251,7 @@ fn specialize_drops_stmt<'a, 'i>(
             let new_default_branch = {
                 let (info, branch) = default_branch;
 
-                let mut branch_env = environment.clone_without_incremented();
+                let mut branch_env = environment.clone();
 
                 insert_branch_info!(branch_env, info);
 
@@ -254,14 +263,91 @@ fn specialize_drops_stmt<'a, 'i>(
                     branch,
                 );
 
+                (info.clone(), new_branch, branch_env)
+            };
+
+            // Find consumed increments in each branch and make sure they are consumed in all branches.
+            // By incrementing them in each branch where they were not consumed.
+            {
+                let branch_envs = {
+                    let mut branch_environments =
+                        Vec::with_capacity_in(new_branches.len() + 1, arena);
+
+                    for (_, _, _, branch_env) in new_branches.iter() {
+                        branch_environments.push(branch_env);
+                    }
+
+                    branch_environments.push(&new_default_branch.2);
+
+                    branch_environments
+                };
+
+                // Find the lowest symbol count for each symbol in each branch, and update the environment to match.
+                for (symbol, count) in environment.incremented_symbols.iter_mut() {
+                    let consumed = branch_envs
+                        .iter()
+                        .map(|branch_env| branch_env.incremented_symbols.get(symbol).unwrap_or(&0))
+                        .min()
+                        .unwrap();
+
+                    // TODO verify this works.
+                    *count = *consumed;
+                }
+            }
+
+            macro_rules! insert_incs {
+                ($branch_env:expr, $branch:expr ) => {{
+                    let symbol_differences =
+                        environment
+                            .incremented_symbols
+                            .iter()
+                            .filter_map(|(symbol, count)| {
+                                let branch_count =
+                                    $branch_env.incremented_symbols.get(symbol).unwrap_or(&0);
+
+                                match count - branch_count {
+                                    0 => None,
+                                    difference => Some(difference),
+                                }
+                            });
+
+                    symbol_differences.fold($branch, |new_branch, difference| {
+                        arena.alloc(Stmt::Refcounting(
+                            ModifyRc::Inc(*cond_symbol, difference),
+                            new_branch,
+                        ))
+                    })
+                }};
+            }
+
+            let newer_branches = new_branches
+                .into_iter()
+                .map(|(label, info, branch, branch_env)| {
+                    let new_branch = insert_incs!(branch_env, branch);
+
+                    (*label, info.clone(), new_branch.clone())
+                })
+                .collect_in::<Vec<_>>(arena)
+                .into_bump_slice();
+
+            let newer_default_branch = {
+                let (info, branch, branch_env) = new_default_branch;
+
+                let new_branch = insert_incs!(branch_env, branch);
+
                 (info.clone(), new_branch)
             };
+
+            // Remove all 0 counts as cleanup.
+            environment
+                .incremented_symbols
+                .retain(|_, count| *count > 0);
 
             arena.alloc(Stmt::Switch {
                 cond_symbol: *cond_symbol,
                 cond_layout: *cond_layout,
-                branches: new_branches,
-                default_branch: new_default_branch,
+                branches: newer_branches,
+                default_branch: newer_default_branch,
                 ret_layout: *ret_layout,
             })
         }
@@ -1290,4 +1376,112 @@ impl<'a> DropSpecializationEnvironment<'a> {
     }
 
     // TODO assert that a parent is only inlined once / assert max single dec per parent.
+}
+
+/**
+Reference count information
+*/
+enum RC {
+    // Rc is important, moving an increment to after this function might break the program.
+    // E.g. if the function checks for uniqueness and behaves differently based on that.
+    Rc,
+    // Rc is not important, moving an increment to after this function should have no effect.
+    NoRc,
+    // Rc effect is unknown.
+    Uknown,
+}
+
+/*
+Returns whether the reference count of arguments to this function is relevant to the program.
+ */
+fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
+    use LowLevel::*;
+
+    match lowlevel {
+        Unreachable => RC::Uknown,
+        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrGraphemes
+        | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => RC::NoRc,
+        ListWithCapacity | StrWithCapacity => RC::NoRc,
+        ListReplaceUnsafe => RC::Rc,
+        StrGetUnsafe | ListGetUnsafe => RC::NoRc,
+        ListConcat => RC::Rc,
+        StrConcat => RC::Rc,
+        StrSubstringUnsafe => RC::NoRc,
+        StrReserve => RC::Rc,
+        StrAppendScalar => RC::Rc,
+        StrGetScalarUnsafe => RC::NoRc,
+        StrTrim => RC::Rc,
+        StrTrimLeft => RC::Rc,
+        StrTrimRight => RC::Rc,
+        StrSplit => RC::NoRc,
+        StrToNum => RC::NoRc,
+        ListPrepend => RC::Rc,
+        StrJoinWith => RC::NoRc,
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => RC::Rc,
+
+        ListAppendUnsafe
+        | ListReserve
+        | ListSublist
+        | ListDropAt
+        | ListSwap
+        | ListReleaseExcessCapacity
+        | StrReleaseExcessCapacity => RC::Rc,
+
+        Eq | NotEq => RC::NoRc,
+
+        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
+        | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
+        | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
+        | NumPow | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
+        | NumShiftRightBy | NumShiftRightZfBy => RC::NoRc,
+
+        NumToStr
+        | NumAbs
+        | NumNeg
+        | NumSin
+        | NumCos
+        | NumSqrtUnchecked
+        | NumLogUnchecked
+        | NumRound
+        | NumCeiling
+        | NumFloor
+        | NumToFrac
+        | Not
+        | NumIsNan
+        | NumIsInfinite
+        | NumIsFinite
+        | NumAtan
+        | NumAcos
+        | NumAsin
+        | NumIntCast
+        | NumToIntChecked
+        | NumToFloatCast
+        | NumToFloatChecked
+        | NumCountLeadingZeroBits
+        | NumCountTrailingZeroBits
+        | NumCountOneBits => RC::NoRc,
+        NumBytesToU16 => RC::NoRc,
+        NumBytesToU32 => RC::NoRc,
+        NumBytesToU64 => RC::NoRc,
+        NumBytesToU128 => RC::NoRc,
+        StrStartsWith | StrEndsWith => RC::NoRc,
+        StrStartsWithScalar => RC::NoRc,
+        StrFromUtf8Range => RC::Rc,
+        StrToUtf8 => RC::Rc,
+        StrRepeat => RC::NoRc,
+        StrFromInt | StrFromFloat => RC::NoRc,
+        Hash => RC::NoRc,
+
+        ListIsUnique => RC::Rc,
+
+        BoxExpr | UnboxExpr => {
+            unreachable!("These lowlevel operations are turned into mono Expr's")
+        }
+
+        PtrCast | PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        | RefCountDecDataPtr | RefCountIsUnique => {
+            unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
+        }
+    }
 }
