@@ -357,26 +357,25 @@ expect
 
     x == fromList (toList x)
 
-# TODO: This test that puts a Set in a Set fails to unify.
-# expect
-#     orderOne : Set Nat
-#     orderOne =
-#         single 1
-#         |> insert 2
+expect
+    orderOne : Set Nat
+    orderOne =
+        single 1
+        |> insert 2
 
-#     orderTwo : Set Nat
-#     orderTwo =
-#         single 2
-#         |> insert 1
+    orderTwo : Set Nat
+    orderTwo =
+        single 2
+        |> insert 1
 
-#     wrapperOne : Set (Set Nat)
-#     wrapperOne =
-#         single orderOne
-#         |> insert orderTwo
+    wrapperOne : Set (Set Nat)
+    wrapperOne =
+        single orderOne
+        |> insert orderTwo
 
-#     wrapperTwo : Set (Set Nat)
-#     wrapperTwo =
-#         single orderTwo
-#         |> insert orderOne
+    wrapperTwo : Set (Set Nat)
+    wrapperTwo =
+        single orderTwo
+        |> insert orderOne
 
-#     wrapperOne == wrapperTwo
+    wrapperOne == wrapperTwo
