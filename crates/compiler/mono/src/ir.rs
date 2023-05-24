@@ -2299,21 +2299,21 @@ impl<'a> Stmt<'a> {
     ) -> Self {
         let then_branch_info = BranchInfo::Constructor {
             scrutinee: condition_symbol,
-            layout: Layout::BOOL,
+            layout: Layout::BOOL_NO_SEMA,
             tag_id: 1,
         };
         let then_branch = (1u64, then_branch_info, then_branch_stmt);
 
         let else_branch_info = BranchInfo::Constructor {
             scrutinee: condition_symbol,
-            layout: Layout::BOOL,
+            layout: Layout::BOOL_NO_SEMA,
             tag_id: 0,
         };
         let else_branch = (else_branch_info, else_branch_stmt);
 
         Stmt::Switch {
             cond_symbol: condition_symbol,
-            cond_layout: Layout::BOOL,
+            cond_layout: Layout::BOOL_NO_SEMA,
             branches: &*arena.alloc([then_branch]),
             default_branch: else_branch,
             ret_layout: return_layout,
@@ -6048,7 +6048,7 @@ fn convert_tag_union<'a>(
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Bool(&tag_name == ttrue.expect_tag_ref())),
-            Layout::BOOL,
+            Layout::BOOL_NO_SEMA,
             hole,
         ),
         ByteUnion(tag_names) => {
@@ -8913,7 +8913,7 @@ where
                     env,
                     lambda_set.iter_set(),
                     closure_tag_id_symbol,
-                    Layout::BOOL,
+                    Layout::BOOL_NO_SEMA,
                     closure_data_symbol,
                     lambda_set.is_represented(&layout_cache.interner),
                     to_lowlevel_call,
@@ -9130,7 +9130,7 @@ fn match_on_lambda_set<'a>(
                     env,
                     lambda_set.iter_set(),
                     closure_tag_id_symbol,
-                    Layout::BOOL,
+                    Layout::BOOL_NO_SEMA,
                     argument_symbols,
                     argument_layouts,
                     return_layout,

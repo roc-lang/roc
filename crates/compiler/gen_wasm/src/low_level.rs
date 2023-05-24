@@ -48,7 +48,7 @@ impl From<InLayout<'_>> for CodeGenNumType {
         let not_num_error =
             || internal_error!("Tried to perform a Num low-level operation on {:?}", layout);
         match layout {
-            Layout::BOOL => I32,
+            Layout::BOOL_NO_SEMA => I32,
             Layout::U8 => I32,
             Layout::U16 => I32,
             Layout::U32 => I32,

@@ -18,7 +18,7 @@ use crate::layout::{
 
 use super::{CodeGenHelp, Context, HelperOp};
 
-const LAYOUT_BOOL: InLayout = Layout::BOOL;
+const LAYOUT_BOOL: InLayout = Layout::BOOL_NO_SEMA;
 const LAYOUT_UNIT: InLayout = Layout::UNIT;
 const LAYOUT_U32: InLayout = Layout::U32;
 
@@ -1643,7 +1643,7 @@ fn refcount_union_contents<'a>(
 
         let switch_with_unique_check_and_let = let_lowlevel(
             root.arena,
-            Layout::BOOL,
+            Layout::BOOL_NO_SEMA,
             is_unique,
             LowLevel::RefCountIsUnique,
             &[structure],
@@ -1904,7 +1904,7 @@ fn refcount_union_tailrec<'a>(
 
         let switch_with_unique_check_and_let = let_lowlevel(
             root.arena,
-            Layout::BOOL,
+            Layout::BOOL_NO_SEMA,
             is_unique,
             LowLevel::RefCountIsUnique,
             &[current],

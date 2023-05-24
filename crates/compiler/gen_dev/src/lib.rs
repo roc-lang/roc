@@ -1073,7 +1073,7 @@ trait Backend<'a> {
                     "Eq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "Eq: expected to have return layout of type Bool"
                 );
@@ -1090,7 +1090,7 @@ trait Backend<'a> {
                     "NotEq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NotEq: expected to have return layout of type Bool"
                 );
@@ -1099,7 +1099,7 @@ trait Backend<'a> {
             LowLevel::Not => {
                 debug_assert_eq!(1, args.len(), "Not: expected to have exactly one argument");
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "Not: expected to have return layout of type Bool"
                 );
@@ -1116,7 +1116,7 @@ trait Backend<'a> {
                     "NumLt: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NumLt: expected to have return layout of type Bool"
                 );
@@ -1133,7 +1133,7 @@ trait Backend<'a> {
                     "NumGt: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NumGt: expected to have return layout of type Bool"
                 );
@@ -1160,7 +1160,7 @@ trait Backend<'a> {
                 );
 
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NumIsNan: expected to have return layout of type Bool"
                 );
@@ -1174,7 +1174,7 @@ trait Backend<'a> {
                 );
 
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NumIsInfinite: expected to have return layout of type Bool"
                 );
@@ -1188,7 +1188,7 @@ trait Backend<'a> {
                 );
 
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NumIsFinite: expected to have return layout of type Bool"
                 );
@@ -1205,7 +1205,7 @@ trait Backend<'a> {
                     "NumLte: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NumLte: expected to have return layout of type Bool"
                 );
@@ -1222,7 +1222,7 @@ trait Backend<'a> {
                     "NumGte: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NumGte: expected to have return layout of type Bool"
                 );
@@ -1755,7 +1755,7 @@ trait Backend<'a> {
                     "NumIsZero: expected to have exactly one argument"
                 );
                 debug_assert_eq!(
-                    Layout::BOOL,
+                    Layout::BOOL_SEMA,
                     *ret_layout,
                     "NumIsZero: expected to have return layout of type Bool"
                 );
@@ -1783,7 +1783,7 @@ trait Backend<'a> {
             }
             Symbol::BOOL_TRUE => {
                 const LITERAL: &Literal<'static> = &Literal::Bool(true);
-                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL;
+                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL_SEMA;
 
                 if self.env().lazy_literals {
                     self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));
@@ -1793,7 +1793,7 @@ trait Backend<'a> {
             }
             Symbol::BOOL_FALSE => {
                 const LITERAL: &Literal<'static> = &Literal::Bool(false);
-                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL;
+                const BOOL_LAYOUT: &InLayout<'static> = &Layout::BOOL_SEMA;
 
                 if self.env().lazy_literals {
                     self.literal_map().insert(*sym, (LITERAL, BOOL_LAYOUT));

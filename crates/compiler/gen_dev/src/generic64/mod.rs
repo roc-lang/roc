@@ -1491,7 +1491,7 @@ impl<
                     bitcode::STR_EQUAL.to_string(),
                     &[*src1, *src2],
                     &[Layout::STR, Layout::STR],
-                    &Layout::BOOL,
+                    &Layout::BOOL_NO_SEMA,
                 );
 
                 // mask the result; we pass booleans around as 64-bit values, but branch on 0x0 and 0x1.
@@ -1544,7 +1544,7 @@ impl<
         match self.interner().get(*arg_layout).repr {
             single_register_int_builtins!() | LayoutRepr::BOOL => {
                 let width = match *arg_layout {
-                    Layout::BOOL | Layout::I8 | Layout::U8 => RegisterWidth::W8,
+                    Layout::BOOL_NO_SEMA | Layout::I8 | Layout::U8 => RegisterWidth::W8,
                     Layout::I16 | Layout::U16 => RegisterWidth::W16,
                     Layout::U32 | Layout::I32 => RegisterWidth::W32,
                     Layout::I64 | Layout::U64 => RegisterWidth::W64,
@@ -1566,7 +1566,7 @@ impl<
                     bitcode::STR_EQUAL.to_string(),
                     &[*src1, *src2],
                     &[Layout::STR, Layout::STR],
-                    &Layout::BOOL,
+                    &Layout::BOOL_NO_SEMA,
                 );
 
                 // negate the result
@@ -1918,7 +1918,7 @@ impl<
 
                 self.load_literal(
                     &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
+                    &Layout::BOOL_NO_SEMA,
                     &Literal::Bool(data_is_owned),
                 );
 
@@ -1950,7 +1950,7 @@ impl<
                     ptr,
                     ptr,
                     ptr,
-                    Layout::BOOL,
+                    Layout::BOOL_NO_SEMA,
                     Layout::U32,
                     usize_,
                     usize_,

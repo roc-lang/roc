@@ -334,7 +334,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 variables: _,
                 remainder,
             } => {
-                self.check_sym_layout(condition, Layout::BOOL, UseKind::ExpectCond);
+                self.check_sym_layout(condition, Layout::BOOL_NO_SEMA, UseKind::ExpectCond);
                 for sym in lookups.iter() {
                     self.check_sym_exists(*sym);
                 }

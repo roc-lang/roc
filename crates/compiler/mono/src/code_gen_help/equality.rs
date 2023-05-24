@@ -123,7 +123,7 @@ fn if_false_return_false<'a>(
     Stmt::if_then_else(
         root.arena,
         symbol,
-        Layout::BOOL,
+        Layout::BOOL_NO_SEMA,
         following,
         root.arena.alloc(Stmt::Ret(Symbol::BOOL_FALSE)),
     )
@@ -808,7 +808,7 @@ fn eq_list<'a>(
     let if_end_of_list = Stmt::if_then_else(
         arena,
         is_end,
-        Layout::BOOL,
+        Layout::BOOL_NO_SEMA,
         Stmt::Ret(Symbol::BOOL_TRUE),
         root.arena.alloc(
             //

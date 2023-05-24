@@ -4134,7 +4134,16 @@ where
         Unit => env
             .cache
             .put_in(Layout::new(LayoutRepr::UNIT, compute_semantic())),
-        BoolUnion { .. } => Layout::BOOL,
+        BoolUnion { .. } => {
+            let semantic = compute_semantic();
+
+            // deduplicate the `Bool : [ True, False ]` type representation
+            if semantic == SemanticRepr::BOOL {
+                Layout::BOOL_SEMA
+            } else {
+                env.cache.put_in(Layout::new(LayoutRepr::BOOL, semantic))
+            }
+        }
         ByteUnion(_) => env
             .cache
             .put_in(Layout::new(LayoutRepr::U8, compute_semantic())),

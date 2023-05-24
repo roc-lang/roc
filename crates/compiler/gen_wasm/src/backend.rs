@@ -853,7 +853,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.start_block()
         }
 
-        let is_bool = matches!(cond_layout, Layout::BOOL);
+        let is_bool = matches!(cond_layout, Layout::BOOL_NO_SEMA);
         let cond_type =
             WasmLayout::new(self.layout_interner, cond_layout).arg_types(CallConv::C)[0];
 
@@ -1424,7 +1424,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.expr(
             ret_symbol,
             self.env.arena.alloc(specialized_call_expr),
-            Layout::BOOL,
+            Layout::BOOL_NO_SEMA,
             ret_storage,
         );
     }
@@ -2012,7 +2012,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.expr(
             ret_symbol,
             self.env.arena.alloc(specialized_call_expr),
-            Layout::BOOL,
+            Layout::BOOL_NO_SEMA,
             ret_storage,
         );
     }
@@ -2039,7 +2039,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.expr(
             ret_symbol,
             self.env.arena.alloc(specialized_call_expr),
-            Layout::BOOL,
+            Layout::BOOL_NO_SEMA,
             ret_storage,
         );
     }

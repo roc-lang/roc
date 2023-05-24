@@ -1745,7 +1745,7 @@ fn test_to_comparison<'a>(
         Test::IsBit(test_bit) => {
             let lhs = Expr::Literal(Literal::Bool(test_bit));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::BOOL, lhs));
+            stores.push((lhs_symbol, Layout::BOOL_NO_SEMA, lhs));
 
             (stores, (lhs_symbol, Comparator::Eq, rhs_symbol), None)
         }
@@ -1928,7 +1928,7 @@ fn compile_test_help<'a>(
 
     cond = Stmt::Switch {
         cond_symbol: test_symbol,
-        cond_layout: Layout::BOOL,
+        cond_layout: Layout::BOOL_NO_SEMA,
         ret_layout,
         branches,
         default_branch,
@@ -1947,7 +1947,7 @@ fn compile_test_help<'a>(
     });
 
     // write to the test symbol
-    cond = Stmt::Let(test_symbol, test, Layout::BOOL, arena.alloc(cond));
+    cond = Stmt::Let(test_symbol, test, Layout::BOOL_NO_SEMA, arena.alloc(cond));
 
     // stores are in top-to-bottom order, so we have to add them in reverse
     for (symbol, layout, expr) in stores.into_iter().rev() {
@@ -2101,7 +2101,7 @@ fn decide_to_branching<'a>(
             let decide = crate::ir::cond(
                 env,
                 test_symbol,
-                Layout::BOOL,
+                Layout::BOOL_NO_SEMA,
                 pass_expr,
                 fail_expr,
                 ret_layout,
@@ -2110,7 +2110,7 @@ fn decide_to_branching<'a>(
             // calculate the guard value
             let param = Param {
                 symbol: test_symbol,
-                layout: Layout::BOOL,
+                layout: Layout::BOOL_NO_SEMA,
                 ownership: Ownership::Owned,
             };
 

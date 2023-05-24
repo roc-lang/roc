@@ -1035,7 +1035,7 @@ where
             let switch = |unique_symbol| {
                 arena.alloc(Stmt::Switch {
                     cond_symbol: unique_symbol,
-                    cond_layout: Layout::BOOL,
+                    cond_layout: Layout::BOOL_NO_SEMA,
                     branches: &*arena.alloc([(1, BranchInfo::None, u.clone())]),
                     default_branch: (BranchInfo::None, n),
                     ret_layout: environment.layout,
@@ -1056,7 +1056,7 @@ where
             let switch = |unique_symbol| {
                 arena.alloc(Stmt::Switch {
                     cond_symbol: unique_symbol,
-                    cond_layout: Layout::BOOL,
+                    cond_layout: Layout::BOOL_NO_SEMA,
                     branches: &*arena.alloc([(1, BranchInfo::None, u.clone())]),
                     default_branch: (BranchInfo::None, n),
                     ret_layout: environment.layout,
@@ -1093,7 +1093,7 @@ fn unique_symbol<'a, 'i>(
             },
             arguments: arena.alloc([symbol]),
         }),
-        Layout::BOOL,
+        Layout::BOOL_NO_SEMA,
         continuation(is_unique),
     ))
 }

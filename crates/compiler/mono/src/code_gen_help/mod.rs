@@ -17,7 +17,7 @@ use crate::layout::{
 mod equality;
 mod refcount;
 
-const LAYOUT_BOOL: InLayout = Layout::BOOL;
+const LAYOUT_BOOL: InLayout = Layout::BOOL_NO_SEMA;
 const LAYOUT_UNIT: InLayout = Layout::UNIT;
 
 const ARG_1: Symbol = Symbol::ARG_1;

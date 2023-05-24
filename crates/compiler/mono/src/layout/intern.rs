@@ -59,25 +59,26 @@ macro_rules! nosema {
 cache_interned_layouts! {
     0,  VOID, pub, Layout::VOID_NAKED
     1,  UNIT, pub, Layout::UNIT_NAKED
-    2,  BOOL, pub, Layout { repr: LayoutRepr::BOOL, semantic: SemanticRepr::BOOL }
-    3,  U8,   pub, nosema!(LayoutRepr::U8)
-    4,  U16,  pub, nosema!(LayoutRepr::U16)
-    5,  U32,  pub, nosema!(LayoutRepr::U32)
-    6,  U64,  pub, nosema!(LayoutRepr::U64)
-    7,  U128, pub, nosema!(LayoutRepr::U128)
-    8,  I8,   pub, nosema!(LayoutRepr::I8)
-    9,  I16,  pub, nosema!(LayoutRepr::I16)
-    10, I32,  pub, nosema!(LayoutRepr::I32)
-    11, I64,  pub, nosema!(LayoutRepr::I64)
-    12, I128, pub, nosema!(LayoutRepr::I128)
-    13, F32,  pub, nosema!(LayoutRepr::F32)
-    14, F64,  pub, nosema!(LayoutRepr::F64)
-    15, DEC,  pub, nosema!(LayoutRepr::DEC)
-    16, STR,  pub, nosema!(LayoutRepr::STR)
-    17, OPAQUE_PTR,  pub, nosema!(LayoutRepr::OPAQUE_PTR)
-    18, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
+    2,  BOOL_NO_SEMA, pub, nosema!(LayoutRepr::BOOL)
+    3,  BOOL_SEMA, pub, Layout { repr: LayoutRepr::BOOL, semantic: SemanticRepr::BOOL }
+    4,  U8,   pub, nosema!(LayoutRepr::U8)
+    5,  U16,  pub, nosema!(LayoutRepr::U16)
+    6,  U32,  pub, nosema!(LayoutRepr::U32)
+    7,  U64,  pub, nosema!(LayoutRepr::U64)
+    8,  U128, pub, nosema!(LayoutRepr::U128)
+    9,  I8,   pub, nosema!(LayoutRepr::I8)
+    10,  I16,  pub, nosema!(LayoutRepr::I16)
+    11, I32,  pub, nosema!(LayoutRepr::I32)
+    12, I64,  pub, nosema!(LayoutRepr::I64)
+    13, I128, pub, nosema!(LayoutRepr::I128)
+    14, F32,  pub, nosema!(LayoutRepr::F32)
+    15, F64,  pub, nosema!(LayoutRepr::F64)
+    16, DEC,  pub, nosema!(LayoutRepr::DEC)
+    17, STR,  pub, nosema!(LayoutRepr::STR)
+    18, OPAQUE_PTR,  pub, nosema!(LayoutRepr::OPAQUE_PTR)
+    19, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
 
-    ; 19
+    ; 20
 }
 
 macro_rules! impl_to_from_int_width {
@@ -415,7 +416,7 @@ impl std::fmt::Debug for InLayout<'_> {
         match *self {
             Layout::VOID => f.write_str("InLayout(VOID)"),
             Layout::UNIT => f.write_str("InLayout(UNIT)"),
-            Layout::BOOL => f.write_str("InLayout(BOOL)"),
+            Layout::BOOL_NO_SEMA => f.write_str("InLayout(BOOL)"),
             Layout::U8 => f.write_str("InLayout(U8)"),
             Layout::U16 => f.write_str("InLayout(U16)"),
             Layout::U32 => f.write_str("InLayout(U32)"),
