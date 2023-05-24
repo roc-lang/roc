@@ -1,7 +1,5 @@
-use std::path::is_separator;
-
 use crate::docs::DocEntry::DetachedDoc;
-use crate::docs::TypeAnnotationEntry::{Apply, BoundVariable, Function, Record, TagUnion};
+use crate::docs::TypeAnnotation::{Apply, BoundVariable, Function, NoTypeAnn, Record, TagUnion};
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
@@ -36,48 +34,42 @@ pub struct DocDef {
 }
 
 #[derive(Debug, Clone)]
-pub enum TypeAnnotationEntry {
+pub enum TypeAnnotation {
     TagUnion {
         tags: Vec<Tag>,
-        extension: Option<Box<TypeAnnotationEntry>>,
+        extension: Box<TypeAnnotation>,
     },
     Function {
-        args: Vec<TypeAnnotationEntry>,
-        output: Box<TypeAnnotationEntry>,
+        args: Vec<TypeAnnotation>,
+        output: Box<TypeAnnotation>,
     },
     ObscuredTagUnion,
     ObscuredRecord,
     BoundVariable(String),
     Apply {
         name: String,
-        parts: Vec<TypeAnnotationEntry>,
+        parts: Vec<TypeAnnotation>,
     },
     Record {
         fields: Vec<RecordField>,
-        extension: Option<Box<TypeAnnotationEntry>>,
+        extension: Box<TypeAnnotation>,
     },
     Ability {
         members: Vec<AbilityMember>,
     },
     Wildcard,
-}
-
-#[derive(Debug, Clone)]
-pub enum TypeAnnotation {
     NoTypeAnn,
-    SingleLine(TypeAnnotationEntry),
-    MultiLine(TypeAnnotationEntry),
 }
 
 #[derive(Debug, Clone)]
 pub enum RecordField {
     RecordField {
         name: String,
-        type_annotation: TypeAnnotationEntry,
+        type_annotation: TypeAnnotation,
     },
     OptionalField {
         name: String,
-        type_annotation: TypeAnnotationEntry,
+        type_annotation: TypeAnnotation,
     },
     LabelOnly {
         name: String,
@@ -87,8 +79,8 @@ pub enum RecordField {
 #[derive(Debug, Clone)]
 pub struct AbilityMember {
     pub name: String,
-    pub type_annotation: TypeAnnotationEntry,
-    pub able_variables: Vec<(String, Vec<TypeAnnotationEntry>)>,
+    pub type_annotation: TypeAnnotation,
+    pub able_variables: Vec<(String, Vec<TypeAnnotation>)>,
     pub docs: Option<String>,
 }
 
@@ -196,7 +188,7 @@ fn generate_entry_docs(
                             let doc_def = DocDef {
                                 name,
                                 symbol: Symbol::new(home, ident_id),
-                                type_annotation: type_to_docs(loc_ann.value),
+                                type_annotation: type_to_docs(false, loc_ann.value),
                                 type_vars: Vec::new(),
                                 docs,
                             };
@@ -215,7 +207,7 @@ fn generate_entry_docs(
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let doc_def = DocDef {
                                 name: identifier.to_string(),
-                                type_annotation: type_to_docs(ann_type.value),
+                                type_annotation: type_to_docs(false, ann_type.value),
                                 type_vars: Vec::new(),
                                 symbol: Symbol::new(home, ident_id),
                                 docs,
@@ -262,7 +254,7 @@ fn generate_entry_docs(
                         if contains_unexposed_type(&ann.value, exposed_module_ids, module_ids) {
                             TypeAnnotation::NoTypeAnn
                         } else {
-                            type_to_docs(ann.value)
+                            type_to_docs(false, ann.value)
                         };
 
                     let ident_id = ident_ids.get_id(name.value).unwrap();
@@ -471,23 +463,7 @@ fn contains_unexposed_type(
     }
 }
 
-fn type_to_docs(type_annotation: ast::TypeAnnotation) -> TypeAnnotation {
-    let mut is_multiline = false;
-
-    let entry = type_to_ann_entry(false, &mut is_multiline, type_annotation);
-
-    if is_multiline {
-        TypeAnnotation::MultiLine(entry)
-    } else {
-        TypeAnnotation::SingleLine(entry)
-    }
-}
-
-fn type_to_ann_entry(
-    in_func_type_ann: bool,
-    is_multiline: &mut bool,
-    type_annotation: ast::TypeAnnotation,
-) -> TypeAnnotationEntry {
+fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) -> TypeAnnotation {
     match type_annotation {
         ast::TypeAnnotation::TagUnion { tags, ext } => {
             let mut tags_to_render: Vec<Tag> = Vec::new();
@@ -498,15 +474,14 @@ fn type_to_ann_entry(
                 }
             }
 
+            let extension = match ext {
+                None => NoTypeAnn,
+                Some(ext_type_ann) => type_to_docs(in_func_type_ann, ext_type_ann.value),
+            };
+
             TagUnion {
                 tags: tags_to_render,
-                extension: ext.map(|ext_type_ann| {
-                    Box::new(type_to_ann_entry(
-                        in_func_type_ann,
-                        is_multiline,
-                        ext_type_ann.value,
-                    ))
-                }),
+                extension: Box::new(extension),
             }
         }
         ast::TypeAnnotation::BoundVariable(var_name) => BoundVariable(var_name.to_string()),
@@ -520,12 +495,11 @@ fn type_to_ann_entry(
 
             name.push_str(type_name);
 
-            let parts = type_ann_parts
-                .iter()
-                .map(|type_ann_part| {
-                    type_to_ann_entry(in_func_type_ann, is_multiline, type_ann_part.value)
-                })
-                .collect();
+            let mut parts: Vec<TypeAnnotation> = Vec::new();
+
+            for type_ann_part in type_ann_parts {
+                parts.push(type_to_docs(in_func_type_ann, type_ann_part.value));
+            }
 
             Apply { name, parts }
         }
@@ -537,52 +511,45 @@ fn type_to_ann_entry(
                     doc_fields.push(doc_field);
                 }
             }
+            let extension = match ext {
+                None => NoTypeAnn,
+                Some(ext_type_ann) => type_to_docs(in_func_type_ann, ext_type_ann.value),
+            };
 
             Record {
                 fields: doc_fields,
-                extension: ext.map(|ext_type_ann| {
-                    Box::new(type_to_ann_entry(
-                        in_func_type_ann,
-                        is_multiline,
-                        ext_type_ann.value,
-                    ))
-                }),
+                extension: Box::new(extension),
             }
         }
-        ast::TypeAnnotation::SpaceBefore(&sub_type_ann, spaces)
-        | ast::TypeAnnotation::SpaceAfter(&sub_type_ann, spaces) => {
-            // A type annotation should only be multiline if it had newlines in it when parsed.
-            if spaces
-                .iter()
-                .any(|comment_or_newline| comment_or_newline.is_newline())
-            {
-                *is_multiline = true;
-            }
-
-            type_to_ann_entry(in_func_type_ann, is_multiline, sub_type_ann)
+        ast::TypeAnnotation::SpaceBefore(&sub_type_ann, _) => {
+            type_to_docs(in_func_type_ann, sub_type_ann)
+        }
+        ast::TypeAnnotation::SpaceAfter(&sub_type_ann, _) => {
+            type_to_docs(in_func_type_ann, sub_type_ann)
         }
         ast::TypeAnnotation::Function(ast_arg_anns, output_ann) => {
             let mut doc_arg_anns = Vec::new();
 
             for ast_arg_ann in ast_arg_anns {
-                doc_arg_anns.push(type_to_ann_entry(true, is_multiline, ast_arg_ann.value));
+                doc_arg_anns.push(type_to_docs(true, ast_arg_ann.value));
             }
 
             Function {
                 args: doc_arg_anns,
-                output: Box::new(type_to_ann_entry(true, is_multiline, output_ann.value)),
+                output: Box::new(type_to_docs(true, output_ann.value)),
             }
         }
-        ast::TypeAnnotation::Wildcard => TypeAnnotationEntry::Wildcard,
+        ast::TypeAnnotation::Wildcard => TypeAnnotation::Wildcard,
+        _ => NoTypeAnn,
     }
 }
 
 fn ability_member_type_to_docs(
     type_annotation: ast::TypeAnnotation,
-) -> (TypeAnnotationEntry, Vec<(String, Vec<TypeAnnotation>)>) {
+) -> (TypeAnnotation, Vec<(String, Vec<TypeAnnotation>)>) {
     match type_annotation {
         ast::TypeAnnotation::Where(ta, has_clauses) => {
-            let ta = type_to_docs(ta.value);
+            let ta = type_to_docs(false, ta.value);
             let has_clauses = has_clauses
                 .iter()
                 .map(|hc| {
@@ -591,7 +558,7 @@ fn ability_member_type_to_docs(
                         var.value.extract_spaces().item.to_string(),
                         abilities
                             .iter()
-                            .map(|ability| type_to_docs(ability.value))
+                            .map(|ability| type_to_docs(false, ability.value))
                             .collect(),
                     )
                 })
@@ -599,7 +566,7 @@ fn ability_member_type_to_docs(
 
             (ta, has_clauses)
         }
-        _ => (type_to_docs(type_annotation), vec![]),
+        _ => (type_to_docs(false, type_annotation), vec![]),
     }
 }
 
