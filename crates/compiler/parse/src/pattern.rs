@@ -116,7 +116,7 @@ fn loc_tag_pattern_args_help<'a>() -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>,
     zero_or_more!(loc_tag_pattern_arg(false))
 }
 
-/// Like `loc_tag_pattern_args_help`, but stops if a "has" keyword is seen (indicating an ability).
+/// Like `loc_tag_pattern_args_help`, but stops if a "implements" keyword is seen (indicating an ability).
 fn loc_type_def_tag_pattern_args_help<'a>(
 ) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
     zero_or_more!(loc_tag_pattern_arg(true))
@@ -138,7 +138,7 @@ fn loc_tag_pattern_arg<'a>(
 
         let Loc { region, value } = loc_pat;
 
-        if stop_on_has_kw && matches!(value, Pattern::Identifier("has")) {
+        if stop_on_has_kw && matches!(value, Pattern::Identifier("implements")) {
             Err((NoProgress, EPattern::End(original_state.pos())))
         } else {
             Ok((
@@ -158,7 +158,7 @@ pub fn loc_has_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPattern<'a>
     then(
         loc_tag_pattern_arg(false),
         |_arena, state, progress, pattern| {
-            if matches!(pattern.value, Pattern::Identifier("has")) {
+            if matches!(pattern.value, Pattern::Identifier("implements")) {
                 Ok((
                     progress,
                     Loc::at(pattern.region, Implements::Implements),
