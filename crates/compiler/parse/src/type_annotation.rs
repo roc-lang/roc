@@ -726,7 +726,7 @@ fn parse_type_variable<'a>(
         min_indent,
     ) {
         Ok((_, name, state)) => {
-            if name == "has" && stop_at_surface_has {
+            if name == "implements" && stop_at_surface_has {
                 Err((NoProgress, EType::TEnd(state.pos())))
             } else {
                 let answer = TypeAnnotation::BoundVariable(name);
