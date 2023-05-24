@@ -5300,7 +5300,6 @@ pub struct CopiedImport {
     pub rigid: Vec<Variable>,
     pub flex_able: Vec<Variable>,
     pub rigid_able: Vec<Variable>,
-    pub translations: Vec<(Variable, Variable)>,
     pub registered: Vec<Variable>,
 }
 
@@ -5320,7 +5319,6 @@ struct CopyImportEnv<'a> {
     rigid: Vec<Variable>,
     flex_able: Vec<Variable>,
     rigid_able: Vec<Variable>,
-    translations: Vec<(Variable, Variable)>,
     registered: Vec<Variable>,
 }
 
@@ -5348,7 +5346,6 @@ pub fn copy_import_to(
             rigid: Vec::new(),
             flex_able: Vec::new(),
             rigid_able: Vec::new(),
-            translations: Vec::new(),
             registered: Vec::new(),
         };
 
@@ -5362,7 +5359,6 @@ pub fn copy_import_to(
             rigid,
             flex_able,
             rigid_able,
-            translations,
             registered,
             target: _,
             bookkeep_unspecialized_lambda_sets: _,
@@ -5374,7 +5370,6 @@ pub fn copy_import_to(
             rigid,
             flex_able,
             rigid_able,
-            translations,
             registered,
         }
     };
@@ -5673,8 +5668,6 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
             env.rigid.push(copy);
 
-            env.translations.push((var, copy));
-
             copy
         }
 
@@ -5693,8 +5686,6 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             );
 
             env.rigid_able.push(copy);
-
-            env.translations.push((var, copy));
 
             copy
         }
