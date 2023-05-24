@@ -676,6 +676,17 @@ pub fn constrain_pattern(
                         RecordField::Optional(pat_type)
                     }
                     DestructType::Required => {
+                        // Named destructures like
+                        //   {foo} -> ...
+                        // are equivalent to wildcards on the type of `foo`, so if `foo` is a tag
+                        // union, we must add a constraint to ensure that this destructure opens it
+                        // up.
+                        if could_be_a_tag_union(types, pat_type_index) {
+                            state
+                                .delayed_is_open_constraints
+                                .push(constraints.is_open_type(pat_type_index));
+                        }
+
                         // No extra constraints necessary.
                         RecordField::Demanded(pat_type)
                     }
