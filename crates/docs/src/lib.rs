@@ -5,7 +5,7 @@ extern crate roc_load;
 use bumpalo::Bump;
 use roc_can::scope::Scope;
 use roc_collections::VecSet;
-use roc_load::docs::{DocEntry, TypeAnnotation};
+use roc_load::docs::{DocEntry, TypeAnnotation, TypeAnnotationEntry};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, Symbol};
@@ -270,9 +270,18 @@ fn render_module_documentation(
 
                     let type_ann = &doc_def.type_annotation;
 
-                    if !matches!(type_ann, TypeAnnotation::NoTypeAnn) {
-                        content.push_str(" : ");
-                        type_annotation_to_html(0, &mut content, type_ann, false);
+                    match type_ann {
+                        TypeAnnotation::NoTypeAnn => {
+                            // We don't have an annotation, so don't print one.
+                        }
+                        TypeAnnotation::SingleLine(ann_entry) => {
+                            content.push_str(" : ");
+                            type_annotation_to_html(0, false, &mut content, type_ann, false);
+                        }
+                        TypeAnnotation::MultiLine(ann_entry) => {
+                            content.push_str(" : ");
+                            type_annotation_to_html(0, true, &mut content, type_ann, false);
+                        }
                     }
 
                     push_html(
@@ -492,13 +501,15 @@ fn new_line(buf: &mut String) {
 // html is written to buf
 fn type_annotation_to_html(
     indent_level: usize,
+    is_multiline: bool,
     buf: &mut String,
-    type_ann: &TypeAnnotation,
+    ann_entry: &TypeAnnotationEntry,
     needs_parens: bool,
 ) {
-    let is_multiline = should_be_multiline(type_ann);
-    match type_ann {
-        TypeAnnotation::TagUnion { tags, extension } => {
+    use TypeAnnotationEntry::*;
+
+    match ann_entry {
+        TagUnion { tags, extension } => {
             if tags.is_empty() {
                 buf.push_str("[]");
             } else {
@@ -529,7 +540,13 @@ fn type_annotation_to_html(
 
                     for type_value in &tag.values {
                         buf.push(' ');
-                        type_annotation_to_html(next_indent_level, buf, type_value, true);
+                        type_annotation_to_html(
+                            next_indent_level,
+                            is_multiline,
+                            buf,
+                            type_value,
+                            true,
+                        );
                     }
 
                     if is_multiline {
@@ -548,12 +565,12 @@ fn type_annotation_to_html(
                 buf.push(']');
             }
 
-            type_annotation_to_html(indent_level, buf, extension, true);
+            type_annotation_to_html(indent_level, is_multiline, buf, extension, true);
         }
-        TypeAnnotation::BoundVariable(var_name) => {
+        BoundVariable(var_name) => {
             buf.push_str(var_name);
         }
-        TypeAnnotation::Apply { name, parts } => {
+        Apply { name, parts } => {
             if parts.is_empty() {
                 buf.push_str(name);
             } else {
@@ -564,7 +581,7 @@ fn type_annotation_to_html(
                 buf.push_str(name);
                 for part in parts {
                     buf.push(' ');
-                    type_annotation_to_html(indent_level, buf, part, true);
+                    type_annotation_to_html(indent_level, is_multiline, buf, part, true);
                 }
 
                 if needs_parens {
@@ -572,7 +589,7 @@ fn type_annotation_to_html(
                 }
             }
         }
-        TypeAnnotation::Record { fields, extension } => {
+        Record { fields, extension } => {
             if fields.is_empty() {
                 buf.push_str("{}");
             } else {
@@ -612,13 +629,25 @@ fn type_annotation_to_html(
                             type_annotation, ..
                         } => {
                             buf.push_str(" : ");
-                            type_annotation_to_html(next_indent_level, buf, type_annotation, false);
+                            type_annotation_to_html(
+                                next_indent_level,
+                                is_multiline,
+                                buf,
+                                type_annotation,
+                                false,
+                            );
                         }
                         RecordField::OptionalField {
                             type_annotation, ..
                         } => {
                             buf.push_str(" ? ");
-                            type_annotation_to_html(next_indent_level, buf, type_annotation, false);
+                            type_annotation_to_html(
+                                next_indent_level,
+                                is_multiline,
+                                buf,
+                                type_annotation,
+                                false,
+                            );
                         }
                         RecordField::LabelOnly { .. } => {}
                     }
@@ -641,9 +670,9 @@ fn type_annotation_to_html(
                 buf.push('}');
             }
 
-            type_annotation_to_html(indent_level, buf, extension, true);
+            type_annotation_to_html(indent_level, is_multiline, buf, extension, true);
         }
-        TypeAnnotation::Function { args, output } => {
+        Function { args, output } => {
             let mut paren_is_open = false;
             let mut peekable_args = args.iter().peekable();
             while let Some(arg) = peekable_args.next() {
@@ -658,9 +687,8 @@ fn type_annotation_to_html(
                     paren_is_open = true;
                 }
 
-                let child_needs_parens =
-                    matches!(arg, TypeAnnotation::Function { args: _, output: _ });
-                type_annotation_to_html(indent_level, buf, arg, child_needs_parens);
+                let child_needs_parens = matches!(arg, Function { args: _, output: _ });
+                type_annotation_to_html(indent_level, is_multiline, buf, arg, child_needs_parens);
 
                 if peekable_args.peek().is_some() {
                     buf.push_str(", ");
@@ -680,93 +708,21 @@ fn type_annotation_to_html(
                 next_indent_level += 1;
             }
 
-            type_annotation_to_html(next_indent_level, buf, output, false);
+            type_annotation_to_html(next_indent_level, is_multiline, buf, output, false);
             if needs_parens && paren_is_open {
                 buf.push(')');
             }
         }
-        TypeAnnotation::Ability { members: _ } => {
+        Ability { members: _ } => {
             // TODO(abilities): fill me in
         }
-        TypeAnnotation::ObscuredTagUnion => {
+        ObscuredTagUnion => {
             buf.push_str("[@..]");
         }
-        TypeAnnotation::ObscuredRecord => {
+        ObscuredRecord => {
             buf.push_str("{ @.. }");
         }
-        TypeAnnotation::NoTypeAnn => {}
-        TypeAnnotation::Wildcard => buf.push('*'),
-    }
-}
-
-fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
-    match type_ann {
-        TypeAnnotation::TagUnion { tags, extension } => {
-            let mut is_multiline = should_be_multiline(extension) || tags.len() > 1;
-
-            for tag in tags {
-                for value in &tag.values {
-                    if is_multiline {
-                        break;
-                    }
-                    is_multiline = should_be_multiline(value);
-                }
-            }
-
-            is_multiline
-        }
-        TypeAnnotation::Function { args, output } => {
-            let mut is_multiline = should_be_multiline(output) || args.len() > 2;
-
-            for arg in args {
-                if is_multiline {
-                    break;
-                }
-
-                is_multiline = should_be_multiline(arg);
-            }
-
-            is_multiline
-        }
-        TypeAnnotation::ObscuredTagUnion => false,
-        TypeAnnotation::ObscuredRecord => false,
-        TypeAnnotation::BoundVariable(_) => false,
-        TypeAnnotation::Apply { parts, .. } => {
-            let mut is_multiline = false;
-
-            for part in parts {
-                is_multiline = should_be_multiline(part);
-
-                if is_multiline {
-                    break;
-                }
-            }
-
-            is_multiline
-        }
-        TypeAnnotation::Record { fields, extension } => {
-            let mut is_multiline = should_be_multiline(extension) || fields.len() > 1;
-
-            for field in fields {
-                if is_multiline {
-                    break;
-                }
-                match field {
-                    RecordField::RecordField {
-                        type_annotation, ..
-                    } => is_multiline = should_be_multiline(type_annotation),
-                    RecordField::OptionalField {
-                        type_annotation, ..
-                    } => is_multiline = should_be_multiline(type_annotation),
-                    RecordField::LabelOnly { .. } => {}
-                }
-            }
-
-            is_multiline
-        }
-        TypeAnnotation::Ability { .. } => true,
-        TypeAnnotation::Wildcard => false,
-        TypeAnnotation::NoTypeAnn => false,
+        Wildcard => buf.push('*'),
     }
 }
 
