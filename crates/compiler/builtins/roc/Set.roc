@@ -23,9 +23,6 @@ interface Set
         Hash.{ Hash, Hasher },
     ]
 
-# We should have this line above the next has.
-# It causes the formatter to fail currently.
-# | k has Hash & Eq
 ## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
 ## type which stores a collection of unique values, without any ordering
 Set k := Dict.Dict k {} | k has Hash & Eq
