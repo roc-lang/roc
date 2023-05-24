@@ -5663,8 +5663,18 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             let name = env.source.field_names[name_index.index as usize].clone();
             let new_name_index = SubsIndex::push_new(&mut env.target.field_names, name);
 
-            env.target
-                .set(copy, make_descriptor(RigidVar(new_name_index)));
+            // If we are copying the import as generalized, we can keep it as rigid.
+            // Otherwise we must make it flex, as this is copying to a non-generalized site.
+            //
+            // The rigid distinction is never necessary for imports, since their types have already
+            // been checked completely.
+            let content = if max_rank.is_generalized() {
+                RigidVar(new_name_index)
+            } else {
+                FlexVar(Some(new_name_index))
+            };
+
+            env.target.set(copy, make_descriptor(content));
 
             env.rigid.push(copy);
 
@@ -5680,10 +5690,18 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                 env.source.get_subs_slice(abilities).iter().copied(),
             );
 
-            env.target.set(
-                copy,
-                make_descriptor(RigidAbleVar(new_name_index, new_abilities)),
-            );
+            // If we are copying the import as generalized, we can keep it as rigid.
+            // Otherwise we must make it flex, as this is copying to a non-generalized site.
+            //
+            // The rigid distinction is never necessary for imports, since their types have already
+            // been checked completely.
+            let content = if max_rank.is_generalized() {
+                RigidAbleVar(new_name_index, new_abilities)
+            } else {
+                FlexAbleVar(Some(new_name_index), new_abilities)
+            };
+
+            env.target.set(copy, make_descriptor(content));
 
             env.rigid_able.push(copy);
 
