@@ -410,7 +410,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     // let a = index b; dec b
                     // As a might get dropped as a result of the decrement of b.
                     let mut incremented_children = {
-                        let mut todo_children = bumpalo::vec![in &arena; *symbol];
+                        let mut todo_children = bumpalo::vec![in arena; *symbol];
                         let mut incremented_children = MutSet::default();
 
                         while let Some(child) = todo_children.pop() {
