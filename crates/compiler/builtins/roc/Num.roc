@@ -838,7 +838,7 @@ logChecked = \x ->
 ## `a / b` is shorthand for `Num.div a b`.
 ##
 ## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero).
-## As such, you should make sure never to pass zero as the denomaintor to this function!
+## As such, you should make sure never to pass zero as the denominator to this function!
 ## Calling [div] on a [Dec] denominator of zero will cause a panic.
 ##
 ## Calling [div] on [F32] and [F64] values follows these rules:
