@@ -15,7 +15,7 @@ use crate::util::Env;
 pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable) {
     // Build
     //
-    //   def_symbol : Decoder (List elem) fmt | elem has Decoding, fmt has DecoderFormatting
+    //   def_symbol : Decoder (List elem) fmt | elem has Decoding, fmt implements DecoderFormatting
     //   def_symbol = Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.list Decode.decoder) fmt
     //
     // NB: reduction to `Decode.list Decode.decoder` is not possible to the HRR.
@@ -27,10 +27,10 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
         // List elem
         let elem_var = env.subs.fresh_unnamed_flex_var();
 
-        // Decode.decoder : Decoder elem fmt | elem has Decoding, fmt has EncoderFormatting
+        // Decode.decoder : Decoder elem fmt | elem has Decoding, fmt implements EncoderFormatting
         let (elem_decoder, elem_decoder_var) = {
             // build `Decode.decoder : Decoder elem fmt` type
-            // Decoder val fmt | val has Decoding, fmt has EncoderFormatting
+            // Decoder val fmt | val has Decoding, fmt implements EncoderFormatting
             let elem_decoder_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODER);
 
             // set val ~ elem
@@ -52,7 +52,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
         };
 
         // Build `Decode.list Decode.decoder` type
-        // Decoder val fmt -[uls]-> Decoder (List val) fmt | fmt has DecoderFormatting
+        // Decoder val fmt -[uls]-> Decoder (List val) fmt | fmt implements DecoderFormatting
         let decode_list_fn_var = env.import_builtin_symbol_var(Symbol::DECODE_LIST);
 
         // Decoder elem fmt -a-> b
@@ -68,7 +68,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
             )),
         );
 
-        //   Decoder val  fmt -[uls]-> Decoder (List val) fmt | fmt has DecoderFormatting
+        //   Decoder val  fmt -[uls]-> Decoder (List val) fmt | fmt implements DecoderFormatting
         // ~ Decoder elem fmt -a    -> b
         env.unify(decode_list_fn_var, this_decode_list_fn_var);
 

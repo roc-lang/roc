@@ -76,7 +76,7 @@ pub enum Pattern {
     Underscore,
 
     /// An identifier that marks a specialization of an ability member.
-    /// For example, given an ability member definition `hash : a -> U64 | a has Hash`,
+    /// For example, given an ability member definition `hash : a -> U64 | a implements Hash`,
     /// there may be the specialization `hash : Bool -> U64`. In this case we generate a
     /// new symbol for the specialized "hash" identifier.
     AbilityMemberSpecialization {

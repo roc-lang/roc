@@ -2510,7 +2510,7 @@ impl AmbientFunctionPolicy {
             }),
             Content::FlexVar(_) => {
                 // Something like
-                //   Encoder fmt <a> : List U8, fmt -a-> List U8 | fmt has EncoderFormatting
+                //   Encoder fmt <a> : List U8, fmt -a-> List U8 | fmt implements EncoderFormatting
                 // THEORY: Replace these with empty lambda sets. They will unify the same as a flex
                 // var does, but allows us to record the ambient function properly.
                 Content::LambdaSet(LambdaSet {

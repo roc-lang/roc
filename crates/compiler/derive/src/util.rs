@@ -130,7 +130,7 @@ impl Env<'_> {
                     })
                     .collect();
 
-                // Since we're doing `{foo} ~ a | a has Encoding`, we may see "lambda sets to
+                // Since we're doing `{foo} ~ a | a implements Encoding`, we may see "lambda sets to
                 // specialize" for e.g. `{foo}:toEncoder:1`, but these are actually just the
                 // specialization lambda sets, so we don't need to do any extra work!
                 //

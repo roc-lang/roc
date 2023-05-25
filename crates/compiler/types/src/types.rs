@@ -1760,7 +1760,7 @@ pub enum Type {
 }
 
 /// A lambda set under an arrow in a ability member signature. For example, in
-///   Default has default : {} -> a | a has Default
+///   Default has default : {} -> a | a implements Default
 /// the unspecialized lambda set for the arrow "{} -> a" would be `a:default:1`.
 ///
 /// Lambda sets in member signatures are never known until those members are specialized at a

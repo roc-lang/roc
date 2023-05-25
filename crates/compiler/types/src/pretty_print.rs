@@ -136,8 +136,8 @@ fn find_names_needed(
             if !root_appearances.contains_key(&root) {
                 roots.push(root);
             }
-            // Able vars are always printed at least twice (in the signature, and in the "has"
-            // clause set).
+            // Able vars are always printed at least twice (in the signature, and in the
+            // "implements" clause set).
             root_appearances.insert(root, Appearances::Multiple);
         }
         RecursionVar {

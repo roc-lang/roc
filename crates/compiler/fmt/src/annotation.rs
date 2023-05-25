@@ -647,7 +647,7 @@ impl<'a> Formattable for Tag<'a> {
 
 impl<'a> Formattable for ImplementsClause<'a> {
     fn is_multiline(&self) -> bool {
-        // No, always put abilities in a "has" clause on one line
+        // No, always put abilities in an "implements" clause on one line
         false
     }
 

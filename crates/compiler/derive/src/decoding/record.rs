@@ -27,7 +27,7 @@ use super::wrap_in_decode_custom_decode_with;
 /// we'd like to generate an impl like
 ///
 /// ```roc
-/// decoder : Decoder {first: a, second: b} fmt | a has Decoding, b has Decoding, fmt has DecoderFormatting
+/// decoder : Decoder {first: a, second: b} fmt | a implements Decoding, b implements Decoding, fmt implements DecoderFormatting
 /// decoder =
 ///     initialState : {f0: Result a [NoField], f1: Result b [NoField]}
 ///     initialState = {f0: Err NoField, f1: Err NoField}

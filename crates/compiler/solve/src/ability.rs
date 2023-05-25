@@ -739,7 +739,7 @@ trait DerivableVisitor {
                             ) {
                                 // TODO: currently, just we suppose the presence of a flex var may
                                 // include more or less things which we can derive. But, we should
-                                // instead recurse here, and add a `t ~ u | u has Decode` constraint as needed.
+                                // instead recurse here, and add a `t ~ u | u implements Decode` constraint as needed.
                                 stack.push(ext);
                             }
                         }

@@ -296,7 +296,7 @@ pub(crate) fn canonicalize_annotation(
 
     let (annotation, region) = match annotation {
         TypeAnnotation::Where(annotation, clauses) => {
-            // Add each "has" clause. The association of a variable to an ability will be saved on
+            // Add each "implements" clause. The association of a variable to an ability will be saved on
             // `introduced_variables`, which we'll process later.
             for clause in clauses.iter() {
                 let opt_err = canonicalize_has_clause(

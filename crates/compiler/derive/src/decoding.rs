@@ -63,7 +63,7 @@ fn wrap_in_decode_custom_decode_with(
 
     // Decode.decodeWith bytes inner_decoder fmt : DecodeResult val
     let (decode_with_call, decode_with_result_var) = {
-        // Decode.decodeWith : List U8, Decoder val fmt, fmt -> DecodeResult val | fmt has DecoderFormatting
+        // Decode.decodeWith : List U8, Decoder val fmt, fmt -> DecodeResult val | fmt implements DecoderFormatting
         let decode_with_type = env.import_builtin_symbol_var(Symbol::DECODE_DECODE_WITH);
 
         // Decode.decodeWith : bytes, inner_decoder, fmt -> DecoderResult (List val)
@@ -80,7 +80,7 @@ fn wrap_in_decode_custom_decode_with(
             )),
         );
 
-        //   List U8, Decoder val fmt,         fmt -> DecodeResult val | fmt has DecoderFormatting
+        //   List U8, Decoder val fmt,         fmt -> DecodeResult val | fmt implements DecoderFormatting
         // ~ bytes,   Decoder (List elem) fmt, fmt -> DecoderResult (List val)
         env.unify(decode_with_type, this_decode_with_fn_var);
 
@@ -169,7 +169,7 @@ fn wrap_in_decode_custom_decode_with(
 
     // Decode.custom \bytes, fmt -> Decode.decodeWith bytes inner_decoder fmt
     let (decode_custom_call, decoder_var) = {
-        // (List U8, fmt -> DecodeResult val) -> Decoder val fmt | fmt has DecoderFormatting
+        // (List U8, fmt -> DecodeResult val) -> Decoder val fmt | fmt implements DecoderFormatting
         let decode_custom_type = env.import_builtin_symbol_var(Symbol::DECODE_CUSTOM);
 
         // (List U8, fmt -> DecodeResult (List elem)) -> Decoder (List elem) fmt
@@ -185,7 +185,7 @@ fn wrap_in_decode_custom_decode_with(
             )),
         );
 
-        //   (List U8, fmt -> DecodeResult val)         -> Decoder val fmt | fmt has DecoderFormatting
+        //   (List U8, fmt -> DecodeResult val)         -> Decoder val fmt | fmt implements DecoderFormatting
         // ~ (List U8, fmt -> DecodeResult (List elem)) -> Decoder (List elem) fmt
         env.unify(decode_custom_type, this_decode_custom_fn_var);
 

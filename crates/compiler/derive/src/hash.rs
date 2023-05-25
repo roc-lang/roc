@@ -75,7 +75,7 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
 
     // Now, a hasher for this record is
     //
-    // hash_rcd : hasher, { f1: t1, ..., fn: tn } -> hasher | hasher has Hasher
+    // hash_rcd : hasher, { f1: t1, ..., fn: tn } -> hasher | hasher implements Hasher
     // hash_rcd = \hasher, rcd ->
     //   Hash.hash (
     //      Hash.hash
@@ -144,7 +144,7 @@ fn hash_tuple(env: &mut Env<'_>, fn_name: Symbol, arity: u32) -> (Variable, Expr
 
     // Now, a hasher for this tuple is
     //
-    // hash_tup : hasher, (t1, ..., tn) -> hasher | hasher has Hasher
+    // hash_tup : hasher, (t1, ..., tn) -> hasher | hasher implements Hasher
     // hash_tup = \hasher, tup ->
     //   Hash.hash (
     //      Hash.hash
@@ -227,7 +227,7 @@ fn hash_tag_union(
 
     // Now, a hasher for this tag union is
     //
-    // hash_union : hasher, [ A t11 .. t1n, ..., Q tq1 .. tqm ] -> hasher | hasher has Hasher
+    // hash_union : hasher, [ A t11 .. t1n, ..., Q tq1 .. tqm ] -> hasher | hasher implements Hasher
     // hash_union = \hasher, union ->
     //   when union is
     //      A x11 .. x1n -> Hash.hash (... (Hash.hash (Hash.uN hasher 0) x11) ...) x1n
@@ -393,7 +393,7 @@ fn hash_newtype_tag_union(
 
     // Now, a hasher for this tag union is
     //
-    // hash_union : hasher, [ A t1 .. tn ] -> hasher | hasher has Hasher
+    // hash_union : hasher, [ A t1 .. tn ] -> hasher | hasher implements Hasher
     // hash_union = \hasher, A x1 .. xn ->
     //   Hash.hash (... (Hash.hash discrHasher x1) ...) xn
     let hasher_sym = env.new_symbol("hasher");
@@ -462,7 +462,7 @@ fn call_hash_ability_member(
 
     // build `member ...` function type. `member` here is `Hash.hash` or `Hash.addU16`.
     //
-    // hasher, val -[uls]-> hasher | hasher has Hasher, val has Hash
+    // hasher, val -[uls]-> hasher | hasher has Hasher, val implements Hash
     let exposed_hash_fn_var = env.import_builtin_symbol_var(member);
 
     // (typeof body), (typeof field) -[clos]-> hasher_result
@@ -479,11 +479,11 @@ fn call_hash_ability_member(
         )),
     );
 
-    //   hasher,        val            -[uls]->  hasher | hasher has Hasher, val has Hash
+    //   hasher,        val            -[uls]->  hasher | hasher has Hasher, val implements Hash
     // ~ (typeof body), (typeof field) -[clos]-> hasher_result
     env.unify(exposed_hash_fn_var, this_hash_fn_var);
 
-    // Hash.hash : hasher, (typeof field) -[clos]-> hasher | hasher has Hasher, (typeof field) has Hash
+    // Hash.hash : hasher, (typeof field) -[clos]-> hasher | hasher has Hasher, (typeof field) implements Hash
     let hash_fn_head = Expr::AbilityMember(member, None, this_hash_fn_var);
     let hash_fn_data = Box::new((
         this_hash_fn_var,

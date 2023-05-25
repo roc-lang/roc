@@ -1302,7 +1302,7 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
         // lambda set does not line up with one required by the ability member prototype.
         // As an example, consider
         //
-        //   Q := [ F (Str -> Str) ] has [Eq {isEq}]
+        //   Q := [ F (Str -> Str) ] implements [Eq {isEq}]
         //
         //   isEq = \@Q _, @Q _ -> Bool.false
         //

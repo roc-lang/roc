@@ -121,7 +121,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     );
 
     // build `toEncoder elem` type
-    // val -[uls]-> Encoder fmt | fmt has EncoderFormatting
+    // val -[uls]-> Encoder fmt | fmt implements EncoderFormatting
     let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
 
     // elem -[clos]-> t1
@@ -136,11 +136,11 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         )),
     );
 
-    //   val  -[uls]->  Encoder fmt | fmt has EncoderFormatting
+    //   val  -[uls]->  Encoder fmt | fmt implements EncoderFormatting
     // ~ elem -[clos]-> t1
     env.unify(to_encoder_fn_var, elem_to_encoder_fn_var);
 
-    // toEncoder : (typeof rcd.a) -[clos]-> Encoder fmt | fmt has EncoderFormatting
+    // toEncoder : (typeof rcd.a) -[clos]-> Encoder fmt | fmt implements EncoderFormatting
     let to_encoder_var = AbilityMember(Symbol::ENCODE_TO_ENCODER, None, elem_to_encoder_fn_var);
     let to_encoder_fn = Box::new((
         to_encoder_fn_var,
@@ -201,7 +201,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     });
 
     // build `Encode.list lst (\elem -> Encode.toEncoder elem)` type
-    // List e, (e -> Encoder fmt) -[uls]-> Encoder fmt | fmt has EncoderFormatting
+    // List e, (e -> Encoder fmt) -[uls]-> Encoder fmt | fmt implements EncoderFormatting
     let encode_list_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_LIST);
 
     // List elem, to_elem_encoder_fn_var -[clos]-> t1
@@ -218,11 +218,11 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         )),
     );
 
-    //   List e,    (e -> Encoder fmt)     -[uls]->  Encoder fmt | fmt has EncoderFormatting
+    //   List e,    (e -> Encoder fmt)     -[uls]->  Encoder fmt | fmt implements EncoderFormatting
     // ~ List elem, to_elem_encoder_fn_var -[clos]-> t1
     env.unify(encode_list_fn_var, this_encode_list_fn_var);
 
-    // Encode.list : List elem, to_elem_encoder_fn_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
+    // Encode.list : List elem, to_elem_encoder_fn_var -[clos]-> Encoder fmt | fmt implements EncoderFormatting
     let encode_list = AbilityMember(Symbol::ENCODE_LIST, None, this_encode_list_fn_var);
     let encode_list_fn = Box::new((
         this_encode_list_fn_var,
@@ -340,7 +340,7 @@ fn to_encoder_record(
             };
 
             // build `toEncoder rcd.a` type
-            // val -[uls]-> Encoder fmt | fmt has EncoderFormatting
+            // val -[uls]-> Encoder fmt | fmt implements EncoderFormatting
             let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
 
             // (typeof rcd.a) -[clos]-> t1
@@ -355,11 +355,11 @@ fn to_encoder_record(
                 )),
             );
 
-            //   val            -[uls]->  Encoder fmt | fmt has EncoderFormatting
+            //   val            -[uls]->  Encoder fmt | fmt implements EncoderFormatting
             // ~ (typeof rcd.a) -[clos]-> t1
             env.unify(to_encoder_fn_var, this_to_encoder_fn_var);
 
-            // toEncoder : (typeof rcd.a) -[clos]-> Encoder fmt | fmt has EncoderFormatting
+            // toEncoder : (typeof rcd.a) -[clos]-> Encoder fmt | fmt implements EncoderFormatting
             let to_encoder_var = AbilityMember(Symbol::ENCODE_TO_ENCODER, None, to_encoder_fn_var);
             let to_encoder_fn = Box::new((
                 to_encoder_fn_var,
@@ -420,7 +420,7 @@ fn to_encoder_record(
     };
 
     // build `Encode.record [ { key: .., value: ..}, .. ]` type
-    // List { key : Str, value : Encoder fmt } -[uls]-> Encoder fmt | fmt has EncoderFormatting
+    // List { key : Str, value : Encoder fmt } -[uls]-> Encoder fmt | fmt implements EncoderFormatting
     let encode_record_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_RECORD);
 
     // fields_list_var -[clos]-> t1
@@ -437,11 +437,11 @@ fn to_encoder_record(
         )),
     );
 
-    //   List { key : Str, value : Encoder fmt } -[uls]->  Encoder fmt | fmt has EncoderFormatting
+    //   List { key : Str, value : Encoder fmt } -[uls]->  Encoder fmt | fmt implements EncoderFormatting
     // ~ fields_list_var                         -[clos]-> t1
     env.unify(encode_record_fn_var, this_encode_record_fn_var);
 
-    // Encode.record : fields_list_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
+    // Encode.record : fields_list_var -[clos]-> Encoder fmt | fmt implements EncoderFormatting
     let encode_record_var = AbilityMember(Symbol::ENCODE_RECORD, None, encode_record_fn_var);
     let encode_record_fn = Box::new((
         encode_record_fn_var,
@@ -543,7 +543,7 @@ fn to_encoder_tuple(
             };
 
             // build `toEncoder tup.0` type
-            // val -[uls]-> Encoder fmt | fmt has EncoderFormatting
+            // val -[uls]-> Encoder fmt | fmt implements EncoderFormatting
             let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
 
             // (typeof tup.0) -[clos]-> t1
@@ -558,11 +558,11 @@ fn to_encoder_tuple(
                 )),
             );
 
-            //   val            -[uls]->  Encoder fmt | fmt has EncoderFormatting
+            //   val            -[uls]->  Encoder fmt | fmt implements EncoderFormatting
             // ~ (typeof tup.0) -[clos]-> t1
             env.unify(to_encoder_fn_var, this_to_encoder_fn_var);
 
-            // toEncoder : (typeof tup.0) -[clos]-> Encoder fmt | fmt has EncoderFormatting
+            // toEncoder : (typeof tup.0) -[clos]-> Encoder fmt | fmt implements EncoderFormatting
             let to_encoder_var = AbilityMember(Symbol::ENCODE_TO_ENCODER, None, to_encoder_fn_var);
             let to_encoder_fn = Box::new((
                 to_encoder_fn_var,
@@ -603,7 +603,7 @@ fn to_encoder_tuple(
     };
 
     // build `Encode.tuple [ toEncoder tup.0, toEncoder tup.1 ]` type
-    // List (Encoder fmt) -[uls]-> Encoder fmt | fmt has EncoderFormatting
+    // List (Encoder fmt) -[uls]-> Encoder fmt | fmt implements EncoderFormatting
     let encode_tuple_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TUPLE);
 
     // elem_encoders_list_var -[clos]-> t1
@@ -620,11 +620,11 @@ fn to_encoder_tuple(
         )),
     );
 
-    //   List (Encoder fmt)     -[uls]->  Encoder fmt | fmt has EncoderFormatting
+    //   List (Encoder fmt)     -[uls]->  Encoder fmt | fmt implements EncoderFormatting
     // ~ elem_encoders_list_var -[clos]-> t1
     env.unify(encode_tuple_fn_var, this_encode_tuple_fn_var);
 
-    // Encode.tuple : elem_encoders_list_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
+    // Encode.tuple : elem_encoders_list_var -[clos]-> Encoder fmt | fmt implements EncoderFormatting
     let encode_tuple_var = AbilityMember(Symbol::ENCODE_TUPLE, None, encode_tuple_fn_var);
     let encode_tuple_fn = Box::new((
         encode_tuple_fn_var,
@@ -741,7 +741,7 @@ fn to_encoder_tag_union(
                 .zip(payload_vars.iter())
                 .map(|(&sym, &sym_var)| {
                     // build `toEncoder v1` type
-                    // expected: val -[uls]-> Encoder fmt | fmt has EncoderFormatting
+                    // expected: val -[uls]-> Encoder fmt | fmt implements EncoderFormatting
                     let to_encoder_fn_var =
                         env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
 
@@ -759,11 +759,11 @@ fn to_encoder_tag_union(
                         )),
                     );
 
-                    //   val -[uls]->  Encoder fmt | fmt has EncoderFormatting
+                    //   val -[uls]->  Encoder fmt | fmt implements EncoderFormatting
                     // ~ t1  -[clos]-> t'
                     env.unify(to_encoder_fn_var, this_to_encoder_fn_var);
 
-                    // toEncoder : t1 -[clos]-> Encoder fmt | fmt has EncoderFormatting
+                    // toEncoder : t1 -[clos]-> Encoder fmt | fmt implements EncoderFormatting
                     let to_encoder_var =
                         AbilityMember(Symbol::ENCODE_TO_ENCODER, None, this_to_encoder_fn_var);
                     let to_encoder_fn = Box::new((
@@ -802,7 +802,7 @@ fn to_encoder_tag_union(
             };
 
             // build `Encode.tag "A" [ ... ]` type
-            // expected: Str, List (Encoder fmt) -[uls]-> Encoder fmt | fmt has EncoderFormatting
+            // expected: Str, List (Encoder fmt) -[uls]-> Encoder fmt | fmt implements EncoderFormatting
             let encode_tag_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TAG);
 
             // wanted: Str, List whole_encoders_var -[clos]-> t'
@@ -821,11 +821,11 @@ fn to_encoder_tag_union(
                 )),
             );
 
-            //   Str, List (Encoder fmt)      -[uls]->  Encoder fmt | fmt has EncoderFormatting
+            //   Str, List (Encoder fmt)      -[uls]->  Encoder fmt | fmt implements EncoderFormatting
             // ~ Str, List whole_encoders_var -[clos]-> t'
             env.unify(encode_tag_fn_var, this_encode_tag_fn_var);
 
-            // Encode.tag : Str, List whole_encoders_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
+            // Encode.tag : Str, List whole_encoders_var -[clos]-> Encoder fmt | fmt implements EncoderFormatting
             let encode_tag_var = AbilityMember(Symbol::ENCODE_TAG, None, this_encode_tag_fn_var);
             let encode_tag_fn = Box::new((
                 this_encode_tag_fn_var,
@@ -954,15 +954,15 @@ fn wrap_in_encode_custom(
     let bytes_sym = env.new_symbol("bytes");
     let bytes_var = Variable::LIST_U8;
 
-    // fmt: fmt | fmt has EncoderFormatting
+    // fmt: fmt | fmt implements EncoderFormatting
     let fmt_sym = env.new_symbol("fmt");
     let fmt_var = env.subs.fresh_unnamed_flex_var();
 
     // build `Encode.appendWith bytes encoder fmt` type
-    // expected: Encode.appendWith : List U8, Encoder fmt, fmt -[appendWith]-> List U8 | fmt has EncoderFormatting
+    // expected: Encode.appendWith : List U8, Encoder fmt, fmt -[appendWith]-> List U8 | fmt implements EncoderFormatting
     let append_with_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_APPEND_WITH);
 
-    // wanted: Encode.appendWith : List U8, encoder_var, fmt -[clos]-> List U8 | fmt has EncoderFormatting
+    // wanted: Encode.appendWith : List U8, encoder_var, fmt -[clos]-> List U8 | fmt implements EncoderFormatting
     let this_append_with_args_var_slice =
         VariableSubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8, encoder_var, fmt_var]);
     let this_append_with_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
@@ -975,11 +975,11 @@ fn wrap_in_encode_custom(
         )),
     );
 
-    //   List U8, Encoder fmt, fmt -[appendWith]-> List U8 | fmt has EncoderFormatting
-    // ~ List U8, encoder_var, fmt -[clos]->       List U8 | fmt has EncoderFormatting
+    //   List U8, Encoder fmt, fmt -[appendWith]-> List U8 | fmt implements EncoderFormatting
+    // ~ List U8, encoder_var, fmt -[clos]->       List U8 | fmt implements EncoderFormatting
     env.unify(append_with_fn_var, this_append_with_fn_var);
 
-    // Encode.appendWith : List U8, encoder_var, fmt -[appendWith]-> List U8 | fmt has EncoderFormatting
+    // Encode.appendWith : List U8, encoder_var, fmt -[appendWith]-> List U8 | fmt implements EncoderFormatting
     let append_with_fn = Box::new((
         this_append_with_fn_var,
         Loc::at_zero(Var(Symbol::ENCODE_APPEND_WITH, this_append_with_fn_var)),
@@ -1050,7 +1050,7 @@ fn wrap_in_encode_custom(
     // Build
     // Encode.custom \bytes, fmt -> Encode.appendWith bytes encoder fmt
     //
-    // expected: Encode.custom : (List U8, fmt -> List U8) -> Encoder fmt | fmt has EncoderFormatting
+    // expected: Encode.custom : (List U8, fmt -> List U8) -> Encoder fmt | fmt implements EncoderFormatting
     let custom_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_CUSTOM);
 
     // wanted: Encode.custom : fn_var -[clos]-> t'
@@ -1066,11 +1066,11 @@ fn wrap_in_encode_custom(
         )),
     );
 
-    //   (List U8, fmt -> List U8) -[..]->   Encoder fmt | fmt has EncoderFormatting
+    //   (List U8, fmt -> List U8) -[..]->   Encoder fmt | fmt implements EncoderFormatting
     // ~ fn_var                    -[clos]-> t'
     env.unify(custom_fn_var, this_custom_fn_var);
 
-    // Encode.custom : (List U8, fmt -> List U8) -> Encoder fmt | fmt has EncoderFormatting
+    // Encode.custom : (List U8, fmt -> List U8) -> Encoder fmt | fmt implements EncoderFormatting
     let custom_fn = Box::new((
         this_custom_fn_var,
         Loc::at_zero(Var(Symbol::ENCODE_CUSTOM, this_custom_fn_var)),

@@ -80,7 +80,7 @@ impl AbilityMemberData<Resolved> {
 
 /// Solved lambda sets for an ability member specialization. For example, if we have
 ///
-///   Default has default : {} -[[] + a:default:1]-> a | a has Default
+///   Default has default : {} -[[] + a:default:1]-> a | a implements Default
 ///
 ///   A := {}
 ///   default = \{} -[[closA]]-> @A {}
@@ -144,7 +144,7 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
     ///
     /// For example, in the program
     ///
-    ///   Hash has hash : a -> U64 | a has Hash
+    ///   Hash has hash : a -> U64 | a implements Hash
     ///
     ///   Id := {} implements [Hash {hash: myHash}]
     ///   myHash = \@Id n -> n
@@ -284,7 +284,7 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
     }
 
     /// Finds the implementation key for a symbol specializing the ability member, if it specializes any.
-    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a has Hash`.
+    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a implements Hash`.
     /// Calling this with `hashId` would retrieve (hash, hashId).
     pub fn impl_key(&self, specializing_symbol: Symbol) -> Option<&ImplKey> {
         self.specialization_to_root.get(&specializing_symbol)
@@ -392,7 +392,7 @@ pub enum MarkError {
 impl IAbilitiesStore<Resolved> {
     /// Finds the symbol name and ability member definition for a symbol specializing the ability
     /// member, if it specializes any.
-    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a has Hash`.
+    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a implements Hash`.
     /// Calling this with `hashId` would retrieve the ability member data for `hash`, and what type
     /// `hashId` is specializing for.
     pub fn impl_key_and_def(

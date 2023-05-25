@@ -480,7 +480,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             //
             //               interface F imports [] exposes []
             //
-            //               Hello := {} has [Encoding.{ toEncoder }]
+            //               Hello := {} implements [Encoding.{ toEncoder }]
             //
             //               toEncoder = \@Hello {} -> ...
             //
@@ -492,7 +492,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             //
             //               interface F imports [Encoding.{ toEncoder }] exposes []
             //
-            //               Hello := {} has [Encoding.{ toEncoder }]
+            //               Hello := {} implements [Encoding.{ toEncoder }]
             //
             //               toEncoder = \@Hello {} -> ...
             //
@@ -510,9 +510,9 @@ fn canonicalize_claimed_ability_impl<'a>(
                 // definition symbol, for example when the ability is defined in the same
                 // module as an implementer:
                 //
-                //   Eq has eq : a, a -> U64 | a has Eq
+                //   Eq has eq : a, a -> U64 | a implements Eq
                 //
-                //   A := U8 has [Eq {eq}]
+                //   A := U8 implements [Eq {eq}]
                 //
                 // So, do a final check that the implementation symbol is not resolved directly
                 // to the member.
@@ -749,8 +749,8 @@ fn canonicalize_opaque<'a>(
                     // Did the user claim this implementation for a specialization of a different
                     // type? e.g.
                     //
-                    //   A has [Hash {hash: myHash}]
-                    //   B has [Hash {hash: myHash}]
+                    //   A implements [Hash {hash: myHash}]
+                    //   B implements [Hash {hash: myHash}]
                     //
                     // If so, that's an error and we drop the impl for this opaque type.
                     let member_impl = match scope.abilities_store.impl_key(impl_symbol) {
@@ -1398,7 +1398,7 @@ fn resolve_abilities(
                 }
                 [..] => {
                     // There is more than one variable bound to the member signature, so something like
-                    //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                    //   Eq has eq : a, b -> Bool | a has Eq, b implements Eq
                     // We have no way of telling what type implements a particular instance of Eq in
                     // this case (a or b?), so disallow it.
                     let span_has_clauses = Region::across_all(

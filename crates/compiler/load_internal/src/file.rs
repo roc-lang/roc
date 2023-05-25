@@ -3172,7 +3172,7 @@ fn update<'a>(
                     //   # Default module
                     //   interface Default exposes [default, getDefault]
                     //
-                    //   Default has default : {} -> a | a has Default
+                    //   Default has default : {} -> a | a implements Default
                     //
                     //   getDefault = \{} -> default {}
                     //
@@ -4632,7 +4632,7 @@ fn build_header<'a>(
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
             //
-            // For example, if module A has [B.{ foo }], then
+            // For example, if module A implements [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
             let ident_id = ident_ids.get_or_insert(loc_exposed.value.as_str());
@@ -4656,7 +4656,7 @@ fn build_header<'a>(
                 // created an IdentId for this, when it was imported exposed
                 // in a dependent module.
                 //
-                // For example, if module A has [B.{ foo }], then
+                // For example, if module A implements [B.{ foo }], then
                 // when we get here for B, `foo` will already have
                 // an IdentId. We must reuse that!
                 let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());

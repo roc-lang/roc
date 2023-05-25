@@ -1106,8 +1106,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
      *******************************************************************/
 
     fn expr_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue) {
-        let invalid_error =
-            || internal_error!("Literal value {:?} has invalid storage {:?}", lit, storage);
+        let invalid_error = || {
+            internal_error!(
+                "Literal value {:?} implements invalid storage {:?}",
+                lit,
+                storage
+            )
+        };
 
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {
