@@ -217,6 +217,7 @@ map_symbol_to_lowlevel_and_arity! {
     BoxExpr; BOX_BOX_FUNCTION; 1,
     UnboxExpr; BOX_UNBOX; 1,
     Unreachable; LIST_UNREACHABLE; 1,
+    DictPseudoSeed; DICT_PSEUDO_SEED; 1,
 }
 
 /// Some builtins cannot be constructed in code gen alone, and need to be defined

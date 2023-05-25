@@ -436,3 +436,12 @@ test "increfC, static data" {
     increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
 }
+
+// This returns a compilation dependent pseudo random seed for dictionaries.
+// The seed is the address of this function.
+// This avoids all roc Dicts using a known seed and being trivial to DOS.
+// Still not as secure as true random, but a lot better.
+// This value must not change between calls unless Dict is changed to store the seed on creation.
+pub fn dictPseudoSeed() callconv(.C) u64 {
+    return @intCast(u64, @ptrToInt(dictPseudoSeed));
+}

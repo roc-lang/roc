@@ -286,7 +286,7 @@ walkUntil = \@Dict { data }, initialState, transform ->
 get : Dict k v, k -> Result v [KeyNotFound] | k has Hash & Eq
 get = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -314,7 +314,7 @@ get = \@Dict { metadata, dataIndices, data }, key ->
 contains : Dict k v, k -> Bool | k has Hash & Eq
 contains = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -339,7 +339,7 @@ contains = \@Dict { metadata, dataIndices, data }, key ->
 insert : Dict k v, k, v -> Dict k v | k has Hash & Eq
 insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -386,7 +386,7 @@ remove : Dict k v, k -> Dict k v | k has Hash & Eq
 remove = \@Dict { metadata, dataIndices, data, size }, key ->
     # TODO: change this from swap remove to tombstone and test is performance is still good.
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -569,7 +569,7 @@ swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v | k has Hash & Eq
 swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
     (T key _) = listGetUnsafe data lastIndex
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -711,7 +711,7 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
 insertForRehash : Dict k v, k, Nat -> Dict k v | k has Hash & Eq
 insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -993,8 +993,16 @@ LowLevelHasher := { originalSeed : U64, state : U64 } has [
 # TODO hide behind an InternalList.roc module
 listGetUnsafe : List a, Nat -> a
 
-createLowLevelHasher : { seed ? U64 } -> LowLevelHasher
-createLowLevelHasher = \{ seed ? 0x526F_6352_616E_643F } ->
+# Returns a application specific pseudo random seed for Dict.
+# This avoids trivial DOS attacks.
+pseudoSeed : {} -> U64
+
+createLowLevelHasher : [PseudoRandSeed, WithSeed U64] -> LowLevelHasher
+createLowLevelHasher = \seedOpt ->
+    seed =
+        when seedOpt is
+            PseudoRandSeed -> pseudoSeed {}
+            WithSeed s -> s
     @LowLevelHasher { originalSeed: seed, state: seed }
 
 combineState : LowLevelHasher, { a : U64, b : U64, seed : U64, length : U64 } -> LowLevelHasher
@@ -1188,12 +1196,14 @@ wyr3 = \list, index, k ->
 
     Num.bitwiseOr a p3
 
+testSeed = WithSeed 0x526F_6352_616E_643F
+
 # TODO: would be great to have table driven expects for this.
 # Would also be great to have some sort of property based hasher
 # where we can compare `addU*` functions to the `addBytes` function.
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes []
         |> complete
 
@@ -1201,7 +1211,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0x42]
         |> complete
 
@@ -1209,7 +1219,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU8 0x42
         |> complete
 
@@ -1217,7 +1227,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0xFF, 0xFF]
         |> complete
 
@@ -1225,7 +1235,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU16 0xFFFF
         |> complete
 
@@ -1233,7 +1243,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0x36, 0xA7]
         |> complete
 
@@ -1241,7 +1251,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU16 0xA736
         |> complete
 
@@ -1249,7 +1259,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0x00, 0x00, 0x00, 0x00]
         |> complete
 
@@ -1257,7 +1267,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU32 0x0000_0000
         |> complete
 
@@ -1265,7 +1275,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0xA9, 0x2F, 0xEE, 0x21]
         |> complete
 
@@ -1273,7 +1283,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU32 0x21EE_2FA9
         |> complete
 
@@ -1281,7 +1291,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0x5D, 0x66, 0xB1, 0x8F, 0x68, 0x44, 0xC7, 0x03, 0xE1, 0xDD, 0x23, 0x34, 0xBB, 0x9A, 0x42, 0xA7]
         |> complete
 
@@ -1289,7 +1299,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU128 0xA742_9ABB_3423_DDE1_03C7_4468_8FB1_665D
         |> complete
 
@@ -1297,7 +1307,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashStrBytes "abcdefghijklmnopqrstuvwxyz"
         |> complete
 
@@ -1305,7 +1315,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashStrBytes "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
         |> complete
 
@@ -1313,7 +1323,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashStrBytes "1234567890123456789012345678901234567890123456789012345678901234567890"
         |> complete
 
@@ -1321,7 +1331,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes (List.repeat 0x77 100)
         |> complete
 
@@ -1331,7 +1341,7 @@ expect
 # Apparently it won't pick the default integer.
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered [8u8, 82u8, 3u8, 8u8, 24u8] List.walk
         |> complete
 
@@ -1339,12 +1349,12 @@ expect
 
 expect
     hash1 =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered ([0u8, 1u8, 2u8, 3u8, 4u8]) List.walk
         |> complete
 
     hash2 =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered [4u8, 3u8, 2u8, 1u8, 0u8] List.walk
         |> complete
 
@@ -1352,12 +1362,12 @@ expect
 
 expect
     hash1 =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered [0u8, 1u8, 2u8, 3u8, 4u8] List.walk
         |> complete
 
     hash2 =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered [4u8, 3u8, 2u8, 1u8, 0u8, 0u8] List.walk
         |> complete
 

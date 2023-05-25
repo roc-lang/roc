@@ -126,6 +126,7 @@ pub enum LowLevel {
     BoxExpr,
     UnboxExpr,
     Unreachable,
+    DictPseudoSeed,
 }
 
 macro_rules! higher_order {
@@ -345,4 +346,5 @@ map_symbol_to_lowlevel! {
     Or <= BOOL_OR,
     Not <= BOOL_NOT,
     Unreachable <= LIST_UNREACHABLE,
+    DictPseudoSeed <= DICT_PSEUDO_SEED,
 }

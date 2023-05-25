@@ -1310,6 +1310,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 ptr.into()
             }
         },
+        DictPseudoSeed => {
+            // Dict.pseudoSeed : {} -> u64
+
+            call_bitcode_fn(env, &[], bitcode::UTILS_DICT_PSEUDO_SEED)
+        }
     }
 }
 
