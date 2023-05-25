@@ -1,19 +1,19 @@
 app "test" provides [main] to "./platform"
 
-F has f : a -> (b -> {}) | a has F, b has G
-G has g : b -> {} | b has G
+F has f : a -> (b -> {}) | a has F, b implements G
+G has g : b -> {} | b implements G
 
-Fo := {} has [F {f}]
+Fo := {} implements [F {f}]
 f = \@Fo {} -> g
-#^{-1} Fo#f(7): Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
+#^{-1} Fo#f(7): Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b implements G
 
-Go := {} has [G {g}]
+Go := {} implements [G {g}]
 g = \@Go {} -> {}
 #^{-1} Go#g(8): Go -[[g(8)]]-> {}
 
 main =
-#^^^^{-1} b -[[] + b:g(4):1]-> {} | b has G
+#^^^^{-1} b -[[] + b:g(4):1]-> {} | b implements G
     h = f (@Fo {})
-#       ^ Fo#f(7): Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
-#   ^ b -[[] + b:g(4):1]-> {} | b has G
+#       ^ Fo#f(7): Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b implements G
+#   ^ b -[[] + b:g(4):1]-> {} | b implements G
     h

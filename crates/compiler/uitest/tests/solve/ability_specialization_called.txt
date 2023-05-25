@@ -1,9 +1,9 @@
 app "test" provides [zero] to "./platform"
 
-MHash has
-    hash : a -> U64 | a has MHash
+MHash implements
+    hash : a -> U64 | a implements MHash
 
-Id := U64 has [MHash {hash}]
+Id := U64 implements [MHash {hash}]
 
 hash = \@Id n -> n
 

@@ -1,19 +1,19 @@
 app "test" provides [main] to "./platform"
 
 X has
-  consume : a -> {} | a has X
+  consume : a -> {} | a implements X
 
-O := {} has [X {consume: consumeO}]
+O := {} implements [X {consume: consumeO}]
 
 consumeO = \@O {} -> {}
 
-P := {} has [X {consume: consumeP}]
+P := {} implements [X {consume: consumeP}]
 
 consumeP = \@P {} -> {}
 
 caller = \x -> consume x
-#                      ^ a | a has X
-#              ^^^^^^^ X#consume(2): a -[[] + a:consume(2):1]-> {} | a has X
+#                      ^ a | a implements X
+#              ^^^^^^^ X#consume(2): a -[[] + a:consume(2):1]-> {} | a implements X
 
 main = {
   a: caller (@O {}),

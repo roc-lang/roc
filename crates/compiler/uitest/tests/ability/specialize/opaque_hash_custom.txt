@@ -1,8 +1,8 @@
 app "test" provides [main] to "./platform"
 
-Noop := {} has [Hash {hash}]
+Noop := {} implements [Hash {hash}]
 
 hash = \hasher, @Noop {} -> hasher
 
 main = \hasher -> hash hasher (@Noop {})
-#^^^^{-1} hasher -[[main(0)]]-> hasher | hasher has Hasher
+#^^^^{-1} hasher -[[main(0)]]-> hasher | hasher implements Hasher

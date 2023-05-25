@@ -3,4 +3,4 @@ app "test"
     provides [main] to "./platform"
 
 main = toEncoder { a: "" }
-     # ^^^^^^^^^ Encoding#toEncoder(2): { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting
+     # ^^^^^^^^^ Encoding#toEncoder(2): { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt implements EncoderFormatting

@@ -1,6 +1,6 @@
 app "test" provides [top] to "./platform"
 
-MDict u := (List u) | u has Hash & Eq
+MDict u := (List u) | u implements Hash & Eq
 
 bot : MDict k -> MDict k
 bot = \@MDict data ->
@@ -9,4 +9,4 @@ bot = \@MDict data ->
 
 top : MDict v -> MDict v
 top = \x -> bot x
-#^^^{-1} MDict v -[[top(0)]]-> MDict v | v has Hash & Eq
+#^^^{-1} MDict v -[[top(0)]]-> MDict v | v implements Hash & Eq

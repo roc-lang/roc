@@ -151,8 +151,8 @@ fn empty_record() {
     derive_test(Hash, v!(EMPTY_RECORD), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for {}
-        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher has Hasher
-        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher has Hasher
+        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher implements Hasher
+        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_{}(0)]]
         #Derived.hash_{} = \#Derived.hasher, #Derived.rcd -> #Derived.hasher
@@ -166,8 +166,8 @@ fn zero_field_record() {
     derive_test(Hash, v!({}), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for {}
-        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher has Hasher
-        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher has Hasher
+        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher implements Hasher
+        # hasher, {} -[[hash_{}(0)]]-> hasher | hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_{}(0)]]
         #Derived.hash_{} = \#Derived.hasher, #Derived.rcd -> #Derived.hasher
@@ -181,8 +181,8 @@ fn one_field_record() {
     derive_test(Hash, v!({ a: v!(U8), }), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for { a : U8 }
-        # hasher, { a : a } -[[hash_{a}(0)]]-> hasher | a has Hash, hasher has Hasher
-        # hasher, { a : a } -[[hash_{a}(0)]]-> hasher | a has Hash, hasher has Hasher
+        # hasher, { a : a } -[[hash_{a}(0)]]-> hasher | a has Hash, hasher implements Hasher
+        # hasher, { a : a } -[[hash_{a}(0)]]-> hasher | a has Hash, hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_{a}(0)]]
         #Derived.hash_{a} =
@@ -197,8 +197,8 @@ fn two_field_record() {
     derive_test(Hash, v!({ a: v!(U8), b: v!(STR), }), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for { a : U8, b : Str }
-        # hasher, { a : a, b : a1 } -[[hash_{a,b}(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
-        # hasher, { a : a, b : a1 } -[[hash_{a,b}(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # hasher, { a : a, b : a1 } -[[hash_{a,b}(0)]]-> hasher | a has Hash, a1 has Hash, hasher implements Hasher
+        # hasher, { a : a, b : a1 } -[[hash_{a,b}(0)]]-> hasher | a has Hash, a1 has Hash, hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_{a,b}(0)]]
         #Derived.hash_{a,b} =
@@ -214,8 +214,8 @@ fn two_element_tuple() {
     derive_test(Hash, v!((v!(U8), v!(STR),)), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for ( U8, Str )*
-        # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
-        # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher | a has Hash, a1 has Hash, hasher implements Hasher
+        # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher | a has Hash, a1 has Hash, hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_(arity:2)(0)]]
         #Derived.hash_(arity:2) =
@@ -231,8 +231,8 @@ fn tag_one_label_no_payloads() {
     derive_test(Hash, v!([A]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A]
-        # hasher, [A] -[[hash_[A 0](0)]]-> hasher | hasher has Hasher
-        # hasher, [A] -[[hash_[A 0](0)]]-> hasher | hasher has Hasher
+        # hasher, [A] -[[hash_[A 0](0)]]-> hasher | hasher implements Hasher
+        # hasher, [A] -[[hash_[A 0](0)]]-> hasher | hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_[A 0](0)]]
         #Derived.hash_[A 0] = \#Derived.hasher, A -> #Derived.hasher
@@ -246,8 +246,8 @@ fn tag_one_label_newtype() {
     derive_test(Hash, v!([A v!(U8) v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A U8 Str]
-        # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
-        # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher | a has Hash, a1 has Hash, hasher has Hasher
+        # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher | a has Hash, a1 has Hash, hasher implements Hasher
+        # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher | a has Hash, a1 has Hash, hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_[A 2](0)]]
         #Derived.hash_[A 2] =
@@ -263,8 +263,8 @@ fn tag_two_labels() {
     derive_test(Hash, v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A U8 Str U16, B Str]
-        # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash, a3 has Hash
-        # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash, a3 has Hash
+        # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash, a3 implements Hash
+        # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash, a3 implements Hash
         # Specialization lambda sets:
         #   @<1>: [[hash_[A 3,B 1](0)]]
         #Derived.hash_[A 3,B 1] =
@@ -285,8 +285,8 @@ fn tag_two_labels_no_payloads() {
     derive_test(Hash, v!([A, B]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A, B]
-        # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a | a has Hasher
-        # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a | a has Hasher
+        # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a | a implements Hasher
+        # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a | a implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_[A 0,B 0](0)]]
         #Derived.hash_[A 0,B 0] =
@@ -304,8 +304,8 @@ fn recursive_tag_union() {
     derive_test(Hash, v!([Nil, Cons v!(U8) v!(^lst) ] as lst), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [Cons U8 $rec, Nil] as $rec
-        # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash
-        # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a | a has Hasher, a1 has Hash, a2 has Hash
+        # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a | a has Hasher, a1 has Hash, a2 implements Hash
+        # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a | a has Hasher, a1 has Hash, a2 implements Hash
         # Specialization lambda sets:
         #   @<1>: [[hash_[Cons 2,Nil 0](0)]]
         #Derived.hash_[Cons 2,Nil 0] =

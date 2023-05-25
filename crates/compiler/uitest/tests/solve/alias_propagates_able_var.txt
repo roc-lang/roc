@@ -1,8 +1,8 @@
 app "test" provides [zeroEncoder] to "./platform"
 
-MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+MEncoder fmt := List U8, fmt -> List U8 | fmt implements Format
 
-Format has it : fmt -> {} | fmt has Format
+Format implements it : fmt -> {} | fmt implements Format
 
 zeroEncoder = @MEncoder \lst, _ -> lst
-#^^^^^^^^^^^{-1} MEncoder a | a has Format
+#^^^^^^^^^^^{-1} MEncoder a | a implements Format

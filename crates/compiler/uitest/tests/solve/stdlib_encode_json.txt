@@ -2,7 +2,7 @@ app "test"
     imports [Json]
     provides [main] to "./platform"
 
-HelloWorld := {} has [Encoding {toEncoder}]
+HelloWorld := {} implements [Encoding {toEncoder}]
 
 toEncoder = \@HelloWorld {} ->
     Encode.custom \bytes, fmt ->

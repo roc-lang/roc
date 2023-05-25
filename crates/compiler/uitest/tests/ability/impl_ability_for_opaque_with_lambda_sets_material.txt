@@ -1,7 +1,7 @@
 # +opt infer:print_only_under_alias
 app "test" provides [main] to "./platform"
 
-Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
 
 isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
 #^^^^^{-1} ({} -[[]]-> Str), ({} -[[]]-> Str) -[[isEqQ(2)]]-> [False, True]

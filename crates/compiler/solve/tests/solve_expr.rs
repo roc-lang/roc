@@ -3150,7 +3150,7 @@ mod solve_expr {
                 Dict.insert
                 "#
             ),
-            "Dict k v, k, v -> Dict k v | k has Hash & Eq",
+            "Dict k v, k, v -> Dict k v | k implements Hash & Eq",
         );
     }
 
@@ -3423,7 +3423,7 @@ mod solve_expr {
                 reconstructPath
                 "#
             ),
-            "Dict position position, position -> List position | position has Hash & Eq",
+            "Dict position position, position -> List position | position implements Hash & Eq",
         );
     }
 
@@ -3480,7 +3480,7 @@ mod solve_expr {
                     astar
                 "#
             ),
-            "Model position -> Result position [KeyNotFound] | position has Hash & Eq",
+            "Model position -> Result position [KeyNotFound] | position implements Hash & Eq",
         );
     }
 

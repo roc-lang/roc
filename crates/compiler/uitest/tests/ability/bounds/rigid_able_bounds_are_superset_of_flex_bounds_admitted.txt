@@ -1,8 +1,8 @@
 app "test" provides [main] to "./platform"
 
-f : x -> x | x has Hash
-g : x -> x | x has Decoding & Encoding
+f : x -> x | x implements Hash
+g : x -> x | x implements Decoding & Encoding
 
-main : x -> x | x has Hash & Decoding & Encoding
+main : x -> x | x implements Hash & Decoding & Encoding
 main = \x -> x |> f |> g
-#^^^^{-1} x -[[main(0)]]-> x | x has Hash & Encoding & Decoding
+#^^^^{-1} x -[[main(0)]]-> x | x implements Hash & Encoding & Decoding

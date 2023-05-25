@@ -1,8 +1,8 @@
 app "test" provides [main] to "./platform"
 
-Id has id : a -> a | a has Id
+Id has id : a -> a | a implements Id
 
-A := {} has [Id {id}]
+A := {} implements [Id {id}]
 id = \@A {} -> @A {}
 #^^{-1} A#id(4): A -[[id(4)]]-> A
 

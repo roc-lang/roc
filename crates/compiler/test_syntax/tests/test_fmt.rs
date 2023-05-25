@@ -5428,7 +5428,7 @@ mod test_fmt {
     fn opaque_has_clause() {
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [Eq, Hash]
+            A := U8 implements [Eq, Hash]
 
             0
             "#
@@ -5439,7 +5439,7 @@ mod test_fmt {
                 r#"
                 A :=
                     U8
-                    has [Eq, Hash]
+                    implements [Eq, Hash]
 
                 0
                 "#
@@ -5447,7 +5447,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 A := U8
-                     has [Eq, Hash]
+                     implements [Eq, Hash]
 
                 0
                 "#
@@ -5457,15 +5457,15 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                A := a | a has Hash has [ Eq, Hash ]
+                A := a | a implements Hash implements [ Eq, Hash ]
 
                 0
                 "#
             ),
             indoc!(
                 r#"
-                A := a | a has Hash
-                     has [Eq, Hash]
+                A := a | a implements Hash
+                     implements [Eq, Hash]
 
                 0
                 "#
@@ -5475,14 +5475,14 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                A := U8 has []
+                A := U8 implements []
 
                 0
                 "#
             ),
             indoc!(
                 r#"
-                A := U8 has []
+                A := U8 implements []
 
                 0
                 "#
@@ -5525,7 +5525,7 @@ mod test_fmt {
     fn opaque_has_with_impls() {
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [Eq { eq }, Hash { hash }]
+            A := U8 implements [Eq { eq }, Hash { hash }]
 
             0
             "#
@@ -5533,7 +5533,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [Eq { eq, eq1 }]
+            A := U8 implements [Eq { eq, eq1 }]
 
             0
             "#
@@ -5542,8 +5542,8 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                A := U8 has [Eq {   eq,     eq1   }]
-                A := U8 has [Eq {
+                A := U8 implements [Eq {   eq,     eq1   }]
+                A := U8 implements [Eq {
                                     eq,
                                     eq1
                                 }]
@@ -5553,8 +5553,8 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                A := U8 has [Eq { eq, eq1 }]
-                A := U8 has [
+                A := U8 implements [Eq { eq, eq1 }]
+                A := U8 implements [
                          Eq {
                              eq,
                              eq1,
@@ -5568,8 +5568,8 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            A := a | a has Other
-                 has [Eq { eq }, Hash { hash }]
+            A := a | a implements Other
+                 implements [Eq { eq }, Hash { hash }]
 
             0
             "#
@@ -5577,7 +5577,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [Eq {}]
+            A := U8 implements [Eq {}]
 
             0
             "#
@@ -5625,7 +5625,7 @@ mod test_fmt {
                     dataIndices : List Nat,
                     data : List (T k v),
                     size : Nat,
-                } | k has Hash & Eq
+                } | k implements Hash & Eq
 
                 a
                 "#
@@ -5837,12 +5837,12 @@ mod test_fmt {
             r#"
             interface Foo exposes [] imports []
 
-            A has
+            A implements
                 ## This is member ab
-                ab : a -> a | a has A
+                ab : a -> a | a implements A
 
                 ## This is member de
-                de : a -> a | a has A
+                de : a -> a | a implements A
 
             f = g
             "#
@@ -5884,7 +5884,7 @@ mod test_fmt {
     fn clauses_with_multiple_abilities() {
         expr_formats_same(indoc!(
             r#"
-            f : {} -> a | a has Eq & Hash & Decode
+            f : {} -> a | a implements Eq & Hash & Decode
 
             f
             "#
@@ -5893,8 +5893,8 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                f : {} -> a | a has Eq & Hash & Decode,
-                              b has Eq & Hash
+                f : {} -> a | a implements Eq & Hash & Decode,
+                              b implements Eq & Hash
 
                 f
                 "#
@@ -5902,10 +5902,10 @@ mod test_fmt {
             indoc!(
                 // TODO: ideally, this would look a bit nicer - consider
                 // f : {} -> a
-                //   | a has Eq & Hash & Decode,
-                //     b has Eq & Hash
+                //   | a implements Eq & Hash & Decode,
+                //     b implements Eq & Hash
                 r#"
-                f : {} -> a | a has Eq & Hash & Decode, b has Eq & Hash
+                f : {} -> a | a implements Eq & Hash & Decode, b implements Eq & Hash
 
                 f
                 "#

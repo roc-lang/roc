@@ -8830,7 +8830,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [hash] to "./platform"
 
-            MHash has
+            MHash implements
                 hash : a -> U64 | a implements MHash
 
             Id := U64 implements [MHash {hash}]
@@ -8864,7 +8864,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [noGoodVeryBadTerrible] to "./platform"
 
-            MHash has
+            MHash implements
                 hash : a -> U64 | a implements MHash
 
             Id := U64 implements [MHash {hash}]
@@ -8912,7 +8912,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [main] to "./platform"
 
             main =
-                MHash has
+                MHash implements
                     hash : a -> U64 | a implements MHash
 
                 123
@@ -8923,7 +8923,7 @@ In roc, functions are always written as a lambda, like{}
 
         This ability definition is not on the top-level of a module:
 
-        4│>      MHash has
+        4│>      MHash implements
         5│>          hash : a -> U64 | a implements MHash
 
         Abilities can only be defined on the top-level of a Roc module.
@@ -8936,7 +8936,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [hash, hashable] to "./platform"
 
-            MHash has
+            MHash implements
                 hash : a -> U64 | a implements MHash
 
             Id := U64 implements [MHash {hash}]
@@ -8977,7 +8977,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
+            MHash implements
                 hash : a -> U64 | a implements MHash
 
             mulMHashes : MHash, MHash -> U64

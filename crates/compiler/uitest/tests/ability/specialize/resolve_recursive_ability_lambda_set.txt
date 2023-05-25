@@ -1,8 +1,8 @@
 app "test" provides [main] to "./platform"
 
-Diverge has diverge : a -> a | a has Diverge
+Diverge has diverge : a -> a | a implements Diverge
 
-A := {} has [Diverge {diverge}]
+A := {} implements [Diverge {diverge}]
 
 diverge : A -> A
 diverge = \@A {} -> diverge (@A {})

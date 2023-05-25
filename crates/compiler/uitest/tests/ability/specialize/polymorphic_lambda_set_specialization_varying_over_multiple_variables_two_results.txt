@@ -1,43 +1,43 @@
 app "test" provides [main] to "./platform"
 
-J has j : j -> (k -> {}) | j has J, k has K
-K has k : k -> {} | k has K
+J has j : j -> (k -> {}) | j has J, k implements K
+K has k : k -> {} | k implements K
 
-C := {} has [J {j: jC}]
+C := {} implements [J {j: jC}]
 jC = \@C _ -> k
-#^^{-1} C -[[jC(9)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+#^^{-1} C -[[jC(9)]]-> (k -[[] + k:k(4):1]-> {}) | k implements K
 
-D := {} has [J {j: jD}]
+D := {} implements [J {j: jD}]
 jD = \@D _ -> k
-#^^{-1} D -[[jD(10)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+#^^{-1} D -[[jD(10)]]-> (k -[[] + k:k(4):1]-> {}) | k implements K
 
-E := {} has [K {k: kE}]
+E := {} implements [K {k: kE}]
 kE = \@E _ -> {}
 #^^{-1} E -[[kE(11)]]-> {}
 
-F := {} has [K {k: kF}]
+F := {} implements [K {k: kF}]
 kF = \@F _ -> {}
 #^^{-1} F -[[kF(12)]]-> {}
 
 f = \flag, a, b ->
-#             ^ j | j has J
-#          ^ j | j has J
+#             ^ j | j implements J
+#          ^ j | j implements J
     it =
-#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k implements K
         when flag is
             A -> j a
-            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k has K
+            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k implements K
             B -> j b
-            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
+            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k implements K
     it
-#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
+#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k implements K
 
 main =
 #^^^^{-1} {}
     it = \x ->
-#   ^^ k -[[it(21)]]-> {} | k has K
+#   ^^ k -[[it(21)]]-> {} | k implements K
         (f A (@C {}) (@D {})) x
-#        ^ [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+#        ^ [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k implements K
     if Bool.true
         then it (@E {})
         #    ^^ E -[[it(21)]]-> {}

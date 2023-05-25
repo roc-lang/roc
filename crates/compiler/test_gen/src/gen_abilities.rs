@@ -20,10 +20,10 @@ fn hash_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 | a implements MHash
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -43,14 +43,14 @@ fn hash_specialization_multiple_add() {
             r#"
             app "test" provides [main] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 | a implements MHash
 
-            Id := U64 has [ MHash {hash: hashId} ]
+            Id := U64 implements [ MHash {hash: hashId} ]
 
             hashId = \@Id n -> n
 
-            One := {} has [ MHash {hash: hashOne} ]
+            One := {} implements [ MHash {hash: hashOne} ]
 
             hashOne = \@One _ -> 1
 
@@ -70,10 +70,10 @@ fn alias_member_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 | a implements MHash
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -95,13 +95,13 @@ fn ability_constrained_in_non_member_usage() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 | a implements MHash
 
-            mulMHashes : a, a -> U64 | a has MHash
+            mulMHashes : a, a -> U64 | a implements MHash
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
             hash = \@Id n -> n
 
             result = mulMHashes (@Id 5) (@Id 7)
@@ -120,12 +120,12 @@ fn ability_constrained_in_non_member_usage_inferred() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 | a implements MHash
 
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
             hash = \@Id n -> n
 
             result = mulMHashes (@Id 5) (@Id 7)
@@ -144,16 +144,16 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 | a implements MHash
 
-            mulMHashes : a, b -> U64 | a has MHash, b has MHash
+            mulMHashes : a, b -> U64 | a implements MHash, b implements MHash
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash { hash: hashId }]
+            Id := U64 implements [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [MHash { hash: hashThree }]
+            Three := {} implements [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
             result = mulMHashes (@Id 100) (@Three {})
@@ -172,15 +172,15 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 | a implements MHash
 
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash { hash: hashId }]
+            Id := U64 implements [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [MHash { hash: hashThree }]
+            Three := {} implements [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
             result = mulMHashes (@Id 100) (@Three {})
@@ -199,16 +199,16 @@ fn ability_used_as_type_still_compiles() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 | a implements MHash
 
             mulMHashes : MHash, MHash -> U64
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash { hash: hashId }]
+            Id := U64 implements [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [MHash { hash: hashThree }]
+            Three := {} implements [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
             result = mulMHashes (@Id 100) (@Three {})
@@ -227,15 +227,15 @@ fn bounds_to_multiple_abilities() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Idempot has idempot : a -> a | a has Idempot
-            Consume has consume : a -> Str | a has Consume
+            Idempot implements idempot : a -> a | a implements Idempot
+            Consume implements consume : a -> Str | a implements Consume
 
-            Hello := Str has [Idempot { idempot: idempotHello }, Consume { consume: consumeHello }]
+            Hello := Str implements [Idempot { idempot: idempotHello }, Consume { consume: consumeHello }]
 
             idempotHello = \@Hello msg -> @Hello msg
             consumeHello = \@Hello msg -> msg
 
-            lifecycle : a -> Str | a has Idempot & Consume
+            lifecycle : a -> Str | a implements Idempot & Consume
             lifecycle = \x -> idempot x |> consume
 
             main = lifecycle (@Hello "hello world")
@@ -254,26 +254,26 @@ fn encode() {
             r#"
             app "test" provides [myU8Bytes] to "./platform"
 
-            MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+            MEncoder fmt := List U8, fmt -> List U8 | fmt implements Format
 
-            MEncoding has
-              toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+            MEncoding implements
+              toEncoder : val -> MEncoder fmt | val implements MEncoding, fmt implements Format
 
-            Format has
-              u8 : U8 -> MEncoder fmt | fmt has Format
+            Format implements
+              u8 : U8 -> MEncoder fmt | fmt implements Format
 
-            appendWith : List U8, MEncoder fmt, fmt -> List U8 | fmt has Format
+            appendWith : List U8, MEncoder fmt, fmt -> List U8 | fmt implements Format
             appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
 
-            toBytes : val, fmt -> List U8 | val has MEncoding, fmt has Format
+            toBytes : val, fmt -> List U8 | val implements MEncoding, fmt implements Format
             toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
-            Linear := {} has [Format {u8}]
+            Linear := {} implements [Format {u8}]
 
             u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-            Rgba := { r : U8, g : U8, b : U8, a : U8 } has [MEncoding {toEncoder}]
+            Rgba := { r : U8, g : U8, b : U8, a : U8 } implements [MEncoding {toEncoder}]
 
             toEncoder = \@Rgba {r, g, b, a} ->
                 @MEncoder \lst, fmt -> lst
@@ -301,19 +301,19 @@ fn decode() {
 
             MDecodeError : [TooShort, Leftover (List U8)]
 
-            MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+            MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt implements MDecoderFormatting
 
-            MDecoding has
-                decoder : MDecoder val fmt | val has MDecoding, fmt has MDecoderFormatting
+            MDecoding implements
+                decoder : MDecoder val fmt | val implements MDecoding, fmt implements MDecoderFormatting
 
-            MDecoderFormatting has
-                u8 : MDecoder U8 fmt | fmt has MDecoderFormatting
+            MDecoderFormatting implements
+                u8 : MDecoder U8 fmt | fmt implements MDecoderFormatting
 
-            decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+            decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt implements MDecoderFormatting
             decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
             fromBytes : List U8, fmt -> Result val MDecodeError
-                        | fmt has MDecoderFormatting, val has MDecoding
+                        | fmt implements MDecoderFormatting, val implements MDecoding
             fromBytes = \lst, fmt ->
                 when decodeWith lst decoder fmt is
                     { result, rest } ->
@@ -323,14 +323,14 @@ fn decode() {
                             else Err (Leftover rest)
 
 
-            Linear := {} has [MDecoderFormatting {u8}]
+            Linear := {} implements [MDecoderFormatting {u8}]
 
             u8 = @MDecoder \lst, @Linear {} ->
                     when List.first lst is
                         Ok n -> { result: Ok n, rest: List.dropFirst lst }
                         Err _ -> { result: Err TooShort, rest: [] }
 
-            MyU8 := U8 has [MDecoding {decoder}]
+            MyU8 := U8 implements [MDecoding {decoder}]
 
             # impl MDecoding for MyU8
             decoder = @MDecoder \lst, fmt ->
@@ -358,7 +358,7 @@ fn encode_use_stdlib() {
                 imports [Encode, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := {} has [Encoding {toEncoder}]
+            HelloWorld := {} implements [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} ->
                 Encode.custom \bytes, fmt ->
                     bytes
@@ -386,7 +386,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
                 imports [Encode, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := {} has [Encoding {toEncoder}]
+            HelloWorld := {} implements [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} -> Encode.string "Hello, World!\n"
 
             main =
@@ -411,7 +411,7 @@ fn encode_derive_to_encoder_for_opaque() {
                 imports [Json]
                 provides [main] to "./platform"
 
-            HelloWorld := { a: Str } has [Encoding]
+            HelloWorld := { a: Str } implements [Encoding]
 
             main =
                 result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) Json.json)
@@ -435,7 +435,7 @@ fn to_encoder_encode_custom_has_capture() {
                 imports [Encode, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := Str has [Encoding {toEncoder}]
+            HelloWorld := Str implements [Encoding {toEncoder}]
             toEncoder = \@HelloWorld s1 ->
                 Encode.custom \bytes, fmt ->
                     bytes
@@ -881,7 +881,7 @@ fn encode_derived_generic_record_with_different_field_types() {
                 imports [Encode, Json]
                 provides [main] to "./platform"
 
-            Q a b := {a: a, b: b} has [Encoding]
+            Q a b := {a: a, b: b} implements [Encoding]
 
             q = @Q {a: 10u32, b: "fieldb"}
 
@@ -907,7 +907,7 @@ fn encode_derived_generic_tag_with_different_field_types() {
                 imports [Encode, Json]
                 provides [main] to "./platform"
 
-            Q a b := [A a, B b] has [Encoding]
+            Q a b := [A a, B b] implements [Encoding]
 
             q : Q Str U32
             q = @Q (B 67)
@@ -934,7 +934,7 @@ fn decode_use_stdlib() {
                 imports [Json]
                 provides [main] to "./platform"
 
-            MyNum := U8 has [Decoding {decoder: myDecoder}]
+            MyNum := U8 implements [Decoding {decoder: myDecoder}]
 
             myDecoder =
                 Decode.custom \bytes, fmt ->
@@ -968,7 +968,7 @@ fn decode_derive_decoder_for_opaque() {
                 imports [Json]
                 provides [main] to "./platform"
 
-            HelloWorld := { a: Str } has [Decoding]
+            HelloWorld := { a: Str } implements [Decoding]
 
             main =
                 when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes Json.json is
@@ -991,7 +991,7 @@ fn decode_use_stdlib_json_list() {
                 imports [Json]
                 provides [main] to "./platform"
 
-            MyNumList := List U8 has [Decoding {decoder: myDecoder}]
+            MyNumList := List U8 implements [Decoding {decoder: myDecoder}]
 
             myDecoder =
                 Decode.custom \bytes, fmt ->
@@ -1414,7 +1414,7 @@ mod hash {
 
     const TEST_HASHER: &str = indoc!(
         r#"
-        THasher := List U8 has [Hasher {
+        THasher := List U8 implements [Hasher {
             addBytes: tAddBytes,
             addU8: tAddU8,
             addU16: tAddU16,
@@ -1947,7 +1947,7 @@ mod hash {
 
                         {}
 
-                        Q := {{ a: U8, b: U8, c: U8 }} has [Hash]
+                        Q := {{ a: U8, b: U8, c: U8 }} implements [Hash]
 
                         q = @Q {{ a: 15, b: 27, c: 31 }}
 
@@ -2000,7 +2000,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                LyingEq := U8 has [Eq {isEq}]
+                LyingEq := U8 implements [Eq {isEq}]
 
                 isEq = \@LyingEq m, @LyingEq n -> m != n
 
@@ -2026,7 +2026,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+                Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
 
                 isEqQ = \@Q _, @Q _ -> Bool.true
 
@@ -2046,7 +2046,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+                Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
 
                 isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
 
@@ -2080,7 +2080,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                Q := U8 has [Eq]
+                Q := U8 implements [Eq]
 
                 main = (@Q 15) == (@Q 15)
                 "#

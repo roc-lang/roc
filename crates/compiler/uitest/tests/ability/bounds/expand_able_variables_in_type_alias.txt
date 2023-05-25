@@ -1,7 +1,7 @@
 # +opt infer:print_only_under_alias
 app "test" provides [main] to "./platform"
 
-F a : a | a has Hash
+F a : a | a implements Hash
 
 main : F a -> F a
-#^^^^{-1} a -[[main(0)]]-> a | a has Hash
+#^^^^{-1} a -[[main(0)]]-> a | a implements Hash

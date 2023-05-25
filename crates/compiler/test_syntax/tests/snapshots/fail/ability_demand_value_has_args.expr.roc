@@ -1,4 +1,4 @@
-MEq has
-    eq b c : a, a -> U64 | a has MEq
+MEq implements
+    eq b c : a, a -> U64 | a implements MEq
 
 1

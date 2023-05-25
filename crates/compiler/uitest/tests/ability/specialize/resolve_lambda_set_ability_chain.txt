@@ -1,9 +1,9 @@
 app "test" provides [main] to "./platform"
 
-Id1 has id1 : a -> a | a has Id1
-Id2 has id2 : a -> a | a has Id2
+Id1 has id1 : a -> a | a implements Id1
+Id2 has id2 : a -> a | a implements Id2
 
-A := {} has [Id1 {id1}, Id2 {id2}]
+A := {} implements [Id1 {id1}, Id2 {id2}]
 id1 = \@A {} -> @A {}
 #^^^{-1} A#id1(6): A -[[id1(6)]]-> A
 

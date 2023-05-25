@@ -1,6 +1,6 @@
 f : a -> (b -> c)
-    | a has Hash,
-      b has Eq,
-      c has Ord
+    | a implements Hash,
+      b implements Eq,
+      c implements Ord
 
 f

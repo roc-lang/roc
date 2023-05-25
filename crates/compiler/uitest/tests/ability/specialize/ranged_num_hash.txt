@@ -2,4 +2,4 @@ app "test" provides [main] to "./platform"
 
 main =
     \h -> Hash.hash h 7
-    #     ^^^^^^^^^ Hash#Hash.hash(1): a, I64 -[[Hash.hashI64(13)]]-> a | a has Hasher
+    #     ^^^^^^^^^ Hash#Hash.hash(1): a, I64 -[[Hash.hashI64(13)]]-> a | a implements Hasher

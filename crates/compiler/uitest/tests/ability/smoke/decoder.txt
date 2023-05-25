@@ -2,19 +2,19 @@ app "test" provides [myU8] to "./platform"
 
 MDecodeError : [TooShort, Leftover (List U8)]
 
-MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt implements MDecoderFormatting
 
 MDecoding has
-    decoder : MDecoder val fmt | val has MDecoding, fmt has MDecoderFormatting
+    decoder : MDecoder val fmt | val has MDecoding, fmt implements MDecoderFormatting
 
 MDecoderFormatting has
-    u8 : MDecoder U8 fmt | fmt has MDecoderFormatting
+    u8 : MDecoder U8 fmt | fmt implements MDecoderFormatting
 
-decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt implements MDecoderFormatting
 decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
 fromBytes : List U8, fmt -> Result val MDecodeError
-            | fmt has MDecoderFormatting, val has MDecoding
+            | fmt has MDecoderFormatting, val implements MDecoding
 fromBytes = \lst, fmt ->
     when decodeWith lst decoder fmt is
         { result, rest } ->
@@ -23,7 +23,7 @@ fromBytes = \lst, fmt ->
                 Err e -> Err e
 
 
-Linear := {} has [MDecoderFormatting {u8}]
+Linear := {} implements [MDecoderFormatting {u8}]
 
 u8 = @MDecoder \lst, @Linear {} ->
 #^^{-1} Linear#u8(11): MDecoder U8 Linear
@@ -31,10 +31,10 @@ u8 = @MDecoder \lst, @Linear {} ->
             Ok n -> { result: Ok n, rest: List.dropFirst lst }
             Err _ -> { result: Err TooShort, rest: [] }
 
-MyU8 := U8 has [MDecoding {decoder}]
+MyU8 := U8 implements [MDecoding {decoder}]
 
 decoder = @MDecoder \lst, fmt ->
-#^^^^^^^{-1} MyU8#decoder(12): MDecoder MyU8 fmt | fmt has MDecoderFormatting
+#^^^^^^^{-1} MyU8#decoder(12): MDecoder MyU8 fmt | fmt implements MDecoderFormatting
     when decodeWith lst u8 fmt is
         { result, rest } ->
             { result: Result.map result (\n -> @MyU8 n), rest }

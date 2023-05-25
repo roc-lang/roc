@@ -3,9 +3,9 @@ app "test" provides [main] to "./platform"
 
 Thunk a := {} -> a
 
-Id has id : a -> Thunk a | a has Id
+Id has id : a -> Thunk a | a implements Id
 
-A := {} has [Id {id}]
+A := {} implements [Id {id}]
 id = \@A {} -> @Thunk (\{} -> @A {})
 #^^{-1} A#id(5): {} -[[id(5)]]-> ({} -[[8]]-> {})
 

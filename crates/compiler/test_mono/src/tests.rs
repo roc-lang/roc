@@ -1344,10 +1344,10 @@ fn specialize_ability_call() {
         r#"
         app "test" provides [main] to "./platform"
 
-        MHash has
-            hash : a -> U64 | a has MHash
+        MHash implements
+            hash : a -> U64 | a implements MHash
 
-        Id := U64 has [MHash {hash}]
+        Id := U64 implements [MHash {hash}]
 
         hash : Id -> U64
         hash = \@Id n -> n
@@ -1380,20 +1380,20 @@ fn encode() {
         r#"
         app "test" provides [myU8Bytes] to "./platform"
 
-        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 | fmt implements Format
 
-        MEncoding has
-          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+        MEncoding implements
+          toEncoder : val -> MEncoder fmt | val implements MEncoding, fmt implements Format
 
-        Format has
-          u8 : U8 -> MEncoder fmt | fmt has Format
+        Format implements
+          u8 : U8 -> MEncoder fmt | fmt implements Format
 
 
-        Linear := {} has [Format {u8}]
+        Linear := {} implements [Format {u8}]
 
         u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8 has [MEncoding {toEncoder}]
+        MyU8 := U8 implements [MEncoding {toEncoder}]
 
         toEncoder = \@MyU8 n -> u8 n
 
@@ -2600,20 +2600,20 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         r#"
         app "test" provides [main] to "./platform"
 
-        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 | fmt implements Format
 
-        MEncoding has
-          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+        MEncoding implements
+          toEncoder : val -> MEncoder fmt | val implements MEncoding, fmt implements Format
 
-        Format has
-          u8 : {} -> MEncoder fmt | fmt has Format
-          str : {} -> MEncoder fmt | fmt has Format
-          tag : MEncoder fmt -> MEncoder fmt | fmt has Format
+        Format implements
+          u8 : {} -> MEncoder fmt | fmt implements Format
+          str : {} -> MEncoder fmt | fmt implements Format
+          tag : MEncoder fmt -> MEncoder fmt | fmt implements Format
 
-        Linear := {} has [Format {u8: lU8, str: lStr, tag: lTag}]
+        Linear := {} implements [Format {u8: lU8, str: lStr, tag: lTag}]
 
-        MU8 := U8 has [MEncoding {toEncoder: toEncoderU8}]
-        MStr := Str has [MEncoding {toEncoder: toEncoderStr}]
+        MU8 := U8 implements [MEncoding {toEncoder: toEncoderU8}]
+        MStr := Str implements [MEncoding {toEncoder: toEncoderStr}]
 
         Q a b := { a: a, b: b }
 
@@ -2663,7 +2663,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         r#"
         app "test" imports [Json] provides [main] to "./platform"
 
-        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+        Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
 
         toEncoderQ =
             \@Q t -> Encode.custom \bytes, fmt ->
@@ -2701,7 +2701,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
         r#"
         app "test" imports [Json] provides [main] to "./platform"
 
-        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+        Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
 
         toEncoderQ =
             \@Q t -> Encode.custom \bytes, fmt ->

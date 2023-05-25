@@ -960,7 +960,7 @@ fn list_walk_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat | a has Eq
+        find : List a, a -> Option Nat | a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -3693,7 +3693,7 @@ fn list_walk_backwards_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat | a has Eq
+        find : List a, a -> Option Nat | a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v

@@ -1,3 +1,3 @@
-f : a -> (b -> c) | a has A
+f : a -> (b -> c) | a implements A
 
 f

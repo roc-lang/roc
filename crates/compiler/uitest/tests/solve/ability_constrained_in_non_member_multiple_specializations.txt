@@ -1,14 +1,14 @@
 app "test" provides [result] to "./platform"
 
-MHash has
-    hash : a -> U64 | a has MHash
+MHash implements
+    hash : a -> U64 | a implements MHash
 
 mulMHashes = \x, y -> hash x * hash y
 
-Id := U64 has [MHash { hash: hashId }]
+Id := U64 implements [MHash { hash: hashId }]
 hashId = \@Id n -> n
 
-Three := {} has [MHash { hash: hashThree }]
+Three := {} implements [MHash { hash: hashThree }]
 hashThree = \@Three _ -> 3
 
 result = mulMHashes (@Id 100) (@Three {})
