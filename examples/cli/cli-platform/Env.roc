@@ -65,7 +65,7 @@ var = \name ->
 ## - comma-separated lists (of either strings or numbers), as long as there are no spaces after the commas
 ##
 ## Trying to decode into any other types will always fail with a `DecodeErr`.
-decode : Str -> Task val [VarNotFound, DecodeErr DecodeError] | val has Decoding
+decode : Str -> Task val [VarNotFound, DecodeErr DecodeError] | val implements Decoding
 decode = \name ->
     Effect.envVar name
     |> Effect.map
@@ -120,4 +120,4 @@ dict =
 # decode all the required vars only, and then decode the optional ones separately some other way.
 # Alternatively, it could make sense to have some sort of tag union convention here, e.g.
 # if decoding into a tag union of [Present val, Missing], then it knows what to do.
-# decodeAll : Task val [] [EnvDecodingFailed Str] [Env] | val has Decoding
+# decodeAll : Task val [] [EnvDecodingFailed Str] [Env] | val implements Decoding

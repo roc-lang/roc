@@ -57,7 +57,7 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
 # -------------------------------
 #   INITIALISATION
 # -------------------------------
-initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] | initData implements Encoding
 initServerApp = \app, initData, hostJavaScript ->
     initData
     |> Ok
@@ -66,7 +66,7 @@ initServerApp = \app, initData, hostJavaScript ->
     |> translateStatic
     |> insertRocScript initData app.wasmUrl hostJavaScript
 
-insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] | initData implements Encoding
 insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
     encode =
         \value ->

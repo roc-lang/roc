@@ -1,6 +1,6 @@
 interface EnvDecoding exposes [EnvFormat, format] imports []
 
-EnvFormat := {} has [
+EnvFormat := {} implements [
          DecoderFormatting {
              u8: envU8,
              u16: envU16,

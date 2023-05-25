@@ -1,5 +1,5 @@
 platform "ruby-interop"
-    requires {} { main : arg -> ret | arg has Decoding, ret has Encoding }
+    requires {} { main : arg -> ret | arg has Decoding, ret implements Encoding }
     exposes []
     packages {}
     imports [Json]

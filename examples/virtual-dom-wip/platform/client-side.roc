@@ -26,7 +26,7 @@ ToHost state initData : {
 }
 
 # TODO: naming the type variables causes a type 'mismatch'
-# main : FromHost state initData -> Effect (ToHost state initData) | initData has Decoding & Encoding
+# main : FromHost state initData -> Effect (ToHost state initData) | initData implements Decoding & Encoding
 main : FromHost _ _ -> Effect (ToHost _ _)
 main = \fromHost ->
     if fromHost.isInitEvent then

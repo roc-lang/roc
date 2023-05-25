@@ -84,7 +84,7 @@ DiffState state : { rendered : RenderedTree state, patches : List Patch }
 # -------------------------------
 #   INITIALISATION
 # -------------------------------
-initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding
+initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData implements Decoding
 initClientApp = \json, app ->
     # Initialise the Roc representation of the rendered DOM, and calculate patches (for event listeners)
     { state, rendered, patches } =
@@ -100,7 +100,7 @@ initClientApp = \json, app ->
     }
 
 # Testable helper function to initialise the app
-initClientAppHelp : List U8, App state initData -> { state, rendered : RenderedTree state, patches : List Patch } | initData has Decoding
+initClientAppHelp : List U8, App state initData -> { state, rendered : RenderedTree state, patches : List Patch } | initData implements Decoding
 initClientAppHelp = \json, app ->
     state =
         json
@@ -200,7 +200,7 @@ JsEventResult state initData : {
 }
 
 ## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
-dispatchEvent : PlatformState state initData, List (List U8), HandlerId -> Effect (JsEventResult state initData) | initData has Decoding
+dispatchEvent : PlatformState state initData, List (List U8), HandlerId -> Effect (JsEventResult state initData) | initData implements Decoding
 dispatchEvent = \platformState, eventData, handlerId ->
     { app, state, rendered } =
         platformState
@@ -694,7 +694,7 @@ eqRenderedAttrs = \a, b ->
     && eqAttrDict a.domProps b.domProps
     && eqAttrDict a.styles b.styles
 
-eqAttrDict : Dict Str v, Dict Str v -> Bool | v has Eq
+eqAttrDict : Dict Str v, Dict Str v -> Bool | v implements Eq
 eqAttrDict = \a, b ->
     Dict.keys a
     |> List.all \k -> Dict.get a k == Dict.get b k
