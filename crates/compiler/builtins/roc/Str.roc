@@ -894,7 +894,7 @@ walkUtf8Help = \str, state, step, index, length ->
 expect (walkUtf8 "ABC" [] List.append) == [65, 66, 67]
 expect (walkUtf8 "鹏" [] List.append) == [233, 185, 143]
 
-## Shrink the memory footprint of a str such that it's capacity and length are equal.
+## Shrink the memory footprint of a str such that its capacity and length are equal.
 ## Note: This will also convert seamless slices to regular lists.
 releaseExcessCapacity : Str -> Str
 
