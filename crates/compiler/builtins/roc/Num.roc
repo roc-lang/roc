@@ -233,7 +233,7 @@ Num range := range
 ##
 ## [I8] is a signed integer that takes up 8 bits. The `I` is for Integer, since
 ## integers in mathematics are signed by default. Because it has 8 bits just
-## like [U8], it can store 256 numbers (still 2^16), but because it is signed,
+## like [U8], it can store 256 numbers (still 2^8), but because it is signed,
 ## the range is different. Its 256 numbers range from -128 to 127.
 ##
 ## Here are some other examples:
