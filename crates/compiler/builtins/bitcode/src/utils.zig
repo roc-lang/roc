@@ -442,6 +442,9 @@ test "increfC, static data" {
 // This avoids all roc Dicts using a known seed and being trivial to DOS.
 // Still not as secure as true random, but a lot better.
 // This value must not change between calls unless Dict is changed to store the seed on creation.
+// Note: On esstentially all OSes, this will be affected by ASLR and different each run.
+// In wasm, the value will be constant to the build as a whole.
+// Either way, it can not be know by an attacker unless they get access to the executable.
 pub fn dictPseudoSeed() callconv(.C) u64 {
     return @intCast(u64, @ptrToInt(dictPseudoSeed));
 }
