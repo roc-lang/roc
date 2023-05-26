@@ -512,7 +512,7 @@ all = \list, predicate ->
 ## length that's too low, it would have to re-allocate.
 ##
 ## (If you want to do an operation like this which reduces the memory footprint
-## of the resulting list, you can do two passes over the lis with [List.walk] - one
+## of the resulting list, you can do two passes over the list with [List.walk] - one
 ## to calculate the precise new size, and another to populate the new list.)
 ##
 ## If given a unique list, [List.keepIf] will mutate it in place to assemble the appropriate list.
