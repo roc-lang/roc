@@ -80,7 +80,7 @@ interface Dict
 ## vacated spot.
 ##
 ## This move is done as a performance optimization, and it lets [remove] have
-## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time). ##
+## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time).
 ##
 ## Dict is inspired by [IndexMap](https://docs.rs/indexmap/latest/indexmap/map/struct.IndexMap.html).
 ## The internal implementation of a dictionary is similar to [absl::flat_hash_map](https://abseil.io/docs/cpp/guides/container).
