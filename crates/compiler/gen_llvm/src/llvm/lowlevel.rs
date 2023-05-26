@@ -1187,6 +1187,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // which could be useful to look at when implementing this.
             todo!("implement checked float conversion");
         }
+        I128OfDec => {
+            arguments!(dec);
+
+            call_bitcode_fn(env, &[dec], bitcode::DEC_TO_I128)
+        }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 

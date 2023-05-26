@@ -1935,6 +1935,7 @@ impl<'a> LowLevelCall<'a> {
             NumToFloatChecked => {
                 todo!("implement toF32Checked and toF64Checked");
             }
+            I128OfDec => self.load_args_and_call_zig(backend, bitcode::DEC_TO_I128),
             And => {
                 self.load_args(backend);
                 backend.code_builder.i32_and();

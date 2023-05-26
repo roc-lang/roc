@@ -194,6 +194,9 @@ const fn builtin_symbol_to_hash_lambda(symbol: Symbol) -> Option<FlatHash> {
         Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
             Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_NAT))
         }
+        Symbol::NUM_DEC | Symbol::NUM_DECIMAL => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_DEC))
+        }
         _ => None,
     }
 }
