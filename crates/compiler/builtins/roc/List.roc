@@ -72,7 +72,8 @@ interface List
         Num.{ Nat, Num, Int },
     ]
 
-## Types
+## ## Types
+##
 ## A sequential list of values.
 ## ```
 ## [1, 2, 3] # a list of numbers

@@ -6,7 +6,7 @@ interface Result
 ## okay, or else there was an error of some sort.
 Result ok err : [Ok ok, Err err]
 
-## Return `Bool.true` if the result indicates a success, else return `Bool.false`
+## Returns `Bool.true` if the result indicates a success, else returns `Bool.false`
 ## ```
 ## Result.isOk (Ok 5)
 ## ```
@@ -16,7 +16,7 @@ isOk = \result ->
         Ok _ -> Bool.true
         Err _ -> Bool.false
 
-## Return `Bool.true` if the result indicates a failure, else return `Bool.false`
+## Returns `Bool.true` if the result indicates a failure, else returns `Bool.false`
 ## ```
 ## Result.isErr (Err "uh oh")
 ## ```
@@ -26,7 +26,7 @@ isErr = \result ->
         Ok _ -> Bool.false
         Err _ -> Bool.true
 
-## If the result is `Ok`, return the value it holds. Otherwise, return
+## If the result is `Ok`, returns the value it holds. Otherwise, returns
 ## the given default value.
 ## ```
 ## Result.withDefault (Ok 7) 42
@@ -38,8 +38,8 @@ withDefault = \result, default ->
         Ok value -> value
         Err _ -> default
 
-## If the result is `Ok`, transform the value it holds by running a conversion
-## function on it. Then return a new `Ok` holding the transformed value. If the
+## If the result is `Ok`, transforms the value it holds by running a conversion
+## function on it. Then returns a new `Ok` holding the transformed value. If the
 ## result is `Err`, this has no effect. Use [mapErr] to transform an `Err`.
 ## ```
 ## Result.map (Ok 12) Num.negate
@@ -54,8 +54,8 @@ map = \result, transform ->
         Ok v -> Ok (transform v)
         Err e -> Err e
 
-## If the result is `Err`, transform the value it holds by running a conversion
-## function on it. Then return a new `Err` holding the transformed value. If
+## If the result is `Err`, transforms the value it holds by running a conversion
+## function on it. Then returns a new `Err` holding the transformed value. If
 ## the result is `Ok`, this has no effect. Use [map] to transform an `Ok`.
 ## ```
 ## Result.mapErr (Err "yipes!") Str.isEmpty
@@ -67,8 +67,8 @@ mapErr = \result, transform ->
         Ok v -> Ok v
         Err e -> Err (transform e)
 
-## If the result is `Ok`, transform the entire result by running a conversion
-## function on the value the `Ok` holds. Then return that new result. If the
+## If the result is `Ok`, transforms the entire result by running a conversion
+## function on the value the `Ok` holds. Then returns that new result. If the
 ## result is `Err`, this has no effect. Use `onErr` to transform an `Err`.
 ## ```
 ## Result.try (Ok -1) \num -> if num < 0 then Err "negative!" else Ok -num
@@ -80,8 +80,8 @@ try = \result, transform ->
         Ok v -> transform v
         Err e -> Err e
 
-## If the result is `Err`, transform the entire result by running a conversion
-## function on the value the `Err` holds. Then return that new result. If the
+## If the result is `Err`, transforms the entire result by running a conversion
+## function on the value the `Err` holds. Then returns that new result. If the
 ## result is `Ok`, this has no effect. Use `try` to transform an `Ok`.
 ## ```
 ## Result.onErr (Ok 10) \errorNum -> Str.toNat errorNum
