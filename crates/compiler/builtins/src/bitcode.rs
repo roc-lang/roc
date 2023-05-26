@@ -390,6 +390,7 @@ pub const UTILS_INCREF_DATA_PTR: &str = "roc_builtins.utils.incref_data_ptr";
 pub const UTILS_DECREF_DATA_PTR: &str = "roc_builtins.utils.decref_data_ptr";
 pub const UTILS_IS_UNIQUE: &str = "roc_builtins.utils.is_unique";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
+pub const UTILS_DICT_PSEUDO_SEED: &str = "roc_builtins.utils.dict_pseudo_seed";
 
 pub const UTILS_EXPECT_FAILED_START_SHARED_BUFFER: &str =
     "roc_builtins.utils.expect_failed_start_shared_buffer";

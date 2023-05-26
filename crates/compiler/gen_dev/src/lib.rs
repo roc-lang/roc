@@ -1548,6 +1548,13 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::DictPseudoSeed => self.build_fn_call(
+                sym,
+                bitcode::UTILS_DICT_PSEUDO_SEED.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::NumToStr => {
                 let arg_layout = arg_layouts[0];
                 let intrinsic = match self.interner().get(arg_layout).repr {

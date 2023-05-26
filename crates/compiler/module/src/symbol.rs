@@ -1463,6 +1463,7 @@ define_builtins! {
         21 DICT_UPDATE: "update"
 
         22 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
+        23 DICT_PSEUDO_SEED: "pseudoSeed"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
