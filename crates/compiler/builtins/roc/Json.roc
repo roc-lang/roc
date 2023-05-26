@@ -1,5 +1,5 @@
 ## JSON is a data format that is easy for humans to read and write. It is
-## commonly used to exhange data between two systems such as a server and a
+## commonly used to exchange data between two systems such as a server and a
 ## client (e.g. web browser).
 ##
 ## This module implements functionality to serialise and de-serialise Roc types
