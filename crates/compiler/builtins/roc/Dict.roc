@@ -95,7 +95,7 @@ Dict k v := {
     # TODO: define Eq and Hash that are unordered. Only if value has hash/eq?
     metadata : List I8,
     dataIndices : List Nat,
-    data : List (T k v),
+    data : List (k, v),
     size : Nat,
 } | k has Hash & Eq
      has [
@@ -175,12 +175,12 @@ single = \k, v ->
 ##     |> Dict.insert 2 "Two"
 ##     |> Dict.insert 3 "Three"
 ##     |> Dict.insert 4 "Four"
-##     |> Bool.isEq (Dict.fromList [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"])
+##     |> Bool.isEq (Dict.fromList [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")])
 ## ```
-fromList : List (T k v) -> Dict k v | k has Hash & Eq
+fromList : List (k, v) -> Dict k v | k has Hash & Eq
 fromList = \data ->
     # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
-    List.walk data (empty {}) (\dict, T k v -> insert dict k v)
+    List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
 
 ## Returns the number of values in the dictionary.
 ## ```
@@ -238,7 +238,7 @@ clear = \@Dict { metadata, dataIndices, data } ->
 ## ```
 walk : Dict k v, state, (state, k, v -> state) -> state | k has Hash & Eq
 walk = \@Dict { data }, initialState, transform ->
-    List.walk data initialState (\state, T k v -> transform state k v)
+    List.walk data initialState (\state, (k, v) -> transform state k v)
 
 ## Same as [Dict.walk], except you can stop walking early.
 ##
@@ -270,7 +270,7 @@ walk = \@Dict { data }, initialState, transform ->
 ## ```
 walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
-    List.walkUntil data initialState (\state, T k v -> transform state k v)
+    List.walkUntil data initialState (\state, (k, v) -> transform state k v)
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
@@ -296,7 +296,7 @@ get = \@Dict { metadata, dataIndices, data }, key ->
     when findIndexHelper metadata dataIndices data h2Key key probe 0 is
         Ok index ->
             dataIndex = listGetUnsafe dataIndices index
-            (T _ v) = listGetUnsafe data dataIndex
+            (_, v) = listGetUnsafe data dataIndex
 
             Ok v
 
@@ -353,7 +353,7 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
             @Dict {
                 metadata,
                 dataIndices,
-                data: List.set data dataIndex (T key value),
+                data: List.set data dataIndex (key, value),
                 size,
             }
 
@@ -447,9 +447,9 @@ update = \dict, key, alter ->
 ##     |> Dict.insert 3 "Three"
 ##     |> Dict.insert 4 "Four"
 ##     |> Dict.toList
-##     |> Bool.isEq [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"]
+##     |> Bool.isEq [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")]
 ## ```
-toList : Dict k v -> List (T k v) | k has Hash & Eq
+toList : Dict k v -> List (k, v) | k has Hash & Eq
 toList = \@Dict { data } ->
     data
 
@@ -466,7 +466,7 @@ toList = \@Dict { data } ->
 ## ```
 keys : Dict k v -> List k | k has Hash & Eq
 keys = \@Dict { data } ->
-    List.map data (\T k _ -> k)
+    List.map data (\(k, _) -> k)
 
 ## Returns the values of a dictionary as a [List].
 ## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
@@ -481,7 +481,7 @@ keys = \@Dict { data } ->
 ## ```
 values : Dict k v -> List v | k has Hash & Eq
 values = \@Dict { data } ->
-    List.map data (\T _ v -> v)
+    List.map data (\(_, v) -> v)
 
 ## Combine two dictionaries by keeping the [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 ## of all the key-value pairs. This means that all the key-value pairs in
@@ -567,7 +567,7 @@ removeAll = \xs, ys ->
 
 swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v | k has Hash & Eq
 swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
-    (T key _) = listGetUnsafe data lastIndex
+    (key, _) = listGetUnsafe data lastIndex
     hashKey =
         createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
@@ -603,7 +603,7 @@ insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value,
     probe = newProbe h1Key (div8 (List.len metadata))
     index = nextEmptyOrDeletedHelper metadata probe 0
     dataIndex = List.len data
-    nextData = List.append data (T key value)
+    nextData = List.append data (key, value)
 
     @Dict {
         metadata: List.set metadata index h2Key,
@@ -629,7 +629,7 @@ nextEmptyOrDeletedHelper = \metadata, probe, offset ->
 
 # TODO: investigate if this needs to be split into more specific helper functions.
 # There is a chance that returning specific sub-info like the value would be faster.
-findIndexHelper : List I8, List Nat, List (T k v), I8, k, Probe, Nat -> Result Nat [NotFound] | k has Hash & Eq
+findIndexHelper : List I8, List Nat, List (k, v), I8, k, Probe, Nat -> Result Nat [NotFound] | k has Hash & Eq
 findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
     # For finding a value, we must search past all deleted element tombstones.
     index = Num.addWrap (mul8 probe.slotIndex) offset
@@ -642,7 +642,7 @@ findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
     else if md == h2Key then
         # Potentially matching slot, check if the key is a match.
         dataIndex = listGetUnsafe dataIndices index
-        (T k _) = listGetUnsafe data dataIndex
+        (k, _) = listGetUnsafe data dataIndex
 
         if k == key then
             # We have a match, return its index.
@@ -687,7 +687,7 @@ rehash = \@Dict { metadata, dataIndices, data, size } ->
 
     rehashHelper newDict metadata dataIndices data 0
 
-rehashHelper : Dict k v, List I8, List Nat, List (T k v), Nat -> Dict k v | k has Hash & Eq
+rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v | k has Hash & Eq
 rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
     when List.get oldMetadata index is
         Ok md ->
@@ -695,7 +695,7 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
                 if md >= 0 then
                     # We have an actual element here
                     dataIndex = listGetUnsafe oldDataIndices index
-                    (T k _) = listGetUnsafe oldData dataIndex
+                    (k, _) = listGetUnsafe oldData dataIndex
 
                     insertForRehash dict k dataIndex
                 else
@@ -730,8 +730,6 @@ emptySlot : I8
 emptySlot = -128
 deletedSlot : I8
 deletedSlot = -2
-
-T k v : [T k v]
 
 # Capacity must be a power of 2.
 # We still will use slots of 8 even though this version has no true slots.
@@ -869,7 +867,7 @@ expect
 
 expect
     dict =
-        fromList [T 1u8 1u8, T 2 2, T 3 3]
+        fromList [(1u8, 1u8), (2, 2), (3, 3)]
         |> remove 1
         |> remove 3
 
@@ -877,7 +875,7 @@ expect
 
 expect
     list =
-        fromList [T 1u8 1u8, T 2u8 2u8, T 3 3]
+        fromList [(1u8, 1u8), (2u8, 2u8), (3, 3)]
         |> remove 1
         |> insert 0 0
         |> remove 3
