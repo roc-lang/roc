@@ -530,9 +530,9 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     }
 }
 
-// Find the element of `options` with the smallest edit distance to
-// `reference`. Returns a tuple containing the element and the distance, or
-// `None` if the `options` `Vec` is empty.
+/// Find the element of `options` with the smallest edit distance to
+/// `reference`. Returns a tuple containing the element and the distance, or
+/// `None` if the `options` `Vec` is empty.
 fn nearest_match<'a>(reference: &str, options: &'a [String]) -> Option<(&'a String, usize)> {
     options
         .iter()
