@@ -907,7 +907,7 @@ divTruncChecked = \a, b ->
     else
         Ok (Num.divTrunc a b)
 
-## Obtain the remainder (truncating modulo) from the division of two integers.
+## Obtains the remainder (truncating modulo) from the division of two integers.
 ##
 ## `a % b` is shorthand for `Num.rem a b`.
 ## ```
@@ -1046,7 +1046,7 @@ countOneBits : Int a -> Nat
 
 addWrap : Int range, Int range -> Int range
 
-## Add two numbers, clamping on the maximum representable number rather than
+## Adds two numbers, clamping on the maximum representable number rather than
 ## overflowing.
 ##
 ## This is the same as [Num.add] except for the saturating behavior if the
@@ -1055,7 +1055,7 @@ addWrap : Int range, Int range -> Int range
 ## yield 255, the maximum value of a `U8`.
 addSaturated : Num a, Num a -> Num a
 
-## Add two numbers and check for overflow.
+## Adds two numbers and checks for overflow.
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
@@ -1072,7 +1072,7 @@ addCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
 subWrap : Int range, Int range -> Int range
 
-## Subtract two numbers, clamping on the minimum representable number rather
+## Subtracts two numbers, clamping on the minimum representable number rather
 ## than overflowing.
 ##
 ## This is the same as [Num.sub] except for the saturating behavior if the
@@ -1081,7 +1081,7 @@ subWrap : Int range, Int range -> Int range
 ## yield 0, the minimum value of a `U8`.
 subSaturated : Num a, Num a -> Num a
 
-## Subtract two numbers and check for overflow.
+## Subtracts two numbers and checks for overflow.
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
@@ -1098,14 +1098,14 @@ subCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
 mulWrap : Int range, Int range -> Int range
 
-## Multiply two numbers, clamping on the maximum representable number rather than
+## Multiplies two numbers, clamping on the maximum representable number rather than
 ## overflowing.
 ##
 ## This is the same as [Num.mul] except for the saturating behavior if the
 ## addition is to overflow.
 mulSaturated : Num a, Num a -> Num a
 
-## Multiply two numbers and check for overflow.
+## Multiplies two numbers and checks for overflow.
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
@@ -1120,8 +1120,8 @@ mulChecked = \a, b ->
 
 mulCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
-## The lowest number that can be stored in an [I8] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I8] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-128`.
 ##
@@ -1130,8 +1130,8 @@ mulCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 minI8 : I8
 minI8 = -128i8
 
-## The highest number that can be stored in an [I8] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I8] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `127`.
 ##
@@ -1140,8 +1140,8 @@ minI8 = -128i8
 maxI8 : I8
 maxI8 = 127i8
 
-## The lowest number that can be stored in a [U8] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U8] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U8] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1150,15 +1150,15 @@ maxI8 = 127i8
 minU8 : U8
 minU8 = 0u8
 
-## The highest number that can be stored in a [U8] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U8] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `255`.
 maxU8 : U8
 maxU8 = 255u8
 
-## The lowest number that can be stored in an [I16] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I16] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-32_768`.
 ##
@@ -1167,8 +1167,8 @@ maxU8 = 255u8
 minI16 : I16
 minI16 = -32768i16
 
-## The highest number that can be stored in an [I16] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I16] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `32_767`.
 ##
@@ -1177,8 +1177,8 @@ minI16 = -32768i16
 maxI16 : I16
 maxI16 = 32767i16
 
-## The lowest number that can be stored in a [U16] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U16] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U16] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1187,15 +1187,15 @@ maxI16 = 32767i16
 minU16 : U16
 minU16 = 0u16
 
-## The highest number that can be stored in a [U16] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U16] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `65_535`.
 maxU16 : U16
 maxU16 = 65535u16
 
-## The lowest number that can be stored in an [I32] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I32] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-2_147_483_648`.
 ##
@@ -1204,8 +1204,8 @@ maxU16 = 65535u16
 minI32 : I32
 minI32 = -2147483648
 
-## The highest number that can be stored in an [I32] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I32] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `2_147_483_647`,
 ## which is over 2 million.
@@ -1215,8 +1215,8 @@ minI32 = -2147483648
 maxI32 : I32
 maxI32 = 2147483647
 
-## The lowest number that can be stored in a [U32] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U32] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U32] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1225,15 +1225,15 @@ maxI32 = 2147483647
 minU32 : U32
 minU32 = 0
 
-## The highest number that can be stored in a [U32] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U32] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `4_294_967_295`.
 maxU32 : U32
 maxU32 = 4294967295
 
-## The lowest number that can be stored in an [I64] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I64] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-9_223_372_036_854_775_808`,
 ## which is under 9 quintillion.
@@ -1243,8 +1243,8 @@ maxU32 = 4294967295
 minI64 : I64
 minI64 = -9223372036854775808
 
-## The highest number that can be stored in an [I64] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I64] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `9_223_372_036_854_775_807`,
 ## which is over 9 quintillion.
@@ -1254,8 +1254,8 @@ minI64 = -9223372036854775808
 maxI64 : I64
 maxI64 = 9223372036854775807
 
-## The lowest number that can be stored in a [U64] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U64] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U64] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1264,16 +1264,16 @@ maxI64 = 9223372036854775807
 minU64 : U64
 minU64 = 0
 
-## The highest number that can be stored in a [U64] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U64] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `18_446_744_073_709_551_615`,
 ## which is over 18 quintillion.
 maxU64 : U64
 maxU64 = 18446744073709551615
 
-## The lowest number that can be stored in an [I128] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I128] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
 ## which is under 170 undecillion.
@@ -1283,8 +1283,8 @@ maxU64 = 18446744073709551615
 minI128 : I128
 minI128 = -170141183460469231731687303715884105728
 
-## The highest number that can be stored in an [I128] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I128] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `170_141_183_460_469_231_731_687_303_715_884_105_727`,
 ## which is over 170 undecillion.
@@ -1294,8 +1294,8 @@ minI128 = -170141183460469231731687303715884105728
 maxI128 : I128
 maxI128 = 170141183460469231731687303715884105727
 
-## The lowest number that can be stored in a [U128] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U128] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U128] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1304,8 +1304,8 @@ maxI128 = 170141183460469231731687303715884105727
 minU128 : U128
 minU128 = 0
 
-## The highest number that can be stored in a [U128] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U128] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `340_282_366_920_938_463_463_374_607_431_768_211_455`,
 ## which is over 340 undecillion.
@@ -1337,7 +1337,7 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
-## Convert an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
+## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
 ## Since [Nat] has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
