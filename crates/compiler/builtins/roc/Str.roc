@@ -704,7 +704,7 @@ expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
 
 ## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well
 ## as the rest of the string after that occurrence.
-## Returns [ Err NotFound] if the delimiter is not found.
+## Returns [Err NotFound] if the delimiter is not found.
 ## ```
 ## expect Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
 ## expect Str.splitFirst "no slashes here" "/" == Err NotFound
