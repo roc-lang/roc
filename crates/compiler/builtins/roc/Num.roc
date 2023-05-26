@@ -887,7 +887,7 @@ divCeilChecked = \a, b ->
 ## `a // b` is shorthand for `Num.divTrunc a b`.
 ##
 ## Division by zero is undefined in mathematics. As such, you should make
-## sure never to pass zero as the denomaintor to this function! If you do,
+## sure never to pass zero as the denominator to this function! If you do,
 ## it will crash.
 ## ```
 ## 5 // 7
