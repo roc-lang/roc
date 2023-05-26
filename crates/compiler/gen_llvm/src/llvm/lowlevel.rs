@@ -1189,8 +1189,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         }
         I128OfDec => {
             arguments!(dec);
-
-            call_bitcode_fn(env, &[dec], bitcode::DEC_TO_I128)
+            dec_to_i128(env, dec)
         }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -1807,6 +1806,25 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
                 BitcodeReturns::Str,
                 bitcode::DEC_TO_STR,
             )
+        }
+        Wasi => unimplemented!(),
+    }
+}
+
+fn dec_to_i128<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    use roc_target::OperatingSystem::*;
+
+    let dec = dec.into_int_value();
+
+    match env.target_info.operating_system {
+        Windows => {
+            //
+            call_bitcode_fn(env, &[dec_alloca(env, dec).into()], bitcode::DEC_TO_I128)
+        }
+        Unix => {
+            let (low, high) = dec_split_into_words(env, dec);
+
+            call_bitcode_fn(env, &[low.into(), high.into()], bitcode::DEC_TO_I128)
         }
         Wasi => unimplemented!(),
     }
