@@ -691,7 +691,7 @@ absDiff = \a, b ->
     else
         b - a
 
-## Return a negative number when given a positive one, and vice versa.
+## Returns a negative number when given a positive one, and vice versa.
 ## ```
 ## Num.neg 5
 ##
@@ -712,7 +712,7 @@ absDiff = \a, b ->
 ## (It will never crash when given a [Frac], however, because of how floating point numbers represent positive and negative numbers.)
 neg : Num a -> Num a
 
-## Add two numbers of the same type.
+## Adds two numbers of the same type.
 ##
 ## (To add an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
@@ -733,7 +733,7 @@ neg : Num a -> Num a
 ## ∞ or -∞. For all other number types, overflow results in a panic.
 add : Num a, Num a -> Num a
 
-## Subtract two numbers of the same type.
+## Subtracts two numbers of the same type.
 ##
 ## (To subtract an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
@@ -754,7 +754,7 @@ add : Num a, Num a -> Num a
 ## ∞ or -∞. For all other number types, overflow results in a panic.
 sub : Num a, Num a -> Num a
 
-## Multiply two numbers of the same type.
+## Multiplies two numbers of the same type.
 ##
 ## (To multiply an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
@@ -833,7 +833,7 @@ logChecked = \x ->
     else
         Ok (Num.log x)
 
-## Divide one [Frac] by another.
+## Divides one [Frac] by another.
 ##
 ## `a / b` is shorthand for `Num.div a b`.
 ##
@@ -882,7 +882,7 @@ divCeilChecked = \a, b ->
     else
         Ok (Num.divCeil a b)
 
-## Divide two integers, truncating the result towards zero.
+## Divides two integers, truncating the result towards zero.
 ##
 ## `a // b` is shorthand for `Num.divTrunc a b`.
 ##
