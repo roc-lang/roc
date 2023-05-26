@@ -647,7 +647,7 @@ isInfinite : Frac * -> Bool
 ## ```
 isFinite : Frac * -> Bool
 
-## Return the absolute value of the number.
+## Returns the absolute value of the number.
 ##
 ## * For a positive number, returns the same number.
 ## * For a negative number, returns the same number except positive.
@@ -670,7 +670,7 @@ isFinite : Frac * -> Bool
 ## Calling this on an unsigned integer (like [U32] or [U64]) never does anything.
 abs : Num a -> Num a
 
-## Return the absolute difference between two numbers.
+## Returns the absolute difference between two numbers.
 ##
 ## ```
 ## Num.absDiff 5 3
