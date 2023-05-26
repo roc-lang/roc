@@ -865,7 +865,7 @@ procedure Test.12 ():
     let Test.16 : {List U8, I64} = Struct {Test.17, Test.18};
     let Test.15 : [C Str, C {List U8, I64}] = TagId(1) Test.16;
     let Test.14 : Int1 = CallByName Bool.11 Test.10 Test.15;
-    dec Test.15;
+    dec Test.16;
     expect Test.14;
     dec Test.10;
     let Test.13 : {} = Struct {};

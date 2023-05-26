@@ -832,7 +832,7 @@ procedure Test.3 ():
     let Test.7 : Str = "Roc";
     let Test.6 : [C [C List U8, C ], C Str] = TagId(1) Test.7;
     let Test.5 : Int1 = CallByName Bool.11 Test.1 Test.6;
-    dec Test.6;
+    dec Test.7;
     expect Test.5;
     dec Test.0;
     dec Test.1;

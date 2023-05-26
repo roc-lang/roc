@@ -30,6 +30,15 @@ procedure Test.0 ():
     let Test.16 : Str = "";
     let Test.15 : [<r>C List *self, C Str] = TagId(1) Test.16;
     let Test.13 : Int1 = CallByName Bool.11 Test.14 Test.15;
-    dec Test.15;
-    dec Test.14;
-    ret Test.13;
+    joinpoint #Derived_gen.0:
+        dec Test.14;
+        ret Test.13;
+    in
+    let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.15;
+    if #Derived_gen.1 then
+        dec Test.16;
+        decref Test.15;
+        jump #Derived_gen.0;
+    else
+        decref Test.15;
+        jump #Derived_gen.0;

@@ -3013,3 +3013,19 @@ fn rb_tree_fbip() {
         "#
     )
 }
+
+#[mono_test]
+fn drop_specialize_after_struct() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: v, right: v }
+            "result"
+        "#
+    )
+}

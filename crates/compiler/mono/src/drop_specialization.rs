@@ -18,8 +18,8 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Proc, ProcLayout, Stmt,
-    UpdateModeId,
+    BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
+    ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -104,7 +104,7 @@ fn specialize_drops_stmt<'a, 'i>(
                                 _ => unreachable!("List get should have two arguments"),
                             };
 
-                            environment.add_list_child(*structure, *binding, index);
+                            environment.add_list_child_symbol(*structure, *binding, index);
 
                             alloc_let_with_continuation!(environment)
                         }
@@ -125,8 +125,45 @@ fn specialize_drops_stmt<'a, 'i>(
                     }
                 }
 
-                Expr::Tag { tag_id, .. } => {
+                Expr::Tag {
+                    tag_id,
+                    arguments: children,
+                    ..
+                } => {
                     environment.symbol_tag.insert(*binding, *tag_id);
+
+                    for (index, child) in children.iter().enumerate() {
+                        environment.add_union_child(*binding, *child, *tag_id, index as u64);
+                    }
+
+                    alloc_let_with_continuation!(environment)
+                }
+                Expr::Struct(children) => {
+                    for (index, child) in children.iter().enumerate() {
+                        environment.add_struct_child(*binding, *child, index as u64);
+                    }
+
+                    alloc_let_with_continuation!(environment)
+                }
+                Expr::ExprBox { symbol: child } => {
+                    environment.add_box_child(*binding, *child);
+
+                    alloc_let_with_continuation!(environment)
+                }
+                Expr::Array {
+                    elems: children, ..
+                } => {
+                    for (index, child) in
+                        children
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, child)| match child {
+                                ListLiteralElement::Literal(_) => None,
+                                ListLiteralElement::Symbol(s) => Some((index, s)),
+                            })
+                    {
+                        environment.add_list_child(*binding, *child, index as u64);
+                    }
 
                     alloc_let_with_continuation!(environment)
                 }
@@ -179,13 +216,10 @@ fn specialize_drops_stmt<'a, 'i>(
                     }
                     alloc_let_with_continuation!(environment)
                 }
-                Expr::Struct(_)
-                | Expr::RuntimeErrorFunction(_)
-                | Expr::ExprBox { .. }
+                Expr::RuntimeErrorFunction(_)
                 | Expr::NullPointer
                 | Expr::GetTagId { .. }
-                | Expr::EmptyArray
-                | Expr::Array { .. } => {
+                | Expr::EmptyArray => {
                     // Does nothing relevant to drop specialization. So we can just continue.
                     alloc_let_with_continuation!(environment)
                 }
@@ -1222,12 +1256,16 @@ impl<'a> DropSpecializationEnvironment<'a> {
             .push(child);
     }
 
-    fn add_list_child(&mut self, parent: Parent, child: Child, index: &Symbol) {
+    fn add_list_child(&mut self, parent: Parent, child: Child, index: u64) {
+        self.list_children
+            .entry(parent)
+            .or_insert_with(|| Vec::new_in(self.arena))
+            .push((child, index));
+    }
+
+    fn add_list_child_symbol(&mut self, parent: Parent, child: Child, index: &Symbol) {
         if let Some(index) = self.symbol_index.get(index) {
-            self.list_children
-                .entry(parent)
-                .or_insert_with(|| Vec::new_in(self.arena))
-                .push((child, *index));
+            self.add_list_child(parent, child, *index)
         }
     }
 
