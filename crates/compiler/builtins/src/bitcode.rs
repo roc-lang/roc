@@ -368,6 +368,7 @@ pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
+pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";
 pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
 pub const DEC_NEGATE: &str = "roc_builtins.dec.negate";
