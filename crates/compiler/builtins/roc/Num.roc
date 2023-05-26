@@ -442,7 +442,7 @@ U8 : Num (Integer Unsigned8)
 ## on 32-bit systems, and so on.
 ##
 ## This system-specific size makes it useful for certain data structure
-## functions like [List.len], because the number of elements many data strucures
+## functions like [List.len], because the number of elements many data structures
 ## can hold is also system-specific. For example, the maximum number of elements
 ## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
 ## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
@@ -473,7 +473,7 @@ F32 : Num (FloatingPoint Binary32)
 ##
 ## This means a [Dec] can represent whole numbers up to slightly over 170
 ## quintillion, along with 18 decimal places. (To be precise, it can store
-## numbers betwween `-170_141_183_460_469_231_731.687303715884105728`
+## numbers between `-170_141_183_460_469_231_731.687303715884105728`
 ## and `170_141_183_460_469_231_731.687303715884105727`.) Why 18
 ## decimal places? It's the highest number of decimal places where you can still
 ## convert any [U64] to a [Dec] without losing information.
