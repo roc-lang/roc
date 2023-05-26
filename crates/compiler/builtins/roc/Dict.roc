@@ -80,7 +80,7 @@ interface Dict
 ## vacated spot.
 ##
 ## This move is done as a performance optimization, and it lets [remove] have
-## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time). ##
+## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time).
 ##
 ## Dict is inspired by [IndexMap](https://docs.rs/indexmap/latest/indexmap/map/struct.IndexMap.html).
 ## The internal implementation of a dictionary is similar to [absl::flat_hash_map](https://abseil.io/docs/cpp/guides/container).
@@ -151,7 +151,7 @@ capacity = \@Dict { dataIndices } ->
     cap - Num.shiftRightZfBy cap 3
 
 ## Return a dictionary with space allocated for a number of entries. This
-## may provide a performance optimisation if you know how many entries will be
+## may provide a performance optimization if you know how many entries will be
 ## inserted.
 withCapacity : Nat -> Dict k v | k has Hash & Eq
 withCapacity = \_ ->
@@ -412,7 +412,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
             @Dict { metadata, dataIndices, data, size }
 
 ## Insert or remove a value for a specified key. This function enables a
-## performance optimisation for the use case of providing a default when a value
+## performance optimization for the use case of providing a default when a value
 ## is missing. This is more efficient than doing both a `Dict.get` and then a
 ## `Dict.insert` call, and supports being piped.
 ## ```
