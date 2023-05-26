@@ -535,8 +535,7 @@ fn specialize_struct<'a, 'i>(
                 }
             }
 
-            let mut new_continuation =
-                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
+            let mut new_continuation = continuation;
 
             // Make sure every field is decremented.
             // Reversed to ensure that the generated code decrements the fields in the correct order.
@@ -580,7 +579,13 @@ fn specialize_struct<'a, 'i>(
                 }
             }
 
-            new_continuation
+            specialize_drops_stmt(
+                arena,
+                layout_interner,
+                ident_ids,
+                environment,
+                new_continuation,
+            )
         }
         None => {
             // No known children, keep decrementing the symbol.
@@ -651,14 +656,6 @@ fn specialize_union<'a, 'i>(
                         }
                     }
 
-                    let new_continuation = specialize_drops_stmt(
-                        arena,
-                        layout_interner,
-                        ident_ids,
-                        environment,
-                        continuation,
-                    );
-
                     type RCFun<'a> =
                         Option<fn(arena: &'a Bump, Symbol, &'a Stmt<'a>) -> &'a Stmt<'a>>;
                     let refcount_fields = |layout_interner: &mut STLayoutInterner<'a>,
@@ -722,7 +719,7 @@ fn specialize_union<'a, 'i>(
                         new_continuation
                     };
 
-                    match union_layout {
+                    let new_continuation = match union_layout {
                         UnionLayout::NonRecursive(_) => refcount_fields(
                             layout_interner,
                             ident_ids,
@@ -732,7 +729,7 @@ fn specialize_union<'a, 'i>(
                             Some(|arena, symbol, continuation| {
                                 arena.alloc(Stmt::Refcounting(ModifyRc::Dec(symbol), continuation))
                             }),
-                            new_continuation,
+                            continuation,
                         ),
                         UnionLayout::Recursive(_)
                         | UnionLayout::NonNullableUnwrapped(_)
@@ -789,10 +786,18 @@ fn specialize_union<'a, 'i>(
                                         )),
                                     )
                                 },
-                                new_continuation,
+                                continuation,
                             )
                         }
-                    }
+                    };
+
+                    specialize_drops_stmt(
+                        arena,
+                        layout_interner,
+                        ident_ids,
+                        environment,
+                        new_continuation,
+                    )
                 }
             }
         }
@@ -817,12 +822,9 @@ fn specialize_boxed<'a, 'i>(
         None => None,
     };
 
-    let new_continuation =
-        specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
-
     match removed {
         Some(s) => {
-            branch_uniqueness(
+            let new_continuation = branch_uniqueness(
                 arena,
                 ident_ids,
                 layout_interner,
@@ -830,31 +832,36 @@ fn specialize_boxed<'a, 'i>(
                 *symbol,
                 // If the symbol is unique:
                 // - free the box
-                |_, _, _| {
+                |_, _, continuation| {
                     arena.alloc(Stmt::Refcounting(
                         // TODO can be replaced by free if ever added to the IR.
                         ModifyRc::DecRef(*symbol),
-                        new_continuation,
+                        continuation,
                     ))
                 },
                 // If the symbol is not unique:
                 // - increment the child
                 // - decref the box
-                |_, _, _| {
+                |_, _, continuation| {
                     arena.alloc(Stmt::Refcounting(
                         ModifyRc::Inc(s, 1),
-                        arena.alloc(Stmt::Refcounting(
-                            ModifyRc::DecRef(*symbol),
-                            new_continuation,
-                        )),
+                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef(*symbol), continuation)),
                     ))
                 },
+                continuation,
+            );
+
+            specialize_drops_stmt(
+                arena,
+                layout_interner,
+                ident_ids,
+                environment,
                 new_continuation,
             )
         }
         None => {
             // No known children, keep decrementing the symbol.
-            arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
+            arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), continuation))
         }
     }
 }
@@ -908,18 +915,8 @@ fn specialize_list<'a, 'i>(
                         }
                     }
 
-                    let new_continuation = specialize_drops_stmt(
-                        arena,
-                        layout_interner,
-                        ident_ids,
-                        environment,
-                        continuation,
-                    );
-
-                    let mut newer_continuation = arena.alloc(Stmt::Refcounting(
-                        ModifyRc::DecRef(*symbol),
-                        new_continuation,
-                    ));
+                    let mut newer_continuation =
+                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef(*symbol), continuation));
 
                     // Reversed to ensure that the generated code decrements the items in the correct order.
                     for i in (0..length).rev() {
@@ -934,7 +931,13 @@ fn specialize_list<'a, 'i>(
                         // Do nothing for the children that were incremented before, as the decrement will cancel out.
                     }
 
-                    newer_continuation
+                    specialize_drops_stmt(
+                        arena,
+                        layout_interner,
+                        ident_ids,
+                        environment,
+                        newer_continuation,
+                    )
                 }
                 _ => keep_original_decrement!(),
             }

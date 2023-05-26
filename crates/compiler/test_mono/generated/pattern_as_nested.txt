@@ -28,6 +28,7 @@ procedure Test.0 ():
         dec Test.7;
         ret Test.6;
     else
-        dec Test.14;
+        let #Derived_gen.0 : Str = StructAtIndex 1 Test.14;
+        dec #Derived_gen.0;
         let Test.11 : Int1 = CallByName Bool.1;
         ret Test.11;
