@@ -5783,7 +5783,7 @@ fn make_specializations<'a>(
         abilities: AbilitiesView::World(&world_abilities),
         exposed_by_module,
         derived_module: &derived_module,
-        struct_indexing: UsageTrackingMap::new(),
+        struct_indexing: UsageTrackingMap::default(),
     };
 
     let mut procs = Procs::new_in(arena);
@@ -5884,7 +5884,7 @@ fn build_pending_specializations<'a>(
         abilities: AbilitiesView::Module(&abilities_store),
         exposed_by_module,
         derived_module: &derived_module,
-        struct_indexing: UsageTrackingMap::new(),
+        struct_indexing: UsageTrackingMap::default(),
     };
 
     let layout_cache_snapshot = layout_cache.snapshot();
@@ -6366,7 +6366,7 @@ fn load_derived_partial_procs<'a>(
             abilities: AbilitiesView::World(world_abilities),
             exposed_by_module,
             derived_module,
-            struct_indexing: UsageTrackingMap::new(),
+            struct_indexing: UsageTrackingMap::default(),
         };
 
         let partial_proc = match derived_expr {
