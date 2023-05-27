@@ -15,7 +15,7 @@ use crate::util::Env;
 pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable) {
     // Build
     //
-    //   def_symbol : Decoder (List elem) fmt | elem has Decoding, fmt implements DecoderFormatting
+    //   def_symbol : Decoder (List elem) fmt | elem implements Decoding, fmt implements DecoderFormatting
     //   def_symbol = Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.list Decode.decoder) fmt
     //
     // NB: reduction to `Decode.list Decode.decoder` is not possible to the HRR.
@@ -27,10 +27,10 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
         // List elem
         let elem_var = env.subs.fresh_unnamed_flex_var();
 
-        // Decode.decoder : Decoder elem fmt | elem has Decoding, fmt implements EncoderFormatting
+        // Decode.decoder : Decoder elem fmt | elem implements Decoding, fmt implements EncoderFormatting
         let (elem_decoder, elem_decoder_var) = {
             // build `Decode.decoder : Decoder elem fmt` type
-            // Decoder val fmt | val has Decoding, fmt implements EncoderFormatting
+            // Decoder val fmt | val implements Decoding, fmt implements EncoderFormatting
             let elem_decoder_var = env.import_builtin_symbol_var(Symbol::DECODE_DECODER);
 
             // set val ~ elem

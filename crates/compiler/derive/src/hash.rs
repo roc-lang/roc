@@ -462,7 +462,7 @@ fn call_hash_ability_member(
 
     // build `member ...` function type. `member` here is `Hash.hash` or `Hash.addU16`.
     //
-    // hasher, val -[uls]-> hasher | hasher has Hasher, val implements Hash
+    // hasher, val -[uls]-> hasher | hasher implements Hasher, val implements Hash
     let exposed_hash_fn_var = env.import_builtin_symbol_var(member);
 
     // (typeof body), (typeof field) -[clos]-> hasher_result
@@ -479,11 +479,11 @@ fn call_hash_ability_member(
         )),
     );
 
-    //   hasher,        val            -[uls]->  hasher | hasher has Hasher, val implements Hash
+    //   hasher,        val            -[uls]->  hasher | hasher implements Hasher, val implements Hash
     // ~ (typeof body), (typeof field) -[clos]-> hasher_result
     env.unify(exposed_hash_fn_var, this_hash_fn_var);
 
-    // Hash.hash : hasher, (typeof field) -[clos]-> hasher | hasher has Hasher, (typeof field) implements Hash
+    // Hash.hash : hasher, (typeof field) -[clos]-> hasher | hasher implements Hasher, (typeof field) implements Hash
     let hash_fn_head = Expr::AbilityMember(member, None, this_hash_fn_var);
     let hash_fn_data = Box::new((
         this_hash_fn_var,

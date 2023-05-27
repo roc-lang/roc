@@ -3172,7 +3172,7 @@ fn update<'a>(
                     //   # Default module
                     //   interface Default exposes [default, getDefault]
                     //
-                    //   Default has default : {} -> a | a implements Default
+                    //   Default implements default : {} -> a | a implements Default
                     //
                     //   getDefault = \{} -> default {}
                     //

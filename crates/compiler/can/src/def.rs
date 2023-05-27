@@ -1398,7 +1398,7 @@ fn resolve_abilities(
                 }
                 [..] => {
                     // There is more than one variable bound to the member signature, so something like
-                    //   Eq has eq : a, b -> Bool | a has Eq, b implements Eq
+                    //   Eq has eq : a, b -> Bool | a implements Eq, b implements Eq
                     // We have no way of telling what type implements a particular instance of Eq in
                     // this case (a or b?), so disallow it.
                     let span_has_clauses = Region::across_all(
