@@ -8444,7 +8444,7 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
-        alias_in_has_clause,
+        alias_in_implements_clause,
         indoc!(
             r#"
             app "test" provides [hash] to "./platform"
