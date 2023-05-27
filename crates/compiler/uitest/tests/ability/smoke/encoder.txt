@@ -3,7 +3,7 @@ app "test" provides [myU8Bytes] to "./platform"
 MEncoder fmt := List U8, fmt -> List U8 | fmt implements Format
 
 MEncoding has
-  toEncoder : val -> MEncoder fmt | val has MEncoding, fmt implements Format
+  toEncoder : val -> MEncoder fmt | val implements MEncoding, fmt implements Format
 
 Format has
   u8 : U8 -> MEncoder fmt | fmt implements Format
@@ -11,7 +11,7 @@ Format has
 appendWith : List U8, MEncoder fmt, fmt -> List U8 | fmt implements Format
 appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
 
-toBytes : val, fmt -> List U8 | val has MEncoding, fmt implements Format
+toBytes : val, fmt -> List U8 | val implements MEncoding, fmt implements Format
 toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 

@@ -5,7 +5,7 @@ MDecodeError : [TooShort, Leftover (List U8)]
 MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt implements MDecoderFormatting
 
 MDecoding has
-    decoder : MDecoder val fmt | val has MDecoding, fmt implements MDecoderFormatting
+    decoder : MDecoder val fmt | val implements MDecoding, fmt implements MDecoderFormatting
 
 MDecoderFormatting has
     u8 : MDecoder U8 fmt | fmt implements MDecoderFormatting
@@ -14,7 +14,7 @@ decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError
 decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
 fromBytes : List U8, fmt -> Result val MDecodeError
-            | fmt has MDecoderFormatting, val implements MDecoding
+            | fmt implements MDecoderFormatting, val implements MDecoding
 fromBytes = \lst, fmt ->
     when decodeWith lst decoder fmt is
         { result, rest } ->

@@ -1,5 +1,5 @@
 platform "python-interop"
-    requires {} { main : arg -> ret | arg has Decoding, ret implements Encoding }
+    requires {} { main : arg -> ret | arg implements Decoding, ret implements Encoding }
     exposes []
     packages {}
     imports [Json]

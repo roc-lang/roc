@@ -26,7 +26,7 @@ WriteErr : InternalFile.WriteErr
 ## This opens the file first and closes it after writing to it.
 ##
 ## To write unformatted bytes to a file, you can use [File.writeBytes] instead.
-write : Path, val, fmt -> Task {} [FileWriteErr Path WriteErr] | val has Encode.Encoding, fmt implements Encode.EncoderFormatting
+write : Path, val, fmt -> Task {} [FileWriteErr Path WriteErr] | val implements Encode.Encoding, fmt implements Encode.EncoderFormatting
 write = \path, val, fmt ->
     bytes = Encode.toBytes val fmt
 
@@ -119,7 +119,7 @@ readUtf8 = \path ->
 #         Str
 #         [FileReadErr Path ReadErr, FileReadDecodeErr Path [Leftover (List U8)]Decode.DecodeError ]
 #         [Read [File]]
-#     | val has Decode.Decoding, fmt implements Decode.DecoderFormatting
+#     | val implements Decode.Decoding, fmt implements Decode.DecoderFormatting
 # read = \path, fmt ->
 #     effect = Effect.map (Effect.fileReadBytes (InternalPath.toBytes path)) \result ->
 #         when result is

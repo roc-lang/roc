@@ -1,6 +1,6 @@
 app "test" provides [main] to "./platform"
 
-F has f : a, b -> ({} -> ({} -> {})) | a has F, b implements G
+F has f : a, b -> ({} -> ({} -> {})) | a implements F, b implements G
 G has g : b -> ({} -> {}) | b implements G
 
 Fo := {} implements [F {f}]

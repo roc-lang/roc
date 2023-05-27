@@ -1,6 +1,6 @@
 app "test" provides [main] to "./platform"
 
-J has j : j -> (k -> {}) | j has J, k implements K
+J has j : j -> (k -> {}) | j implements J, k implements K
 K has k : k -> {} | k implements K
 
 C := {} implements [J {j: jC}]
@@ -19,14 +19,14 @@ f = \flag, a, b ->
 #             ^ j | j implements J
 #          ^ j | j implements J
     it =
-#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k implements K
+#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j implements J, j1 has J, k implements K
         when flag is
             A -> j a
-            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j has J, j1 has J, k implements K
+            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j implements J, j1 has J, k implements K
             B -> j b
-            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k implements K
+            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j implements J, j1 has J, k implements K
     it
-#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k implements K
+#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j implements J, j1 has J, k implements K
 
 main = (f A (@C {}) (@D {})) (@E {})
 #       ^ [A, B], C, D -[[f(11)]]-> (E -[[k(10)]]-> {})
