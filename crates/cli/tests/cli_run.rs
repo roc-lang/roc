@@ -634,7 +634,6 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore]
     #[cfg_attr(
         windows,
         ignore = "this platform is broken, and `roc run --lib` is missing on windows"
