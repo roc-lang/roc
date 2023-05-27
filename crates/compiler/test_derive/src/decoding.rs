@@ -87,7 +87,7 @@ fn derivable_record_ext_flex_var() {
 fn derivable_record_ext_flex_able_var() {
     check_derivable(
         Decoder,
-        v!({ a: v!(STR), }a has Symbol::DECODE_DECODER ),
+        v!({ a: v!(STR), }a implements Symbol::DECODE_DECODER ),
         DeriveKey::Decoder(FlatDecodableKey::Record(vec!["a".into()])),
     );
 }
@@ -124,8 +124,8 @@ fn record_2_fields() {
     derive_test(Decoder, v!({first: v!(STR), second: v!(STR),}), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for { first : Str, second : Str }
-        # Decoder { first : val, second : val1 } fmt | fmt implements DecoderFormatting, val has Decoding, val1 implements Decoding
-        # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok { first : val, second : val1 }] } | fmt implements DecoderFormatting, val has Decoding, val1 implements Decoding
+        # Decoder { first : val, second : val1 } fmt | fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
+        # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok { first : val, second : val1 }] } | fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
         # Specialization lambda sets:
         #   @<1>: [[custom(22)]]
         #Derived.decoder_{first,second} =
@@ -181,8 +181,8 @@ fn tuple_2_fields() {
     derive_test(Decoder, v!((v!(STR), v!(U8),)), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for ( Str, U8 )*
-        # Decoder ( val, val1 )* fmt | fmt implements DecoderFormatting, val has Decoding, val1 implements Decoding
-        # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok ( val, val1 )a] } | fmt implements DecoderFormatting, val has Decoding, val1 implements Decoding
+        # Decoder ( val, val1 )* fmt | fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
+        # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok ( val, val1 )a] } | fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
         # Specialization lambda sets:
         #   @<1>: [[custom(22)]]
         #Derived.decoder_(arity:2) =

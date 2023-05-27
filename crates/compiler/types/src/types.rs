@@ -4005,7 +4005,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push('(');
             }
             buf.push_str(name.as_str());
-            write!(buf, "has {:?}", symbol).unwrap();
+            write!(buf, "implements {:?}", symbol).unwrap();
             if write_parens {
                 buf.push(')');
             }

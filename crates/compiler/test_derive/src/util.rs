@@ -182,7 +182,7 @@ macro_rules! v {
          use roc_types::subs::{Subs, Content};
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
      }};
-     ($name:ident has $ability:path) => {{
+     ($name:ident implements $ability:path) => {{
          use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
          |subs: &mut Subs| {
              let name_index =

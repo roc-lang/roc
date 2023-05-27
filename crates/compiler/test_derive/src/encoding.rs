@@ -139,7 +139,7 @@ fn derivable_record_ext_flex_var() {
 fn derivable_record_ext_flex_able_var() {
     check_derivable(
         ToEncoder,
-        v!({ a: v!(STR), }a has Symbol::ENCODE_TO_ENCODER),
+        v!({ a: v!(STR), }a implements Symbol::ENCODE_TO_ENCODER),
         DeriveKey::ToEncoder(FlatEncodableKey::Record(vec!["a".into()])),
     );
 }
@@ -166,7 +166,7 @@ fn derivable_tag_ext_flex_var() {
 fn derivable_tag_ext_flex_able_var() {
     check_derivable(
         ToEncoder,
-        v!([ A v!(STR) ]a has Symbol::ENCODE_TO_ENCODER),
+        v!([ A v!(STR) ]a implements Symbol::ENCODE_TO_ENCODER),
         DeriveKey::ToEncoder(FlatEncodableKey::TagUnion(vec![("A".into(), 1)])),
     );
 }
@@ -251,8 +251,8 @@ fn two_field_record() {
     derive_test(ToEncoder, v!({ a: v!(U8), b: v!(STR), }), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for { a : U8, b : Str }
-        # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> Encoder fmt | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
-        # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : val1 }]]-> List U8) | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
+        # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> Encoder fmt | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : val1 }]]-> List U8) | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # Specialization lambda sets:
         #   @<1>: [[toEncoder_{a,b}(0)]]
         #   @<2>: [[custom(2) { a : val, b : val1 }]] | val implements Encoding, val1 implements Encoding
@@ -278,8 +278,8 @@ fn two_field_tuple() {
     derive_test(ToEncoder, v!((v!(U8), v!(STR),)), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for ( U8, Str )*
-        # ( val, val1 )* -[[toEncoder_(arity:2)(0)]]-> Encoder fmt | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
-        # ( val, val1 )a -[[toEncoder_(arity:2)(0)]]-> (List U8, fmt -[[custom(2) ( val, val1 )a]]-> List U8) | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
+        # ( val, val1 )* -[[toEncoder_(arity:2)(0)]]-> Encoder fmt | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # ( val, val1 )a -[[toEncoder_(arity:2)(0)]]-> (List U8, fmt -[[custom(2) ( val, val1 )a]]-> List U8) | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # Specialization lambda sets:
         #   @<1>: [[toEncoder_(arity:2)(0)]]
         #   @<2>: [[custom(2) ( val, val1 )*]] | val implements Encoding, val1 implements Encoding
@@ -338,8 +338,8 @@ fn tag_one_label_two_args() {
     derive_test(ToEncoder, v!([A v!(U8) v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A U8 Str]
-        # [A val val1] -[[toEncoder_[A 2](0)]]-> Encoder fmt | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
-        # [A val val1] -[[toEncoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val val1]]]-> List U8) | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
+        # [A val val1] -[[toEncoder_[A 2](0)]]-> Encoder fmt | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+        # [A val val1] -[[toEncoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val val1]]]-> List U8) | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # Specialization lambda sets:
         #   @<1>: [[toEncoder_[A 2](0)]]
         #   @<2>: [[custom(4) [A val val1]]] | val implements Encoding, val1 implements Encoding
@@ -366,8 +366,8 @@ fn tag_two_labels() {
         |golden| {
             assert_snapshot!(golden, @r###"
             # derived for [A U8 Str U16, B Str]
-            # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
-            # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val val1 val1, B val1]]]-> List U8) | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
+            # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+            # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val val1 val1, B val1]]]-> List U8) | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
             # Specialization lambda sets:
             #   @<1>: [[toEncoder_[A 3,B 1](0)]]
             #   @<2>: [[custom(6) [A val val1 val1, B val1]]] | val implements Encoding, val1 implements Encoding
@@ -402,8 +402,8 @@ fn recursive_tag_union() {
         |golden| {
             assert_snapshot!(golden, @r###"
             # derived for [Cons U8 $rec, Nil] as $rec
-            # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
-            # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val val1, Nil]]]-> List U8) | fmt implements EncoderFormatting, val has Encoding, val1 implements Encoding
+            # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
+            # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val val1, Nil]]]-> List U8) | fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
             # Specialization lambda sets:
             #   @<1>: [[toEncoder_[Cons 2,Nil 0](0)]]
             #   @<2>: [[custom(4) [Cons val val1, Nil]]] | val implements Encoding, val1 implements Encoding

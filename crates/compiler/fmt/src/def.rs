@@ -134,7 +134,7 @@ impl<'a> Formattable for TypeDef<'a> {
                     buf.indent(indent);
                 }
 
-                buf.push_str(" has");
+                buf.push_str(" implements");
 
                 if !self.is_multiline() {
                     debug_assert_eq!(members.len(), 1);
