@@ -578,15 +578,18 @@ pub fn build(
                     ));
                     // Add some additional hints if run as `roc [FILENAME]`.
                     if matches.subcommand().is_none() {
-                        if let Some(possible_typo) = path.to_str() {
-                            if let Some((nearest_command, _)) =
-                                nearest_match(possible_typo, subcommands)
-                            {
-                                error_lines.push(format!(
-                                    "Did you mean to use the {} subcommand?",
-                                    nearest_command
-                                ));
+                        match path.to_str() {
+                            Some(possible_typo) if !possible_typo.ends_with(".roc") => {
+                                if let Some((nearest_command, _)) =
+                                    nearest_match(possible_typo, subcommands)
+                                {
+                                    error_lines.push(format!(
+                                        "Did you mean to use the {} subcommand?",
+                                        nearest_command
+                                    ));
+                                }
                             }
+                            _ => (),
                         }
                     }
                     error_lines.push("You can run `roc help` to see the list of available subcommands and for more information on how to provide a .roc file.".to_string());
