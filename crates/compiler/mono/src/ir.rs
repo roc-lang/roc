@@ -4924,7 +4924,6 @@ pub fn with_hole<'a>(
             // Strategy: turn a record update into the creation of a new record.
             // This has the benefit that we don't need to do anything special for reference
             // counting
-
             let sorted_fields_result = {
                 let mut layout_env = layout::Env::from_components(
                     layout_cache,
@@ -4961,18 +4960,15 @@ pub fn with_hole<'a>(
 
                         let original_struct_symbol = env.unique_symbol();
                         if let Some(field) = updates.get(label) {
-                            // TODO this should probably used around here.
-                            // let field_symbol = possible_reuse_symbol_or_specialize(
-                            //     env,
-                            //     procs,
-                            //     layout_cache,
-                            //     &field.loc_expr.value,
-                            //     field.var,
-                            // );
-
                             env.struct_indexing
                                 .insert(record_index, original_struct_symbol);
-                            let new_struct_symbol = env.unique_symbol();
+                            let new_struct_symbol = possible_reuse_symbol_or_specialize(
+                                env,
+                                procs,
+                                layout_cache,
+                                &field.loc_expr.value,
+                                field.var,
+                            );
                             new_struct_symbols.push(new_struct_symbol);
                             fields.push(UpdateExisting(field));
                         } else {
