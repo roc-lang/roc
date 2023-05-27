@@ -5425,7 +5425,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn opaque_has_clause() {
+    fn opaque_implements_clause() {
         expr_formats_same(indoc!(
             r#"
             A := U8 implements [Eq, Hash]
@@ -5522,7 +5522,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn opaque_has_with_impls() {
+    fn opaque_implements_with_impls() {
         expr_formats_same(indoc!(
             r#"
             A := U8 implements [Eq { eq }, Hash { hash }]
