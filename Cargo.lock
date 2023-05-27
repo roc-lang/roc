@@ -3233,6 +3233,7 @@ dependencies = [
  "cli_utils",
  "const_format",
  "criterion",
+ "distance",
  "errno",
  "indoc",
  "inkwell",

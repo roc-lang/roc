@@ -140,14 +140,14 @@ pub fn build_app() -> Command {
         .help("Arguments to pass into the app being run\ne.g. `roc run -- arg1 arg2`")
         .value_parser(value_parser!(OsString))
         .num_args(0..)
-        .allow_hyphen_values(true)
-        .last(true);
+        .allow_hyphen_values(true);
 
     let build_target_values_parser =
         PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
+        .args_conflicts_with_subcommands(true)
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(flag_optimize.clone())
@@ -214,7 +214,7 @@ pub fn build_app() -> Command {
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
             )
-            .arg(args_for_app.clone())
+            .arg(args_for_app.clone().last(true))
         )
         .subcommand(Command::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
@@ -230,7 +230,7 @@ pub fn build_app() -> Command {
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
             .arg(roc_file_to_run.clone())
-            .arg(args_for_app.clone())
+            .arg(args_for_app.clone().last(true))
         )
         .subcommand(Command::new(CMD_DEV)
             .about("`check` a .roc file, and then run it if there were no errors")
@@ -243,7 +243,7 @@ pub fn build_app() -> Command {
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
             .arg(roc_file_to_run.clone())
-            .arg(args_for_app.clone())
+            .arg(args_for_app.clone().last(true))
         )
         .subcommand(Command::new(CMD_FORMAT)
             .about("Format a .roc file using standard Roc formatting")
@@ -333,8 +333,8 @@ pub fn build_app() -> Command {
         .arg(flag_time)
         .arg(flag_linker)
         .arg(flag_prebuilt)
-        .arg(roc_file_to_run.required(false))
-        .arg(args_for_app);
+        .arg(roc_file_to_run)
+        .arg(args_for_app.trailing_var_arg(true));
 
     if cfg!(feature = "editor") {
         app.subcommand(
@@ -530,8 +530,19 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     }
 }
 
+/// Find the element of `options` with the smallest edit distance to
+/// `reference`. Returns a tuple containing the element and the distance, or
+/// `None` if the `options` `Vec` is empty.
+fn nearest_match<'a>(reference: &str, options: &'a [String]) -> Option<(&'a String, usize)> {
+    options
+        .iter()
+        .map(|s| (s, distance::damerau_levenshtein(reference, s)))
+        .min_by(|(_, a), (_, b)| a.cmp(b))
+}
+
 pub fn build(
     matches: &ArgMatches,
+    subcommands: &[String],
     config: BuildConfig,
     triple: Triple,
     roc_cache_dir: RocCacheDir<'_>,
@@ -559,7 +570,32 @@ pub fn build(
                         DEFAULT_ROC_FILENAME
                     )
                 }
-                _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", expected_file_path_string),
+                _ => {
+                    let mut error_lines = Vec::new();
+                    error_lines.push(format!(
+                        "This file was not found: {}",
+                        expected_file_path_string
+                    ));
+                    // Add some additional hints if run as `roc [FILENAME]`.
+                    if matches.subcommand().is_none() {
+                        match path.to_str() {
+                            Some(possible_typo) if !possible_typo.ends_with(".roc") => {
+                                if let Some((nearest_command, _)) =
+                                    nearest_match(possible_typo, subcommands)
+                                {
+                                    error_lines.push(format!(
+                                        "Did you mean to use the {} subcommand?",
+                                        nearest_command
+                                    ));
+                                }
+                            }
+                            _ => (),
+                        }
+                    }
+                    error_lines.push("You can run `roc help` to see the list of available subcommands and for more information on how to provide a .roc file.".to_string());
+
+                    eprintln!("\n{}\n", error_lines.join("\n\n"));
+                }
             }
 
             process::exit(1);
