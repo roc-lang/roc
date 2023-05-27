@@ -122,7 +122,7 @@ pub struct NamedVariable {
     pub first_seen: Region,
 }
 
-/// A type variable bound to an ability, like "a has Hash".
+/// A type variable bound to an ability, like "a implements Hash".
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AbleVariable {
     pub variable: Variable,
@@ -1040,7 +1040,7 @@ fn can_annotation_help(
         Where(_annotation, clauses) => {
             debug_assert!(!clauses.is_empty());
 
-            // Has clauses are allowed only on the top level of a signature, which we handle elsewhere.
+            // Implements clauses are allowed only on the top level of a signature, which we handle elsewhere.
             env.problem(roc_problem::can::Problem::IllegalImplementsClause {
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });

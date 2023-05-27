@@ -510,7 +510,7 @@ fn canonicalize_claimed_ability_impl<'a>(
                 // definition symbol, for example when the ability is defined in the same
                 // module as an implementer:
                 //
-                //   Eq has eq : a, a -> U64 | a implements Eq
+                //   Eq implements eq : a, a -> U64 | a implements Eq
                 //
                 //   A := U8 implements [Eq {eq}]
                 //
@@ -1398,7 +1398,7 @@ fn resolve_abilities(
                 }
                 [..] => {
                     // There is more than one variable bound to the member signature, so something like
-                    //   Eq has eq : a, b -> Bool | a implements Eq, b implements Eq
+                    //   Eq implements eq : a, b -> Bool | a implements Eq, b implements Eq
                     // We have no way of telling what type implements a particular instance of Eq in
                     // this case (a or b?), so disallow it.
                     let span_has_clauses = Region::across_all(

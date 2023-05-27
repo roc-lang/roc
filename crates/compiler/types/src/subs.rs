@@ -2359,7 +2359,7 @@ pub enum Content {
     /// This can only happen when unified with a [Self::RigidAbleVar].
     FlexAbleVar(Option<SubsIndex<Lowercase>>, SubsSlice<Symbol>),
     /// Like a [Self::RigidVar], but is also bound to 1+ abilities.
-    /// For example, "a has Hash".
+    /// For example, "a implements Hash".
     RigidAbleVar(SubsIndex<Lowercase>, SubsSlice<Symbol>),
     /// name given to a recursion variable
     RecursionVar {

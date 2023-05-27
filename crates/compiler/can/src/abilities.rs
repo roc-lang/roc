@@ -80,7 +80,7 @@ impl AbilityMemberData<Resolved> {
 
 /// Solved lambda sets for an ability member specialization. For example, if we have
 ///
-///   Default has default : {} -[[] + a:default:1]-> a | a implements Default
+///   Default implements default : {} -[[] + a:default:1]-> a | a implements Default
 ///
 ///   A := {}
 ///   default = \{} -[[closA]]-> @A {}
@@ -144,7 +144,7 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
     ///
     /// For example, in the program
     ///
-    ///   Hash has hash : a -> U64 | a implements Hash
+    ///   Hash implements hash : a -> U64 | a implements Hash
     ///
     ///   Id := {} implements [Hash {hash: myHash}]
     ///   myHash = \@Id n -> n
@@ -155,7 +155,7 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
     /// Information about all members composing abilities.
     ability_members: MutMap<Symbol, AbilityMemberData<Phase>>,
 
-    /// Maps a tuple (member, type) specifying that `type` has an implementation of an ability
+    /// Maps a tuple (member, type) specifying that `type` implements an ability
     /// member `member`, to how that implementation is defined.
     declared_implementations: MutMap<ImplKey, MemberImpl>,
 
@@ -414,7 +414,7 @@ impl IAbilitiesStore<Resolved> {
     }
 
     /// Returns an iterator over pairs ((ability member, type), implementation) specifying that
-    /// the give type has an implementation of an ability member.
+    /// the give type implements an ability member.
     pub fn iter_declared_implementations(
         &self,
     ) -> impl Iterator<Item = (ImplKey, &MemberImpl)> + '_ {
