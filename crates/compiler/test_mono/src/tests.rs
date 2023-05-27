@@ -3013,3 +3013,17 @@ fn rb_tree_fbip() {
         "#
     )
 }
+
+#[mono_test]
+fn record_update() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = f {a: [], b: [], c:[]}
+
+        f : {a: List Nat, b: List Nat, c: List Nat} -> {a: List Nat, b: List Nat, c: List Nat}
+        f = \record -> {record & a: List.set record.a 7 7, b: List.set record.b 8 8}
+        "#
+    )
+}

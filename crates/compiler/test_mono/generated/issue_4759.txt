@@ -1,13 +1,13 @@
 procedure Test.1 (Test.2):
     dec Test.2;
-    let Test.7 : Str = "ux";
-    let Test.8 : Str = "uy";
-    let Test.6 : {Str, Str} = Struct {Test.7, Test.8};
-    ret Test.6;
+    let Test.8 : Str = "ux";
+    let Test.9 : Str = "uy";
+    let Test.7 : {Str, Str} = Struct {Test.8, Test.9};
+    ret Test.7;
 
 procedure Test.0 ():
-    let Test.10 : Str = "x";
-    let Test.11 : Str = "y";
-    let Test.9 : {Str, Str} = Struct {Test.10, Test.11};
-    let Test.3 : {Str, Str} = CallByName Test.1 Test.9;
+    let Test.11 : Str = "x";
+    let Test.12 : Str = "y";
+    let Test.10 : {Str, Str} = Struct {Test.11, Test.12};
+    let Test.3 : {Str, Str} = CallByName Test.1 Test.10;
     ret Test.3;
