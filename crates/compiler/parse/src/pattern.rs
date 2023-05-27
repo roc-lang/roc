@@ -154,7 +154,7 @@ fn loc_tag_pattern_arg<'a>(
     }
 }
 
-pub fn loc_has_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPattern<'a>> {
+pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPattern<'a>> {
     then(
         loc_tag_pattern_arg(false),
         |_arena, state, progress, pattern| {

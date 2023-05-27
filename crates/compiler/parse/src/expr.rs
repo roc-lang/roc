@@ -15,7 +15,7 @@ use crate::parser::{
     word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString,
     EType, EWhen, Either, ParseResult, Parser,
 };
-use crate::pattern::{closure_param, loc_has_parser};
+use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
 use crate::type_annotation;
@@ -618,7 +618,7 @@ pub fn parse_single_def<'a>(
 
             if let Some((name, name_region, args)) = opt_tag_and_args {
                 if let Ok((_, loc_has, state)) =
-                    loc_has_parser().parse(arena, state.clone(), min_indent)
+                    loc_implements_parser().parse(arena, state.clone(), min_indent)
                 {
                     let (_, (type_def, def_region), state) = finish_parsing_ability_def_help(
                         min_indent,
