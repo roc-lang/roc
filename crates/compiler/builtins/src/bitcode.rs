@@ -368,6 +368,7 @@ pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
+pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";
 pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
 pub const DEC_NEGATE: &str = "roc_builtins.dec.negate";
@@ -390,6 +391,7 @@ pub const UTILS_INCREF_DATA_PTR: &str = "roc_builtins.utils.incref_data_ptr";
 pub const UTILS_DECREF_DATA_PTR: &str = "roc_builtins.utils.decref_data_ptr";
 pub const UTILS_IS_UNIQUE: &str = "roc_builtins.utils.is_unique";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
+pub const UTILS_DICT_PSEUDO_SEED: &str = "roc_builtins.utils.dict_pseudo_seed";
 
 pub const UTILS_EXPECT_FAILED_START_SHARED_BUFFER: &str =
     "roc_builtins.utils.expect_failed_start_shared_buffer";

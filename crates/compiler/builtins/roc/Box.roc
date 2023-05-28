@@ -2,7 +2,7 @@ interface Box
     exposes [box, unbox]
     imports []
 
-## Allocate a value on the heap. Boxing is an expensive process as it copies
+## Allocates a value on the heap. Boxing is an expensive process as it copies
 ## the value from the stack to the heap. This may provide a performance
 ## optimization for advanced use cases with large values. A platform may require
 ## that some values are boxed.

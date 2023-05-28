@@ -110,6 +110,7 @@ pub enum LowLevel {
     NumCountLeadingZeroBits,
     NumCountTrailingZeroBits,
     NumCountOneBits,
+    I128OfDec,
     Eq,
     NotEq,
     And,
@@ -126,6 +127,7 @@ pub enum LowLevel {
     BoxExpr,
     UnboxExpr,
     Unreachable,
+    DictPseudoSeed,
 }
 
 macro_rules! higher_order {
@@ -339,10 +341,12 @@ map_symbol_to_lowlevel! {
     NumCountLeadingZeroBits <= NUM_COUNT_LEADING_ZERO_BITS,
     NumCountTrailingZeroBits <= NUM_COUNT_TRAILING_ZERO_BITS,
     NumCountOneBits <= NUM_COUNT_ONE_BITS,
+    I128OfDec <= I128_OF_DEC,
     Eq <= BOOL_STRUCTURAL_EQ,
     NotEq <= BOOL_STRUCTURAL_NOT_EQ,
     And <= BOOL_AND,
     Or <= BOOL_OR,
     Not <= BOOL_NOT,
     Unreachable <= LIST_UNREACHABLE,
+    DictPseudoSeed <= DICT_PSEUDO_SEED,
 }

@@ -1123,7 +1123,10 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             env.builder.build_return(Some(&answer));
         }
-        NullableWrapped { other_tags, .. } => {
+        NullableWrapped {
+            other_tags,
+            nullable_id,
+        } => {
             let ptr_equal = env.builder.build_int_compare(
                 IntPredicate::EQ,
                 env.builder
@@ -1204,7 +1207,9 @@ fn build_tag_eq_help<'a, 'ctx>(
             let tags = other_tags;
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
-            for (tag_id, field_layouts) in tags.iter().enumerate() {
+            for (i, field_layouts) in tags.iter().enumerate() {
+                let tag_id = if i >= (*nullable_id as _) { i + 1 } else { i };
+
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 

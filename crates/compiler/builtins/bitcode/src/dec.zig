@@ -209,6 +209,10 @@ pub const RocDec = extern struct {
         return RocStr.init(&str_bytes, position);
     }
 
+    pub fn toI128(self: RocDec) i128 {
+        return self.num;
+    }
+
     pub fn eq(self: RocDec, other: RocDec) bool {
         return self.num == other.num;
     }
@@ -1106,6 +1110,10 @@ pub fn toStr(arg: RocDec) callconv(.C) RocStr {
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
     return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");
+}
+
+pub fn toI128(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.toI128, .{arg});
 }
 
 pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
