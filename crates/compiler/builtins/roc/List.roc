@@ -251,6 +251,50 @@ set : List a, Nat, a -> List a
 set = \list, index, value ->
     (List.replace list index value).list
 
+## Updates the element at the given index with the given function.
+## ```
+## List.update [1, 2, 3] 1 (\x -> x + 1)
+## ```
+## If the given index is outside the bounds of the list, returns the original
+## list unmodified.
+##
+## To replace the element at a given index, instead of updating based on the current value,
+## see [List.set] and [List.replace]
+update : List a, Nat, (a -> a) -> List a
+update = \list, index, func ->
+    when List.get list index is
+        Err OutOfBounds -> list
+        Ok value ->
+            newValue = func value
+            (replaceUnsafe list index newValue).list
+
+# Update one element in bounds
+expect
+    list : List Nat
+    list = [1, 2, 3]
+    got = update list 1 (\x -> x + 42)
+    want = [1, 44, 3]
+    got == want
+
+# Update out of bounds
+expect
+    list : List Nat
+    list = [1, 2, 3]
+    got = update list 5 (\x -> x + 42)
+    got == list
+
+# Update chain
+expect
+    list : List Nat
+    list = [1, 2, 3]
+    got =
+        list
+        |> update 0 (\x -> x + 10)
+        |> update 1 (\x -> x + 20)
+        |> update 2 (\x -> x + 30)
+    want = [11, 22, 33]
+    got == want
+
 ## Add a single element to the end of a list.
 ## ```
 ## List.append [1, 2, 3] 4
