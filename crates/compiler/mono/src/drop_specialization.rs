@@ -958,23 +958,20 @@ fn specialize_boxed<'a, 'i>(
                 *symbol,
                 // If the symbol is unique:
                 // - free the box
-                |_, _, _| {
+                |_, _, continuation| {
                     arena.alloc(Stmt::Refcounting(
                         // TODO can be replaced by free if ever added to the IR.
                         ModifyRc::DecRef(*symbol),
-                        new_continuation,
+                        continuation,
                     ))
                 },
                 // If the symbol is not unique:
                 // - increment the child
                 // - decref the box
-                |_, _, _| {
+                |_, _, continuation| {
                     arena.alloc(Stmt::Refcounting(
                         ModifyRc::Inc(s, 1),
-                        arena.alloc(Stmt::Refcounting(
-                            ModifyRc::DecRef(*symbol),
-                            new_continuation,
-                        )),
+                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef(*symbol), continuation)),
                     ))
                 },
                 new_continuation,

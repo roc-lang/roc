@@ -3028,9 +3028,9 @@ fn specialize_after_match() {
             listB = Nil
 
             longestLinkedList listA listB
-        
+
         LinkedList a : [Cons a (LinkedList a), Nil]
-        
+
         longestLinkedList : LinkedList a, LinkedList a -> Nat
         longestLinkedList = \listA, listB -> when listA is
             Nil -> linkedListLength listB
