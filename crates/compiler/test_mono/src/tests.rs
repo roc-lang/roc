@@ -3019,14 +3019,18 @@ fn specialize_after_match() {
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
+
         main = 
             listA : LinkedList Str
             listA = Nil
             
             listB : LinkedList Str
             listB = Nil
+
             longestLinkedList listA listB
+        
         LinkedList a : [Cons a (LinkedList a), Nil]
+        
         longestLinkedList : LinkedList a, LinkedList a -> Nat
         longestLinkedList = \listA, listB -> when listA is
             Nil -> linkedListLength listB
