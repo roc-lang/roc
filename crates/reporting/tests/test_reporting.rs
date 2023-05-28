@@ -8278,7 +8278,7 @@ In roc, functions are always written as a lambda, like{}
         ability_non_signature_expression,
         indoc!(
             r#"
-            MEq implememts
+            MEq implements
                 123
 
             1
@@ -8453,12 +8453,12 @@ In roc, functions are always written as a lambda, like{}
             "#
         ),
         @r###"
-    ── IMPLEMENTS CLAUSE IS NOT AN ABILITY ──────────────────── /code/proj/Main.roc ─
+    ── IMPLEMENTS CLAUSE IS NOT AN ABILITY ─────────────────── /code/proj/Main.roc ─
 
-    The type referenced in this "implememts" clause is not an ability:
+    The type referenced in this "implements" clause is not an ability:
 
-    3│  MHash has hash : a, b -> Num.U64 | a implements MHash, b implements Bool.Bool
-                                                                            ^^^^^^^^^
+    3│  MHash implements hash : a, b -> Num.U64 | a implements MHash, b implements Bool.Bool
+                                                                                   ^^^^^^^^^
     "###
     );
 
@@ -8530,14 +8530,14 @@ In roc, functions are always written as a lambda, like{}
         @r#"
         ── ABILITY MEMBER MISSING IMPLEMENTS CLAUSE ────────────── /code/proj/Main.roc ─
 
-        The definition of the ability member `ab` does not include an `implements` clause
-        binding a type variable to the ability `Ability`:
+        The definition of the ability member `ab` does not include an `implements`
+        clause binding a type variable to the ability `Ability`:
 
         3│  Ability implements ab : {} -> {}
                                ^^
 
-        Ability members must include an `implements` clause binding a type variable to
-        an ability, like
+        Ability members must include an `implements` clause binding a type
+        variable to an ability, like
 
             a implements Ability
 
@@ -8600,18 +8600,19 @@ In roc, functions are always written as a lambda, like{}
     3│  MHash implements hash : (a | a implements MHash) -> Num.U64
                                      ^^^^^^^^^^^^^^^^^^
 
-    `implements` clauses can only be specified on the top-level type annotations.
+    `implements` clauses can only be specified on the top-level type
+    annotations.
 
     ── ABILITY MEMBER MISSING IMPLEMENTS CLAUSE ────────────── /code/proj/Main.roc ─
 
-    The definition of the ability member `hash` does not include an `implements`
-    clause binding a type variable to the ability `MHash`:
+    The definition of the ability member `hash` does not include an
+    `implements` clause binding a type variable to the ability `MHash`:
 
     3│  MHash implements hash : (a | a implements MHash) -> Num.U64
                          ^^^^
 
-    Ability members must include an `implements` clause binding a type variable to
-    an ability, like
+    Ability members must include an `implements` clause binding a type
+    variable to an ability, like
 
         a implements MHash
 
@@ -8963,8 +8964,8 @@ In roc, functions are always written as a lambda, like{}
 
         a | a implements MHash
 
-    Note: The type variable `a` says it can take on any value that implements the
-    ability `MHash`.
+    Note: The type variable `a` says it can take on any value that
+    implements the ability `MHash`.
 
     But, I see that the type is only ever used as a a `Id` value. Can you
     replace `a` with a more specific type?
@@ -9153,7 +9154,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [main] to "./platform"
 
-            Default has default : {} -> a | a implements Default
+            Default implements default : {} -> a | a implements Default
 
             main =
                 A := {} implements [Default {default}]
@@ -9361,7 +9362,7 @@ In roc, functions are always written as a lambda, like{}
     cannot be generated.
 
     Tip: `A` does not implement `Encoding`. Consider adding a custom
-    implementation or `has Encode.Encoding` to the definition of `A`.
+    implementation or `implements Encode.Encoding` to the definition of `A`.
     "###
     );
 
@@ -9404,7 +9405,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            MEq has eq : a, a -> U64 | a implements MEq
+            MEq implements eq : a, a -> U64 | a implements MEq
 
             A := U8 implements [MEq {eq}]
             "#
@@ -9440,7 +9441,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A, myMEq] to "./platform"
 
-            MEq has eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool | a implements MEq
 
             A := U8 implements [ MEq {eq: aMEq} ]
 
@@ -9481,7 +9482,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A, myMEq] to "./platform"
 
-            MEq has eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool | a implements MEq
 
             A := U8 implements [ MEq {eq ? aMEq} ]
 
@@ -9537,8 +9538,8 @@ In roc, functions are always written as a lambda, like{}
     Custom implementations must be supplied fully.
 
     Hint: if you want this implementation to be derived, don't include a
-    record of implementations. For example,    implements [Encoding] will attempt
-    to derive `Encoding`
+    record of implementations. For example,    implements [Encoding] will
+    attempt to derive `Encoding`
 
     ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
@@ -9559,7 +9560,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            MEq has eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool | a implements MEq
 
             A := U8 implements [ MEq {eq : Bool.eq} ]
             "#
@@ -9594,7 +9595,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            MEq has eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool | a implements MEq
 
             A := U8 implements [ MEq {eq : \m, n -> m == n} ]
             "#
@@ -9631,7 +9632,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            MEq has eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool | a implements MEq
 
             A := U8 implements [ MEq {eq: eqA, eq: eqA} ]
 
@@ -9684,7 +9685,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            Ab has ab : a -> a | a implements Ab
+            Ab implements ab : a -> a | a implements Ab
 
             A := {} implements [Ab]
             "#
@@ -9746,7 +9747,7 @@ In roc, functions are always written as a lambda, like{}
                            ^^^^^^^^^^^^^^^
 
     Tip: `B` does not implement `Encoding`. Consider adding a custom
-    implementation or `has Encode.Encoding` to the definition of `B`.
+    implementation or `implements Encode.Encoding` to the definition of `B`.
 
     Tip: You can define a custom implementation of `Encoding` for `A`.
     "###
@@ -9945,7 +9946,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [x] to "./platform"
 
-            Foo has foo : a -> a | a implements Foo
+            Foo implements foo : a -> a | a implements Foo
 
             F a b := b | a implements Foo
 
@@ -10475,7 +10476,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [hash, Id] to "./platform"
 
-            MHash has hash : a -> U64 | a implements MHash
+            MHash implements hash : a -> U64 | a implements MHash
 
             Id := {}
 
@@ -10618,9 +10619,10 @@ I recommend using camelCase. It's the standard style in Roc code!
                            ^^^^^^^^^^^^^^^
 
     Tip: `B` does not implement `Decoding`. Consider adding a custom
-    implementation or `has Decode.Decoding` to the definition of `B`.
+    implementation or `implements Decode.Decoding` to the definition of `B`.
 
     Tip: You can define a custom implementation of `Decoding` for `A`.
+
     "###
     );
 
@@ -10713,7 +10715,7 @@ I recommend using camelCase. It's the standard style in Roc code!
     cannot be generated.
 
     Tip: `A` does not implement `Decoding`. Consider adding a custom
-    implementation or `has Decode.Decoding` to the definition of `A`.
+    implementation or `implements Decode.Decoding` to the definition of `A`.
     "###
     );
 
@@ -11282,9 +11284,10 @@ I recommend using camelCase. It's the standard style in Roc code!
                            ^^^^
 
     Tip: `B` does not implement `Hash`. Consider adding a custom
-    implementation or `has Hash.Hash` to the definition of `B`.
+    implementation or `implements Hash.Hash` to the definition of `B`.
 
     Tip: You can define a custom implementation of `Hash` for `A`.
+
     "###
     );
 
@@ -11667,9 +11670,10 @@ I recommend using camelCase. It's the standard style in Roc code!
                            ^^
 
     Tip: `B` does not implement `Eq`. Consider adding a custom implementation
-    or `has Bool.Eq` to the definition of `B`.
+    or `implements Bool.Eq` to the definition of `B`.
 
     Tip: You can define a custom implementation of `Eq` for `A`.
+
     "###
     );
 
@@ -12047,7 +12051,8 @@ I recommend using camelCase. It's the standard style in Roc code!
     4│      f : a -> {} | a implements Hash & Hash
                                               ^^^^
 
-    Abilities only need to bound to a type variable once in an `implements` clause!
+    Abilities only need to bound to a type variable once in an `implements`
+    clause!
     "###
     );
 
@@ -12079,12 +12084,12 @@ I recommend using camelCase. It's the standard style in Roc code!
 
         x | x implements Encoding & Decoding
 
-    Note: The type variable `x` says it can take on any value that has only
-    the ability `Encoding`.
+    Note: The type variable `x` says it can take on any value that
+    implements only the ability `Encoding`.
 
-    But, I see that it's also used as if it implements the ability `Decoding`. Can
-    you use `x` without that ability? If not, consider adding it to the `implements`
-    clause of `x`.
+    But, I see that it's also used as if it implements the ability
+    `Decoding`. Can you use `x` without that ability? If not, consider adding
+    it to the `implements` clause of `x`.
     "###
     );
 
@@ -12116,11 +12121,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
         x | x implements Hash & Encoding & Decoding
 
-    Note: The type variable `x` says it can take on any value that implements only
-    the ability `Encoding`.
+    Note: The type variable `x` says it can take on any value that
+    implements only the ability `Encoding`.
 
-    But, I see that it's also used as if it implements the abilities `Hash` and
-    `Decoding`. Can you use `x` without those abilities? If not, consider
+    But, I see that it's also used as if it implements the abilities `Hash`
+    and `Decoding`. Can you use `x` without those abilities? If not, consider
     adding them to the `implements` clause of `x`.
     "###
     );
@@ -12154,12 +12159,12 @@ I recommend using camelCase. It's the standard style in Roc code!
 
         x | x implements Encoding & Decoding
 
-    Note: The type variable `x` says it can take on any value that implements only
-    the abilities `Hash` and `Encoding`.
+    Note: The type variable `x` says it can take on any value that
+    implements only the abilities `Hash` and `Encoding`.
 
-    But, I see that it's also used as if it implements the ability `Decoding`. Can
-    you use `x` without that ability? If not, consider adding it to the `implements`
-    clause of `x`.
+    But, I see that it's also used as if it implements the ability
+    `Decoding`. Can you use `x` without that ability? If not, consider adding
+    it to the `implements` clause of `x`.
     "###
     );
 
