@@ -84,7 +84,6 @@ capstone = { version = "0.11.0", default-features = false }
 cgmath = "0.18.0"
 clap = { version = "4.2.7", default-features = false, features = ["std", "color", "suggestions", "help", "usage", "error-context"] }
 colored = "2.0.0"
-confy = { git = 'https://github.com/rust-cli/confy', features = ["yaml_conf"], default-features = false }
 console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.30", features = ["const_generics"] }
 copypasta = "0.8.2"
