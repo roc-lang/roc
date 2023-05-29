@@ -1488,6 +1488,8 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         NumBytesToU32 => RC::NoRc,
         NumBytesToU64 => RC::NoRc,
         NumBytesToU128 => RC::NoRc,
+        I128OfDec => RC::NoRc,
+        DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
         StrStartsWithScalar => RC::NoRc,
         StrFromUtf8Range => RC::Rc,
