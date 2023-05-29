@@ -414,7 +414,7 @@ impl IAbilitiesStore<Resolved> {
     }
 
     /// Returns an iterator over pairs ((ability member, type), implementation) specifying that
-    /// the give type implements an ability member.
+    /// the given type implements an ability member.
     pub fn iter_declared_implementations(
         &self,
     ) -> impl Iterator<Item = (ImplKey, &MemberImpl)> + '_ {
