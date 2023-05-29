@@ -117,7 +117,7 @@ hashNat = \hasher, n ->
 i128OfDec : Dec -> I128
 
 ## Adds a single [Dec] to a hasher.
-hashDec : a, Dec -> a | a has Hasher
+hashDec : a, Dec -> a | a implements Hasher
 hashDec = \hasher, n -> hashI128 hasher (i128OfDec n)
 
 ## Adds a container of [Hash]able elements to a [Hasher] by hashing each element.

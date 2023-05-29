@@ -47,7 +47,7 @@ isEq = \xs, ys ->
             else
                 Break Bool.false
 
-hashSet : hasher, Set k -> hasher | k has Hash & Eq, hasher has Hasher
+hashSet : hasher, Set k -> hasher | k implements Hash & Eq, hasher implements Hasher
 hashSet = \hasher, @Set inner -> Hash.hash hasher inner
 
 ## Creates a new empty `Set`.
