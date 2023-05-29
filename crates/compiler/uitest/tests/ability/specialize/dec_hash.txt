@@ -1,0 +1,5 @@
+app "test" provides [main] to "./platform"
+
+main =
+    \h -> Hash.hash h 1.1dec
+    #     ^^^^^^^^^ Hash#Hash.hash(1): a, Dec -[[Hash.hashDec(17)]]-> a | a has Hasher

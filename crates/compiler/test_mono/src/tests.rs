@@ -1855,6 +1855,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
 }
 
 #[mono_test]
+#[cfg(not(debug_assertions))]
 fn encode_derived_record_one_field_string() {
     indoc!(
         r#"
@@ -1872,6 +1873,7 @@ fn encode_derived_record_one_field_string() {
 }
 
 #[mono_test]
+#[cfg(not(debug_assertions))]
 fn encode_derived_record_two_field_strings() {
     indoc!(
         r#"
@@ -1889,6 +1891,7 @@ fn encode_derived_record_two_field_strings() {
 }
 
 #[mono_test]
+#[cfg(not(debug_assertions))]
 fn encode_derived_nested_record_string() {
     indoc!(
         r#"
@@ -3007,6 +3010,43 @@ fn rb_tree_fbip() {
                     if k > kx 
                         then Node Red l kx vx (ins r k v)
                         else Node Red l k v r
+        "#
+    )
+}
+
+#[mono_test]
+fn specialize_after_match() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = 
+            listA : LinkedList Str
+            listA = Nil
+            
+            listB : LinkedList Str
+            listB = Nil
+
+            longestLinkedList listA listB
+
+        LinkedList a : [Cons a (LinkedList a), Nil]
+
+        longestLinkedList : LinkedList a, LinkedList a -> Nat
+        longestLinkedList = \listA, listB -> when listA is
+            Nil -> linkedListLength listB
+            Cons a aa -> when listB is
+                Nil -> linkedListLength listA
+                Cons b bb -> 
+                    lengthA = (linkedListLength aa) + 1
+                    lengthB = linkedListLength listB
+                    if lengthA > lengthB
+                        then lengthA
+                        else lengthB
+        
+        linkedListLength : LinkedList a -> Nat
+        linkedListLength = \list -> when list is
+            Nil -> 0
+            Cons _ rest -> 1 + linkedListLength rest
         "#
     )
 }

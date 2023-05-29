@@ -506,9 +506,9 @@ procedure Json.68 ():
 procedure Json.69 (Json.1467):
     joinpoint Json.1197 Json.1165:
         let Json.599 : List U8 = StructAtIndex 0 Json.1165;
+        inc Json.599;
         let Json.600 : List U8 = StructAtIndex 1 Json.1165;
         let Json.1315 : U64 = 0i64;
-        inc Json.599;
         let Json.601 : [C {}, C U8] = CallByName List.2 Json.599 Json.1315;
         let Json.1314 : U64 = 1i64;
         inc Json.599;

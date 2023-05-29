@@ -67,6 +67,7 @@ ven_pretty = { path = "../vendor/pretty" }
 bumpalo.workspace = true
 clap.workspace = true
 const_format.workspace = true
+distance.workspace = true
 errno.workspace = true
 indoc.workspace = true
 inkwell.workspace = true

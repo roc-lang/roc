@@ -40,9 +40,10 @@ fold = \f, tree, b ->
 
 main : Task.Task {} []
 main =
-    Task.after
-        Task.getInt
-        \n ->
+    inputResult <- Task.attempt Task.getInt
+
+    when inputResult is
+        Ok n ->
             # original koka n = 4_200_000
             ms : ConsList Map
             ms = makeMap 5 n
@@ -57,6 +58,9 @@ main =
 
                 Nil ->
                     Task.putLine "fail"
+
+        Err GetIntError ->
+            Task.putLine "Error: Failed to get Integer from stdin."
 
 insert : Tree (Num k) v, Num k, v -> Tree (Num k) v
 insert = \t, k, v -> if isRed t then setBlack (ins t k v) else ins t k v

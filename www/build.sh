@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# run from root of repo with `./www/build.sh`
+# check www/README.md to run a test server
+
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
@@ -48,8 +51,11 @@ cargo --version
 export ROC_DOCS_URL_ROOT=/builtins
 
 cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
-mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
-mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
+mv generated-docs/*.js www/build # move all .js files to build/
+mv generated-docs/*.css www/build
+mv generated-docs/*.svg www/build
+
+mv generated-docs/ www/build/builtins # move all the rest to build/builtins/
 
 # Manually add this tip to all the builtin docs.
 find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
@@ -58,7 +64,7 @@ find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div c
 # cleanup files that could have stayed behind if the script failed
 rm -rf roc_nightly roc_releases.json
 
-# to prevent GitHub from rate limiting netlify servers
+# we use `! [ -v GITHUB_TOKEN_READ_ONLY ];` to check if we're on a netlify server
 if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   echo 'Building tutorial.html from tutorial.md...'
   mkdir www/build/tutorial

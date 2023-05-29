@@ -22,7 +22,6 @@ page_size = "0.4.2"
 roc_std = { path = "../../../crates/roc_std" }
 cgmath = "0.18.0"
 colored = "2.0.0"
-confy = { git = 'https://github.com/rust-cli/confy', features = ["yaml_conf"], default-features = false }
 copypasta = "0.7.1"
 fs_extra = "1.2.0"
 futures = "0.3.17"
@@ -38,12 +37,6 @@ threadpool = "1.8.1"
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "0545e36" }
 wgpu_glyph = { git = "https://github.com/Anton-4/wgpu_glyph", rev = "257d109" }
 winit = "0.26.1"
-
-[package.metadata.cargo-udeps.ignore]
-# confy is currently unused but should not be removed
-normal = ["confy"]
-#development = []
-#build = []
 
 [features]
 default = []

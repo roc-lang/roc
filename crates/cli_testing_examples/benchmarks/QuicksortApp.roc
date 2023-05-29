@@ -5,9 +5,10 @@ app "quicksortapp"
 
 main : Task.Task {} []
 main =
-    Task.after
-        Task.getInt
-        \n ->
+    inputResult <- Task.attempt Task.getInt
+
+    when inputResult is
+        Ok n ->
             unsortedList =
                 if n == 0 then
                     # small unsorted list of 20 elements (0-9)
@@ -19,6 +20,10 @@ main =
             sort unsortedList
             |> Quicksort.show
             |> Task.putLine
+
+        Err GetIntError ->
+            Task.putLine "Error: Failed to get Integer from stdin."
+            
 
 sort : List I64 -> List I64
 sort = \list ->
