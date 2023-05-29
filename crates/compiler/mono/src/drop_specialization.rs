@@ -378,12 +378,6 @@ fn specialize_drops_stmt<'a, 'i>(
                 (info.clone(), new_branch)
             };
 
-            // Remove all 0 counts as cleanup.
-            environment
-                .incremented_symbols
-                .map
-                .retain(|_, count| *count > 0);
-
             arena.alloc(Stmt::Switch {
                 cond_symbol: *cond_symbol,
                 cond_layout: *cond_layout,
@@ -395,7 +389,7 @@ fn specialize_drops_stmt<'a, 'i>(
         Stmt::Ret(symbol) => arena.alloc(Stmt::Ret(*symbol)),
         Stmt::Refcounting(rc, continuation) => match rc {
             ModifyRc::Inc(symbol, count) => {
-                let any = environment.incremented_symbols.contains(symbol);
+                let inc_before = environment.incremented_symbols.contained(symbol);
 
                 // Add a symbol for every increment performed.
                 environment
@@ -410,7 +404,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     continuation,
                 );
 
-                if any {
+                if inc_before {
                     // There were increments before this one, best to let the first one do the increments.
                     // Or there are no increments left, so we can just continue.
                     new_continuation
@@ -1540,10 +1534,7 @@ where
 
     fn pop(&mut self, key: &K) -> bool {
         match self.map.get_mut(key) {
-            Some(1) => {
-                self.map.remove(key);
-                true
-            }
+            Some(0) => false,
             Some(c) => {
                 *c -= 1;
                 true
@@ -1552,7 +1543,7 @@ where
         }
     }
 
-    fn contains(&self, symbol: &K) -> bool {
+    fn contained(&self, symbol: &K) -> bool {
         self.map.contains_key(symbol)
     }
 }

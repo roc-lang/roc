@@ -136,14 +136,13 @@ procedure Test.1 (Test.77):
             if Test.64 then
                 let Test.52 : [<r>C I64, C List *self] = StructAtIndex 0 Test.6;
                 let Test.12 : List [<r>C I64, C List *self] = UnionAtIndex (Id 1) (Index 0) Test.52;
-                inc Test.12;
+                inc 2 Test.12;
                 let Test.51 : [<r>C I64, C List *self] = StructAtIndex 1 Test.6;
                 dec Test.52;
                 let Test.14 : List [<r>C I64, C List *self] = UnionAtIndex (Id 1) (Index 0) Test.51;
+                inc Test.14;
                 joinpoint #Derived_gen.2:
                     let Test.35 : {} = Struct {};
-                    inc Test.12;
-                    inc Test.14;
                     let Test.33 : List {[<r>C I64, C List *self], [<r>C I64, C List *self]} = CallByName List.23 Test.12 Test.14 Test.35;
                     let Test.34 : {} = Struct {};
                     let Test.29 : Int1 = CallByName List.56 Test.33 Test.34;
