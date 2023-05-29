@@ -3115,7 +3115,6 @@ fn update<'a>(
                         &mut layout_interner,
                         module_id,
                         ident_ids,
-                        state.target_info,
                         &mut state.procedures,
                     );
 

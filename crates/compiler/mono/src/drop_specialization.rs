@@ -15,7 +15,6 @@ use bumpalo::collections::CollectIn;
 
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_target::TargetInfo;
 
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
@@ -38,12 +37,10 @@ pub fn specialize_drops<'a, 'i>(
     layout_interner: &'i mut STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     for ((_symbol, proc_layout), proc) in procs.iter_mut() {
-        let mut environment =
-            DropSpecializationEnvironment::new(arena, home, proc_layout.result, target_info);
+        let mut environment = DropSpecializationEnvironment::new(arena, home, proc_layout.result);
         specialize_drops_proc(arena, layout_interner, ident_ids, &mut environment, proc);
     }
 }
@@ -114,9 +111,18 @@ fn specialize_drops_stmt<'a, 'i>(
                             RC::NoRc => alloc_let_with_continuation!(environment),
                             // We probably should not pass the increments to the continuation.
                             RC::Rc | RC::Uknown => {
-                                let mut new_environment = environment.clone_without_incremented();
+                                let incremented_symbols = environment.incremented_symbols.drain();
 
-                                alloc_let_with_continuation!(&mut new_environment)
+                                let new_stmt = alloc_let_with_continuation!(environment);
+
+                                // The new_environment might have inserted increments that were set to 0 before. We need to add th
+                                for (symbol, increment) in incremented_symbols.map.into_iter() {
+                                    environment
+                                        .incremented_symbols
+                                        .insert_count(symbol, increment);
+                                }
+
+                                new_stmt
                             }
                         },
                         _ => {
@@ -127,9 +133,18 @@ fn specialize_drops_stmt<'a, 'i>(
                             // the parent might be deallocated before the function can use it.
                             // Thus forget everything about any increments.
 
-                            let mut new_environment = environment.clone_without_incremented();
+                            let incremented_symbols = environment.incremented_symbols.drain();
 
-                            alloc_let_with_continuation!(&mut new_environment)
+                            let new_stmt = alloc_let_with_continuation!(environment);
+
+                            // The new_environment might have inserted increments that were set to 0 before. We need to add th
+                            for (symbol, increment) in incremented_symbols.map.into_iter() {
+                                environment
+                                    .incremented_symbols
+                                    .insert_count(symbol, increment);
+                            }
+
+                            new_stmt
                         }
                     }
                 }
@@ -609,7 +624,8 @@ fn specialize_drops_stmt<'a, 'i>(
             body,
             remainder,
         } => {
-            let mut new_environment = environment.clone_without_incremented();
+            let mut new_environment = environment.clone();
+            new_environment.incremented_symbols.clear();
 
             for param in parameters.iter() {
                 new_environment.add_symbol_layout(param.symbol, param.layout);
@@ -1255,7 +1271,6 @@ struct DropSpecializationEnvironment<'a> {
     arena: &'a Bump,
     home: ModuleId,
     layout: InLayout<'a>,
-    target_info: TargetInfo,
 
     symbol_layouts: MutMap<Symbol, InLayout<'a>>,
 
@@ -1285,12 +1300,11 @@ struct DropSpecializationEnvironment<'a> {
 }
 
 impl<'a> DropSpecializationEnvironment<'a> {
-    fn new(arena: &'a Bump, home: ModuleId, layout: InLayout<'a>, target_info: TargetInfo) -> Self {
+    fn new(arena: &'a Bump, home: ModuleId, layout: InLayout<'a>) -> Self {
         Self {
             arena,
             home,
             layout,
-            target_info,
             symbol_layouts: MutMap::default(),
             struct_children: MutMap::default(),
             union_children: MutMap::default(),
@@ -1300,24 +1314,6 @@ impl<'a> DropSpecializationEnvironment<'a> {
             symbol_tag: MutMap::default(),
             symbol_index: MutMap::default(),
             list_length: MutMap::default(),
-        }
-    }
-
-    fn clone_without_incremented(&self) -> Self {
-        Self {
-            arena: self.arena,
-            home: self.home,
-            layout: self.layout,
-            target_info: self.target_info,
-            symbol_layouts: self.symbol_layouts.clone(),
-            struct_children: self.struct_children.clone(),
-            union_children: self.union_children.clone(),
-            box_children: self.box_children.clone(),
-            list_children: self.list_children.clone(),
-            incremented_symbols: CountingMap::new(),
-            symbol_tag: self.symbol_tag.clone(),
-            symbol_index: self.symbol_index.clone(),
-            list_length: self.list_length.clone(),
         }
     }
 
@@ -1506,14 +1502,14 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 #[derive(Clone)]
 struct CountingMap<K>
 where
-    K: Eq + std::hash::Hash,
+    K: Eq + std::hash::Hash + Clone,
 {
     map: MutMap<K, u64>,
 }
 
 impl<K> CountingMap<K>
 where
-    K: Eq + std::hash::Hash,
+    K: Eq + std::hash::Hash + Clone,
 {
     fn new() -> Self {
         Self {
@@ -1522,7 +1518,7 @@ where
     }
 
     fn insert(&mut self, key: K) {
-        self.map.entry(key).and_modify(|c| *c += 1).or_insert(1);
+        self.insert_count(key, 1);
     }
 
     fn insert_count(&mut self, key: K, count: u64) {
@@ -1545,5 +1541,17 @@ where
 
     fn contained(&self, symbol: &K) -> bool {
         self.map.contains_key(symbol)
+    }
+
+    fn drain(&mut self) -> Self {
+        let res = self.clone();
+        for (_, v) in self.map.iter_mut() {
+            *v = 0;
+        }
+        res
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
     }
 }
