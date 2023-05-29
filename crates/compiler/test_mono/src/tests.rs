@@ -3100,3 +3100,26 @@ fn drop_specialize_after_jump() {
         "#
     )
 }
+
+#[mono_test]
+fn drop_specialize_inc_after_jump() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: { left: v, right: v }, right: v }
+            tupleItem t
+
+        tupleItem = \t ->
+            true = Bool.true
+            l = t.left
+            x = if true then 1 else 0
+            t2 = {left: l, right: t}
+            {left: l, right: t2}
+        "#
+    )
+}

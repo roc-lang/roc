@@ -677,7 +677,7 @@ fn specialize_drops_stmt<'a, 'i>(
             let mut body_jump_incremented_symbols = remainder_jump_incremented_symbols;
 
             // Perform iteration to get the incremented_symbols for the body.
-            let joinpoint_usage = loop {
+            let joinpoint_info = loop {
                 // Update the incremented_symbols to the remainder's incremented_symbols.
                 let mut current_body_environment = body_environment.clone();
                 current_body_environment.incremented_symbols =
@@ -701,18 +701,21 @@ fn specialize_drops_stmt<'a, 'i>(
                     .clone();
 
                 if body_jump_incremented_symbols == new_body_jump_incremented_symbols {
-                    break new_body_jump_incremented_symbols;
+                    break (
+                        new_body_jump_incremented_symbols,
+                        current_body_environment.incremented_symbols,
+                    );
                 } else {
                     body_jump_incremented_symbols = new_body_jump_incremented_symbols;
                 }
             };
 
-            let join_joinpoint_usage = arena.alloc(joinpoint_usage.clone());
+            let alloced_joinpoint_info = arena.alloc(joinpoint_info.clone());
 
-            body_environment.incremented_symbols = joinpoint_usage;
+            body_environment.incremented_symbols = joinpoint_info.0;
             body_environment
                 .join_incremented_symbols
-                .insert(*id, join_joinpoint_usage);
+                .insert(*id, alloced_joinpoint_info);
 
             let new_body = specialize_drops_stmt(
                 arena,
@@ -724,7 +727,7 @@ fn specialize_drops_stmt<'a, 'i>(
 
             environment
                 .join_incremented_symbols
-                .insert(*id, join_joinpoint_usage);
+                .insert(*id, alloced_joinpoint_info);
 
             arena.alloc(Stmt::Join {
                 id: *id,
@@ -741,7 +744,7 @@ fn specialize_drops_stmt<'a, 'i>(
         }
         Stmt::Jump(joinpoint_id, arguments) => {
             match environment.join_incremented_symbols.get(joinpoint_id) {
-                Some(join_usage) => {
+                Some((join_usage, join_returns)) => {
                     // Consume all symbols that were consumed in the join.
                     for (symbol, count) in join_usage.map.iter() {
                         for _ in 0..*count {
@@ -751,6 +754,11 @@ fn specialize_drops_stmt<'a, 'i>(
                                 "Every incremented symbol should be available from jumps"
                             );
                         }
+                    }
+                    for (symbol, count) in join_returns.map.iter() {
+                        environment
+                            .incremented_symbols
+                            .insert_count(*symbol, *count);
                     }
                 }
                 None => {
@@ -1411,7 +1419,7 @@ struct DropSpecializationEnvironment<'a> {
     jump_incremented_symbols: MutMap<JoinPointId, CountingMap<Symbol>>,
 
     // A map containing the expected number of symbol increments from joinpoints for a jump.
-    join_incremented_symbols: MutMap<JoinPointId, &'a CountingMap<Symbol>>,
+    join_incremented_symbols: MutMap<JoinPointId, &'a (CountingMap<Symbol>, CountingMap<Symbol>)>,
 }
 
 impl<'a> DropSpecializationEnvironment<'a> {
