@@ -654,7 +654,7 @@ impl<'a> Formattable for ImplementsClause<'a> {
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         buf.push_str(self.var.value.extract_spaces().item);
         buf.spaces(1);
-        buf.push_str("implements");
+        buf.push_str(roc_parse::keyword::IMPLEMENTS);
         buf.spaces(1);
 
         for (i, ab) in self.abilities.iter().enumerate() {
@@ -753,7 +753,7 @@ impl<'a> Formattable for ImplementsAbilities<'a> {
                     buf.newline();
                     buf.indent(indent);
                 }
-                buf.push_str("implements");
+                buf.push_str(roc_parse::keyword::IMPLEMENTS);
                 buf.spaces(1);
                 fmt_collection(buf, indent, Braces::Square, *has_abilities, Newlines::No);
             }

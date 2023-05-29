@@ -459,7 +459,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
             ),
             skip_first!(
                 // Parse "implements"; we don't care about this keyword
-                word("implements", EType::THasClause),
+                word(crate::keyword::IMPLEMENTS, EType::THasClause),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
                 absolute_column_min_indent(ability_chain())
             )
@@ -512,7 +512,7 @@ fn implements_clause_chain<'a>(
 pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>>, EType<'a>> {
     increment_min_indent(skip_first!(
         // Parse "implements"; we don't care about this keyword
-        word("implements", EType::THasClause),
+        word(crate::keyword::IMPLEMENTS, EType::THasClause),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
             loc!(map!(
@@ -726,7 +726,7 @@ fn parse_type_variable<'a>(
         min_indent,
     ) {
         Ok((_, name, state)) => {
-            if name == "implements" && stop_at_surface_has {
+            if name == crate::keyword::IMPLEMENTS && stop_at_surface_has {
                 Err((NoProgress, EType::TEnd(state.pos())))
             } else {
                 let answer = TypeAnnotation::BoundVariable(name);

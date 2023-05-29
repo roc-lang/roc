@@ -664,12 +664,12 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("An "),
-                    alloc.keyword("implements"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause is not allowed here:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.keyword("implements"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(
                         " clauses can only be specified on the top-level type annotations.",
                     ),
@@ -688,7 +688,7 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
                     alloc.reflow("Abilities only need to bound to a type variable once in an "),
-                    alloc.keyword("implements"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause!"),
                 ]),
             ]);
@@ -705,7 +705,7 @@ pub fn can_problem<'b>(
                     alloc.reflow("The definition of the ability member "),
                     alloc.symbol_unqualified(member),
                     alloc.reflow(" does not include an "),
-                    alloc.keyword("implements"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause binding a type variable to the ability "),
                     alloc.symbol_unqualified(ability),
                     alloc.reflow(":"),
@@ -713,13 +713,13 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
                     alloc.reflow("Ability members must include an "),
-                    alloc.keyword("implements"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause binding a type variable to an ability, like"),
                 ]),
                 alloc.type_block(alloc.concat([
                     alloc.type_variable("a".into()),
                     alloc.space(),
-                    alloc.keyword("implements"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
                     alloc.symbol_unqualified(ability),
                 ])),
@@ -781,12 +781,12 @@ pub fn can_problem<'b>(
                 alloc
                     .hint("")
                     .append(alloc.reflow("Perhaps you meant to include an "))
-                    .append(alloc.keyword("implements"))
+                    .append(alloc.keyword(roc_parse::keyword::IMPLEMENTS))
                     .append(alloc.reflow(" annotation, like")),
                 alloc.type_block(alloc.concat([
                     alloc.type_variable(suggested_var_name),
                     alloc.space(),
-                    alloc.keyword("implements"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
                     alloc.symbol_unqualified(ability),
                 ])),
@@ -853,7 +853,7 @@ pub fn can_problem<'b>(
             let hint = if ability.is_builtin() {
                 alloc.hint("").append(
                     alloc.reflow("if you want this implementation to be derived, don't include a record of implementations. For example,")
-                        .append(alloc.type_block(alloc.concat([alloc.type_str("implements ["), alloc.symbol_unqualified(ability), alloc.type_str("]")])))
+                        .append(alloc.type_block(alloc.concat([alloc.type_str(roc_parse::keyword::IMPLEMENTS), alloc.type_str(" ["), alloc.symbol_unqualified(ability), alloc.type_str("]")])))
                         .append(alloc.reflow(" will attempt to derive ").append(alloc.symbol_unqualified(ability))))
             } else {
                 alloc.nil()

@@ -373,7 +373,7 @@ fn underivable_hint<'b>(
                         alloc.concat([
                             alloc.reflow(" or "),
                             alloc.inline_type_block(alloc.concat([
-                                alloc.keyword("implements"),
+                                alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                                 alloc.space(),
                                 alloc.symbol_qualified(ability),
                             ])),
@@ -400,13 +400,13 @@ fn underivable_hint<'b>(
                 alloc.reflow("This type variable is not bound to "),
                 alloc.symbol_unqualified(ability),
                 alloc.reflow(". Consider adding an "),
-                alloc.keyword("implements"),
+                alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                 alloc.reflow(" clause to bind the type variable, like "),
                 alloc.inline_type_block(alloc.concat([
                     alloc.string("| ".to_string()),
                     alloc.type_variable(v.clone()),
                     alloc.space(),
-                    alloc.keyword("implements"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
                     alloc.symbol_qualified(ability),
                 ])),
@@ -2758,7 +2758,7 @@ fn type_with_able_vars<'b>(
         doc.push(alloc.string(if i == 0 { " | " } else { ", " }.to_string()));
         doc.push(alloc.type_variable(var));
         doc.push(alloc.space());
-        doc.push(alloc.keyword("implements"));
+        doc.push(alloc.keyword(roc_parse::keyword::IMPLEMENTS));
 
         for (i, ability) in abilities.into_sorted_iter().enumerate() {
             if i > 0 {
@@ -4532,7 +4532,7 @@ fn type_problem_to_pretty<'b>(
                                 alloc.reflow("it")
                             },
                             alloc.reflow(" to the "),
-                            alloc.keyword("implements"),
+                            alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                             alloc.reflow(" clause of "),
                             alloc.type_variable(name),
                             alloc.reflow("."),

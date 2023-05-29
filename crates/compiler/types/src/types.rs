@@ -4005,7 +4005,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push('(');
             }
             buf.push_str(name.as_str());
-            write!(buf, "implements {:?}", symbol).unwrap();
+            write!(buf, "{} {:?}", roc_parse::keyword::IMPLEMENTS, symbol).unwrap();
             if write_parens {
                 buf.push(')');
             }

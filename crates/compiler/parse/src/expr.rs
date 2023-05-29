@@ -1641,7 +1641,7 @@ fn parse_expr_end<'a>(
                 value:
                     Expr::Var {
                         module_name: "",
-                        ident: "implements",
+                        ident: crate::keyword::IMPLEMENTS,
                     },
                 ..
             },

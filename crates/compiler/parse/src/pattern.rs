@@ -138,7 +138,7 @@ fn loc_tag_pattern_arg<'a>(
 
         let Loc { region, value } = loc_pat;
 
-        if stop_on_has_kw && matches!(value, Pattern::Identifier("implements")) {
+        if stop_on_has_kw && matches!(value, Pattern::Identifier(crate::keyword::IMPLEMENTS)) {
             Err((NoProgress, EPattern::End(original_state.pos())))
         } else {
             Ok((
@@ -158,7 +158,10 @@ pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPatt
     then(
         loc_tag_pattern_arg(false),
         |_arena, state, progress, pattern| {
-            if matches!(pattern.value, Pattern::Identifier("implements")) {
+            if matches!(
+                pattern.value,
+                Pattern::Identifier(crate::keyword::IMPLEMENTS)
+            ) {
                 Ok((
                     progress,
                     Loc::at(pattern.region, Implements::Implements),

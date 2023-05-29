@@ -604,7 +604,8 @@ fn variable_to_string(
     for (i, (var, abilities)) in ctx.able_variables.into_iter().enumerate() {
         buf.push_str(if i == 0 { " | " } else { ", " });
         buf.push_str(var);
-        buf.push_str(" implements");
+        buf.push(' ');
+        buf.push_str(roc_parse::keyword::IMPLEMENTS);
         for (i, ability) in abilities.into_sorted_iter().enumerate() {
             if i > 0 {
                 buf.push_str(" &");
