@@ -404,7 +404,7 @@ fn specialize_drops_stmt<'a, 'i>(
         Stmt::Ret(symbol) => arena.alloc(Stmt::Ret(*symbol)),
         Stmt::Refcounting(rc, continuation) => match rc {
             ModifyRc::Inc(symbol, count) => {
-                let inc_before = environment.incremented_symbols.contained(symbol);
+                let inc_before = environment.incremented_symbols.contains(symbol);
 
                 // Add a symbol for every increment performed.
                 environment
@@ -1499,11 +1499,10 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
     }
 }
 
+/// Map that contains a count for each key.
+/// Keys with a count of 0 are kept around, so that it can be seen that they were once present.
 #[derive(Clone)]
-struct CountingMap<K>
-where
-    K: Eq + std::hash::Hash + Clone,
-{
+struct CountingMap<K> {
     map: MutMap<K, u64>,
 }
 
@@ -1539,7 +1538,7 @@ where
         }
     }
 
-    fn contained(&self, symbol: &K) -> bool {
+    fn contains(&self, symbol: &K) -> bool {
         self.map.contains_key(symbol)
     }
 
