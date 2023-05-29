@@ -4,6 +4,7 @@ interface List
         get,
         set,
         replace,
+        update,
         append,
         map,
         len,
