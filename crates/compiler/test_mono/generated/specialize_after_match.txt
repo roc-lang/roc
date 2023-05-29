@@ -1,0 +1,79 @@
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.282 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.282;
+
+procedure Num.24 (#Attr.2, #Attr.3):
+    let Num.283 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.283;
+
+procedure Test.2 (Test.9, Test.10):
+    let Test.38 : U8 = 1i64;
+    let Test.39 : U8 = GetTagId Test.9;
+    let Test.40 : Int1 = lowlevel Eq Test.38 Test.39;
+    if Test.40 then
+        let Test.20 : U64 = CallByName Test.3 Test.10;
+        ret Test.20;
+    else
+        let Test.11 : Str = UnionAtIndex (Id 0) (Index 0) Test.9;
+        let Test.12 : [<rnu><null>, C Str *self] = UnionAtIndex (Id 0) (Index 1) Test.9;
+        let Test.35 : U8 = 1i64;
+        let Test.36 : U8 = GetTagId Test.10;
+        let Test.37 : Int1 = lowlevel Eq Test.35 Test.36;
+        if Test.37 then
+            let Test.29 : U64 = CallByName Test.3 Test.9;
+            ret Test.29;
+        else
+            joinpoint #Derived_gen.3:
+                let Test.13 : Str = UnionAtIndex (Id 0) (Index 0) Test.10;
+                let Test.14 : [<rnu><null>, C Str *self] = UnionAtIndex (Id 0) (Index 1) Test.10;
+                let Test.33 : U64 = CallByName Test.3 Test.12;
+                let Test.34 : U64 = 1i64;
+                let Test.15 : U64 = CallByName Num.19 Test.33 Test.34;
+                let Test.16 : U64 = CallByName Test.3 Test.10;
+                let Test.31 : Int1 = CallByName Num.24 Test.15 Test.16;
+                if Test.31 then
+                    ret Test.15;
+                else
+                    ret Test.16;
+            in
+            let #Derived_gen.4 : Int1 = lowlevel RefCountIsUnique Test.9;
+            if #Derived_gen.4 then
+                dec Test.11;
+                decref Test.9;
+                jump #Derived_gen.3;
+            else
+                inc Test.12;
+                decref Test.9;
+                jump #Derived_gen.3;
+
+procedure Test.3 (Test.17):
+    let Test.26 : U8 = 1i64;
+    let Test.27 : U8 = GetTagId Test.17;
+    let Test.28 : Int1 = lowlevel Eq Test.26 Test.27;
+    if Test.28 then
+        let Test.22 : U64 = 0i64;
+        ret Test.22;
+    else
+        let Test.18 : [<rnu><null>, C Str *self] = UnionAtIndex (Id 0) (Index 1) Test.17;
+        joinpoint #Derived_gen.0:
+            let Test.24 : U64 = 1i64;
+            let Test.25 : U64 = CallByName Test.3 Test.18;
+            let Test.23 : U64 = CallByName Num.19 Test.24 Test.25;
+            ret Test.23;
+        in
+        let #Derived_gen.2 : Int1 = lowlevel RefCountIsUnique Test.17;
+        if #Derived_gen.2 then
+            let #Derived_gen.1 : Str = UnionAtIndex (Id 0) (Index 0) Test.17;
+            dec #Derived_gen.1;
+            decref Test.17;
+            jump #Derived_gen.0;
+        else
+            inc Test.18;
+            decref Test.17;
+            jump #Derived_gen.0;
+
+procedure Test.0 ():
+    let Test.5 : [<rnu><null>, C Str *self] = TagId(1) ;
+    let Test.6 : [<rnu><null>, C Str *self] = TagId(1) ;
+    let Test.19 : U64 = CallByName Test.2 Test.5 Test.6;
+    ret Test.19;
