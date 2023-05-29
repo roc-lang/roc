@@ -1423,7 +1423,6 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrGraphemes
         | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => RC::NoRc,
         ListWithCapacity | StrWithCapacity => RC::NoRc,
-        DictPseudoSeed => RC::NoRc,
         ListReplaceUnsafe => RC::Rc,
         StrGetUnsafe | ListGetUnsafe => RC::NoRc,
         ListConcat => RC::Rc,
@@ -1483,7 +1482,6 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
         | NumCountOneBits => RC::NoRc,
-        I128OfDec => RC::NoRc,
         NumBytesToU16 => RC::NoRc,
         NumBytesToU32 => RC::NoRc,
         NumBytesToU64 => RC::NoRc,
