@@ -6,7 +6,7 @@ const math = std.math;
 // Until then, we are manually ingesting used parts of compiler-rt here.
 //
 // Taken from
-// https://github.com/ziglang/zig/tree/4976b58ab16069f8d3267b69ed030f29685c1abe/lib/compiler_rt//
+// https://github.com/ziglang/zig/tree/4976b58ab16069f8d3267b69ed030f29685c1abe/lib/compiler_rt/
 // Thank you Zig Contributors!
 
 // Libcalls that involve u128 on Windows x86-64 are expected by LLVM to use the
@@ -21,11 +21,21 @@ comptime {
     if (want_windows_v2u64_abi) {
         @export(__divti3_windows_x86_64, .{ .name = "__divti3", .linkage = .Weak });
         @export(__modti3_windows_x86_64, .{ .name = "__modti3", .linkage = .Weak });
+        @export(__umodti3_windows_x86_64, .{ .name = "__umodti3", .linkage = .Weak });
         @export(__udivti3_windows_x86_64, .{ .name = "__udivti3", .linkage = .Weak });
+        @export(__fixdfti_windows_x86_64, .{ .name = "__fixdfti", .linkage = .Weak });
+        @export(__fixsfti_windows_x86_64, .{ .name = "__fixsfti", .linkage = .Weak });
+        @export(__fixunsdfti_windows_x86_64, .{ .name = "__fixunsdfti", .linkage = .Weak });
+        @export(__fixunssfti_windows_x86_64, .{ .name = "__fixunssfti", .linkage = .Weak });
     } else {
         @export(__divti3, .{ .name = "__divti3", .linkage = .Weak });
         @export(__modti3, .{ .name = "__modti3", .linkage = .Weak });
+        @export(__umodti3, .{ .name = "__umodti3", .linkage = .Weak });
         @export(__udivti3, .{ .name = "__udivti3", .linkage = .Weak });
+        @export(__fixdfti, .{ .name = "__fixdfti", .linkage = .Weak });
+        @export(__fixsfti, .{ .name = "__fixsfti", .linkage = .Weak });
+        @export(__fixunsdfti, .{ .name = "__fixunsdfti", .linkage = .Weak });
+        @export(__fixunssfti, .{ .name = "__fixunssfti", .linkage = .Weak });
     }
 }
 
@@ -65,6 +75,18 @@ fn __udivti3_windows_x86_64(a: v2u64, b: v2u64) callconv(.C) v2u64 {
     return @bitCast(v2u64, udivmod(u128, @bitCast(u128, a), @bitCast(u128, b), null));
 }
 
+pub fn __umodti3(a: u128, b: u128) callconv(.C) u128 {
+    var r: u128 = undefined;
+    _ = udivmod(u128, a, b, &r);
+    return r;
+}
+
+fn __umodti3_windows_x86_64(a: v2u64, b: v2u64) callconv(.C) v2u64 {
+    var r: u128 = undefined;
+    _ = udivmod(u128, @bitCast(u128, a), @bitCast(u128, b), &r);
+    return @bitCast(v2u64, r);
+}
+
 pub fn __modti3(a: i128, b: i128) callconv(.C) i128 {
     return mod(a, b);
 }
@@ -85,6 +107,37 @@ inline fn mod(a: i128, b: i128) i128 {
     return (@bitCast(i128, r) ^ s_a) -% s_a; // negate if s == -1
 }
 
+pub fn __fixdfti(a: f64) callconv(.C) i128 {
+    return floatToInt(i128, a);
+}
+
+fn __fixdfti_windows_x86_64(a: f64) callconv(.C) v2u64 {
+    return @bitCast(v2u64, floatToInt(i128, a));
+}
+
+pub fn __fixsfti(a: f32) callconv(.C) i128 {
+    return floatToInt(i128, a);
+}
+
+fn __fixsfti_windows_x86_64(a: f32) callconv(.C) v2u64 {
+    return @bitCast(v2u64, floatToInt(i128, a));
+}
+
+pub fn __fixunsdfti(a: f64) callconv(.C) u128 {
+    return floatToInt(u128, a);
+}
+
+fn __fixunsdfti_windows_x86_64(a: f64) callconv(.C) v2u64 {
+    return @bitCast(v2u64, floatToInt(u128, a));
+}
+
+pub fn __fixunssfti(a: f32) callconv(.C) u128 {
+    return floatToInt(u128, a);
+}
+
+fn __fixunssfti_windows_x86_64(a: f32) callconv(.C) v2u64 {
+    return @bitCast(v2u64, floatToInt(u128, a));
+}
 // mulo - multiplication overflow
 // * return a*%b.
 // * return if a*b overflows => 1 else => 0
@@ -318,4 +371,72 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
         rem.* = r_all;
     }
     return q_all;
+}
+
+pub inline fn floatToInt(comptime I: type, a: anytype) I {
+    const Log2Int = math.Log2Int;
+    const Int = @import("std").meta.Int;
+    const F = @TypeOf(a);
+    const float_bits = @typeInfo(F).Float.bits;
+    const int_bits = @typeInfo(I).Int.bits;
+    const rep_t = Int(.unsigned, float_bits);
+    const sig_bits = math.floatMantissaBits(F);
+    const exp_bits = math.floatExponentBits(F);
+    const fractional_bits = floatFractionalBits(F);
+
+    // const implicit_bit = if (F != f80) (@as(rep_t, 1) << sig_bits) else 0;
+    const implicit_bit = @as(rep_t, 1) << sig_bits;
+    const max_exp = (1 << (exp_bits - 1));
+    const exp_bias = max_exp - 1;
+    const sig_mask = (@as(rep_t, 1) << sig_bits) - 1;
+
+    // Break a into sign, exponent, significand
+    const a_rep: rep_t = @bitCast(rep_t, a);
+    const negative = (a_rep >> (float_bits - 1)) != 0;
+    const exponent = @intCast(i32, (a_rep << 1) >> (sig_bits + 1)) - exp_bias;
+    const significand: rep_t = (a_rep & sig_mask) | implicit_bit;
+
+    // If the exponent is negative, the result rounds to zero.
+    if (exponent < 0) return 0;
+
+    // If the value is too large for the integer type, saturate.
+    switch (@typeInfo(I).Int.signedness) {
+        .unsigned => {
+            if (negative) return 0;
+            if (@intCast(c_uint, exponent) >= @minimum(int_bits, max_exp)) return math.maxInt(I);
+        },
+        .signed => if (@intCast(c_uint, exponent) >= @minimum(int_bits - 1, max_exp)) {
+            return if (negative) math.minInt(I) else math.maxInt(I);
+        },
+    }
+
+    // If 0 <= exponent < sig_bits, right shift to get the result.
+    // Otherwise, shift left.
+    var result: I = undefined;
+    if (exponent < fractional_bits) {
+        result = @intCast(I, significand >> @intCast(Log2Int(rep_t), fractional_bits - exponent));
+    } else {
+        result = @intCast(I, significand) << @intCast(Log2Int(I), exponent - fractional_bits);
+    }
+
+    if ((@typeInfo(I).Int.signedness == .signed) and negative)
+        return ~result +% 1;
+    return result;
+}
+
+/// Returns the number of fractional bits in the mantissa of floating point type T.
+pub inline fn floatFractionalBits(comptime T: type) comptime_int {
+    comptime std.debug.assert(@typeInfo(T) == .Float);
+
+    // standard IEEE floats have an implicit 0.m or 1.m integer part
+    // f80 is special and has an explicitly stored bit in the MSB
+    // this function corresponds to `MANT_DIG - 1' from C
+    return switch (@typeInfo(T).Float.bits) {
+        16 => 10,
+        32 => 23,
+        64 => 52,
+        80 => 63,
+        128 => 112,
+        else => @compileError("unknown floating point type " ++ @typeName(T)),
+    };
 }
