@@ -10061,9 +10061,16 @@ enum Usage {
     Unused,
 }
 
-#[derive(Default)]
 pub struct UsageTrackingMap<K, V> {
     map: MutMap<K, (V, Usage)>,
+}
+
+impl<K, V> Default for UsageTrackingMap<K, V> {
+    fn default() -> Self {
+        Self {
+            map: MutMap::default(),
+        }
+    }
 }
 
 impl<K, V> UsageTrackingMap<K, V>
