@@ -15,11 +15,10 @@ use bumpalo::collections::CollectIn;
 
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_target::TargetInfo;
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Proc, ProcLayout, Stmt,
-    UpdateModeId,
+    BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
+    ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -27,7 +26,7 @@ use crate::layout::{
 
 use bumpalo::Bump;
 
-use roc_collections::{MutMap, MutSet};
+use roc_collections::MutMap;
 
 /**
 Try to find increments of symbols followed by decrements of the symbol they were indexed out of (their parent).
@@ -38,12 +37,10 @@ pub fn specialize_drops<'a, 'i>(
     layout_interner: &'i mut STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     for ((_symbol, proc_layout), proc) in procs.iter_mut() {
-        let mut environment =
-            DropSpecializationEnvironment::new(arena, home, proc_layout.result, target_info);
+        let mut environment = DropSpecializationEnvironment::new(arena, home, proc_layout.result);
         specialize_drops_proc(arena, layout_interner, ident_ids, &mut environment, proc);
     }
 }
@@ -104,13 +101,31 @@ fn specialize_drops_stmt<'a, 'i>(
                                 _ => unreachable!("List get should have two arguments"),
                             };
 
-                            environment.add_list_child(*structure, *binding, index);
+                            environment.add_list_child_symbol(*structure, *binding, index);
 
                             alloc_let_with_continuation!(environment)
                         }
-                        _ => {
-                            // TODO perhaps allow for some e.g. lowlevel functions to be called if they cannot modify the RC of the symbol.
+                        // Check whether the increments can be passed to the continuation.
+                        CallType::LowLevel { op, .. } => match low_level_no_rc(&op) {
+                            // It should be safe to pass the increments to the continuation.
+                            RC::NoRc => alloc_let_with_continuation!(environment),
+                            // We probably should not pass the increments to the continuation.
+                            RC::Rc | RC::Uknown => {
+                                let incremented_symbols = environment.incremented_symbols.drain();
 
+                                let new_stmt = alloc_let_with_continuation!(environment);
+
+                                // The new_environment might have inserted increments that were set to 0 before. We need to add th
+                                for (symbol, increment) in incremented_symbols.map.into_iter() {
+                                    environment
+                                        .incremented_symbols
+                                        .insert_count(symbol, increment);
+                                }
+
+                                new_stmt
+                            }
+                        },
+                        _ => {
                             // Calls can modify the RC of the symbol.
                             // If we move a increment of children after the function,
                             // the function might deallocate the child before we can use it after the function.
@@ -118,15 +133,61 @@ fn specialize_drops_stmt<'a, 'i>(
                             // the parent might be deallocated before the function can use it.
                             // Thus forget everything about any increments.
 
-                            let mut new_environment = environment.clone_without_incremented();
+                            let incremented_symbols = environment.incremented_symbols.drain();
 
-                            alloc_let_with_continuation!(&mut new_environment)
+                            let new_stmt = alloc_let_with_continuation!(environment);
+
+                            // The new_environment might have inserted increments that were set to 0 before. We need to add th
+                            for (symbol, increment) in incremented_symbols.map.into_iter() {
+                                environment
+                                    .incremented_symbols
+                                    .insert_count(symbol, increment);
+                            }
+
+                            new_stmt
                         }
                     }
                 }
 
-                Expr::Tag { tag_id, .. } => {
+                Expr::Tag {
+                    tag_id,
+                    arguments: children,
+                    ..
+                } => {
                     environment.symbol_tag.insert(*binding, *tag_id);
+
+                    for (index, child) in children.iter().enumerate() {
+                        environment.add_union_child(*binding, *child, *tag_id, index as u64);
+                    }
+
+                    alloc_let_with_continuation!(environment)
+                }
+                Expr::Struct(children) => {
+                    for (index, child) in children.iter().enumerate() {
+                        environment.add_struct_child(*binding, *child, index as u64);
+                    }
+
+                    alloc_let_with_continuation!(environment)
+                }
+                Expr::ExprBox { symbol: child } => {
+                    environment.add_box_child(*binding, *child);
+
+                    alloc_let_with_continuation!(environment)
+                }
+                Expr::Array {
+                    elems: children, ..
+                } => {
+                    for (index, child) in
+                        children
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, child)| match child {
+                                ListLiteralElement::Literal(_) => None,
+                                ListLiteralElement::Symbol(s) => Some((index, s)),
+                            })
+                    {
+                        environment.add_list_child(*binding, *child, index as u64);
+                    }
 
                     alloc_let_with_continuation!(environment)
                 }
@@ -179,13 +240,10 @@ fn specialize_drops_stmt<'a, 'i>(
                     }
                     alloc_let_with_continuation!(environment)
                 }
-                Expr::Struct(_)
-                | Expr::RuntimeErrorFunction(_)
-                | Expr::ExprBox { .. }
+                Expr::RuntimeErrorFunction(_)
                 | Expr::NullPointer
                 | Expr::GetTagId { .. }
-                | Expr::EmptyArray
-                | Expr::Array { .. } => {
+                | Expr::EmptyArray => {
                     // Does nothing relevant to drop specialization. So we can just continue.
                     alloc_let_with_continuation!(environment)
                 }
@@ -222,7 +280,7 @@ fn specialize_drops_stmt<'a, 'i>(
             let new_branches = branches
                 .iter()
                 .map(|(label, info, branch)| {
-                    let mut branch_env = environment.clone_without_incremented();
+                    let mut branch_env = environment.clone();
 
                     insert_branch_info!(branch_env, info);
 
@@ -234,7 +292,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         branch,
                     );
 
-                    (*label, info.clone(), new_branch.clone())
+                    (*label, info.clone(), new_branch.clone(), branch_env)
                 })
                 .collect_in::<Vec<_>>(arena)
                 .into_bump_slice();
@@ -242,7 +300,7 @@ fn specialize_drops_stmt<'a, 'i>(
             let new_default_branch = {
                 let (info, branch) = default_branch;
 
-                let mut branch_env = environment.clone_without_incremented();
+                let mut branch_env = environment.clone();
 
                 insert_branch_info!(branch_env, info);
 
@@ -254,24 +312,104 @@ fn specialize_drops_stmt<'a, 'i>(
                     branch,
                 );
 
+                (info.clone(), new_branch, branch_env)
+            };
+
+            // Find consumed increments in each branch and make sure they are consumed in all branches.
+            // By incrementing them in each branch where they were not consumed.
+            {
+                let branch_envs = {
+                    let mut branch_environments =
+                        Vec::with_capacity_in(new_branches.len() + 1, arena);
+
+                    for (_, _, _, branch_env) in new_branches.iter() {
+                        branch_environments.push(branch_env);
+                    }
+
+                    branch_environments.push(&new_default_branch.2);
+
+                    branch_environments
+                };
+
+                // Find the lowest symbol count for each symbol in each branch, and update the environment to match.
+                for (symbol, count) in environment.incremented_symbols.map.iter_mut() {
+                    let consumed = branch_envs
+                        .iter()
+                        .map(|branch_env| {
+                            branch_env.incremented_symbols.map.get(symbol).unwrap_or(&0)
+                        })
+                        .min()
+                        .unwrap();
+
+                    // Update the existing env to match the lowest count.
+                    *count = *consumed;
+                }
+            }
+
+            macro_rules! insert_incs {
+                ($branch_env:expr, $branch:expr ) => {{
+                    let symbol_differences =
+                        environment
+                            .incremented_symbols
+                            .map
+                            .iter()
+                            .filter_map(|(symbol, count)| {
+                                let branch_count = $branch_env
+                                    .incremented_symbols
+                                    .map
+                                    .get(symbol)
+                                    .unwrap_or(&0);
+
+                                match branch_count - count {
+                                    0 => None,
+                                    difference => Some((symbol, difference)),
+                                }
+                            });
+
+                    symbol_differences.fold($branch, |new_branch, (symbol, difference)| {
+                        arena.alloc(Stmt::Refcounting(
+                            ModifyRc::Inc(*symbol, difference),
+                            new_branch,
+                        ))
+                    })
+                }};
+            }
+
+            let newer_branches = new_branches
+                .iter()
+                .map(|(label, info, branch, branch_env)| {
+                    let new_branch = insert_incs!(branch_env, branch);
+
+                    (*label, info.clone(), new_branch.clone())
+                })
+                .collect_in::<Vec<_>>(arena)
+                .into_bump_slice();
+
+            let newer_default_branch = {
+                let (info, branch, branch_env) = new_default_branch;
+
+                let new_branch = insert_incs!(branch_env, branch);
+
                 (info.clone(), new_branch)
             };
 
             arena.alloc(Stmt::Switch {
                 cond_symbol: *cond_symbol,
                 cond_layout: *cond_layout,
-                branches: new_branches,
-                default_branch: new_default_branch,
+                branches: newer_branches,
+                default_branch: newer_default_branch,
                 ret_layout: *ret_layout,
             })
         }
         Stmt::Ret(symbol) => arena.alloc(Stmt::Ret(*symbol)),
         Stmt::Refcounting(rc, continuation) => match rc {
             ModifyRc::Inc(symbol, count) => {
-                let any = environment.any_incremented(symbol);
+                let inc_before = environment.incremented_symbols.contains(symbol);
 
                 // Add a symbol for every increment performed.
-                environment.add_incremented(*symbol, *count);
+                environment
+                    .incremented_symbols
+                    .insert_count(*symbol, *count);
 
                 let new_continuation = specialize_drops_stmt(
                     arena,
@@ -281,12 +419,17 @@ fn specialize_drops_stmt<'a, 'i>(
                     continuation,
                 );
 
-                if any {
+                if inc_before {
                     // There were increments before this one, best to let the first one do the increments.
                     // Or there are no increments left, so we can just continue.
                     new_continuation
                 } else {
-                    match environment.get_incremented(symbol) {
+                    match environment
+                        .incremented_symbols
+                        .map
+                        .remove(symbol)
+                        .unwrap_or(0)
+                    {
                         // This is the first increment, but all increments are consumed. So don't insert any.
                         0 => new_continuation,
                         // We still need to do some increments.
@@ -307,7 +450,7 @@ fn specialize_drops_stmt<'a, 'i>(
                 // dec a
                 // dec b
 
-                if environment.pop_incremented(symbol) {
+                if environment.incremented_symbols.pop(symbol) {
                     // This decremented symbol was incremented before, so we can remove it.
                     specialize_drops_stmt(
                         arena,
@@ -317,24 +460,32 @@ fn specialize_drops_stmt<'a, 'i>(
                         continuation,
                     )
                 } else {
-                    // Collect all children that were incremented and make sure that one increment remains in the environment afterwards.
+                    // Collect all children (recursively) that were incremented and make sure that one increment remains in the environment afterwards.
                     // To prevent
                     // let a = index b; inc a; dec b; ...; dec a
                     // from being translated to
                     // let a = index b; dec b
                     // As a might get dropped as a result of the decrement of b.
-                    let mut incremented_children = environment
-                        .get_children(symbol)
-                        .iter()
-                        .copied()
-                        .filter_map(|child| environment.pop_incremented(&child).then_some(child))
-                        .collect::<MutSet<_>>();
+                    let mut incremented_children = {
+                        let mut todo_children = bumpalo::vec![in arena; *symbol];
+                        let mut incremented_children = CountingMap::new();
+
+                        while let Some(child) = todo_children.pop() {
+                            if environment.incremented_symbols.pop(&child) {
+                                incremented_children.insert(child);
+                            } else {
+                                todo_children.extend(environment.get_children(&child));
+                            }
+                        }
+
+                        incremented_children
+                    };
 
                     // This decremented symbol was not incremented before, perhaps the children were.
                     let in_layout = environment.get_symbol_layout(symbol);
                     let runtime_layout = layout_interner.runtime_representation(*in_layout);
 
-                    let new_dec = match runtime_layout.repr {
+                    let updated_stmt = match runtime_layout.repr {
                         // Layout has children, try to inline them.
                         LayoutRepr::Struct(field_layouts) => specialize_struct(
                             arena,
@@ -391,11 +542,13 @@ fn specialize_drops_stmt<'a, 'i>(
                     };
 
                     // Add back the increments for the children to the environment.
-                    for child_symbol in incremented_children.iter() {
-                        environment.add_incremented(*child_symbol, 1)
+                    for (child_symbol, symbol_count) in incremented_children.map.into_iter() {
+                        environment
+                            .incremented_symbols
+                            .insert_count(child_symbol, symbol_count)
                     }
 
-                    new_dec
+                    updated_stmt
                 }
             }
             ModifyRc::DecRef(_) => {
@@ -471,7 +624,8 @@ fn specialize_drops_stmt<'a, 'i>(
             body,
             remainder,
         } => {
-            let mut new_environment = environment.clone_without_incremented();
+            let mut new_environment = environment.clone();
+            new_environment.incremented_symbols.clear();
 
             for param in parameters.iter() {
                 new_environment.add_symbol_layout(param.symbol, param.layout);
@@ -510,7 +664,7 @@ fn specialize_struct<'a, 'i>(
     environment: &mut DropSpecializationEnvironment<'a>,
     symbol: &Symbol,
     struct_layout: &'a [InLayout],
-    incremented_children: &mut MutSet<Child>,
+    incremented_children: &mut CountingMap<Child>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     match environment.struct_children.get(symbol) {
@@ -526,7 +680,7 @@ fn specialize_struct<'a, 'i>(
 
             for (index, _layout) in struct_layout.iter().enumerate() {
                 for (child, _i) in children_clone.iter().filter(|(_, i)| *i == index as u64) {
-                    let removed = incremented_children.remove(child);
+                    let removed = incremented_children.pop(child);
                     index_symbols.insert(index, (*child, removed));
 
                     if removed {
@@ -599,7 +753,7 @@ fn specialize_union<'a, 'i>(
     environment: &mut DropSpecializationEnvironment<'a>,
     symbol: &Symbol,
     union_layout: UnionLayout<'a>,
-    incremented_children: &mut MutSet<Child>,
+    incremented_children: &mut CountingMap<Child>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     let current_tag = environment.symbol_tag.get(symbol).copied();
@@ -642,7 +796,7 @@ fn specialize_union<'a, 'i>(
                         {
                             debug_assert_eq!(tag, *t);
 
-                            let removed = incremented_children.remove(child);
+                            let removed = incremented_children.pop(child);
                             index_symbols.insert(index, (*child, removed));
 
                             if removed {
@@ -804,14 +958,14 @@ fn specialize_boxed<'a, 'i>(
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
     environment: &mut DropSpecializationEnvironment<'a>,
-    incremented_children: &mut MutSet<Child>,
+    incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    let removed = match incremented_children.iter().next() {
-        Some(s) => {
+    let removed = match incremented_children.map.iter().next() {
+        Some((s, _)) => {
             let s = *s;
-            incremented_children.remove(&s);
+            incremented_children.pop(&s);
             Some(s)
         }
         None => None,
@@ -830,23 +984,20 @@ fn specialize_boxed<'a, 'i>(
                 *symbol,
                 // If the symbol is unique:
                 // - free the box
-                |_, _, _| {
+                |_, _, continuation| {
                     arena.alloc(Stmt::Refcounting(
                         // TODO can be replaced by free if ever added to the IR.
                         ModifyRc::DecRef(*symbol),
-                        new_continuation,
+                        continuation,
                     ))
                 },
                 // If the symbol is not unique:
                 // - increment the child
                 // - decref the box
-                |_, _, _| {
+                |_, _, continuation| {
                     arena.alloc(Stmt::Refcounting(
                         ModifyRc::Inc(s, 1),
-                        arena.alloc(Stmt::Refcounting(
-                            ModifyRc::DecRef(*symbol),
-                            new_continuation,
-                        )),
+                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef(*symbol), continuation)),
                     ))
                 },
                 new_continuation,
@@ -864,7 +1015,7 @@ fn specialize_list<'a, 'i>(
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
     environment: &mut DropSpecializationEnvironment<'a>,
-    incremented_children: &mut MutSet<Child>,
+    incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
     item_layout: InLayout,
     continuation: &'a Stmt<'a>,
@@ -899,7 +1050,7 @@ fn specialize_list<'a, 'i>(
                         for (child, i) in children_clone.iter().filter(|(_child, i)| *i == index) {
                             debug_assert!(length > *i);
 
-                            let removed = incremented_children.remove(child);
+                            let removed = incremented_children.pop(child);
                             index_symbols.insert(index, (*child, removed));
 
                             if removed {
@@ -1120,7 +1271,6 @@ struct DropSpecializationEnvironment<'a> {
     arena: &'a Bump,
     home: ModuleId,
     layout: InLayout<'a>,
-    target_info: TargetInfo,
 
     symbol_layouts: MutMap<Symbol, InLayout<'a>>,
 
@@ -1137,7 +1287,7 @@ struct DropSpecializationEnvironment<'a> {
     list_children: MutMap<Parent, Vec<'a, (Child, Index)>>,
 
     // Keeps track of all incremented symbols.
-    incremented_symbols: MutMap<Symbol, u64>,
+    incremented_symbols: CountingMap<Symbol>,
 
     // Map containing the current known tag of a layout.
     symbol_tag: MutMap<Symbol, Tag>,
@@ -1150,39 +1300,20 @@ struct DropSpecializationEnvironment<'a> {
 }
 
 impl<'a> DropSpecializationEnvironment<'a> {
-    fn new(arena: &'a Bump, home: ModuleId, layout: InLayout<'a>, target_info: TargetInfo) -> Self {
+    fn new(arena: &'a Bump, home: ModuleId, layout: InLayout<'a>) -> Self {
         Self {
             arena,
             home,
             layout,
-            target_info,
             symbol_layouts: MutMap::default(),
             struct_children: MutMap::default(),
             union_children: MutMap::default(),
             box_children: MutMap::default(),
             list_children: MutMap::default(),
-            incremented_symbols: MutMap::default(),
+            incremented_symbols: CountingMap::new(),
             symbol_tag: MutMap::default(),
             symbol_index: MutMap::default(),
             list_length: MutMap::default(),
-        }
-    }
-
-    fn clone_without_incremented(&self) -> Self {
-        Self {
-            arena: self.arena,
-            home: self.home,
-            layout: self.layout,
-            target_info: self.target_info,
-            symbol_layouts: self.symbol_layouts.clone(),
-            struct_children: self.struct_children.clone(),
-            union_children: self.union_children.clone(),
-            box_children: self.box_children.clone(),
-            list_children: self.list_children.clone(),
-            incremented_symbols: MutMap::default(),
-            symbol_tag: self.symbol_tag.clone(),
-            symbol_index: self.symbol_index.clone(),
-            list_length: self.list_length.clone(),
         }
     }
 
@@ -1222,12 +1353,16 @@ impl<'a> DropSpecializationEnvironment<'a> {
             .push(child);
     }
 
-    fn add_list_child(&mut self, parent: Parent, child: Child, index: &Symbol) {
+    fn add_list_child(&mut self, parent: Parent, child: Child, index: u64) {
+        self.list_children
+            .entry(parent)
+            .or_insert_with(|| Vec::new_in(self.arena))
+            .push((child, index));
+    }
+
+    fn add_list_child_symbol(&mut self, parent: Parent, child: Child, index: &Symbol) {
         if let Some(index) = self.symbol_index.get(index) {
-            self.list_children
-                .entry(parent)
-                .or_insert_with(|| Vec::new_in(self.arena))
-                .push((child, *index));
+            self.add_list_child(parent, child, *index)
         }
     }
 
@@ -1252,35 +1387,149 @@ impl<'a> DropSpecializationEnvironment<'a> {
 
         res
     }
+}
 
-    /**
-    Add a symbol for every increment performed.
-     */
-    fn add_incremented(&mut self, symbol: Symbol, count: u64) {
-        self.incremented_symbols
-            .entry(symbol)
+/**
+Reference count information
+*/
+enum RC {
+    // Rc is important, moving an increment to after this function might break the program.
+    // E.g. if the function checks for uniqueness and behaves differently based on that.
+    Rc,
+    // Rc is not important, moving an increment to after this function should have no effect.
+    NoRc,
+    // Rc effect is unknown.
+    Uknown,
+}
+
+/*
+Returns whether the reference count of arguments to this function is relevant to the program.
+ */
+fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
+    use LowLevel::*;
+
+    match lowlevel {
+        Unreachable => RC::Uknown,
+        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrGraphemes
+        | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => RC::NoRc,
+        ListWithCapacity | StrWithCapacity => RC::NoRc,
+        ListReplaceUnsafe => RC::Rc,
+        StrGetUnsafe | ListGetUnsafe => RC::NoRc,
+        ListConcat => RC::Rc,
+        StrConcat => RC::Rc,
+        StrSubstringUnsafe => RC::NoRc,
+        StrReserve => RC::Rc,
+        StrAppendScalar => RC::Rc,
+        StrGetScalarUnsafe => RC::NoRc,
+        StrTrim => RC::Rc,
+        StrTrimLeft => RC::Rc,
+        StrTrimRight => RC::Rc,
+        StrSplit => RC::NoRc,
+        StrToNum => RC::NoRc,
+        ListPrepend => RC::Rc,
+        StrJoinWith => RC::NoRc,
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => RC::Rc,
+
+        ListAppendUnsafe
+        | ListReserve
+        | ListSublist
+        | ListDropAt
+        | ListSwap
+        | ListReleaseExcessCapacity
+        | StrReleaseExcessCapacity => RC::Rc,
+
+        Eq | NotEq => RC::NoRc,
+
+        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
+        | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
+        | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
+        | NumPow | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
+        | NumShiftRightBy | NumShiftRightZfBy => RC::NoRc,
+
+        NumToStr
+        | NumAbs
+        | NumNeg
+        | NumSin
+        | NumCos
+        | NumSqrtUnchecked
+        | NumLogUnchecked
+        | NumRound
+        | NumCeiling
+        | NumFloor
+        | NumToFrac
+        | Not
+        | NumIsNan
+        | NumIsInfinite
+        | NumIsFinite
+        | NumAtan
+        | NumAcos
+        | NumAsin
+        | NumIntCast
+        | NumToIntChecked
+        | NumToFloatCast
+        | NumToFloatChecked
+        | NumCountLeadingZeroBits
+        | NumCountTrailingZeroBits
+        | NumCountOneBits => RC::NoRc,
+        NumBytesToU16 => RC::NoRc,
+        NumBytesToU32 => RC::NoRc,
+        NumBytesToU64 => RC::NoRc,
+        NumBytesToU128 => RC::NoRc,
+        I128OfDec => RC::NoRc,
+        DictPseudoSeed => RC::NoRc,
+        StrStartsWith | StrEndsWith => RC::NoRc,
+        StrStartsWithScalar => RC::NoRc,
+        StrFromUtf8Range => RC::Rc,
+        StrToUtf8 => RC::Rc,
+        StrRepeat => RC::NoRc,
+        StrFromInt | StrFromFloat => RC::NoRc,
+        Hash => RC::NoRc,
+
+        ListIsUnique => RC::Rc,
+
+        BoxExpr | UnboxExpr => {
+            unreachable!("These lowlevel operations are turned into mono Expr's")
+        }
+
+        PtrCast | PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        | RefCountDecDataPtr | RefCountIsUnique => {
+            unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
+        }
+    }
+}
+
+/// Map that contains a count for each key.
+/// Keys with a count of 0 are kept around, so that it can be seen that they were once present.
+#[derive(Clone)]
+struct CountingMap<K> {
+    map: MutMap<K, u64>,
+}
+
+impl<K> CountingMap<K>
+where
+    K: Eq + std::hash::Hash + Clone,
+{
+    fn new() -> Self {
+        Self {
+            map: MutMap::default(),
+        }
+    }
+
+    fn insert(&mut self, key: K) {
+        self.insert_count(key, 1);
+    }
+
+    fn insert_count(&mut self, key: K, count: u64) {
+        self.map
+            .entry(key)
             .and_modify(|c| *c += count)
             .or_insert(count);
     }
 
-    fn any_incremented(&self, symbol: &Symbol) -> bool {
-        self.incremented_symbols.contains_key(symbol)
-    }
-
-    /**
-    Return the amount of times a symbol still has to be incremented.
-    Accounting for later consumtion and removal of the increment.
-    */
-    fn get_incremented(&mut self, symbol: &Symbol) -> u64 {
-        self.incremented_symbols.remove(symbol).unwrap_or(0)
-    }
-
-    fn pop_incremented(&mut self, symbol: &Symbol) -> bool {
-        match self.incremented_symbols.get_mut(symbol) {
-            Some(1) => {
-                self.incremented_symbols.remove(symbol);
-                true
-            }
+    fn pop(&mut self, key: &K) -> bool {
+        match self.map.get_mut(key) {
+            Some(0) => false,
             Some(c) => {
                 *c -= 1;
                 true
@@ -1289,5 +1538,19 @@ impl<'a> DropSpecializationEnvironment<'a> {
         }
     }
 
-    // TODO assert that a parent is only inlined once / assert max single dec per parent.
+    fn contains(&self, symbol: &K) -> bool {
+        self.map.contains_key(symbol)
+    }
+
+    fn drain(&mut self) -> Self {
+        let res = self.clone();
+        for (_, v) in self.map.iter_mut() {
+            *v = 0;
+        }
+        res
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+    }
 }

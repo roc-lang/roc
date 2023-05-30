@@ -203,8 +203,8 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                             let Test.173 : Int1 = true;
                             let Test.177 : Int1 = lowlevel Eq Test.173 Test.172;
                             if Test.177 then
-                                let #Derived_gen.272 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.16, id: UpdateModeId { id: 242 } };
                                 inc Test.19;
+                                let #Derived_gen.272 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.16, id: UpdateModeId { id: 242 } };
                                 let Test.118 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.19 Test.10 Test.11;
                                 joinpoint Test.137 #Derived_gen.317 #Derived_gen.318:
                                     let Test.136 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;

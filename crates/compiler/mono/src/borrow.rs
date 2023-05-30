@@ -947,6 +947,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
     // - other refcounted arguments are Borrowed
     match op {
         Unreachable => arena.alloc_slice_copy(&[irrelevant]),
+        DictPseudoSeed => arena.alloc_slice_copy(&[irrelevant]),
         ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrGraphemes
         | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => {
             arena.alloc_slice_copy(&[borrowed])
@@ -1014,7 +1015,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         | NumToFloatChecked
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
-        | NumCountOneBits => arena.alloc_slice_copy(&[irrelevant]),
+        | NumCountOneBits
+        | I128OfDec => arena.alloc_slice_copy(&[irrelevant]),
         NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU64 => arena.alloc_slice_copy(&[borrowed, irrelevant]),

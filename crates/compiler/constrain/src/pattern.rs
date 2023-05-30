@@ -512,13 +512,13 @@ pub fn constrain_pattern(
                 let expected =
                     constraints.push_pat_expected_type(PExpected::NoExpectation(pat_type_index));
 
-                let (guard_var, loc_guard) = typ;
+                let (guard_var, loc_pattern) = typ;
                 let elem_type = {
                     let guard_type = constraints.push_variable(*guard_var);
                     let expected_pat = constraints.push_pat_expected_type(PExpected::ForReason(
                         PReason::PatternGuard,
                         pat_type_index,
-                        loc_guard.region,
+                        loc_pattern.region,
                     ));
 
                     state.constraints.push(constraints.pattern_presence(
@@ -533,8 +533,8 @@ pub fn constrain_pattern(
                         types,
                         constraints,
                         env,
-                        &loc_guard.value,
-                        loc_guard.region,
+                        &loc_pattern.value,
+                        loc_pattern.region,
                         expected,
                         state,
                     );
@@ -676,6 +676,17 @@ pub fn constrain_pattern(
                         RecordField::Optional(pat_type)
                     }
                     DestructType::Required => {
+                        // Named destructures like
+                        //   {foo} -> ...
+                        // are equivalent to wildcards on the type of `foo`, so if `foo` is a tag
+                        // union, we must add a constraint to ensure that this destructure opens it
+                        // up.
+                        if could_be_a_tag_union(types, pat_type_index) {
+                            state
+                                .delayed_is_open_constraints
+                                .push(constraints.is_open_type(pat_type_index));
+                        }
+
                         // No extra constraints necessary.
                         RecordField::Demanded(pat_type)
                     }

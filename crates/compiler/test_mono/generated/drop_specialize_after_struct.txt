@@ -1,0 +1,6 @@
+procedure Test.0 ():
+    let Test.2 : Str = "value";
+    let Test.3 : {Str, Str} = Struct {Test.2, Test.2};
+    dec Test.2;
+    let Test.4 : Str = "result";
+    ret Test.4;

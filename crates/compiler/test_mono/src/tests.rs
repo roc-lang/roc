@@ -3015,13 +3015,64 @@ fn rb_tree_fbip() {
 }
 
 #[mono_test]
-fn record_update() {
+fn specialize_after_match() {
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
 
-        main = f {a: [], b: [], c:[]}
+        main = 
+            listA : LinkedList Str
+            listA = Nil
+            
+            listB : LinkedList Str
+            listB = Nil
 
+            longestLinkedList listA listB
+
+        LinkedList a : [Cons a (LinkedList a), Nil]
+
+        longestLinkedList : LinkedList a, LinkedList a -> Nat
+        longestLinkedList = \listA, listB -> when listA is
+            Nil -> linkedListLength listB
+            Cons a aa -> when listB is
+                Nil -> linkedListLength listA
+                Cons b bb -> 
+                    lengthA = (linkedListLength aa) + 1
+                    lengthB = linkedListLength listB
+                    if lengthA > lengthB
+                        then lengthA
+                        else lengthB
+        
+        linkedListLength : LinkedList a -> Nat
+        linkedListLength = \list -> when list is
+            Nil -> 0
+            Cons _ rest -> 1 + linkedListLength rest
+        "#
+    )
+}
+
+#[mono_test]
+fn drop_specialize_after_struct() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: v, right: v }
+            "result"
+        "#
+    )
+}
+
+#[mono_test]
+fn record_update() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+        main = f {a: [], b: [], c:[]}
         f : {a: List Nat, b: List Nat, c: List Nat} -> {a: List Nat, b: List Nat, c: List Nat}
         f = \record -> {record & a: List.set record.a 7 7, b: List.set record.b 8 8}
         "#

@@ -216,7 +216,7 @@ withCapacity : Nat -> Str
 ## In this example:
 ## 1. We start with `greeting`, which has both a length and capacity of 24 (bytes).
 ## 2. `|> Str.concat ", "` will see that there isn't enough capacity to add 2 more bytes for the `", "`, so it will create a new heap allocation with enough bytes to hold both. (This probably will be more than 7 bytes, because when [Str] functions reallocate, they apply a multiplier to the exact capacity required. This makes it less likely that future realloctions will be needed. The multiplier amount is not specified, because it may change in future releases of Roc, but it will likely be around 1.5 to 2 times the exact capacity required.) Then it will copy the current bytes (`"Hello"`) into the new allocation, and finally concatenate the `", "` into the new allocation. The old allocation will then be deallocated because it's no longer referenced anywhere in the program.
-## 3. `|> Str.concat subject` will again check if there is enough capacity in the string. If it doesn't find enough capacity once again, it will make a third allocation, copy the existing bytes (`"Hello, "`) into that third allocation, and then deallocate the second allocation because it's already no longer being referenced anywhere else in the program. (It may find enough capacity in this prticular case, because the previous [Str.concat] allocated something like 1.5 to 2 times the necessary capacity in order to anticipate future concatenations like this...but if something longer than `"World"` were being concatenated here, it might still require further reallocation and copying.)
+## 3. `|> Str.concat subject` will again check if there is enough capacity in the string. If it doesn't find enough capacity once again, it will make a third allocation, copy the existing bytes (`"Hello, "`) into that third allocation, and then deallocate the second allocation because it's already no longer being referenced anywhere else in the program. (It may find enough capacity in this particular case, because the previous [Str.concat] allocated something like 1.5 to 2 times the necessary capacity in order to anticipate future concatenations like this...but if something longer than `"World"` were being concatenated here, it might still require further reallocation and copying.)
 ## 4. `|> Str.concat "!\n"` will repeat this process once more.
 ##
 ## This process can have significant performance costs due to multiple reallocation of new strings, copying between old strings and new strings, and deallocation of immediately obsolete strings.
@@ -704,7 +704,7 @@ expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
 
 ## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well
 ## as the rest of the string after that occurrence.
-## Returns [ Err NotFound] if the delimiter is not found.
+## Returns [Err NotFound] if the delimiter is not found.
 ## ```
 ## expect Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
 ## expect Str.splitFirst "no slashes here" "/" == Err NotFound
@@ -894,7 +894,7 @@ walkUtf8Help = \str, state, step, index, length ->
 expect (walkUtf8 "ABC" [] List.append) == [65, 66, 67]
 expect (walkUtf8 "鹏" [] List.append) == [233, 185, 143]
 
-## Shrink the memory footprint of a str such that it's capacity and length are equal.
+## Shrink the memory footprint of a str such that its capacity and length are equal.
 ## Note: This will also convert seamless slices to regular lists.
 releaseExcessCapacity : Str -> Str
 

@@ -80,7 +80,7 @@ interface Dict
 ## vacated spot.
 ##
 ## This move is done as a performance optimization, and it lets [remove] have
-## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time). ##
+## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time).
 ##
 ## Dict is inspired by [IndexMap](https://docs.rs/indexmap/latest/indexmap/map/struct.IndexMap.html).
 ## The internal implementation of a dictionary is similar to [absl::flat_hash_map](https://abseil.io/docs/cpp/guides/container).
@@ -95,9 +95,33 @@ Dict k v := {
     # TODO: define Eq and Hash that are unordered. Only if value has hash/eq?
     metadata : List I8,
     dataIndices : List Nat,
-    data : List (T k v),
+    data : List (k, v),
     size : Nat,
 } | k has Hash & Eq
+     has [
+         Eq {
+             isEq,
+         },
+         Hash {
+             hash: hashDict,
+         },
+     ]
+
+isEq : Dict k v, Dict k v -> Bool | k has Hash & Eq, v has Eq
+isEq = \xs, ys ->
+    if len xs != len ys then
+        Bool.false
+    else
+        walkUntil xs Bool.true \_, k, xVal ->
+            when get ys k is
+                Ok yVal if yVal == xVal ->
+                    Continue Bool.true
+
+                _ ->
+                    Break Bool.false
+
+hashDict : hasher, Dict k v -> hasher | k has Hash & Eq, v has Hash, hasher has Hasher
+hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
 
 ## Return an empty dictionary.
 ## ```
@@ -127,7 +151,7 @@ capacity = \@Dict { dataIndices } ->
     cap - Num.shiftRightZfBy cap 3
 
 ## Return a dictionary with space allocated for a number of entries. This
-## may provide a performance optimisation if you know how many entries will be
+## may provide a performance optimization if you know how many entries will be
 ## inserted.
 withCapacity : Nat -> Dict k v | k has Hash & Eq
 withCapacity = \_ ->
@@ -151,12 +175,12 @@ single = \k, v ->
 ##     |> Dict.insert 2 "Two"
 ##     |> Dict.insert 3 "Three"
 ##     |> Dict.insert 4 "Four"
-##     |> Bool.isEq (Dict.fromList [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"])
+##     |> Bool.isEq (Dict.fromList [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")])
 ## ```
-fromList : List (T k v) -> Dict k v | k has Hash & Eq
+fromList : List (k, v) -> Dict k v | k has Hash & Eq
 fromList = \data ->
     # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
-    List.walk data (empty {}) (\dict, T k v -> insert dict k v)
+    List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
 
 ## Returns the number of values in the dictionary.
 ## ```
@@ -214,7 +238,7 @@ clear = \@Dict { metadata, dataIndices, data } ->
 ## ```
 walk : Dict k v, state, (state, k, v -> state) -> state | k has Hash & Eq
 walk = \@Dict { data }, initialState, transform ->
-    List.walk data initialState (\state, T k v -> transform state k v)
+    List.walk data initialState (\state, (k, v) -> transform state k v)
 
 ## Same as [Dict.walk], except you can stop walking early.
 ##
@@ -246,7 +270,7 @@ walk = \@Dict { data }, initialState, transform ->
 ## ```
 walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
-    List.walkUntil data initialState (\state, T k v -> transform state k v)
+    List.walkUntil data initialState (\state, (k, v) -> transform state k v)
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
@@ -262,7 +286,7 @@ walkUntil = \@Dict { data }, initialState, transform ->
 get : Dict k v, k -> Result v [KeyNotFound] | k has Hash & Eq
 get = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -272,7 +296,7 @@ get = \@Dict { metadata, dataIndices, data }, key ->
     when findIndexHelper metadata dataIndices data h2Key key probe 0 is
         Ok index ->
             dataIndex = listGetUnsafe dataIndices index
-            (T _ v) = listGetUnsafe data dataIndex
+            (_, v) = listGetUnsafe data dataIndex
 
             Ok v
 
@@ -290,7 +314,7 @@ get = \@Dict { metadata, dataIndices, data }, key ->
 contains : Dict k v, k -> Bool | k has Hash & Eq
 contains = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -315,7 +339,7 @@ contains = \@Dict { metadata, dataIndices, data }, key ->
 insert : Dict k v, k, v -> Dict k v | k has Hash & Eq
 insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -329,7 +353,7 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
             @Dict {
                 metadata,
                 dataIndices,
-                data: List.set data dataIndex (T key value),
+                data: List.set data dataIndex (key, value),
                 size,
             }
 
@@ -362,7 +386,7 @@ remove : Dict k v, k -> Dict k v | k has Hash & Eq
 remove = \@Dict { metadata, dataIndices, data, size }, key ->
     # TODO: change this from swap remove to tombstone and test is performance is still good.
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -388,7 +412,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
             @Dict { metadata, dataIndices, data, size }
 
 ## Insert or remove a value for a specified key. This function enables a
-## performance optimisation for the use case of providing a default when a value
+## performance optimization for the use case of providing a default when a value
 ## is missing. This is more efficient than doing both a `Dict.get` and then a
 ## `Dict.insert` call, and supports being piped.
 ## ```
@@ -423,9 +447,9 @@ update = \dict, key, alter ->
 ##     |> Dict.insert 3 "Three"
 ##     |> Dict.insert 4 "Four"
 ##     |> Dict.toList
-##     |> Bool.isEq [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"]
+##     |> Bool.isEq [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")]
 ## ```
-toList : Dict k v -> List (T k v) | k has Hash & Eq
+toList : Dict k v -> List (k, v) | k has Hash & Eq
 toList = \@Dict { data } ->
     data
 
@@ -442,7 +466,7 @@ toList = \@Dict { data } ->
 ## ```
 keys : Dict k v -> List k | k has Hash & Eq
 keys = \@Dict { data } ->
-    List.map data (\T k _ -> k)
+    List.map data (\(k, _) -> k)
 
 ## Returns the values of a dictionary as a [List].
 ## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
@@ -457,7 +481,7 @@ keys = \@Dict { data } ->
 ## ```
 values : Dict k v -> List v | k has Hash & Eq
 values = \@Dict { data } ->
-    List.map data (\T _ v -> v)
+    List.map data (\(_, v) -> v)
 
 ## Combine two dictionaries by keeping the [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 ## of all the key-value pairs. This means that all the key-value pairs in
@@ -543,9 +567,9 @@ removeAll = \xs, ys ->
 
 swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v | k has Hash & Eq
 swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
-    (T key _) = listGetUnsafe data lastIndex
+    (key, _) = listGetUnsafe data lastIndex
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -579,7 +603,7 @@ insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value,
     probe = newProbe h1Key (div8 (List.len metadata))
     index = nextEmptyOrDeletedHelper metadata probe 0
     dataIndex = List.len data
-    nextData = List.append data (T key value)
+    nextData = List.append data (key, value)
 
     @Dict {
         metadata: List.set metadata index h2Key,
@@ -605,7 +629,7 @@ nextEmptyOrDeletedHelper = \metadata, probe, offset ->
 
 # TODO: investigate if this needs to be split into more specific helper functions.
 # There is a chance that returning specific sub-info like the value would be faster.
-findIndexHelper : List I8, List Nat, List (T k v), I8, k, Probe, Nat -> Result Nat [NotFound] | k has Hash & Eq
+findIndexHelper : List I8, List Nat, List (k, v), I8, k, Probe, Nat -> Result Nat [NotFound] | k has Hash & Eq
 findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
     # For finding a value, we must search past all deleted element tombstones.
     index = Num.addWrap (mul8 probe.slotIndex) offset
@@ -618,7 +642,7 @@ findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
     else if md == h2Key then
         # Potentially matching slot, check if the key is a match.
         dataIndex = listGetUnsafe dataIndices index
-        (T k _) = listGetUnsafe data dataIndex
+        (k, _) = listGetUnsafe data dataIndex
 
         if k == key then
             # We have a match, return its index.
@@ -663,7 +687,7 @@ rehash = \@Dict { metadata, dataIndices, data, size } ->
 
     rehashHelper newDict metadata dataIndices data 0
 
-rehashHelper : Dict k v, List I8, List Nat, List (T k v), Nat -> Dict k v | k has Hash & Eq
+rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v | k has Hash & Eq
 rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
     when List.get oldMetadata index is
         Ok md ->
@@ -671,7 +695,7 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
                 if md >= 0 then
                     # We have an actual element here
                     dataIndex = listGetUnsafe oldDataIndices index
-                    (T k _) = listGetUnsafe oldData dataIndex
+                    (k, _) = listGetUnsafe oldData dataIndex
 
                     insertForRehash dict k dataIndex
                 else
@@ -687,7 +711,7 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
 insertForRehash : Dict k v, k, Nat -> Dict k v | k has Hash & Eq
 insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
     hashKey =
-        createLowLevelHasher {}
+        createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
         |> complete
     h1Key = h1 hashKey
@@ -706,8 +730,6 @@ emptySlot : I8
 emptySlot = -128
 deletedSlot : I8
 deletedSlot = -2
-
-T k v : [T k v]
 
 # Capacity must be a power of 2.
 # We still will use slots of 8 even though this version has no true slots.
@@ -748,6 +770,71 @@ expect
     val == Ok "bar"
 
 expect
+    dict1 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz"
+
+    dict2 =
+        empty {}
+        |> insert 2 "baz"
+        |> insert 1 "bar"
+
+    dict1 == dict2
+
+expect
+    dict1 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz"
+
+    dict2 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz!"
+
+    dict1 != dict2
+
+expect
+    inner1 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz"
+
+    inner2 =
+        empty {}
+        |> insert 2 "baz"
+        |> insert 1 "bar"
+
+    outer =
+        empty {}
+        |> insert inner1 "wrong"
+        |> insert inner2 "right"
+
+    get outer inner1 == Ok "right"
+
+expect
+    inner1 =
+        empty {}
+        |> insert 1 "bar"
+        |> insert 2 "baz"
+
+    inner2 =
+        empty {}
+        |> insert 2 "baz"
+        |> insert 1 "bar"
+
+    outer1 =
+        empty {}
+        |> insert inner1 "val"
+
+    outer2 =
+        empty {}
+        |> insert inner2 "val"
+
+    outer1 == outer2
+
+expect
     val =
         empty {}
         |> insert "foo" "bar"
@@ -780,7 +867,7 @@ expect
 
 expect
     dict =
-        fromList [T 1u8 1u8, T 2 2, T 3 3]
+        fromList [(1u8, 1u8), (2, 2), (3, 3)]
         |> remove 1
         |> remove 3
 
@@ -788,7 +875,7 @@ expect
 
 expect
     list =
-        fromList [T 1u8 1u8, T 2u8 2u8, T 3 3]
+        fromList [(1u8, 1u8), (2u8, 2u8), (3, 3)]
         |> remove 1
         |> insert 0 0
         |> remove 3
@@ -904,8 +991,16 @@ LowLevelHasher := { originalSeed : U64, state : U64 } has [
 # TODO hide behind an InternalList.roc module
 listGetUnsafe : List a, Nat -> a
 
-createLowLevelHasher : { seed ? U64 } -> LowLevelHasher
-createLowLevelHasher = \{ seed ? 0x526F_6352_616E_643F } ->
+# Returns a application specific pseudo random seed for Dict.
+# This avoids trivial DOS attacks.
+pseudoSeed : {} -> U64
+
+createLowLevelHasher : [PseudoRandSeed, WithSeed U64] -> LowLevelHasher
+createLowLevelHasher = \seedOpt ->
+    seed =
+        when seedOpt is
+            PseudoRandSeed -> pseudoSeed {}
+            WithSeed s -> s
     @LowLevelHasher { originalSeed: seed, state: seed }
 
 combineState : LowLevelHasher, { a : U64, b : U64, seed : U64, length : U64 } -> LowLevelHasher
@@ -1099,12 +1194,14 @@ wyr3 = \list, index, k ->
 
     Num.bitwiseOr a p3
 
+testSeed = WithSeed 0x526F_6352_616E_643F
+
 # TODO: would be great to have table driven expects for this.
 # Would also be great to have some sort of property based hasher
 # where we can compare `addU*` functions to the `addBytes` function.
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes []
         |> complete
 
@@ -1112,7 +1209,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0x42]
         |> complete
 
@@ -1120,7 +1217,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU8 0x42
         |> complete
 
@@ -1128,7 +1225,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0xFF, 0xFF]
         |> complete
 
@@ -1136,7 +1233,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU16 0xFFFF
         |> complete
 
@@ -1144,7 +1241,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0x36, 0xA7]
         |> complete
 
@@ -1152,7 +1249,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU16 0xA736
         |> complete
 
@@ -1160,7 +1257,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0x00, 0x00, 0x00, 0x00]
         |> complete
 
@@ -1168,7 +1265,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU32 0x0000_0000
         |> complete
 
@@ -1176,7 +1273,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0xA9, 0x2F, 0xEE, 0x21]
         |> complete
 
@@ -1184,7 +1281,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU32 0x21EE_2FA9
         |> complete
 
@@ -1192,7 +1289,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes [0x5D, 0x66, 0xB1, 0x8F, 0x68, 0x44, 0xC7, 0x03, 0xE1, 0xDD, 0x23, 0x34, 0xBB, 0x9A, 0x42, 0xA7]
         |> complete
 
@@ -1200,7 +1297,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addU128 0xA742_9ABB_3423_DDE1_03C7_4468_8FB1_665D
         |> complete
 
@@ -1208,7 +1305,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashStrBytes "abcdefghijklmnopqrstuvwxyz"
         |> complete
 
@@ -1216,7 +1313,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashStrBytes "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
         |> complete
 
@@ -1224,7 +1321,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashStrBytes "1234567890123456789012345678901234567890123456789012345678901234567890"
         |> complete
 
@@ -1232,7 +1329,7 @@ expect
 
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> addBytes (List.repeat 0x77 100)
         |> complete
 
@@ -1242,7 +1339,7 @@ expect
 # Apparently it won't pick the default integer.
 expect
     hash =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered [8u8, 82u8, 3u8, 8u8, 24u8] List.walk
         |> complete
 
@@ -1250,12 +1347,12 @@ expect
 
 expect
     hash1 =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered ([0u8, 1u8, 2u8, 3u8, 4u8]) List.walk
         |> complete
 
     hash2 =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered [4u8, 3u8, 2u8, 1u8, 0u8] List.walk
         |> complete
 
@@ -1263,12 +1360,12 @@ expect
 
 expect
     hash1 =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered [0u8, 1u8, 2u8, 3u8, 4u8] List.walk
         |> complete
 
     hash2 =
-        createLowLevelHasher {}
+        createLowLevelHasher testSeed
         |> Hash.hashUnordered [4u8, 3u8, 2u8, 1u8, 0u8, 0u8] List.walk
         |> complete
 

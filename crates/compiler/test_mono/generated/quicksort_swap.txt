@@ -45,10 +45,9 @@ procedure Num.22 (#Attr.2, #Attr.3):
 
 procedure Test.1 (Test.2):
     let Test.28 : U64 = 0i64;
-    inc Test.2;
+    inc 2 Test.2;
     let Test.26 : [C {}, C I64] = CallByName List.2 Test.2 Test.28;
     let Test.27 : U64 = 0i64;
-    inc Test.2;
     let Test.25 : [C {}, C I64] = CallByName List.2 Test.2 Test.27;
     let Test.8 : {[C {}, C I64], [C {}, C I64]} = Struct {Test.25, Test.26};
     joinpoint Test.22:

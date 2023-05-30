@@ -1610,6 +1610,16 @@ mod hash {
         }
 
         #[test]
+        #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
+        fn dec() {
+            assert_evals_to!(
+                &build_test("1.1dec"),
+                RocList::from_slice(&[0, 0, 238, 4, 44, 252, 67, 15, 0, 0, 0, 0, 0, 0, 0, 0]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
         fn string() {
             assert_evals_to!(
                 &build_test(r#""ab☃AB""#),

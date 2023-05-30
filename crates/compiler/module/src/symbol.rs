@@ -1463,6 +1463,7 @@ define_builtins! {
         21 DICT_UPDATE: "update"
 
         22 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
+        23 DICT_PSEUDO_SEED: "pseudoSeed"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1565,10 +1566,12 @@ define_builtins! {
         13 HASH_HASH_I64: "hashI64"
         14 HASH_HASH_I128: "hashI128"
         15 HASH_HASH_NAT: "hashNat"
-        16 HASH_COMPLETE: "complete"
-        17 HASH_HASH_STR_BYTES: "hashStrBytes"
-        18 HASH_HASH_LIST: "hashList"
-        19 HASH_HASH_UNORDERED: "hashUnordered"
+        16 I128_OF_DEC: "i128OfDec"
+        17 HASH_HASH_DEC: "hashDec"
+        18 HASH_COMPLETE: "complete"
+        19 HASH_HASH_STR_BYTES: "hashStrBytes"
+        20 HASH_HASH_LIST: "hashList"
+        21 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 JSON: "Json" => {
         0 JSON_JSON: "Json"
