@@ -23,7 +23,6 @@ interface Set
         Hash.{ Hash, Hasher },
     ]
 
-
 ## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
 ## type which stores a collection of unique values, without any ordering
 Set k := Dict.Dict k {} | k implements Hash & Eq
