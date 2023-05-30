@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const math = std.math;
 
-// Eventaully, we need to statically ingest compiler-rt and get it working with the surgical linker, then these should not be needed anymore.
+// Eventually, we need to statically ingest compiler-rt and get it working with the surgical linker, then these should not be needed anymore.
 // Until then, we are manually ingesting used parts of compiler-rt here.
 //
 // Taken from
