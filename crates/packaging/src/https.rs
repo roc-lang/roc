@@ -136,10 +136,18 @@ fn url_problem_misleading_characters() {
 
     for misleading_character_example in [
         "https://user:password@example.com/",
-        "https://example.com⁄path",
-        "https://example.com∕path",
-        "https://example.com／path",
-        "https://example.com⧸path",
+        
+        //"https://example.com⁄path",
+        "https://example.com\u{2044}path",
+        
+        //"https://example.com∕path",
+        "https://example.com\u{2215}path",
+        
+        //"https://example.com／path",
+        "https://example.com\u{ff0f}path",
+
+        //"https://example.com⧸path",
+        "https://example.com\u{29f8}path",
         ] {
         assert_eq!(PackageMetadata::try_from(misleading_character_example), expected);
     }
