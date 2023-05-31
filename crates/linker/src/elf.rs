@@ -1471,21 +1471,11 @@ fn surgery_elf_help(
                             }
                         }
                     } else {
-                        // Explicitly ignore some symbols that are currently always linked.
-                        const ALWAYS_LINKED: &[&str] = &["__divti3", "__udivti3"];
-
-                        match app_obj.symbol_by_index(index) {
-                            Ok(sym) if ALWAYS_LINKED.contains(&sym.name().unwrap_or_default()) => {
-                                continue
-                            }
-                            _ => {
-                                internal_error!(
-                                    "Undefined Symbol in relocation, {:+x?}: {:+x?}",
-                                    rel,
-                                    app_obj.symbol_by_index(index)
-                                );
-                            }
-                        }
+                        internal_error!(
+                            "Undefined Symbol in relocation, {:+x?}: {:+x?}",
+                            rel,
+                            app_obj.symbol_by_index(index)
+                        );
                     }
                 }
 

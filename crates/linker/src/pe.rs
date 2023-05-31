@@ -434,7 +434,19 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                         relocation,
                     );
                 } else {
-                    if *address == 0 && !name.starts_with("roc") {
+                    let is_ingested_compiler_rt = [
+                        "__muloti4",
+                        "__divti3",
+                        "__udivti3",
+                        "__modti3",
+                        "__umodti3",
+                        "__fixdfti",
+                        "__fixsfti",
+                        "__fixunsdfti",
+                        "__fixunssfti",
+                    ]
+                    .contains(&name.as_str());
+                    if *address == 0 && !name.starts_with("roc") && !is_ingested_compiler_rt {
                         eprintln!(
                             "I don't know the address of the {} function! this may cause segfaults",
                             name
