@@ -13,6 +13,7 @@ use crate::tarball::Compression;
 // let's try to avoid doing that.
 const BROTLI_BUFFER_BYTES: usize = 8 * 1_000_000; // MB
 
+#[derive(Debug, PartialEq)]
 pub struct PackageMetadata<'a> {
     /// The BLAKE3 hash of the tarball's contents. Also the .tar filename on disk.
     pub content_hash: &'a str,
@@ -38,7 +39,7 @@ const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 /// ⧸ - U+29F8 Big Solidus
 const MISLEADING_CHARACTERS_IN_URL: [&str; 5] = ["@", "\u{2044}", "\u{2215}", "\u{FF0F}", "\u{29F8}"];
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum UrlProblem {
     InvalidExtensionSuffix(String),
     MissingTarExt,
@@ -117,6 +118,92 @@ impl<'a> PackageMetadata<'a> {
             root_module_filename: fragment,
         })
     }
+}
+
+#[test]
+#[should_panic(expected = "MissingHttps")]
+fn url_problem_missing_https() {
+    PackageMetadata::try_from("http://example.com").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "MisleadingCharacter")]
+fn url_problem_misleading_character_at() {
+    PackageMetadata::try_from("https://user:password@example.com/").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "MisleadingCharacter")]
+fn url_problem_misleading_character_unicode_2044() {
+    PackageMetadata::try_from("https://example.com⁄path").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "MisleadingCharacter")]
+fn url_problem_misleading_character_unicode_2215() {
+    PackageMetadata::try_from("https://example.com∕path").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "MisleadingCharacter")]
+fn url_problem_misleading_character_unicode_ff0f() {
+    PackageMetadata::try_from("https://example.com／path").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "MisleadingCharacter")]
+fn url_problem_misleading_character_unicode_29f8() {
+    PackageMetadata::try_from("https://example.com⧸path").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "InvalidFragment")]
+fn url_problem_invalid_fragment_not_a_roc_file() {
+    PackageMetadata::try_from("https://example.com/#filename.sh").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "InvalidFragment")]
+fn url_problem_invalid_fragment_empty_roc_filename() {
+    PackageMetadata::try_from("https://example.com/#.roc").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "MissingTarExt")]
+fn url_problem_not_a_tar_url() {
+    PackageMetadata::try_from("https://example.com/filename.zip").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "InvalidExtensionSuffix")]
+fn url_problem_invalid_tar_suffix() {
+    PackageMetadata::try_from("https://example.com/filename.tar.zip").unwrap();
+}
+
+#[test]
+#[should_panic(expected = "MissingHash")]
+fn url_problem_missing_hash() {
+    PackageMetadata::try_from("https://example.com/.tar.gz").unwrap();
+}
+
+#[test]
+fn url_without_fragment() {
+    let actual = PackageMetadata::try_from("https://example.com/path/hash.tar.gz").unwrap();
+    assert_eq!(PackageMetadata {
+        cache_subdir: "example.com/path",
+        content_hash: "hash",
+        root_module_filename: None,
+    }, actual);
+}
+
+#[test]
+fn url_with_fragment() {
+    let actual = PackageMetadata::try_from("https://example.com/path/hash.tar.gz#filename.roc").unwrap();
+    assert_eq!(PackageMetadata {
+        cache_subdir: "example.com/path",
+        content_hash: "hash",
+        root_module_filename: Some("filename.roc"),
+    }, actual);
 }
 
 #[derive(Debug)]
