@@ -125,89 +125,74 @@ impl<'a> PackageMetadata<'a> {
 }
 
 #[test]
-#[should_panic(expected = "MissingHttps")]
 fn url_problem_missing_https() {
-    PackageMetadata::try_from("http://example.com").unwrap();
+    let expected = Err(UrlProblem::MissingHttps);
+    assert_eq!(PackageMetadata::try_from("http://example.com"), expected);
 }
 
 #[test]
-#[should_panic(expected = "MisleadingCharacter")]
-fn url_problem_misleading_character_at() {
-    PackageMetadata::try_from("https://user:password@example.com/").unwrap();
+fn url_problem_misleading_characters() {
+    let expected = Err(UrlProblem::MisleadingCharacter);
+
+    for misleading_character_example in [
+        "https://user:password@example.com/",
+        "https://example.com⁄path",
+        "https://example.com∕path",
+        "https://example.com／path",
+        "https://example.com⧸path",
+        ] {
+        assert_eq!(PackageMetadata::try_from(misleading_character_example), expected);
+    }
 }
 
 #[test]
-#[should_panic(expected = "MisleadingCharacter")]
-fn url_problem_misleading_character_unicode_2044() {
-    PackageMetadata::try_from("https://example.com⁄path").unwrap();
-}
-
-#[test]
-#[should_panic(expected = "MisleadingCharacter")]
-fn url_problem_misleading_character_unicode_2215() {
-    PackageMetadata::try_from("https://example.com∕path").unwrap();
-}
-
-#[test]
-#[should_panic(expected = "MisleadingCharacter")]
-fn url_problem_misleading_character_unicode_ff0f() {
-    PackageMetadata::try_from("https://example.com／path").unwrap();
-}
-
-#[test]
-#[should_panic(expected = "MisleadingCharacter")]
-fn url_problem_misleading_character_unicode_29f8() {
-    PackageMetadata::try_from("https://example.com⧸path").unwrap();
-}
-
-#[test]
-#[should_panic(expected = "InvalidFragment")]
 fn url_problem_invalid_fragment_not_a_roc_file() {
-    PackageMetadata::try_from("https://example.com/#filename.sh").unwrap();
+    let expected = Err(UrlProblem::InvalidFragment("filename.sh".to_string()));
+    assert_eq!(PackageMetadata::try_from("https://example.com/#filename.sh"), expected);
 }
 
 #[test]
-#[should_panic(expected = "InvalidFragment")]
 fn url_problem_invalid_fragment_empty_roc_filename() {
-    PackageMetadata::try_from("https://example.com/#.roc").unwrap();
+    let expected = Err(UrlProblem::InvalidFragment(".roc".to_string()));
+    assert_eq!(PackageMetadata::try_from("https://example.com/#.roc"), expected);
 }
 
 #[test]
-#[should_panic(expected = "MissingTarExt")]
 fn url_problem_not_a_tar_url() {
-    PackageMetadata::try_from("https://example.com/filename.zip").unwrap();
+    let expected = Err(UrlProblem::MissingTarExt);
+    assert_eq!(PackageMetadata::try_from("https://example.com/filename.zip"), expected);
 }
 
 #[test]
-#[should_panic(expected = "InvalidExtensionSuffix")]
 fn url_problem_invalid_tar_suffix() {
-    PackageMetadata::try_from("https://example.com/filename.tar.zip").unwrap();
+    let expected = Err(UrlProblem::InvalidExtensionSuffix(".zip".to_string()));
+    assert_eq!(PackageMetadata::try_from("https://example.com/filename.tar.zip"), expected);
 }
 
 #[test]
-#[should_panic(expected = "MissingHash")]
 fn url_problem_missing_hash() {
-    PackageMetadata::try_from("https://example.com/.tar.gz").unwrap();
+    let expected = Err(UrlProblem::MissingHash);
+    assert_eq!(PackageMetadata::try_from("https://example.com/.tar.gz"), expected);
 }
 
 #[test]
 fn url_without_fragment() {
-    let actual = PackageMetadata::try_from("https://example.com/path/hash.tar.gz").unwrap();
-    assert_eq!(PackageMetadata {
+    let expected = Ok(PackageMetadata {
         cache_subdir: "example.com/path",
         content_hash: "hash",
         root_module_filename: None,
-    }, actual);
+    });
+    assert_eq!(PackageMetadata::try_from("https://example.com/path/hash.tar.gz"), expected);
 }
 
 #[test]
 fn url_with_fragment() {
-    let actual = PackageMetadata::try_from("https://example.com/path/hash.tar.gz#filename.roc").unwrap();
-    assert_eq!(PackageMetadata {
+    let expected = Ok(PackageMetadata {
         cache_subdir: "example.com/path",
         content_hash: "hash",
         root_module_filename: Some("filename.roc"),
-    }, actual);
+    });
+    assert_eq!(PackageMetadata::try_from("https://example.com/path/hash.tar.gz#filename.roc"), expected);
 }
 
 #[derive(Debug)]
