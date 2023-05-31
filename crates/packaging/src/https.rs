@@ -38,7 +38,7 @@ const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 /// Nevertheless we should avoid such issues earlier.
 /// You can read more here: https://medium.com/@bobbyrsec/the-dangers-of-googles-zip-tld-5e1e675e59a5
 const MISLEADING_CHARACTERS_IN_URL: [char; 5] = [
-    '@', // @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
+    '@',        // @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
     '\u{2044}', // U+2044 ==  ⁄ Fraction Slash
     '\u{2215}', // U+2215 ==  ∕ Division Slash
     '\u{FF0F}', // U+2215 == ／ Fullwidth Solidus
@@ -74,7 +74,10 @@ impl<'a> PackageMetadata<'a> {
         };
 
         // Next, check if there are misleading characters in the URL
-        if url.chars().any(|ch| MISLEADING_CHARACTERS_IN_URL.contains(&ch)) {
+        if url
+            .chars()
+            .any(|ch| MISLEADING_CHARACTERS_IN_URL.contains(&ch))
+        {
             return Err(UrlProblem::MisleadingCharacter);
         }
 
@@ -136,51 +139,65 @@ fn url_problem_misleading_characters() {
 
     for misleading_character_example in [
         "https://user:password@example.com/",
-        
         //"https://example.com⁄path",
         "https://example.com\u{2044}path",
-        
         //"https://example.com∕path",
         "https://example.com\u{2215}path",
-        
         //"https://example.com／path",
         "https://example.com\u{ff0f}path",
-
         //"https://example.com⧸path",
         "https://example.com\u{29f8}path",
-        ] {
-        assert_eq!(PackageMetadata::try_from(misleading_character_example), expected);
+    ] {
+        assert_eq!(
+            PackageMetadata::try_from(misleading_character_example),
+            expected
+        );
     }
 }
 
 #[test]
 fn url_problem_invalid_fragment_not_a_roc_file() {
     let expected = Err(UrlProblem::InvalidFragment("filename.sh".to_string()));
-    assert_eq!(PackageMetadata::try_from("https://example.com/#filename.sh"), expected);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/#filename.sh"),
+        expected
+    );
 }
 
 #[test]
 fn url_problem_invalid_fragment_empty_roc_filename() {
     let expected = Err(UrlProblem::InvalidFragment(".roc".to_string()));
-    assert_eq!(PackageMetadata::try_from("https://example.com/#.roc"), expected);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/#.roc"),
+        expected
+    );
 }
 
 #[test]
 fn url_problem_not_a_tar_url() {
     let expected = Err(UrlProblem::MissingTarExt);
-    assert_eq!(PackageMetadata::try_from("https://example.com/filename.zip"), expected);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/filename.zip"),
+        expected
+    );
 }
 
 #[test]
 fn url_problem_invalid_tar_suffix() {
     let expected = Err(UrlProblem::InvalidExtensionSuffix(".zip".to_string()));
-    assert_eq!(PackageMetadata::try_from("https://example.com/filename.tar.zip"), expected);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/filename.tar.zip"),
+        expected
+    );
 }
 
 #[test]
 fn url_problem_missing_hash() {
     let expected = Err(UrlProblem::MissingHash);
-    assert_eq!(PackageMetadata::try_from("https://example.com/.tar.gz"), expected);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/.tar.gz"),
+        expected
+    );
 }
 
 #[test]
@@ -190,7 +207,10 @@ fn url_without_fragment() {
         content_hash: "hash",
         root_module_filename: None,
     });
-    assert_eq!(PackageMetadata::try_from("https://example.com/path/hash.tar.gz"), expected);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/path/hash.tar.gz"),
+        expected
+    );
 }
 
 #[test]
@@ -200,7 +220,10 @@ fn url_with_fragment() {
         content_hash: "hash",
         root_module_filename: Some("filename.roc"),
     });
-    assert_eq!(PackageMetadata::try_from("https://example.com/path/hash.tar.gz#filename.roc"), expected);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/path/hash.tar.gz#filename.roc"),
+        expected
+    );
 }
 
 #[derive(Debug)]
