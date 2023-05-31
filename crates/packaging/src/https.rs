@@ -30,7 +30,13 @@ pub struct PackageMetadata<'a> {
 /// - .tar.br
 const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 
-/// Characters that could be misleading if present in URLs:
+/// Since the TLD (top level domain) `.zip` is now available, there is a new attack
+/// vector where malicous URLs can be used to confuse the reader.
+/// Example of a URL which would take you to example.zip:
+/// https://github.com∕kubernetes∕kubernetes∕archive∕refs∕tags∕@example.zip
+/// roc employs a checksum mechanism to prevent tampering with packages.
+/// Nevertheless we should avoid such issues earlier.
+/// You can read more here: https://medium.com/@bobbyrsec/the-dangers-of-googles-zip-tld-5e1e675e59a5
 ///
 /// @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
 /// ⁄ - U+2044 Fraction Slash
