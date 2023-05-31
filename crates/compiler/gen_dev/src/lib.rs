@@ -1068,13 +1068,12 @@ trait Backend<'a> {
             }
             LowLevel::Eq => {
                 debug_assert_eq!(2, args.len(), "Eq: expected to have exactly two argument");
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
+                debug_assert!(
+                    self.interner().eq_repr(arg_layouts[0], arg_layouts[1],),
                     "Eq: expected all arguments of to have the same layout"
                 );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "Eq: expected to have return layout of type Bool"
                 );
                 self.build_eq(sym, &args[0], &args[1], &arg_layouts[0])
@@ -1085,22 +1084,20 @@ trait Backend<'a> {
                     args.len(),
                     "NotEq: expected to have exactly two argument"
                 );
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
+                debug_assert!(
+                    self.interner().eq_repr(arg_layouts[0], arg_layouts[1],),
                     "NotEq: expected all arguments of to have the same layout"
                 );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NotEq: expected to have return layout of type Bool"
                 );
                 self.build_neq(sym, &args[0], &args[1], &arg_layouts[0])
             }
             LowLevel::Not => {
                 debug_assert_eq!(1, args.len(), "Not: expected to have exactly one argument");
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "Not: expected to have return layout of type Bool"
                 );
                 self.build_not(sym, &args[0], &arg_layouts[0])
@@ -1111,13 +1108,12 @@ trait Backend<'a> {
                     args.len(),
                     "NumLt: expected to have exactly two argument"
                 );
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
+                debug_assert!(
+                    self.interner().eq_repr(arg_layouts[0], arg_layouts[1],),
                     "NumLt: expected all arguments of to have the same layout"
                 );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NumLt: expected to have return layout of type Bool"
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
@@ -1128,13 +1124,12 @@ trait Backend<'a> {
                     args.len(),
                     "NumGt: expected to have exactly two argument"
                 );
-                debug_assert_eq!(
-                    arg_layouts[0], arg_layouts[1],
+                debug_assert!(
+                    self.interner().eq_repr(arg_layouts[0], arg_layouts[1],),
                     "NumGt: expected all arguments of to have the same layout"
                 );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NumGt: expected to have return layout of type Bool"
                 );
                 self.build_num_gt(sym, &args[0], &args[1], &arg_layouts[0])
@@ -1159,9 +1154,8 @@ trait Backend<'a> {
                     "NumIsNan: expected to have exactly one argument"
                 );
 
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NumIsNan: expected to have return layout of type Bool"
                 );
                 self.build_num_is_nan(sym, &args[0], &arg_layouts[0])
@@ -1173,9 +1167,8 @@ trait Backend<'a> {
                     "NumIsInfinite: expected to have exactly one argument"
                 );
 
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NumIsInfinite: expected to have return layout of type Bool"
                 );
                 self.build_num_is_infinite(sym, &args[0], &arg_layouts[0])
@@ -1187,9 +1180,8 @@ trait Backend<'a> {
                     "NumIsFinite: expected to have exactly one argument"
                 );
 
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NumIsFinite: expected to have return layout of type Bool"
                 );
                 self.build_num_is_finite(sym, &args[0], &arg_layouts[0])
@@ -1204,9 +1196,8 @@ trait Backend<'a> {
                     arg_layouts[0], arg_layouts[1],
                     "NumLte: expected all arguments of to have the same layout"
                 );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NumLte: expected to have return layout of type Bool"
                 );
                 self.build_num_lte(sym, &args[0], &args[1], &arg_layouts[0])
@@ -1221,9 +1212,8 @@ trait Backend<'a> {
                     arg_layouts[0], arg_layouts[1],
                     "NumGte: expected all arguments of to have the same layout"
                 );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NumGte: expected to have return layout of type Bool"
                 );
                 self.build_num_gte(sym, &args[0], &args[1], &arg_layouts[0])
@@ -1761,9 +1751,8 @@ trait Backend<'a> {
                     args.len(),
                     "NumIsZero: expected to have exactly one argument"
                 );
-                debug_assert_eq!(
-                    Layout::BOOL,
-                    *ret_layout,
+                debug_assert!(
+                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
