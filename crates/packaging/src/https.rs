@@ -37,13 +37,13 @@ const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 /// roc employs a checksum mechanism to prevent tampering with packages.
 /// Nevertheless we should avoid such issues earlier.
 /// You can read more here: https://medium.com/@bobbyrsec/the-dangers-of-googles-zip-tld-5e1e675e59a5
-///
-/// @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
-/// ⁄ - U+2044 Fraction Slash
-/// ∕ - U+2215 Division Slash
-/// ／ - U+FF0F Fullwidth Solidus
-/// ⧸ - U+29F8 Big Solidus
-const MISLEADING_CHARACTERS_IN_URL: [&str; 5] = ["@", "\u{2044}", "\u{2215}", "\u{FF0F}", "\u{29F8}"];
+const MISLEADING_CHARACTERS_IN_URL: [&str; 5] = [
+    "@", // @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
+    "\u{2044}", // U+2044 ==  ⁄ Fraction Slash
+    "\u{2215}", // U+2215 ==  ∕ Division Slash
+    "\u{FF0F}", // U+2215 == ／ Fullwidth Solidus
+    "\u{29F8}", // U+29F8 == ⧸ Big Solidus
+];
 
 #[derive(Debug, PartialEq)]
 pub enum UrlProblem {
