@@ -31,11 +31,12 @@ const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 
 /// Characters that could be misleading if present in URLs:
 ///
+/// @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
 /// ⁄ - U+2044 Fraction Slash
 /// ∕ - U+2215 Division Slash
 /// ／ - U+FF0F Fullwidth Solidus
 /// ⧸ - U+29F8 Big Solidus
-const MISLEADING_CHARACTERS_IN_URL: [&str; 4] = ["\u{2044}", "\u{2215}", "\u{FF0F}", "\u{29F8}"];
+const MISLEADING_CHARACTERS_IN_URL: [&str; 5] = ["@", "\u{2044}", "\u{2215}", "\u{FF0F}", "\u{29F8}"];
 
 #[derive(Debug)]
 pub enum UrlProblem {
