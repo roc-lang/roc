@@ -29,6 +29,14 @@ pub struct PackageMetadata<'a> {
 /// - .tar.br
 const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 
+/// Characters that could be misleading if present in URLs:
+///
+/// ⁄ - U+2044 Fraction Slash
+/// ∕ - U+2215 Division Slash
+/// ／ - U+FF0F Fullwidth Solidus
+/// ⧸ - U+29F8 Big Solidus
+const MISLEADING_CHARACTERS_IN_URL: [&str; 4] = ["\u{2044}", "\u{2215}", "\u{FF0F}", "\u{29F8}"];
+
 #[derive(Debug)]
 pub enum UrlProblem {
     InvalidExtensionSuffix(String),
@@ -36,6 +44,7 @@ pub enum UrlProblem {
     InvalidFragment(String),
     MissingHash,
     MissingHttps,
+    MisleadingCharacter,
 }
 
 impl<'a> TryFrom<&'a str> for PackageMetadata<'a> {
@@ -55,6 +64,13 @@ impl<'a> PackageMetadata<'a> {
                 return Err(UrlProblem::MissingHttps);
             }
         };
+
+        // Next, check if there are misleading characters in the URL
+        for misleading_character in MISLEADING_CHARACTERS_IN_URL {
+            if url.contains(misleading_character) {
+                return Err(UrlProblem::MisleadingCharacter);
+            }
+        }
 
         // Next, get the (optional) URL fragment, which must be a .roc filename
         let (without_fragment, fragment) = match without_protocol.rsplit_once('#') {
