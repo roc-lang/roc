@@ -150,6 +150,8 @@ pub enum CompareOperation {
 /// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
 /// dst should always come before sources.
 pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
+    fn base_pointer() -> GeneralReg;
+
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
     fn abs_freg64_freg64(
         buf: &mut Vec<'_, u8>,
@@ -2629,6 +2631,49 @@ impl<
                 );
             }
 
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                debug_assert_ne!(tag_id, *nullable_id as TagIdIntType);
+
+                let other_fields = if tag_id < *nullable_id {
+                    other_tags[tag_id as usize]
+                } else {
+                    other_tags[tag_id as usize - 1]
+                };
+
+                let element_layout = other_fields[index as usize];
+
+                let ptr_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                let mask_symbol = self.debug_symbol("tag_id_mask");
+                let mask_reg = self
+                    .storage_manager
+                    .claim_general_reg(&mut self.buf, &mask_symbol);
+                ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
+
+                // mask out the tag id bits
+                ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                Self::ptr_read(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    self.layout_interner,
+                    ptr_reg,
+                    offset as i32,
+                    element_layout,
+                    *sym,
+                );
+            }
+
             _ => {
                 let union_in_layout = self
                     .layout_interner
@@ -2780,6 +2825,72 @@ impl<
 
                 self.free_symbol(&tmp);
             }
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                let number_of_tags = other_tags.len() + 1;
+
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+
+                // build a table to index into with the value that we find
+                let nullable_id = *nullable_id as usize;
+                let it = std::iter::once(nullable_id)
+                    .chain(0..nullable_id)
+                    .chain(nullable_id + 1..number_of_tags);
+
+                let table = self.debug_symbol("tag_id_table");
+                let table_offset = self
+                    .storage_manager
+                    .claim_stack_area(&table, (number_of_tags * 2) as _);
+
+                let mut offset = table_offset;
+                for i in it {
+                    ASM::mov_reg64_imm64(&mut self.buf, dst_reg, i as i64);
+                    ASM::mov_base32_reg16(&mut self.buf, offset, dst_reg);
+
+                    offset += 2;
+                }
+
+                self.free_symbol(&table);
+
+                // mask the 3 lowest bits
+                let tmp = Symbol::DEV_TMP5;
+                let reg = self.storage_manager.claim_general_reg(&mut self.buf, &tmp);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, 0b111);
+
+                let src1_reg = reg;
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                ASM::and_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+
+                // we're indexing into an array of u16, so double this index
+                // also the stack grows down, so negate the index
+                ASM::mov_reg64_imm64(&mut self.buf, reg, 2);
+                ASM::umul_reg64_reg64_reg64(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    dst_reg,
+                    reg,
+                );
+
+                // index into the table
+                let base_pointer = ASM::base_pointer();
+                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, base_pointer);
+
+                // load the 16-bit value at the pointer
+                ASM::mov_reg16_mem16_offset32(&mut self.buf, dst_reg, dst_reg, table_offset);
+
+                // keep only the lowest 16 bits
+                ASM::mov_reg64_imm64(&mut self.buf, reg, 0xFFFF);
+                ASM::and_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, reg);
+
+                self.free_symbol(&tmp);
+            }
+
             x => todo!("getting tag id of union with layout ({:?})", x),
         };
     }
@@ -2862,6 +2973,68 @@ impl<
                     self.expr_box(*sym, temp_sym, layout, reuse);
 
                     self.free_symbol(&temp_sym);
+                }
+            }
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                let nullable_id = *nullable_id;
+
+                if tag_id == nullable_id as TagIdIntType {
+                    // it's just a null pointer
+                    self.load_literal_i64(sym, 0);
+                } else {
+                    let other_fields = if tag_id < nullable_id {
+                        other_tags[tag_id as usize]
+                    } else {
+                        other_tags[tag_id as usize - 1]
+                    };
+
+                    // construct the payload as a struct on the stack
+                    let temp_sym = Symbol::DEV_TMP5;
+                    let layout = self
+                        .layout_interner
+                        .insert_no_semantic(LayoutRepr::Struct(other_fields));
+
+                    self.load_literal_symbols(fields);
+                    self.storage_manager.create_struct(
+                        self.layout_interner,
+                        &mut self.buf,
+                        &temp_sym,
+                        &layout,
+                        fields,
+                    );
+
+                    // now effectively box this struct
+                    let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
+                    self.expr_box(untagged_pointer_symbol, temp_sym, layout, reuse);
+
+                    self.free_symbol(&temp_sym);
+
+                    let tag_id_symbol = self.debug_symbol("tag_id");
+
+                    // index zero is taken up by the nullable tag, so any tags before it in the
+                    // ordering need to be incremented by one
+                    let pointer_tag = if tag_id < nullable_id {
+                        tag_id + 1
+                    } else {
+                        tag_id
+                    };
+
+                    // finally, we need to tag the pointer
+                    debug_assert!(tag_id < 8);
+                    self.load_literal_i64(&tag_id_symbol, pointer_tag as _);
+
+                    self.build_int_bitwise_or(
+                        sym,
+                        &untagged_pointer_symbol,
+                        &tag_id_symbol,
+                        IntWidth::U64,
+                    );
+
+                    self.free_symbol(&untagged_pointer_symbol);
+                    self.free_symbol(&tag_id_symbol);
                 }
             }
             x => todo!("creating unions with layout: {:?}", x),

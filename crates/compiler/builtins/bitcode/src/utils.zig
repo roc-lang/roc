@@ -305,6 +305,10 @@ pub fn isUnique(
 
     const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
 
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("| is unique {*}\n", .{&bytes[0]});
+    }
+
     const refcount = (isizes - 1)[0];
 
     return refcount == REFCOUNT_ONE_ISIZE;

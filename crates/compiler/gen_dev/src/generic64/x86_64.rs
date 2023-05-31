@@ -1139,6 +1139,11 @@ where
 }
 
 impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
+    #[inline(always)]
+    fn base_pointer() -> X86_64GeneralReg {
+        X86_64GeneralReg::RBP
+    }
+
     // These functions should map to the raw assembly functions below.
     // In some cases, that means you can just directly call one of the direct assembly functions.
     #[inline(always)]
