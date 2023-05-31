@@ -37,12 +37,12 @@ const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 /// roc employs a checksum mechanism to prevent tampering with packages.
 /// Nevertheless we should avoid such issues earlier.
 /// You can read more here: https://medium.com/@bobbyrsec/the-dangers-of-googles-zip-tld-5e1e675e59a5
-const MISLEADING_CHARACTERS_IN_URL: [&str; 5] = [
-    "@", // @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
-    "\u{2044}", // U+2044 ==  ⁄ Fraction Slash
-    "\u{2215}", // U+2215 ==  ∕ Division Slash
-    "\u{FF0F}", // U+2215 == ／ Fullwidth Solidus
-    "\u{29F8}", // U+29F8 == ⧸ Big Solidus
+const MISLEADING_CHARACTERS_IN_URL: [char; 5] = [
+    '@', // @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
+    '\u{2044}', // U+2044 ==  ⁄ Fraction Slash
+    '\u{2215}', // U+2215 ==  ∕ Division Slash
+    '\u{FF0F}', // U+2215 == ／ Fullwidth Solidus
+    '\u{29F8}', // U+29F8 == ⧸ Big Solidus
 ];
 
 #[derive(Debug, PartialEq)]
@@ -74,10 +74,8 @@ impl<'a> PackageMetadata<'a> {
         };
 
         // Next, check if there are misleading characters in the URL
-        for misleading_character in MISLEADING_CHARACTERS_IN_URL {
-            if url.contains(misleading_character) {
-                return Err(UrlProblem::MisleadingCharacter);
-            }
+        if url.chars().any(|ch| MISLEADING_CHARACTERS_IN_URL.contains(&ch)) {
+            return Err(UrlProblem::MisleadingCharacter);
         }
 
         // Next, get the (optional) URL fragment, which must be a .roc filename
