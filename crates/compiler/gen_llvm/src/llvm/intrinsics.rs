@@ -7,11 +7,12 @@ use inkwell::{
 };
 use roc_builtins::{
     bitcode::{FloatWidth, IntWidth, IntrinsicName},
-    float_intrinsic, llvm_int_intrinsic,
+    llvm_int_intrinsic,
 };
 
 use super::build::{add_func, FunctionSpec};
 
+#[allow(dead_code)]
 fn add_float_intrinsic<'ctx, F>(
     ctx: &'ctx Context,
     module: &Module<'ctx>,
@@ -111,18 +112,6 @@ pub(crate) fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         i8_ptr_type.fn_type(&[], false),
     );
 
-    add_float_intrinsic(ctx, module, &LLVM_LOG, |t| t.fn_type(&[t.into()], false));
-    add_float_intrinsic(ctx, module, &LLVM_POW, |t| {
-        t.fn_type(&[t.into(), t.into()], false)
-    });
-    add_float_intrinsic(ctx, module, &LLVM_FABS, |t| t.fn_type(&[t.into()], false));
-    add_float_intrinsic(ctx, module, &LLVM_SIN, |t| t.fn_type(&[t.into()], false));
-    add_float_intrinsic(ctx, module, &LLVM_COS, |t| t.fn_type(&[t.into()], false));
-    add_float_intrinsic(ctx, module, &LLVM_CEILING, |t| {
-        t.fn_type(&[t.into()], false)
-    });
-    add_float_intrinsic(ctx, module, &LLVM_FLOOR, |t| t.fn_type(&[t.into()], false));
-
     add_int_intrinsic(ctx, module, &LLVM_ADD_WITH_OVERFLOW, |t| {
         let fields = [t.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
@@ -149,17 +138,6 @@ pub(crate) fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         t.fn_type(&[t.into(), t.into()], false)
     });
 }
-
-pub const LLVM_POW: IntrinsicName = float_intrinsic!("llvm.pow");
-pub const LLVM_FABS: IntrinsicName = float_intrinsic!("llvm.fabs");
-pub static LLVM_SQRT: IntrinsicName = float_intrinsic!("llvm.sqrt");
-pub static LLVM_LOG: IntrinsicName = float_intrinsic!("llvm.log");
-
-pub static LLVM_SIN: IntrinsicName = float_intrinsic!("llvm.sin");
-pub static LLVM_COS: IntrinsicName = float_intrinsic!("llvm.cos");
-pub static LLVM_CEILING: IntrinsicName = float_intrinsic!("llvm.ceil");
-pub static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
-pub static LLVM_ROUND: IntrinsicName = float_intrinsic!("llvm.round");
 
 pub static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 pub static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";

@@ -41,9 +41,13 @@ use crate::llvm::{
         self, basic_type_from_layout, zig_num_parse_result_type, zig_to_int_checked_result_type,
     },
     intrinsics::{
-        LLVM_ADD_SATURATED, LLVM_ADD_WITH_OVERFLOW, LLVM_CEILING, LLVM_COS, LLVM_FABS, LLVM_FLOOR,
-        LLVM_LOG, LLVM_MUL_WITH_OVERFLOW, LLVM_POW, LLVM_ROUND, LLVM_SIN, LLVM_SQRT,
-        LLVM_SUB_SATURATED, LLVM_SUB_WITH_OVERFLOW,
+        // These instrinsics do not generate calls to libc and are safe to keep.
+        // If we find that any of them generate calls to libc on some platforms, we need to define them as zig bitcode.
+        LLVM_ADD_SATURATED,
+        LLVM_ADD_WITH_OVERFLOW,
+        LLVM_MUL_WITH_OVERFLOW,
+        LLVM_SUB_SATURATED,
+        LLVM_SUB_WITH_OVERFLOW,
     },
     refcounting::PointerToRefcount,
 };
@@ -1704,7 +1708,11 @@ fn build_float_binop<'ctx>(
         NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
         NumDivFrac => bd.build_float_div(lhs, rhs, "div_float").into(),
-        NumPow => env.call_intrinsic(&LLVM_POW[float_width], &[lhs.into(), rhs.into()]),
+        NumPow => call_bitcode_fn(
+            env,
+            &[lhs.into(), rhs.into()],
+            &bitcode::NUM_POW[float_width],
+        ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -2316,9 +2324,9 @@ fn build_float_unary_op<'a, 'ctx>(
     // TODO: Handle different sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
-        NumAbs => env.call_intrinsic(&LLVM_FABS[float_width], &[arg.into()]),
-        NumSqrtUnchecked => env.call_intrinsic(&LLVM_SQRT[float_width], &[arg.into()]),
-        NumLogUnchecked => env.call_intrinsic(&LLVM_LOG[float_width], &[arg.into()]),
+        NumAbs => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FABS[float_width]),
+        NumSqrtUnchecked => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_SQRT[float_width]),
+        NumLogUnchecked => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_LOG[float_width]),
         NumToFrac => {
             let return_width = match layout_interner.get(layout).repr {
                 LayoutRepr::Builtin(Builtin::Float(return_width)) => return_width,
@@ -2342,64 +2350,46 @@ fn build_float_unary_op<'a, 'ctx>(
             }
         }
         NumCeiling => {
-            let (return_signed, return_type) = match layout_interner.get(layout).repr {
-                LayoutRepr::Builtin(Builtin::Int(int_width)) => (
-                    int_width.is_signed(),
-                    convert::int_type_from_int_width(env, int_width),
-                ),
+            let int_width = match layout_interner.get(layout).repr {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
             };
-            let opcode = if return_signed {
-                InstructionOpcode::FPToSI
-            } else {
-                InstructionOpcode::FPToUI
-            };
-            env.builder.build_cast(
-                opcode,
-                env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),
-                return_type,
-                "num_ceiling",
-            )
+            match float_width {
+                FloatWidth::F32 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_CEILING_F32[int_width])
+                }
+                FloatWidth::F64 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_CEILING_F64[int_width])
+                }
+            }
         }
         NumFloor => {
-            let (return_signed, return_type) = match layout_interner.get(layout).repr {
-                LayoutRepr::Builtin(Builtin::Int(int_width)) => (
-                    int_width.is_signed(),
-                    convert::int_type_from_int_width(env, int_width),
-                ),
-                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            let int_width = match layout_interner.get(layout).repr {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
+                _ => internal_error!("Floor return layout is not int: {:?}", layout),
             };
-            let opcode = if return_signed {
-                InstructionOpcode::FPToSI
-            } else {
-                InstructionOpcode::FPToUI
-            };
-            env.builder.build_cast(
-                opcode,
-                env.call_intrinsic(&LLVM_FLOOR[float_width], &[arg.into()]),
-                return_type,
-                "num_floor",
-            )
+            match float_width {
+                FloatWidth::F32 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FLOOR_F32[int_width])
+                }
+                FloatWidth::F64 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FLOOR_F64[int_width])
+                }
+            }
         }
         NumRound => {
-            let (return_signed, return_type) = match layout_interner.get(layout).repr {
-                LayoutRepr::Builtin(Builtin::Int(int_width)) => (
-                    int_width.is_signed(),
-                    convert::int_type_from_int_width(env, int_width),
-                ),
-                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            let int_width = match layout_interner.get(layout).repr {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
+                _ => internal_error!("Round return layout is not int: {:?}", layout),
             };
-            let opcode = if return_signed {
-                InstructionOpcode::FPToSI
-            } else {
-                InstructionOpcode::FPToUI
-            };
-            env.builder.build_cast(
-                opcode,
-                env.call_intrinsic(&LLVM_ROUND[float_width], &[arg.into()]),
-                return_type,
-                "num_round",
-            )
+            match float_width {
+                FloatWidth::F32 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND_F32[int_width])
+                }
+                FloatWidth::F64 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND_F64[int_width])
+                }
+            }
         }
         NumIsNan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_NAN[float_width]),
         NumIsInfinite => {
@@ -2408,8 +2398,8 @@ fn build_float_unary_op<'a, 'ctx>(
         NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE[float_width]),
 
         // trigonometry
-        NumSin => env.call_intrinsic(&LLVM_SIN[float_width], &[arg.into()]),
-        NumCos => env.call_intrinsic(&LLVM_COS[float_width], &[arg.into()]),
+        NumSin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_SIN[float_width]),
+        NumCos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_COS[float_width]),
 
         NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN[float_width]),
         NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS[float_width]),
