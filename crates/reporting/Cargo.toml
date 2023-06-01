@@ -15,6 +15,7 @@ roc_exhaustive = { path = "../compiler/exhaustive" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_module = { path = "../compiler/module" }
 roc_parse = { path = "../compiler/parse" }
+roc_packaging = { path = "../packaging" }
 roc_problem = { path = "../compiler/problem" }
 roc_region = { path = "../compiler/region" }
 roc_solve_problem = { path = "../compiler/solve_problem" }

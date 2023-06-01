@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::{fmt, io};
 use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
+#[cfg(not(target_family = "wasm"))]
+use roc_packaging::https::Problem;
+
 pub use crate::error::canonicalize::can_problem;
 pub use crate::error::parse::parse_problem;
 pub use crate::error::r#type::type_problem;
@@ -1072,6 +1075,55 @@ where
             },
         }
         Ok(())
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn to_https_problem_report_string(https_problem: Problem) -> String {
+    let src_lines: Vec<&str> = Vec::new();
+
+    let mut module_ids = ModuleIds::default();
+
+    let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
+
+    let interns = Interns::default();
+
+    // Report parsing and canonicalization problems
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    let report = to_https_problem_report(&alloc, https_problem);
+    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+    buf
+}
+
+pub fn to_https_problem_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    https_problem: Problem,
+) -> Report<'b> {
+    match https_problem {
+        _ => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I am looking for this file, but it's not there:"),
+                alloc
+                    .string("almost there".to_string())
+                    .annotate(Annotation::ParserSuggestion)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"Is the file supposed to be there? "),
+                    alloc.reflow("Maybe there is a typo in the file name?"),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "HTTPS PROBLEM".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
     }
 }
 
