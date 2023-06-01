@@ -1562,7 +1562,7 @@ impl<
                 let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
                 ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
 
-                self.free_symbol(&tmp);
+                self.free_symbol(tmp);
             }
             _ => {
                 let ident_ids = self
@@ -1640,7 +1640,22 @@ impl<
 
                 self.free_symbol(tmp)
             }
-            x => todo!("NumNeq: layout, {:?}", x),
+            _ => {
+                // defer to equality
+
+                self.build_eq(dst, src1, src2, arg_layout);
+
+                let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
+
+                self.storage_manager
+                    .with_tmp_general_reg(&mut self.buf, |_, buf, tmp| {
+                        ASM::mov_reg64_imm64(buf, tmp, -1);
+                        ASM::xor_reg64_reg64_reg64(buf, dst_reg, tmp, dst_reg);
+
+                        ASM::mov_reg64_imm64(buf, tmp, 1);
+                        ASM::and_reg64_reg64_reg64(buf, dst_reg, tmp, dst_reg);
+                    })
+            }
         }
     }
 
@@ -2754,40 +2769,38 @@ impl<
                 );
             }
             UnionLayout::Recursive(tag_layouts) => {
-                if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
-                    todo!("big recursive tags")
-                } else {
-                    let other_fields = tag_layouts[tag_id as usize];
-                    let element_layout = other_fields[index as usize];
+                let other_fields = tag_layouts[tag_id as usize];
+                let element_layout = other_fields[index as usize];
 
-                    let ptr_reg = self
-                        .storage_manager
-                        .load_to_general_reg(&mut self.buf, structure);
+                let ptr_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
 
+                // mask out the tag id bits
+                if !union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
                     let mask_symbol = self.debug_symbol("tag_id_mask");
                     let mask_reg = self
                         .storage_manager
                         .claim_general_reg(&mut self.buf, &mask_symbol);
                     ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
 
-                    // mask out the tag id bits
                     ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
-
-                    let mut offset = 0;
-                    for field in &other_fields[..index as usize] {
-                        offset += self.layout_interner.stack_size(*field);
-                    }
-
-                    Self::ptr_read(
-                        &mut self.buf,
-                        &mut self.storage_manager,
-                        self.layout_interner,
-                        ptr_reg,
-                        offset as i32,
-                        element_layout,
-                        *sym,
-                    );
                 }
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                Self::ptr_read(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    self.layout_interner,
+                    ptr_reg,
+                    offset as i32,
+                    element_layout,
+                    *sym,
+                );
             }
         }
     }
@@ -3002,11 +3015,30 @@ impl<
             }
 
             UnionLayout::Recursive(_) => {
-                if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
-                    todo!("big recursive tags")
-                } else {
-                    let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
 
+                let target_info = self.storage_manager.target_info;
+                if union_layout.stores_tag_id_as_data(target_info) {
+                    let offset = union_layout
+                        .tag_id_offset(self.interner(), target_info)
+                        .unwrap() as i32;
+
+                    let ptr_reg = self
+                        .storage_manager
+                        .load_to_general_reg(&mut self.buf, structure);
+
+                    match union_layout.tag_id_layout() {
+                        Layout::U8 => {
+                            ASM::mov_reg8_mem8_offset32(&mut self.buf, dst_reg, ptr_reg, offset);
+                            ASM::movzx_reg_reg(&mut self.buf, RegisterWidth::W8, dst_reg, dst_reg)
+                        }
+                        Layout::U16 => {
+                            ASM::mov_reg16_mem16_offset32(&mut self.buf, dst_reg, ptr_reg, offset);
+                            ASM::movzx_reg_reg(&mut self.buf, RegisterWidth::W16, dst_reg, dst_reg)
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
                     // mask the 3 lowest bits
                     let tmp = Symbol::DEV_TMP5;
                     let reg = self.storage_manager.claim_general_reg(&mut self.buf, &tmp);
@@ -3189,33 +3221,73 @@ impl<
                 }
             }
             UnionLayout::Recursive(tags) => {
-                if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
-                    todo!("big recursive tags")
+                self.load_literal_symbols(fields);
+
+                let whole_struct_symbol = self.debug_symbol("whole_struct_symbol");
+                let tag_id_symbol = self.debug_symbol("tag_id_symbol");
+                let other_fields = tags[tag_id as usize];
+
+                let stores_tag_id_as_data =
+                    union_layout.stores_tag_id_as_data(self.storage_manager.target_info);
+
+                // construct the payload as a struct on the stack
+                let data_struct_layout = self
+                    .layout_interner
+                    .insert_no_semantic(LayoutRepr::Struct(other_fields));
+
+                let tag_id_layout = union_layout.tag_id_layout();
+
+                if stores_tag_id_as_data {
+                    let inner_struct_symbol = self.debug_symbol("inner_struct_symbol");
+
+                    self.storage_manager.create_struct(
+                        self.layout_interner,
+                        &mut self.buf,
+                        &inner_struct_symbol,
+                        &data_struct_layout,
+                        fields,
+                    );
+
+                    self.load_literal_i64(&tag_id_symbol, tag_id as _);
+
+                    let arena = self.env.arena;
+                    let whole_struct_layout = self.layout_interner.insert_no_semantic(
+                        LayoutRepr::Struct(arena.alloc([data_struct_layout, tag_id_layout])),
+                    );
+
+                    self.storage_manager.create_struct(
+                        self.layout_interner,
+                        &mut self.buf,
+                        &whole_struct_symbol,
+                        &whole_struct_layout,
+                        arena.alloc([inner_struct_symbol, tag_id_symbol]),
+                    );
+
+                    self.expr_box(*sym, whole_struct_symbol, whole_struct_layout, reuse);
+
+                    self.free_symbol(&tag_id_symbol);
+                    self.free_symbol(&whole_struct_symbol);
+                    self.free_symbol(&inner_struct_symbol);
                 } else {
-                    let other_fields = tags[tag_id as usize];
-
-                    // construct the payload as a struct on the stack
-                    let temp_sym = Symbol::DEV_TMP5;
-                    let layout = self
-                        .layout_interner
-                        .insert_no_semantic(LayoutRepr::Struct(other_fields));
-
                     self.load_literal_symbols(fields);
                     self.storage_manager.create_struct(
                         self.layout_interner,
                         &mut self.buf,
-                        &temp_sym,
-                        &layout,
+                        &whole_struct_symbol,
+                        &data_struct_layout,
                         fields,
                     );
 
                     // now effectively box this struct
                     let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
-                    self.expr_box(untagged_pointer_symbol, temp_sym, layout, reuse);
+                    self.expr_box(
+                        untagged_pointer_symbol,
+                        whole_struct_symbol,
+                        data_struct_layout,
+                        reuse,
+                    );
 
-                    self.free_symbol(&temp_sym);
-
-                    let tag_id_symbol = self.debug_symbol("tag_id");
+                    self.free_symbol(&whole_struct_symbol);
 
                     // finally, we need to tag the pointer
                     debug_assert!(tag_id < 8);

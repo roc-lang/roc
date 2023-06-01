@@ -2171,7 +2171,7 @@ fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_5162_recast_nested_nullable_unwrapped_layout() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
@@ -2199,7 +2199,7 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nullable_wrapped_eq_issue_5434() {
     assert_evals_to!(
         indoc!(
@@ -2226,5 +2226,80 @@ fn nullable_wrapped_eq_issue_5434() {
         ),
         RocStr::from("FAIL"),
         RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn recursive_tag_id_in_allocation_basic() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            Value : [
+                A Value,
+                B I64,
+                C I64,
+                D I64,
+                E I64,
+                F I64,
+                G I64,
+                H I64,
+                I I64,
+            ]
+
+            x : Value
+            x = H 42
+
+            main =
+                when x is
+                    A _ -> "A"  
+                    B _ -> "B"  
+                    C _ -> "C"  
+                    D _ -> "D"  
+                    E _ -> "E"  
+                    F _ -> "F"  
+                    G _ -> "G"  
+                    H _ -> "H"  
+                    I _ -> "I"  
+            "###
+        ),
+        RocStr::from("H"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn recursive_tag_id_in_allocation_eq() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            Value : [
+                A Value,
+                B I64,
+                C I64,
+                D I64,
+                E I64,
+                F I64,
+                G I64,
+                H I64,
+                I I64,
+            ]
+
+            x : Value
+            x = G 42
+
+            y : Value
+            y = H 42
+
+            main = (x == x) && (x != y) && (y == y)
+            "###
+        ),
+        true,
+        bool
     );
 }
