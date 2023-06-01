@@ -1595,7 +1595,7 @@ fn issue_2900_unreachable_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3261_non_nullable_unwrapped_recursive_union_at_index() {
     assert_evals_to!(
         indoc!(

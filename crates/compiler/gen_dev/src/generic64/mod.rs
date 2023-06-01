@@ -2604,6 +2604,28 @@ impl<
                     tag_layouts[tag_id as usize],
                 );
             }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                let element_layout = field_layouts[index as usize];
+
+                let ptr_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                let mut offset = 0;
+                for field in &field_layouts[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                Self::ptr_read(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    self.layout_interner,
+                    ptr_reg,
+                    offset as i32,
+                    element_layout,
+                    *sym,
+                );
+            }
             UnionLayout::NullableUnwrapped {
                 nullable_id,
                 other_fields,
@@ -2791,6 +2813,10 @@ impl<
                     tags,
                 );
             }
+            UnionLayout::NonNullableUnwrapped(_) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 0);
+            }
             UnionLayout::NullableUnwrapped { nullable_id, .. } => {
                 // simple is_null check on the pointer
                 let tmp = Symbol::DEV_TMP5;
@@ -2947,6 +2973,27 @@ impl<
                         }
                     });
             }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                // construct the payload as a struct on the stack
+                let temp_sym = Symbol::DEV_TMP5;
+                let layout = self
+                    .layout_interner
+                    .insert_no_semantic(LayoutRepr::Struct(field_layouts));
+
+                self.load_literal_symbols(fields);
+                self.storage_manager.create_struct(
+                    self.layout_interner,
+                    &mut self.buf,
+                    &temp_sym,
+                    &layout,
+                    fields,
+                );
+
+                // now effectively box this struct
+                self.expr_box(*sym, temp_sym, layout, reuse);
+
+                self.free_symbol(&temp_sym);
+            }
             UnionLayout::NullableUnwrapped {
                 nullable_id,
                 other_fields,
@@ -3038,7 +3085,7 @@ impl<
                     self.free_symbol(&tag_id_symbol);
                 }
             }
-            x => todo!("creating unions with layout: {:?}", x),
+            UnionLayout::Recursive(_) => todo!(),
         }
     }
 
