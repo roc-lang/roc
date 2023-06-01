@@ -85,8 +85,12 @@ comptime {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
 
-        num.exportRoundF32(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
-        num.exportRoundF64(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+        num.exportRound(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
+        num.exportRound(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+        num.exportFloor(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f32.");
+        num.exportFloor(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f64.");
+        num.exportCeiling(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f32.");
+        num.exportCeiling(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f64.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
@@ -126,6 +130,8 @@ comptime {
 
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow.");
         num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");
+        num.exportFAbs(T, ROC_BUILTINS ++ "." ++ NUM ++ ".fabs.");
+        num.exportSqrt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sqrt.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportSubWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_with_overflow.");
