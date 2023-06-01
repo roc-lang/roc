@@ -306,6 +306,14 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src: GeneralReg,
     );
 
+    // move with zero extension
+    fn movzx_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        dst: GeneralReg,
+        src: GeneralReg,
+    );
+
     // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
 
@@ -914,7 +922,7 @@ impl<
                 let width = RegisterWidth::try_from_layout(ret_repr).unwrap();
 
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                ASM::mov_reg_reg(&mut self.buf, width, dst_reg, CC::GENERAL_RETURN_REGS[0]);
+                ASM::movzx_reg_reg(&mut self.buf, width, dst_reg, CC::GENERAL_RETURN_REGS[0]);
             }
             single_register_floats!() => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);

@@ -1511,6 +1511,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     ) {
         mov_reg_reg(buf, register_width, dst, src);
     }
+
     #[inline(always)]
     fn movsx_reg_reg(
         buf: &mut Vec<'_, u8>,
@@ -1518,7 +1519,27 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         dst: X86_64GeneralReg,
         src: X86_64GeneralReg,
     ) {
-        raw_movsx_reg_reg(buf, input_width, dst, src);
+        use RegisterWidth::*;
+
+        match input_width {
+            W8 | W16 | W32 => raw_movsx_reg_reg(buf, input_width, dst, src),
+            W64 => mov_reg_reg(buf, input_width, dst, src),
+        }
+    }
+
+    #[inline(always)]
+    fn movzx_reg_reg(
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+    ) {
+        use RegisterWidth::*;
+
+        match input_width {
+            W8 | W16 => raw_movzx_reg_reg(buf, input_width, dst, src),
+            W32 | W64 => mov_reg_reg(buf, input_width, dst, src),
+        }
     }
 
     #[inline(always)]
@@ -2674,6 +2695,35 @@ fn raw_movsx_reg_reg(
             buf.extend([rex, 0x63, mod_rm]);
         }
         RegisterWidth::W64 => { /* do nothing */ }
+    }
+}
+
+#[allow(unused)]
+fn raw_movzx_reg_reg(
+    buf: &mut Vec<u8>,
+    input_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    // NOTE src and dst seem to be flipped here. It works this way though
+    let mod_rm = 0xC0 | (dst_mod << 3) | src_mod;
+
+    let rex = add_rm_extension(src, REX_W);
+    let rex = add_reg_extension(dst, rex);
+
+    match input_width {
+        RegisterWidth::W8 => {
+            buf.extend([rex, 0x0f, 0xb6, mod_rm]);
+        }
+        RegisterWidth::W16 => {
+            buf.extend([rex, 0x0f, 0xb7, mod_rm]);
+        }
+        RegisterWidth::W32 | RegisterWidth::W64 => { /* do nothing */ }
     }
 }
 
@@ -3843,6 +3893,32 @@ mod tests {
                         reg1,
                         X86_64GeneralReg::low_32bits_string(&reg2)
                     ),
+                    RegisterWidth::W64 => String::new(),
+                }
+            },
+            ALL_REGISTER_WIDTHS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_movzx_reg64_reg64() {
+        disassembler_test!(
+            raw_movzx_reg_reg,
+            |w, reg1, reg2| {
+                match w {
+                    RegisterWidth::W8 => format!(
+                        "movzx {}, {}",
+                        reg1,
+                        X86_64GeneralReg::low_8bits_string(&reg2)
+                    ),
+                    RegisterWidth::W16 => format!(
+                        "movzx {}, {}",
+                        reg1,
+                        X86_64GeneralReg::low_16bits_string(&reg2)
+                    ),
+                    RegisterWidth::W32 => String::new(),
                     RegisterWidth::W64 => String::new(),
                 }
             },
