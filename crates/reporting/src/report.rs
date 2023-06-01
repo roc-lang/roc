@@ -1079,7 +1079,7 @@ where
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub fn to_https_problem_report_string(https_problem: Problem) -> String {
+pub fn to_https_problem_report_string(url: &str, https_problem: Problem) -> String {
     let src_lines: Vec<&str> = Vec::new();
 
     let mut module_ids = ModuleIds::default();
@@ -1093,7 +1093,7 @@ pub fn to_https_problem_report_string(https_problem: Problem) -> String {
 
     let mut buf = String::new();
     let palette = DEFAULT_PALETTE;
-    let report = to_https_problem_report(&alloc, https_problem);
+    let report = to_https_problem_report(&alloc, url, https_problem);
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
     buf
@@ -1101,26 +1101,60 @@ pub fn to_https_problem_report_string(https_problem: Problem) -> String {
 
 pub fn to_https_problem_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
+    url: &'b str,
     https_problem: Problem,
 ) -> Report<'b> {
+    let url_problem_intro_1 = || alloc.reflow(r"I was trying to download this URL:");
+    let url_problem_intro_2 = || {
+        alloc
+            .string((&url).to_string())
+            .annotate(Annotation::Url)
+            .indent(4)
+    };
+
     match https_problem {
-        _ => {
+        Problem::UnsupportedEncoding(not_supported_encoding) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I am looking for this file, but it's not there:"),
-                alloc
-                    .string("almost there".to_string())
-                    .annotate(Annotation::ParserSuggestion)
-                    .indent(4),
+                url_problem_intro_1(),
+                url_problem_intro_2(),
                 alloc.concat([
-                    alloc.reflow(r"Is the file supposed to be there? "),
-                    alloc.reflow("Maybe there is a typo in the file name?"),
+                    alloc.reflow(r"But the server replied with a "),
+                    alloc.reflow(r"content encoding").annotate(Annotation::Emphasized),
+                    alloc.reflow(r" that I do not understand ("),
+                    alloc.string(not_supported_encoding).annotate(Annotation::Emphasized),
+                    alloc.reflow(r")."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The supported content encodings are "),
+                    alloc.keyword(r"br"),
+                    alloc.reflow(r", "),
+                    alloc.keyword(r"gzip"),
+                    alloc.reflow(r" and "),
+                    alloc.keyword(r"deflate"),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Perhaps you can check if the URL is correctly formed, or if the server is correctly configured."),
                 ]),
             ]);
 
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "HTTPS PROBLEM".to_string(),
+                title: "UNSUPPORTED ENCODING".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        _ => {
+            let doc = alloc.stack([
+                url_problem_intro_1(),
+                url_problem_intro_2(),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "todo!".to_string(),
                 severity: Severity::Fatal,
             }
         }
