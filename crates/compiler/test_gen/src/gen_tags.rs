@@ -1004,7 +1004,7 @@ fn result_never() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_recursive_literal() {
     assert_evals_to!(
         indoc!(
@@ -1024,7 +1024,7 @@ fn nested_recursive_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn newtype_wrapper() {
     assert_evals_to!(
         indoc!(
@@ -1042,13 +1042,17 @@ fn newtype_wrapper() {
                 "#
         ),
         42,
-        &i64,
-        |x: &i64| *x
+        Box<i64>,
+        |x: Box<i64>| {
+            let value = *x;
+            std::mem::forget(x);
+            value
+        }
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_function() {
     assert_evals_to!(
         indoc!(
@@ -1065,7 +1069,7 @@ fn applied_tag_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_function_result() {
     assert_evals_to!(
         indoc!(
@@ -1082,7 +1086,7 @@ fn applied_tag_function_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[ignore = "This test has incorrect refcounts: https://github.com/roc-lang/roc/issues/2968"]
 fn applied_tag_function_linked_list() {
     assert_evals_to!(
@@ -1143,7 +1147,7 @@ fn tag_must_be_its_own_type() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn recursive_tag_union_into_flat_tag_union() {
     // Comprehensive test for correctness in cli/tests/repl_eval
     assert_evals_to!(
@@ -1399,7 +1403,7 @@ fn issue_2458() {
 
 #[test]
 #[ignore = "See https://github.com/roc-lang/roc/issues/2466"]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2458_deep_recursion_var() {
     assert_evals_to!(
         indoc!(
@@ -1420,7 +1424,7 @@ fn issue_2458_deep_recursion_var() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_1162() {
     assert_evals_to!(
         indoc!(
@@ -1616,7 +1620,7 @@ fn issue_3261_non_nullable_unwrapped_recursive_union_at_index() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn instantiate_annotated_as_recursive_alias_toplevel() {
     assert_evals_to!(
         indoc!(
@@ -1643,7 +1647,7 @@ fn instantiate_annotated_as_recursive_alias_toplevel() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
     assert_evals_to!(
         indoc!(
@@ -1670,7 +1674,7 @@ fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
     assert_evals_to!(
         indoc!(
@@ -1799,7 +1803,7 @@ fn error_type_in_tag_union_payload() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3653_recursion_pointer_in_naked_opaque() {
     assert_evals_to!(
         indoc!(
@@ -1824,7 +1828,7 @@ fn issue_3653_recursion_pointer_in_naked_opaque() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3653_recursion_pointer_in_naked_opaque_localized() {
     assert_evals_to!(
         indoc!(
@@ -1849,7 +1853,7 @@ fn issue_3653_recursion_pointer_in_naked_opaque_localized() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2165_recursive_tag_destructure() {
     assert_evals_to!(
         indoc!(
@@ -1891,7 +1895,7 @@ fn tag_union_let_generalization() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn fit_recursive_union_in_struct_into_recursive_pointer() {
     assert_evals_to!(
         indoc!(
@@ -1954,7 +1958,7 @@ fn dispatch_tag_union_function_inferred() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_4077_fixed_fixpoint() {
     assert_evals_to!(
         indoc!(
@@ -1979,7 +1983,7 @@ fn issue_4077_fixed_fixpoint() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
     assert_evals_to!(
         indoc!(
@@ -2038,7 +2042,7 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
     assert_evals_to!(
         indoc!(
@@ -2128,7 +2132,7 @@ fn nullable_wrapped_with_nullable_not_last_index() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
     assert_evals_to!(
         indoc!(

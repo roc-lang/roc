@@ -1451,20 +1451,19 @@ impl<
                 ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
             LayoutRepr::U128 | LayoutRepr::I128 => {
-                let buf = &mut self.buf;
-
-                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
 
                 // put the arguments on the stack
                 let (src1_offset, _) = self.storage_manager.stack_offset_and_size(src1);
                 let (src2_offset, _) = self.storage_manager.stack_offset_and_size(src2);
 
-                let tmp1 = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP);
-                let tmp2 = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
+                let tmp1_symbol = self.debug_symbol("eq_tmp1");
+                let tmp2_symbol = self.debug_symbol("eq_tmp2");
+
+                let buf = &mut self.buf;
+
+                let tmp1 = self.storage_manager.claim_general_reg(buf, &tmp1_symbol);
+                let tmp2 = self.storage_manager.claim_general_reg(buf, &tmp2_symbol);
 
                 // move the upper 8 bytes of both arguments into a register
                 ASM::mov_reg64_base32(buf, tmp1, src1_offset);
@@ -1483,8 +1482,8 @@ impl<
                 // now and dst and tmp1, storing the result in dst
                 ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, tmp1);
 
-                self.storage_manager.free_symbol(&Symbol::DEV_TMP);
-                self.storage_manager.free_symbol(&Symbol::DEV_TMP2);
+                self.storage_manager.free_symbol(&tmp1_symbol);
+                self.storage_manager.free_symbol(&tmp2_symbol);
             }
             LayoutRepr::F32 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F32)),
             LayoutRepr::F64 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F64)),
@@ -1508,6 +1507,8 @@ impl<
                 let width = RegisterWidth::W8; // we're comparing booleans
                 let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
                 ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
+
+                self.free_symbol(&tmp);
             }
             _ => {
                 let ident_ids = self
@@ -1582,6 +1583,8 @@ impl<
                 let width = RegisterWidth::W8; // we're comparing booleans
                 let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
                 ASM::neq_reg_reg_reg(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
+
+                self.free_symbol(tmp)
             }
             x => todo!("NumNeq: layout, {:?}", x),
         }
@@ -2696,15 +2699,41 @@ impl<
                     *sym,
                 );
             }
+            UnionLayout::Recursive(tag_layouts) => {
+                if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    todo!("big recursive tags")
+                } else {
+                    let other_fields = tag_layouts[tag_id as usize];
+                    let element_layout = other_fields[index as usize];
 
-            _ => {
-                let union_in_layout = self
-                    .layout_interner
-                    .insert_direct_no_semantic(LayoutRepr::Union(*union_layout));
-                todo!(
-                    "loading from union type: {:?}",
-                    self.layout_interner.dbg(union_in_layout)
-                )
+                    let ptr_reg = self
+                        .storage_manager
+                        .load_to_general_reg(&mut self.buf, structure);
+
+                    let mask_symbol = self.debug_symbol("tag_id_mask");
+                    let mask_reg = self
+                        .storage_manager
+                        .claim_general_reg(&mut self.buf, &mask_symbol);
+                    ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
+
+                    // mask out the tag id bits
+                    ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
+
+                    let mut offset = 0;
+                    for field in &other_fields[..index as usize] {
+                        offset += self.layout_interner.stack_size(*field);
+                    }
+
+                    Self::ptr_read(
+                        &mut self.buf,
+                        &mut self.storage_manager,
+                        self.layout_interner,
+                        ptr_reg,
+                        offset as i32,
+                        element_layout,
+                        *sym,
+                    );
+                }
             }
         }
     }
@@ -2918,7 +2947,27 @@ impl<
                 self.free_symbol(&tmp);
             }
 
-            x => todo!("getting tag id of union with layout ({:?})", x),
+            UnionLayout::Recursive(_) => {
+                if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    todo!("big recursive tags")
+                } else {
+                    let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+
+                    // mask the 3 lowest bits
+                    let tmp = Symbol::DEV_TMP5;
+                    let reg = self.storage_manager.claim_general_reg(&mut self.buf, &tmp);
+                    ASM::mov_reg64_imm64(&mut self.buf, reg, 0b111);
+
+                    let src1_reg = reg;
+                    let src2_reg = self
+                        .storage_manager
+                        .load_to_general_reg(&mut self.buf, structure);
+
+                    ASM::and_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+
+                    self.free_symbol(&tmp);
+                }
+            }
         };
     }
 
@@ -3085,7 +3134,50 @@ impl<
                     self.free_symbol(&tag_id_symbol);
                 }
             }
-            UnionLayout::Recursive(_) => todo!(),
+            UnionLayout::Recursive(tags) => {
+                if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    todo!("big recursive tags")
+                } else {
+                    let other_fields = tags[tag_id as usize];
+
+                    // construct the payload as a struct on the stack
+                    let temp_sym = Symbol::DEV_TMP5;
+                    let layout = self
+                        .layout_interner
+                        .insert_no_semantic(LayoutRepr::Struct(other_fields));
+
+                    self.load_literal_symbols(fields);
+                    self.storage_manager.create_struct(
+                        self.layout_interner,
+                        &mut self.buf,
+                        &temp_sym,
+                        &layout,
+                        fields,
+                    );
+
+                    // now effectively box this struct
+                    let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
+                    self.expr_box(untagged_pointer_symbol, temp_sym, layout, reuse);
+
+                    self.free_symbol(&temp_sym);
+
+                    let tag_id_symbol = self.debug_symbol("tag_id");
+
+                    // finally, we need to tag the pointer
+                    debug_assert!(tag_id < 8);
+                    self.load_literal_i64(&tag_id_symbol, tag_id as _);
+
+                    self.build_int_bitwise_or(
+                        sym,
+                        &untagged_pointer_symbol,
+                        &tag_id_symbol,
+                        IntWidth::U64,
+                    );
+
+                    self.free_symbol(&untagged_pointer_symbol);
+                    self.free_symbol(&tag_id_symbol);
+                }
+            }
         }
     }
 
@@ -3510,6 +3602,8 @@ impl<
                 ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
 
                 ASM::mov_base32_reg64(buf, base_offset + 8, src_reg);
+
+                self.free_symbol(&tmp);
 
                 return;
             }
