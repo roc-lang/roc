@@ -180,7 +180,7 @@ fn eq_struct<'a>(
         ))
     }
 
-    if_pointers_equal_return_true(root, ident_ids, [ARG_1, ARG_2], root.arena.alloc(else_stmt))
+    else_stmt
 }
 
 fn eq_tag_union<'a>(
