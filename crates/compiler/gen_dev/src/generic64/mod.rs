@@ -250,12 +250,16 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     /// Jumps by an offset of offset bytes if reg is not equal to imm.
     /// It should always generate the same number of bytes to enable replacement if offset changes.
     /// It returns the base offset to calculate the jump from (generally the instruction after the jump).
-    fn jne_reg64_imm64_imm32(
-        buf: &mut Vec<'_, u8>,
+    fn jne_reg64_imm64_imm32<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, '_, GeneralReg, FloatReg, ASM, CC>,
         reg: GeneralReg,
         imm: u64,
         offset: i32,
-    ) -> usize;
+    ) -> usize
+    where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
 
     fn mov_freg32_imm32(
         buf: &mut Vec<'_, u8>,
@@ -543,6 +547,22 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
+    );
+
+    fn eq_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: FloatReg,
+        src2: FloatReg,
+        width: FloatWidth,
+    );
+
+    fn neq_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: FloatReg,
+        src2: FloatReg,
+        width: FloatWidth,
     );
 
     fn cmp_freg_freg_reg64(
@@ -964,7 +984,13 @@ impl<
             // Create jump to next branch if cond_sym not equal to value.
             // Since we don't know the offset yet, set it to 0 and overwrite later.
             let jne_location = self.buf.len();
-            let start_offset = ASM::jne_reg64_imm64_imm32(&mut self.buf, cond_reg, *val, 0);
+            let start_offset = ASM::jne_reg64_imm64_imm32(
+                &mut self.buf,
+                &mut self.storage_manager,
+                cond_reg,
+                *val,
+                0,
+            );
 
             // Build all statements in this branch. Using storage as from before any branch.
             self.storage_manager = base_storage.clone();
@@ -980,7 +1006,13 @@ impl<
             // Overwrite the original jne with the correct offset.
             let end_offset = self.buf.len();
             let jne_offset = end_offset - start_offset;
-            ASM::jne_reg64_imm64_imm32(&mut tmp, cond_reg, *val, jne_offset as i32);
+            ASM::jne_reg64_imm64_imm32(
+                &mut tmp,
+                &mut self.storage_manager,
+                cond_reg,
+                *val,
+                jne_offset as i32,
+            );
             for (i, byte) in tmp.iter().enumerate() {
                 self.buf[jne_location + i] = *byte;
             }
@@ -1485,8 +1517,22 @@ impl<
                 self.storage_manager.free_symbol(&tmp1_symbol);
                 self.storage_manager.free_symbol(&tmp2_symbol);
             }
-            LayoutRepr::F32 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F32)),
-            LayoutRepr::F64 => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::F64)),
+            LayoutRepr::F32 | LayoutRepr::F64 => {
+                let float_width = if repr == LayoutRepr::F32 {
+                    FloatWidth::F32
+                } else {
+                    FloatWidth::F64
+                };
+
+                let buf = &mut self.buf;
+
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+
+                let src_reg1 = self.storage_manager.load_to_float_reg(buf, src1);
+                let src_reg2 = self.storage_manager.load_to_float_reg(buf, src2);
+
+                ASM::eq_freg_freg_reg64(&mut self.buf, dst_reg, src_reg1, src_reg2, float_width)
+            }
             LayoutRepr::DEC => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::DEC)),
             LayoutRepr::STR => {
                 // use a zig call
@@ -3765,7 +3811,8 @@ impl<
 
         // jump to where the pointer is valid, because it is already valid if non-zero
         let jmp_start_index = self.buf.len();
-        let jmp_end_index = ASM::jne_reg64_imm64_imm32(&mut self.buf, src_reg, 0x0, 0);
+        let jmp_end_index =
+            ASM::jne_reg64_imm64_imm32(&mut self.buf, &mut self.storage_manager, src_reg, 0x0, 0);
 
         self.free_symbol(&dst);
 
@@ -3788,6 +3835,7 @@ impl<
         let destination_index = self.buf.len();
         ASM::jne_reg64_imm64_imm32(
             &mut tmp,
+            &mut self.storage_manager,
             src_reg,
             0x0,
             (destination_index - jmp_end_index) as i32,

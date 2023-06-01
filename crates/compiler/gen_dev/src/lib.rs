@@ -1121,14 +1121,17 @@ trait Backend<'a> {
             }
             LowLevel::Eq => {
                 debug_assert_eq!(2, args.len(), "Eq: expected to have exactly two argument");
+
+                let a = Layout::runtime_representation_in(arg_layouts[0], self.interner());
+                let b = Layout::runtime_representation_in(arg_layouts[1], self.interner());
+
                 debug_assert!(
-                    self.interner().eq_repr(arg_layouts[0], arg_layouts[1],),
-                    "Eq: expected all arguments of to have the same layout"
+                    self.interner().eq_repr(a, b),
+                    "Eq: expected all arguments to have the same layout, but {} != {}",
+                    self.interner().dbg(a),
+                    self.interner().dbg(b),
                 );
-                debug_assert!(
-                    self.interner().eq_repr(Layout::BOOL, *ret_layout,),
-                    "Eq: expected to have return layout of type Bool"
-                );
+
                 self.build_eq(sym, &args[0], &args[1], &arg_layouts[0])
             }
             LowLevel::NotEq => {
@@ -1137,9 +1140,15 @@ trait Backend<'a> {
                     args.len(),
                     "NotEq: expected to have exactly two argument"
                 );
+
+                let a = Layout::runtime_representation_in(arg_layouts[0], self.interner());
+                let b = Layout::runtime_representation_in(arg_layouts[1], self.interner());
+
                 debug_assert!(
-                    self.interner().eq_repr(arg_layouts[0], arg_layouts[1],),
-                    "NotEq: expected all arguments of to have the same layout"
+                    self.interner().eq_repr(a, b),
+                    "NotEq: expected all arguments to have the same layout, but {} != {}",
+                    self.interner().dbg(a),
+                    self.interner().dbg(b),
                 );
                 debug_assert!(
                     self.interner().eq_repr(Layout::BOOL, *ret_layout,),
@@ -1546,6 +1555,21 @@ trait Backend<'a> {
                     args.len(),
                     "RefCountGetPtr: expected to have exactly one argument"
                 );
+
+                debug_assert_eq!(
+                    self.interner().stack_size_and_alignment(arg_layouts[0]),
+                    (8, 8),
+                    "cannot pointer cast from source: {}",
+                    self.interner().dbg(arg_layouts[0])
+                );
+
+                debug_assert_eq!(
+                    self.interner().stack_size_and_alignment(*ret_layout),
+                    (8, 8),
+                    "cannot pointer cast to target: {}",
+                    self.interner().dbg(*ret_layout)
+                );
+
                 self.build_ptr_cast(sym, &args[0])
             }
             LowLevel::PtrWrite => {

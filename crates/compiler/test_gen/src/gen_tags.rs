@@ -1042,8 +1042,8 @@ fn newtype_wrapper() {
                 "#
         ),
         42,
-        Box<i64>,
-        |x: Box<i64>| {
+        roc_std::RocBox<i64>,
+        |x: roc_std::RocBox<i64>| {
             let value = *x;
             std::mem::forget(x);
             value

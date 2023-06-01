@@ -428,14 +428,19 @@ fn eq_tag_union_help<'a>(
         )),
     ));
 
-    let compare_ptr_or_value =
-        if_pointers_equal_return_true(root, ident_ids, operands, root.arena.alloc(compare_values));
-
     if is_non_recursive {
-        compare_ptr_or_value
+        compare_values
     } else {
+        let compare_ptr_or_value = if_pointers_equal_return_true(
+            root,
+            ident_ids,
+            operands,
+            root.arena.alloc(compare_values),
+        );
+
         let union_layout =
             layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
+
         let loop_params_iter = operands.iter().map(|arg| Param {
             symbol: *arg,
             ownership: Ownership::Borrowed,

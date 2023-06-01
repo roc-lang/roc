@@ -1432,18 +1432,29 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn jne_reg64_imm64_imm32(
-        buf: &mut Vec<'_, u8>,
+    fn jne_reg64_imm64_imm32<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, '_, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         reg: X86_64GeneralReg,
         imm: u64,
         offset: i32,
-    ) -> usize {
+    ) -> usize
+    where
+        ASM: Assembler<X86_64GeneralReg, X86_64FloatReg>,
+        CC: CallConv<X86_64GeneralReg, X86_64FloatReg, ASM>,
+    {
         buf.reserve(13);
         if imm > i32::MAX as u64 {
-            todo!("comparison with values greater than i32::max");
+            storage_manager.with_tmp_general_reg(buf, |_, buf, tmp| {
+                mov_reg64_imm64(buf, tmp, imm as _);
+                cmp_reg64_reg64(buf, RegisterWidth::W64, reg, tmp);
+            })
+        } else {
+            cmp_reg64_imm32(buf, reg, imm as i32);
         }
-        cmp_reg64_imm32(buf, reg, imm as i32);
+
         jne_imm32(buf, offset);
+
         buf.len()
     }
 
@@ -1794,6 +1805,36 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
             CompareOperation::GreaterThan => seta_reg64(buf, dst),
             CompareOperation::GreaterThanOrEqual => setae_reg64(buf, dst),
         }
+    }
+
+    fn eq_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+        width: FloatWidth,
+    ) {
+        match width {
+            FloatWidth::F32 => cmp_freg32_freg32(buf, src1, src2),
+            FloatWidth::F64 => cmp_freg64_freg64(buf, src1, src2),
+        }
+
+        sete_reg64(buf, dst);
+    }
+
+    fn neq_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+        width: FloatWidth,
+    ) {
+        match width {
+            FloatWidth::F32 => cmp_freg32_freg32(buf, src1, src2),
+            FloatWidth::F64 => cmp_freg64_freg64(buf, src1, src2),
+        }
+
+        setne_reg64(buf, dst);
     }
 
     #[inline(always)]
