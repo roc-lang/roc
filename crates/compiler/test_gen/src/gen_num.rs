@@ -1842,7 +1842,7 @@ fn float_add_checked_fail() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen_dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn float_add_overflow() {
     assert_evals_to!(
         "1.7976931348623157e308 + 1.7976931348623157e308",

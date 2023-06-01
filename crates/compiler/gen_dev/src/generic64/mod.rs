@@ -1,6 +1,6 @@
 use crate::{
-    single_register_floats, single_register_int_builtins, single_register_integers, Backend, Env,
-    Relocation,
+    pointer_layouts, single_register_floats, single_register_int_builtins,
+    single_register_integers, Backend, Env, Relocation,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
@@ -150,6 +150,8 @@ pub enum CompareOperation {
 /// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
 /// dst should always come before sources.
 pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
+    fn base_pointer() -> GeneralReg;
+
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
     fn abs_freg64_freg64(
         buf: &mut Vec<'_, u8>,
@@ -517,7 +519,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         Self::eq_reg_reg_reg(buf, RegisterWidth::W64, dst, src1, src2)
     }
 
-    fn neq_reg64_reg64_reg64(
+    fn neq_reg_reg_reg(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,
         dst: GeneralReg,
@@ -904,27 +906,30 @@ impl<
                 ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
                 ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
             }
-
-            other => {
-                //
-                match other {
-                    LayoutRepr::Boxed(_) => {
-                        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
-                    }
-                    LayoutRepr::LambdaSet(lambda_set) => {
-                        self.move_return_value(dst, &lambda_set.runtime_representation())
-                    }
-                    _ => {
-                        CC::load_returned_complex_symbol(
-                            &mut self.buf,
-                            &mut self.storage_manager,
-                            self.layout_interner,
-                            dst,
-                            ret_layout,
-                        );
-                    }
-                }
+            pointer_layouts!() => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
+            }
+            LayoutRepr::LambdaSet(lambda_set) => {
+                self.move_return_value(dst, &lambda_set.runtime_representation())
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                CC::load_returned_complex_symbol(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    self.layout_interner,
+                    dst,
+                    ret_layout,
+                );
+            }
+            _ => {
+                CC::load_returned_complex_symbol(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    self.layout_interner,
+                    dst,
+                    ret_layout,
+                );
             }
         }
     }
@@ -1558,7 +1563,7 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::neq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
+                ASM::neq_reg_reg_reg(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
             LayoutRepr::STR => {
                 self.build_fn_call(
@@ -1576,7 +1581,7 @@ impl<
 
                 let width = RegisterWidth::W8; // we're comparing booleans
                 let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
-                ASM::neq_reg64_reg64_reg64(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
+                ASM::neq_reg_reg_reg(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
             }
             x => todo!("NumNeq: layout, {:?}", x),
         }
@@ -1714,25 +1719,13 @@ impl<
                         ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg); // zero out dst reg
                         ASM::mov_reg32_freg32(buf, dst_reg, src_reg);
                         ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, mask_reg);
-                        ASM::neq_reg64_reg64_reg64(
-                            buf,
-                            RegisterWidth::W32,
-                            dst_reg,
-                            dst_reg,
-                            mask_reg,
-                        );
+                        ASM::neq_reg_reg_reg(buf, RegisterWidth::W32, dst_reg, dst_reg, mask_reg);
                     }
                     Layout::F64 => {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7ff0_0000_0000_0000);
                         ASM::mov_reg64_freg64(buf, dst_reg, src_reg);
                         ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, mask_reg);
-                        ASM::neq_reg64_reg64_reg64(
-                            buf,
-                            RegisterWidth::W64,
-                            dst_reg,
-                            dst_reg,
-                            mask_reg,
-                        );
+                        ASM::neq_reg_reg_reg(buf, RegisterWidth::W64, dst_reg, dst_reg, mask_reg);
                     }
                     _ => unreachable!(),
                 }
@@ -2213,6 +2206,7 @@ impl<
                         storage_manager,
                         self.layout_interner,
                         element_ptr,
+                        0,
                         *ret_layout,
                         *dst,
                     );
@@ -2600,7 +2594,7 @@ impl<
         union_layout: &UnionLayout<'a>,
     ) {
         match union_layout {
-            UnionLayout::NonRecursive(tag_layouts) | UnionLayout::Recursive(tag_layouts) => {
+            UnionLayout::NonRecursive(tag_layouts) => {
                 self.storage_manager.load_field_at_index(
                     self.layout_interner,
                     sym,
@@ -2609,6 +2603,77 @@ impl<
                     tag_layouts[tag_id as usize],
                 );
             }
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                debug_assert_ne!(tag_id, *nullable_id as TagIdIntType);
+
+                let element_layout = other_fields[index as usize];
+
+                let ptr_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                Self::ptr_read(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    self.layout_interner,
+                    ptr_reg,
+                    offset as i32,
+                    element_layout,
+                    *sym,
+                );
+            }
+
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                debug_assert_ne!(tag_id, *nullable_id as TagIdIntType);
+
+                let other_fields = if tag_id < *nullable_id {
+                    other_tags[tag_id as usize]
+                } else {
+                    other_tags[tag_id as usize - 1]
+                };
+
+                let element_layout = other_fields[index as usize];
+
+                let ptr_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                let mask_symbol = self.debug_symbol("tag_id_mask");
+                let mask_reg = self
+                    .storage_manager
+                    .claim_general_reg(&mut self.buf, &mask_symbol);
+                ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
+
+                // mask out the tag id bits
+                ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                Self::ptr_read(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    self.layout_interner,
+                    ptr_reg,
+                    offset as i32,
+                    element_layout,
+                    *sym,
+                );
+            }
+
             _ => {
                 let union_in_layout = self
                     .layout_interner
@@ -2653,11 +2718,17 @@ impl<
         }
 
         // box is just a pointer on the stack
-        let base_offset = self.storage_manager.claim_stack_area(&sym, 8);
+        let base_offset = self.storage_manager.claim_pointer_stack_area(sym);
         ASM::mov_base32_reg64(&mut self.buf, base_offset, ptr_reg);
     }
 
-    fn expr_box(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>) {
+    fn expr_box(
+        &mut self,
+        sym: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+        reuse: Option<Symbol>,
+    ) {
         let element_width_symbol = Symbol::DEV_TMP;
         self.load_layout_stack_size(element_layout, element_width_symbol);
 
@@ -2665,18 +2736,27 @@ impl<
         let element_alignment_symbol = Symbol::DEV_TMP2;
         self.load_layout_alignment(Layout::U32, element_alignment_symbol);
 
-        self.allocate_with_refcount(
-            Symbol::DEV_TMP3,
-            element_width_symbol,
-            element_alignment_symbol,
-        );
+        let allocation = self.debug_symbol("allocation");
+
+        match reuse {
+            None => {
+                self.allocate_with_refcount(
+                    allocation,
+                    element_width_symbol,
+                    element_alignment_symbol,
+                );
+            }
+            Some(reuse) => {
+                self.allocate_with_refcount_if_null(allocation, reuse, element_layout);
+            }
+        };
 
         self.free_symbol(&element_width_symbol);
         self.free_symbol(&element_alignment_symbol);
 
-        self.build_ptr_write(sym, Symbol::DEV_TMP3, value, element_layout);
+        self.build_ptr_write(sym, allocation, value, element_layout);
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&allocation);
     }
 
     fn expr_unbox(&mut self, dst: Symbol, ptr: Symbol, element_layout: InLayout<'a>) {
@@ -2684,24 +2764,135 @@ impl<
             .storage_manager
             .load_to_general_reg(&mut self.buf, &ptr);
 
+        let offset = 0;
+
         Self::ptr_read(
             &mut self.buf,
             &mut self.storage_manager,
             self.layout_interner,
             ptr_reg,
+            offset,
             element_layout,
             dst,
         );
     }
 
     fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {
-        self.storage_manager.load_union_tag_id(
-            self.layout_interner,
-            &mut self.buf,
-            sym,
-            structure,
-            union_layout,
-        );
+        let layout_interner: &mut STLayoutInterner<'a> = self.layout_interner;
+        let _buf: &mut Vec<'a, u8> = &mut self.buf;
+        match union_layout {
+            UnionLayout::NonRecursive(tags) => {
+                self.storage_manager.load_union_tag_id_nonrecursive(
+                    layout_interner,
+                    &mut self.buf,
+                    sym,
+                    structure,
+                    tags,
+                );
+            }
+            UnionLayout::NullableUnwrapped { nullable_id, .. } => {
+                // simple is_null check on the pointer
+                let tmp = Symbol::DEV_TMP5;
+                let reg = self.storage_manager.claim_general_reg(&mut self.buf, &tmp);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, 0);
+
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+                let src1_reg = reg;
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                match *nullable_id {
+                    true => {
+                        ASM::eq_reg_reg_reg(
+                            &mut self.buf,
+                            RegisterWidth::W64,
+                            dst_reg,
+                            src1_reg,
+                            src2_reg,
+                        );
+                    }
+                    false => {
+                        ASM::neq_reg_reg_reg(
+                            &mut self.buf,
+                            RegisterWidth::W64,
+                            dst_reg,
+                            src1_reg,
+                            src2_reg,
+                        );
+                    }
+                }
+
+                self.free_symbol(&tmp);
+            }
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                let number_of_tags = other_tags.len() + 1;
+
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+
+                // build a table to index into with the value that we find
+                let nullable_id = *nullable_id as usize;
+                let it = std::iter::once(nullable_id)
+                    .chain(0..nullable_id)
+                    .chain(nullable_id + 1..number_of_tags);
+
+                let table = self.debug_symbol("tag_id_table");
+                let table_offset = self
+                    .storage_manager
+                    .claim_stack_area(&table, (number_of_tags * 2) as _);
+
+                let mut offset = table_offset;
+                for i in it {
+                    ASM::mov_reg64_imm64(&mut self.buf, dst_reg, i as i64);
+                    ASM::mov_base32_reg16(&mut self.buf, offset, dst_reg);
+
+                    offset += 2;
+                }
+
+                self.free_symbol(&table);
+
+                // mask the 3 lowest bits
+                let tmp = Symbol::DEV_TMP5;
+                let reg = self.storage_manager.claim_general_reg(&mut self.buf, &tmp);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, 0b111);
+
+                let src1_reg = reg;
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                ASM::and_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+
+                // we're indexing into an array of u16, so double this index
+                // also the stack grows down, so negate the index
+                ASM::mov_reg64_imm64(&mut self.buf, reg, 2);
+                ASM::umul_reg64_reg64_reg64(
+                    &mut self.buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    dst_reg,
+                    reg,
+                );
+
+                // index into the table
+                let base_pointer = ASM::base_pointer();
+                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, base_pointer);
+
+                // load the 16-bit value at the pointer
+                ASM::mov_reg16_mem16_offset32(&mut self.buf, dst_reg, dst_reg, table_offset);
+
+                // keep only the lowest 16 bits
+                ASM::mov_reg64_imm64(&mut self.buf, reg, 0xFFFF);
+                ASM::and_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, reg);
+
+                self.free_symbol(&tmp);
+            }
+
+            x => todo!("getting tag id of union with layout ({:?})", x),
+        };
     }
 
     fn tag(
@@ -2710,15 +2901,144 @@ impl<
         fields: &'a [Symbol],
         union_layout: &UnionLayout<'a>,
         tag_id: TagIdIntType,
+        reuse: Option<Symbol>,
     ) {
-        self.storage_manager.create_union(
-            self.layout_interner,
-            &mut self.buf,
-            sym,
-            union_layout,
-            fields,
-            tag_id,
-        )
+        let target_info = self.storage_manager.target_info;
+
+        let layout_interner: &mut STLayoutInterner<'a> = self.layout_interner;
+        let buf: &mut Vec<'a, u8> = &mut self.buf;
+
+        let (data_size, data_alignment) =
+            union_layout.data_size_and_alignment(layout_interner, target_info);
+
+        match union_layout {
+            UnionLayout::NonRecursive(field_layouts) => {
+                let id_offset = data_size - data_alignment;
+                let base_offset = self.storage_manager.claim_stack_area(sym, data_size);
+                let mut current_offset = base_offset;
+
+                let it = fields.iter().zip(field_layouts[tag_id as usize].iter());
+                for (field, field_layout) in it {
+                    self.storage_manager.copy_symbol_to_stack_offset(
+                        layout_interner,
+                        buf,
+                        current_offset,
+                        field,
+                        field_layout,
+                    );
+                    let field_size = layout_interner.stack_size(*field_layout);
+                    current_offset += field_size as i32;
+                }
+
+                // put the tag id in the right place
+                self.storage_manager
+                    .with_tmp_general_reg(buf, |_symbol_storage, buf, reg| {
+                        ASM::mov_reg64_imm64(buf, reg, tag_id as i64);
+
+                        let total_id_offset = base_offset as u32 + id_offset;
+                        debug_assert!(total_id_offset % data_alignment == 0);
+
+                        // pick the right instruction based on the alignment of the tag id
+                        if field_layouts.len() <= u8::MAX as _ {
+                            ASM::mov_base32_reg8(buf, total_id_offset as i32, reg);
+                        } else {
+                            ASM::mov_base32_reg16(buf, total_id_offset as i32, reg);
+                        }
+                    });
+            }
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                if tag_id == *nullable_id as TagIdIntType {
+                    // it's just a null pointer
+                    self.load_literal_i64(sym, 0);
+                } else {
+                    // construct the payload as a struct on the stack
+                    let temp_sym = Symbol::DEV_TMP5;
+                    let layout = self
+                        .layout_interner
+                        .insert_no_semantic(LayoutRepr::Struct(other_fields));
+
+                    self.load_literal_symbols(fields);
+                    self.storage_manager.create_struct(
+                        self.layout_interner,
+                        &mut self.buf,
+                        &temp_sym,
+                        &layout,
+                        fields,
+                    );
+
+                    // now effectively box this struct
+                    self.expr_box(*sym, temp_sym, layout, reuse);
+
+                    self.free_symbol(&temp_sym);
+                }
+            }
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                let nullable_id = *nullable_id;
+
+                if tag_id == nullable_id as TagIdIntType {
+                    // it's just a null pointer
+                    self.load_literal_i64(sym, 0);
+                } else {
+                    let other_fields = if tag_id < nullable_id {
+                        other_tags[tag_id as usize]
+                    } else {
+                        other_tags[tag_id as usize - 1]
+                    };
+
+                    // construct the payload as a struct on the stack
+                    let temp_sym = Symbol::DEV_TMP5;
+                    let layout = self
+                        .layout_interner
+                        .insert_no_semantic(LayoutRepr::Struct(other_fields));
+
+                    self.load_literal_symbols(fields);
+                    self.storage_manager.create_struct(
+                        self.layout_interner,
+                        &mut self.buf,
+                        &temp_sym,
+                        &layout,
+                        fields,
+                    );
+
+                    // now effectively box this struct
+                    let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
+                    self.expr_box(untagged_pointer_symbol, temp_sym, layout, reuse);
+
+                    self.free_symbol(&temp_sym);
+
+                    let tag_id_symbol = self.debug_symbol("tag_id");
+
+                    // index zero is taken up by the nullable tag, so any tags before it in the
+                    // ordering need to be incremented by one
+                    let pointer_tag = if tag_id < nullable_id {
+                        tag_id + 1
+                    } else {
+                        tag_id
+                    };
+
+                    // finally, we need to tag the pointer
+                    debug_assert!(tag_id < 8);
+                    self.load_literal_i64(&tag_id_symbol, pointer_tag as _);
+
+                    self.build_int_bitwise_or(
+                        sym,
+                        &untagged_pointer_symbol,
+                        &tag_id_symbol,
+                        IntWidth::U64,
+                    );
+
+                    self.free_symbol(&untagged_pointer_symbol);
+                    self.free_symbol(&tag_id_symbol);
+                }
+            }
+            x => todo!("creating unions with layout: {:?}", x),
+        }
     }
 
     fn load_literal(&mut self, sym: &Symbol, layout: &InLayout<'a>, lit: &Literal<'a>) {
@@ -2860,7 +3180,7 @@ impl<
         if self.storage_manager.is_stored_primitive(sym) {
             // Just load it to the correct type of reg as a stand alone value.
             match repr {
-                single_register_integers!() => {
+                single_register_integers!() | pointer_layouts!() => {
                     self.storage_manager.load_to_specified_general_reg(
                         &mut self.buf,
                         sym,
@@ -2874,22 +3194,14 @@ impl<
                         CC::FLOAT_RETURN_REGS[0],
                     );
                 }
-                other => match other {
-                    LayoutRepr::Boxed(_) => {
-                        // treat like a 64-bit integer
-                        self.storage_manager.load_to_specified_general_reg(
-                            &mut self.buf,
-                            sym,
-                            CC::GENERAL_RETURN_REGS[0],
-                        );
-                    }
-                    LayoutRepr::LambdaSet(lambda_set) => {
-                        self.return_symbol(sym, &lambda_set.runtime_representation())
-                    }
-                    _ => {
-                        internal_error!("All primitive values should fit in a single register");
-                    }
-                },
+                LayoutRepr::LambdaSet(lambda_set) => {
+                    self.return_symbol(sym, &lambda_set.runtime_representation())
+                }
+                LayoutRepr::Union(UnionLayout::NonRecursive(_))
+                | LayoutRepr::Builtin(_)
+                | LayoutRepr::Struct(_) => {
+                    internal_error!("All primitive values should fit in a single register");
+                }
             }
         } else {
             CC::return_complex_symbol(
@@ -3297,22 +3609,78 @@ impl<
         );
     }
 
+    fn allocate_with_refcount_if_null(&mut self, dst: Symbol, src: Symbol, layout: InLayout) {
+        let src_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &src);
+
+        // dummy mov that is supposed to move src into dst, and is filled in later because don't know yet which
+        // register the other branch will pick for dst. We must pass two different registers here
+        // otherwise the whole instruction is skipped!
+        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
+        let mov_start_index = self.buf.len();
+        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+
+        // jump to where the pointer is valid, because it is already valid if non-zero
+        let jmp_start_index = self.buf.len();
+        let jmp_end_index = ASM::jne_reg64_imm64_imm32(&mut self.buf, src_reg, 0x0, 0);
+
+        self.free_symbol(&dst);
+
+        // so, the pointer is NULL, allocate
+
+        let data_bytes = self.debug_symbol("data_bytes");
+        self.load_layout_stack_size(layout, data_bytes);
+
+        let element_alignment = self.debug_symbol("element_alignment");
+        self.load_layout_alignment(layout, element_alignment);
+
+        self.allocate_with_refcount(dst, data_bytes, element_alignment);
+
+        self.free_symbol(&data_bytes);
+        self.free_symbol(&element_alignment);
+
+        let mut tmp = bumpalo::vec![in self.env.arena];
+
+        // update the jump
+        let destination_index = self.buf.len();
+        ASM::jne_reg64_imm64_imm32(
+            &mut tmp,
+            src_reg,
+            0x0,
+            (destination_index - jmp_end_index) as i32,
+        );
+
+        self.buf[jmp_start_index..][..tmp.len()].copy_from_slice(tmp.as_slice());
+
+        // figure out what register was actually used
+        let dst_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &dst);
+
+        tmp.clear();
+        ASM::mov_reg64_reg64(&mut tmp, dst_reg, src_reg);
+
+        self.buf[mov_start_index..][..tmp.len()].copy_from_slice(tmp.as_slice());
+    }
+
     fn unbox_str_or_list(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
         dst: Symbol,
         ptr_reg: GeneralReg,
         tmp_reg: GeneralReg,
+        offset: i32,
     ) {
         let base_offset = storage_manager.claim_stack_area(&dst, 24);
 
-        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 0);
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset);
         ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
 
-        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 8);
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 8);
         ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
 
-        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 16);
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 16);
         ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
     }
 
@@ -3323,6 +3691,7 @@ impl<
         stack_size: u32,
         ptr_reg: GeneralReg,
         tmp_reg: GeneralReg,
+        read_offset: i32,
     ) {
         let mut copied = 0;
         let size = stack_size as i32;
@@ -3336,7 +3705,7 @@ impl<
 
         if size - copied >= 8 {
             for _ in (0..(size - copied)).step_by(8) {
-                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
                 ASM::mov_base32_reg64(buf, base_offset + copied, tmp_reg);
 
                 copied += 8;
@@ -3345,7 +3714,7 @@ impl<
 
         if size - copied >= 4 {
             for _ in (0..(size - copied)).step_by(4) {
-                ASM::mov_reg32_mem32_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_reg32_mem32_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
                 ASM::mov_base32_reg32(buf, base_offset + copied, tmp_reg);
 
                 copied += 4;
@@ -3354,7 +3723,7 @@ impl<
 
         if size - copied >= 2 {
             for _ in (0..(size - copied)).step_by(2) {
-                ASM::mov_reg16_mem16_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_reg16_mem16_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
                 ASM::mov_base32_reg16(buf, base_offset + copied, tmp_reg);
 
                 copied += 2;
@@ -3363,7 +3732,7 @@ impl<
 
         if size - copied >= 1 {
             for _ in (0..(size - copied)).step_by(1) {
-                ASM::mov_reg8_mem8_offset32(buf, tmp_reg, ptr_reg, copied);
+                ASM::mov_reg8_mem8_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
                 ASM::mov_base32_reg8(buf, base_offset + copied, tmp_reg);
 
                 copied += 1;
@@ -3376,6 +3745,7 @@ impl<
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
         layout_interner: &STLayoutInterner<'a>,
         ptr_reg: GeneralReg,
+        offset: i32,
         element_in_layout: InLayout<'a>,
         dst: Symbol,
     ) {
@@ -3388,48 +3758,55 @@ impl<
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                        ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                        ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                     IntWidth::I32 | IntWidth::U32 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                        ASM::mov_reg32_mem32_offset32(buf, dst_reg, ptr_reg, 0);
+                        ASM::mov_reg32_mem32_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                     IntWidth::I16 | IntWidth::U16 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                        ASM::mov_reg16_mem16_offset32(buf, dst_reg, ptr_reg, 0);
+                        ASM::mov_reg16_mem16_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                     IntWidth::I8 | IntWidth::U8 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                        ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, 0);
+                        ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                 },
                 Builtin::Float(FloatWidth::F64) => {
                     let dst_reg = storage_manager.claim_float_reg(buf, &dst);
-                    ASM::mov_freg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                    ASM::mov_freg64_mem64_offset32(buf, dst_reg, ptr_reg, offset);
                 }
                 Builtin::Float(FloatWidth::F32) => {
                     let dst_reg = storage_manager.claim_float_reg(buf, &dst);
-                    ASM::mov_freg32_mem32_offset32(buf, dst_reg, ptr_reg, 0);
+                    ASM::mov_freg32_mem32_offset32(buf, dst_reg, ptr_reg, offset);
                 }
                 Builtin::Bool => {
                     // the same as an 8-bit integer
                     let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                    ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, 0);
+                    ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, offset);
                 }
                 Builtin::Decimal => {
                     // same as 128-bit integer
                 }
                 Builtin::Str | Builtin::List(_) => {
                     storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
-                        Self::unbox_str_or_list(buf, storage_manager, dst, ptr_reg, tmp_reg);
+                        Self::unbox_str_or_list(
+                            buf,
+                            storage_manager,
+                            dst,
+                            ptr_reg,
+                            tmp_reg,
+                            offset,
+                        );
                     });
                 }
             },
 
-            LayoutRepr::Boxed(_) => {
+            pointer_layouts!() => {
                 // the same as 64-bit integer (for 64-bit targets)
                 let dst_reg = storage_manager.claim_general_reg(buf, &dst);
-                ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, offset);
             }
 
             LayoutRepr::Struct { .. } => {
@@ -3437,7 +3814,15 @@ impl<
                 let stack_size = layout_interner.stack_size(element_in_layout);
 
                 storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
-                    Self::unbox_to_stack(buf, storage_manager, dst, stack_size, ptr_reg, tmp_reg);
+                    Self::unbox_to_stack(
+                        buf,
+                        storage_manager,
+                        dst,
+                        stack_size,
+                        ptr_reg,
+                        tmp_reg,
+                        offset,
+                    );
                 });
             }
 
@@ -3446,7 +3831,15 @@ impl<
                 let stack_size = layout_interner.stack_size(element_in_layout);
 
                 storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
-                    Self::unbox_to_stack(buf, storage_manager, dst, stack_size, ptr_reg, tmp_reg);
+                    Self::unbox_to_stack(
+                        buf,
+                        storage_manager,
+                        dst,
+                        stack_size,
+                        ptr_reg,
+                        tmp_reg,
+                        offset,
+                    );
                 });
             }
 
@@ -3456,12 +3849,11 @@ impl<
                     storage_manager,
                     layout_interner,
                     ptr_reg,
+                    offset,
                     lambda_set.runtime_representation(),
                     dst,
                 );
             }
-
-            _ => todo!("unboxing of {:?}", layout_interner.dbg(element_in_layout)),
         }
     }
 
@@ -3497,7 +3889,7 @@ impl<
                 let sym_reg = storage_manager.load_to_float_reg(buf, &value);
                 ASM::movesd_mem64_offset32_freg64(buf, ptr_reg, element_offset, sym_reg);
             }
-            LayoutRepr::Boxed(_) => {
+            pointer_layouts!() => {
                 let sym_reg = storage_manager.load_to_general_reg(buf, &value);
                 ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, sym_reg);
             }
@@ -3605,7 +3997,7 @@ impl<
     }
 
     /// Loads the alignment bytes of `layout` into the given `symbol`
-    fn load_layout_alignment(&mut self, layout: InLayout<'a>, symbol: Symbol) {
+    fn load_layout_alignment(&mut self, layout: InLayout<'_>, symbol: Symbol) {
         let u32_layout = Layout::U32;
         let alignment = self.layout_interner.alignment_bytes(layout);
         let alignment_literal = Literal::Int((alignment as i128).to_ne_bytes());
@@ -3614,7 +4006,7 @@ impl<
     }
 
     /// Loads the stack size of `layout` into the given `symbol`
-    fn load_layout_stack_size(&mut self, layout: InLayout<'a>, symbol: Symbol) {
+    fn load_layout_stack_size(&mut self, layout: InLayout<'_>, symbol: Symbol) {
         let u64_layout = Layout::U64;
         let width = self.layout_interner.stack_size(layout);
         let width_literal = Literal::Int((width as i128).to_ne_bytes());
@@ -3669,5 +4061,19 @@ macro_rules! single_register_floats {
 macro_rules! single_register_layouts {
     () => {
         single_register_integers!() | single_register_floats!()
+    };
+}
+
+#[macro_export]
+macro_rules! pointer_layouts {
+    () => {
+        LayoutRepr::Boxed(_)
+            | LayoutRepr::RecursivePointer(_)
+            | LayoutRepr::Union(
+                UnionLayout::Recursive(_)
+                    | UnionLayout::NonNullableUnwrapped(_)
+                    | UnionLayout::NullableWrapped { .. }
+                    | UnionLayout::NullableUnwrapped { .. },
+            )
     };
 }

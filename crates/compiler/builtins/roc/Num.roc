@@ -989,19 +989,11 @@ pow : Frac a, Frac a -> Frac a
 ## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
 ##
 ## For a [Frac] alternative to this function, which supports negative exponents,
-## see #Num.exp.
-## ```
-## Num.exp 5 0
+## see #Num.pow.
 ##
-## Num.exp 5 1
+## ## Warning
 ##
-## Num.exp 5 2
-##
-## Num.exp 5 6
-## ```
-## ## Performance Details
-##
-## Be careful! It is very easy for this function to produce an answer
+## It is very easy for this function to produce an answer
 ## so large it causes an overflow.
 powInt : Int a, Int a -> Int a
 

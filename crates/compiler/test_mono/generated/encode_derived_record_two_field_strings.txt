@@ -630,8 +630,8 @@ procedure Json.25 (Json.183):
         let Json.1532 : List U8 = CallByName List.8 Json.1533 Json.1534;
         ret Json.1532;
     else
-        let Json.1574 : U64 = StructAtIndex 0 Json.186;
         inc Json.184;
+        let Json.1574 : U64 = StructAtIndex 0 Json.186;
         let Json.1573 : {List U8, List U8} = CallByName List.52 Json.184 Json.1574;
         let Json.210 : List U8 = StructAtIndex 0 Json.1573;
         let Json.212 : List U8 = StructAtIndex 1 Json.1573;

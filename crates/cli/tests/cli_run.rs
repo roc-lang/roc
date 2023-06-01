@@ -725,7 +725,7 @@ mod cli_run {
                 Arg::PlainText("81"),
             ],
             &[],
-            "4\n",
+            "4.000000000000001\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )

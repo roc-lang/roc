@@ -267,9 +267,15 @@ pub const NUM_IS_INFINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is
 pub const NUM_IS_FINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is_finite");
 pub const NUM_LOG: IntrinsicName = float_intrinsic!("roc_builtins.num.log");
 pub const NUM_POW: IntrinsicName = float_intrinsic!("roc_builtins.num.pow");
+pub const NUM_FABS: IntrinsicName = float_intrinsic!("roc_builtins.num.fabs");
+pub const NUM_SQRT: IntrinsicName = float_intrinsic!("roc_builtins.num.sqrt");
 
 pub const NUM_POW_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.pow_int");
 pub const NUM_DIV_CEIL: IntrinsicName = int_intrinsic!("roc_builtins.num.div_ceil");
+pub const NUM_CEILING_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.ceiling_f32");
+pub const NUM_CEILING_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.ceiling_f64");
+pub const NUM_FLOOR_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.floor_f32");
+pub const NUM_FLOOR_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.floor_f64");
 pub const NUM_ROUND_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f32");
 pub const NUM_ROUND_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f64");
 

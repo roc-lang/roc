@@ -2063,7 +2063,7 @@ fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nullable_wrapped_with_non_nullable_singleton_tags() {
     assert_evals_to!(
         indoc!(
@@ -2094,7 +2094,7 @@ fn nullable_wrapped_with_non_nullable_singleton_tags() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nullable_wrapped_with_nullable_not_last_index() {
     assert_evals_to!(
         indoc!(
@@ -2102,9 +2102,9 @@ fn nullable_wrapped_with_nullable_not_last_index() {
             app "test" provides [main] to "./platform"
 
             Parser : [
-                OneOrMore Parser,
-                Keyword Str,
                 CharLiteral,
+                Keyword Str,
+                OneOrMore Parser,
             ]
 
             toIdParser : Parser -> Str

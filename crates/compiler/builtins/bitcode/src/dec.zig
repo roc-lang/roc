@@ -44,6 +44,8 @@ pub const RocDec = extern struct {
         return ret;
     }
 
+    // TODO: If Str.toDec eventually supports more error types, return errors here.
+    // For now, just return null which will give the default error.
     pub fn fromStr(roc_str: RocStr) ?RocDec {
         if (roc_str.isEmpty()) {
             return null;
@@ -79,7 +81,8 @@ pub const RocDec = extern struct {
 
             var after_str_len = (length - 1) - pi;
             if (after_str_len > decimal_places) {
-                @panic("TODO runtime exception for too many decimal places!");
+                // TODO: runtime exception for too many decimal places!
+                return null;
             }
             var diff_decimal_places = decimal_places - after_str_len;
 
@@ -96,7 +99,8 @@ pub const RocDec = extern struct {
             var result: i128 = undefined;
             var overflowed = @mulWithOverflow(i128, before, one_point_zero_i128, &result);
             if (overflowed) {
-                @panic("TODO runtime exception for overflow!");
+                // TODO: runtime exception for overflow!
+                return null;
             }
             before_val_i128 = result;
         }
@@ -107,7 +111,8 @@ pub const RocDec = extern struct {
                     var result: i128 = undefined;
                     var overflowed = @addWithOverflow(i128, before, after, &result);
                     if (overflowed) {
-                        @panic("TODO runtime exception for overflow!");
+                        // TODO: runtime exception for overflow!
+                        return null;
                     }
                     break :blk .{ .num = result };
                 } else {
@@ -184,7 +189,7 @@ pub const RocDec = extern struct {
         position += 1;
 
         const trailing_zeros: u6 = count_trailing_zeros_base10(num);
-        if (trailing_zeros == decimal_places) {
+        if (trailing_zeros >= decimal_places) {
             // add just a single zero if all decimal digits are zero
             str_bytes[position] = '0';
             position += 1;
@@ -849,6 +854,14 @@ test "fromStr: .123.1" {
     var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
+}
+
+test "toStr: 100.00" {
+    var dec: RocDec = .{ .num = 100000000000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "100.0"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 123.45" {

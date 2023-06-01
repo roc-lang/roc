@@ -153,8 +153,8 @@ procedure Json.60 (Json.540):
     let Json.1336 : U8 = GetTagId Json.1327;
     let Json.1337 : Int1 = lowlevel Eq Json.1335 Json.1336;
     if Json.1337 then
-        let Json.542 : U64 = UnionAtIndex (Id 2) (Index 0) Json.1327;
         inc Json.540;
+        let Json.542 : U64 = UnionAtIndex (Id 2) (Index 0) Json.1327;
         let Json.1329 : List U8 = CallByName List.29 Json.540 Json.542;
         let Json.1332 : U64 = 0i64;
         let Json.1331 : {U64, U64} = Struct {Json.542, Json.1332};
@@ -506,18 +506,15 @@ procedure Json.68 ():
 procedure Json.69 (Json.1467):
     joinpoint Json.1197 Json.1165:
         let Json.599 : List U8 = StructAtIndex 0 Json.1165;
-        inc Json.599;
+        inc 4 Json.599;
         let Json.600 : List U8 = StructAtIndex 1 Json.1165;
         let Json.1315 : U64 = 0i64;
         let Json.601 : [C {}, C U8] = CallByName List.2 Json.599 Json.1315;
         let Json.1314 : U64 = 1i64;
-        inc Json.599;
         let Json.602 : [C {}, C U8] = CallByName List.2 Json.599 Json.1314;
         let Json.1313 : U64 = 2i64;
-        inc Json.599;
         let Json.603 : List U8 = CallByName List.29 Json.599 Json.1313;
         let Json.1312 : U64 = 6i64;
-        inc Json.599;
         let Json.604 : List U8 = CallByName List.29 Json.599 Json.1312;
         let Json.1198 : {[C {}, C U8], [C {}, C U8]} = Struct {Json.601, Json.602};
         joinpoint Json.1277:
@@ -865,7 +862,7 @@ procedure Test.12 ():
     let Test.16 : {List U8, I64} = Struct {Test.17, Test.18};
     let Test.15 : [C Str, C {List U8, I64}] = TagId(1) Test.16;
     let Test.14 : Int1 = CallByName Bool.11 Test.10 Test.15;
-    dec Test.15;
+    dec Test.16;
     expect Test.14;
     dec Test.10;
     let Test.13 : {} = Struct {};

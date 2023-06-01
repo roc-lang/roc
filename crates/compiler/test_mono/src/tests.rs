@@ -3050,3 +3050,31 @@ fn specialize_after_match() {
         "#
     )
 }
+
+#[mono_test]
+fn drop_specialize_after_struct() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: v, right: v }
+            "result"
+        "#
+    )
+}
+
+#[mono_test]
+fn record_update() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+        main = f {a: [], b: [], c:[]}
+        f : {a: List Nat, b: List Nat, c: List Nat} -> {a: List Nat, b: List Nat, c: List Nat}
+        f = \record -> {record & a: List.set record.a 7 7, b: List.set record.b 8 8}
+        "#
+    )
+}
