@@ -150,8 +150,6 @@ pub enum CompareOperation {
 /// Generally, I prefer explicit sources, as opposed to dst being one of the sources. Ex: `x = x + y` would be `add x, x, y` instead of `add x, y`.
 /// dst should always come before sources.
 pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
-    fn base_pointer() -> GeneralReg;
-
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
     fn abs_freg64_freg64(
         buf: &mut Vec<'_, u8>,
@@ -3001,8 +2999,7 @@ impl<
                 );
 
                 // index into the table
-                let base_pointer = ASM::base_pointer();
-                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, base_pointer);
+                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, CC::BASE_PTR_REG);
 
                 // load the 16-bit value at the pointer
                 ASM::mov_reg16_mem16_offset32(&mut self.buf, dst_reg, dst_reg, table_offset);

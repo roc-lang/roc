@@ -459,11 +459,6 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
-    fn base_pointer() -> AArch64GeneralReg {
-        AArch64GeneralReg::FP
-    }
-
-    #[inline(always)]
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
         cmp_reg64_imm12(buf, src, 0);
         cneg_reg64_reg64_cond(buf, dst, src, ConditionCode::MI);
