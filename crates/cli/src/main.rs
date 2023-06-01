@@ -120,8 +120,7 @@ fn main() -> io::Result<()> {
             let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
             let target = matches
                 .get_one::<String>(FLAG_TARGET)
-                .map(|s| Target::from_str(s).ok())
-                .flatten()
+                .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
             roc_linker::generate_stub_lib(
                 input_path,
@@ -132,8 +131,7 @@ fn main() -> io::Result<()> {
         Some((CMD_BUILD, matches)) => {
             let target = matches
                 .get_one::<String>(FLAG_TARGET)
-                .map(|s| Target::from_str(s).ok())
-                .flatten()
+                .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
             let link_type = match (matches.get_flag(FLAG_LIB), matches.get_flag(FLAG_NO_LINK)) {
                 (true, false) => LinkType::Dylib,

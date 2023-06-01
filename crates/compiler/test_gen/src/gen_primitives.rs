@@ -597,7 +597,7 @@ fn top_level_destructure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_0() {
     assert_evals_to!(
         indoc!(
@@ -625,7 +625,7 @@ fn linked_list_len_0() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_twice_0() {
     assert_evals_to!(
         indoc!(
@@ -653,7 +653,7 @@ fn linked_list_len_twice_0() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_1() {
     assert_evals_to!(
         indoc!(
@@ -681,7 +681,7 @@ fn linked_list_len_1() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_twice_1() {
     assert_evals_to!(
         indoc!(
@@ -709,7 +709,7 @@ fn linked_list_len_twice_1() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_3() {
     assert_evals_to!(
         indoc!(
@@ -738,7 +738,7 @@ fn linked_list_len_3() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_sum_num_a() {
     assert_evals_to!(
         indoc!(
@@ -767,7 +767,7 @@ fn linked_list_sum_num_a() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_sum_int() {
     assert_evals_to!(
         indoc!(
@@ -795,7 +795,7 @@ fn linked_list_sum_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_map() {
     assert_evals_to!(
         indoc!(
@@ -1244,7 +1244,7 @@ fn return_wrapped_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_is_singleton() {
     assert_evals_to!(
         indoc!(
@@ -1279,7 +1279,7 @@ fn linked_list_is_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_is_empty_1() {
     assert_evals_to!(
         indoc!(
@@ -1314,7 +1314,7 @@ fn linked_list_is_empty_1() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_is_empty_2() {
     assert_evals_to!(
         indoc!(
@@ -1346,7 +1346,7 @@ fn linked_list_is_empty_2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
     assert_evals_to!(
@@ -1712,7 +1712,7 @@ fn nested_pattern_match_two_ways() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_guarded_double_pattern_match() {
     // the important part here is that the first case (with the nested Cons) does not match
     // TODO this also has undefined behavior
@@ -1744,7 +1744,7 @@ fn linked_list_guarded_double_pattern_match() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_double_pattern_match() {
     assert_evals_to!(
         indoc!(

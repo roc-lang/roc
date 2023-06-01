@@ -1,7 +1,7 @@
 use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::{
-    single_register_floats, single_register_int_builtins, single_register_integers,
-    single_register_layouts, Relocation,
+    pointer_layouts, single_register_floats, single_register_int_builtins,
+    single_register_integers, single_register_layouts, Relocation,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -461,6 +461,7 @@ impl X64_64SystemVStoreArgs {
     ) {
         match layout_interner.get(in_layout).repr {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
+            pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
             LayoutRepr::I128 | LayoutRepr::U128 => {
                 let (offset, _) = storage_manager.stack_offset_and_size(&sym);
@@ -507,92 +508,83 @@ impl X64_64SystemVStoreArgs {
                 }
                 self.tmp_stack_offset += size as i32;
             }
-            other => {
-                // look at the layout in more detail
-                match other {
-                    LayoutRepr::Boxed(_) => {
-                        // treat boxed like a 64-bit integer
-                        self.store_arg_general(buf, storage_manager, sym)
-                    }
-                    LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
+            LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
+                buf,
+                storage_manager,
+                layout_interner,
+                sym,
+                lambda_set.runtime_representation(),
+            ),
+            LayoutRepr::Struct { .. } => {
+                // for now, just also store this on the stack
+                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
+                debug_assert_eq!(base_offset % 8, 0);
+                for i in (0..size as i32).step_by(8) {
+                    X86_64Assembler::mov_reg64_base32(
                         buf,
-                        storage_manager,
-                        layout_interner,
-                        sym,
-                        lambda_set.runtime_representation(),
-                    ),
-                    LayoutRepr::Struct { .. } => {
-                        // for now, just also store this on the stack
-                        let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-                        debug_assert_eq!(base_offset % 8, 0);
-                        for i in (0..size as i32).step_by(8) {
-                            X86_64Assembler::mov_reg64_base32(
-                                buf,
-                                Self::GENERAL_RETURN_REGS[0],
-                                base_offset + i,
-                            );
-                            X86_64Assembler::mov_stack32_reg64(
-                                buf,
-                                self.tmp_stack_offset + i,
-                                Self::GENERAL_RETURN_REGS[0],
-                            );
-                        }
-                        self.tmp_stack_offset += size as i32;
-                    }
-                    LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
-                        type ASM = X86_64Assembler;
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset + i,
+                    );
+                    X86_64Assembler::mov_stack32_reg64(
+                        buf,
+                        self.tmp_stack_offset + i,
+                        Self::GENERAL_RETURN_REGS[0],
+                    );
+                }
+                self.tmp_stack_offset += size as i32;
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                type ASM = X86_64Assembler;
 
-                        let tmp_reg = Self::GENERAL_RETURN_REGS[0];
-                        let stack_offset = self.tmp_stack_offset;
+                let tmp_reg = Self::GENERAL_RETURN_REGS[0];
+                let stack_offset = self.tmp_stack_offset;
 
-                        let mut copied = 0;
-                        let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
+                let mut copied = 0;
+                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
 
-                        if size - copied >= 8 {
-                            for _ in (0..(size - copied)).step_by(8) {
-                                ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
-                                ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
+                if size - copied >= 8 {
+                    for _ in (0..(size - copied)).step_by(8) {
+                        ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
+                        ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
 
-                                copied += 8;
-                            }
-                        }
-
-                        if size - copied >= 4 {
-                            for _ in (0..(size - copied)).step_by(4) {
-                                ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
-                                ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
-
-                                copied += 4;
-                            }
-                        }
-
-                        if size - copied >= 2 {
-                            for _ in (0..(size - copied)).step_by(2) {
-                                ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
-                                ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
-
-                                copied += 2;
-                            }
-                        }
-
-                        if size - copied >= 1 {
-                            for _ in (0..(size - copied)).step_by(1) {
-                                ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
-                                ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
-
-                                copied += 1;
-                            }
-                        }
-
-                        self.tmp_stack_offset += size as i32;
-                    }
-                    _ => {
-                        todo!(
-                            "calling with arg type, {:?}",
-                            layout_interner.dbg(in_layout)
-                        );
+                        copied += 8;
                     }
                 }
+
+                if size - copied >= 4 {
+                    for _ in (0..(size - copied)).step_by(4) {
+                        ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
+                        ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
+
+                        copied += 4;
+                    }
+                }
+
+                if size - copied >= 2 {
+                    for _ in (0..(size - copied)).step_by(2) {
+                        ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
+                        ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
+
+                        copied += 2;
+                    }
+                }
+
+                if size - copied >= 1 {
+                    for _ in (0..(size - copied)).step_by(1) {
+                        ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
+                        ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
+
+                        copied += 1;
+                    }
+                }
+
+                self.tmp_stack_offset += size as i32;
+            }
+            _ => {
+                todo!(
+                    "calling with arg type, {:?}",
+                    layout_interner.dbg(in_layout)
+                );
             }
         }
     }
@@ -664,6 +656,7 @@ impl X64_64SystemVLoadArgs {
         let stack_size = layout_interner.stack_size(in_layout);
         match layout_interner.get(in_layout).repr {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
+            pointer_layouts!() => self.load_arg_general(storage_manager, sym),
             single_register_floats!() => self.load_arg_float(storage_manager, sym),
             _ if stack_size == 0 => {
                 storage_manager.no_data(&sym);
@@ -673,38 +666,32 @@ impl X64_64SystemVLoadArgs {
                 storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                 self.argument_offset += stack_size as i32;
             }
-            other => match other {
-                LayoutRepr::Boxed(_) => {
-                    // boxed layouts are pointers, which we treat as 64-bit integers
-                    self.load_arg_general(storage_manager, sym)
-                }
-                LayoutRepr::LambdaSet(lambda_set) => self.load_arg(
-                    storage_manager,
-                    layout_interner,
-                    sym,
-                    lambda_set.runtime_representation(),
-                ),
-                LayoutRepr::Struct { .. } => {
-                    // for now, just also store this on the stack
-                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                    self.argument_offset += stack_size as i32;
-                }
-                LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
-                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                    self.argument_offset += stack_size as i32;
-                }
-                LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
-                    // for now, just also store this on the stack
-                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                    self.argument_offset += stack_size as i32;
-                }
-                _ => {
-                    todo!(
-                        "Loading args with layout {:?}",
-                        layout_interner.dbg(in_layout)
-                    );
-                }
-            },
+            LayoutRepr::LambdaSet(lambda_set) => self.load_arg(
+                storage_manager,
+                layout_interner,
+                sym,
+                lambda_set.runtime_representation(),
+            ),
+            LayoutRepr::Struct { .. } => {
+                // for now, just also store this on the stack
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                // for now, just also store this on the stack
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            _ => {
+                todo!(
+                    "Loading args with layout {:?}",
+                    layout_interner.dbg(in_layout)
+                );
+            }
         }
     }
 
@@ -1756,7 +1743,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn neq_reg64_reg64_reg64(
+    fn neq_reg_reg_reg(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,
         dst: X86_64GeneralReg,
