@@ -13,9 +13,7 @@ comptime {
 const Memcpy = fn (noalias [*]u8, noalias [*]const u8, len: usize) callconv(.C) [*]u8;
 
 pub var memcpy_target: Memcpy = switch (arch) {
-    // TODO: Switch to dispatch_memcpy once the surgical linker can support it.
-    // .x86_64 => dispatch_memcpy,
-    .x86_64 => musl.memcpy,
+    .x86_64 => dispatch_memcpy,
     else => unreachable,
 };
 
@@ -32,19 +30,24 @@ pub fn memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callcon
 }
 
 fn dispatch_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callconv(.C) [*]u8 {
+    // TODO: Switch this to overwrite the memcpy_target pointer once the surgical linker can support it.
+    // Then dispatch will just happen on the first call instead of every call.
     switch (arch) {
         .x86_64 => {
             if (cpuid.supports_avx2()) {
                 if (cpuid.supports_prefetchw()) {
-                    memcpy_target = folly.memcpy_prefetchw;
+                    // memcpy_target = folly.memcpy_prefetchw;
+                    return folly.memcpy_prefetchw(dest, src, len);
                 } else {
-                    memcpy_target = folly.memcpy_prefetcht0;
+                    // memcpy_target = folly.memcpy_prefetcht0;
+                    return folly.memcpy_prefetcht0(dest, src, len);
                 }
             } else {
-                memcpy_target = musl.memcpy;
+                // memcpy_target = musl.memcpy;
+                return musl.memcpy(dest, src, len);
             }
         },
         else => unreachable,
     }
-    return memcpy_target(dest, src, len);
+    // return memcpy_target(dest, src, len);
 }
