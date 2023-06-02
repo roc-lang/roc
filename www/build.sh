@@ -74,7 +74,7 @@ else
   echo 'Fetching latest roc nightly...'
   
   # get roc release archive
-  curl -fOL curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+  curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
   # extract archive
   ls | grep "roc_nightly" | xargs tar -xzvf
   # delete archive
