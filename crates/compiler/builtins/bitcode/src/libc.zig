@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const arch = builtin.cpu.arch;
-const musl_memcpy = @import("libc/musl/memcpy.zig");
+const musl = @import("libc/musl.zig");
 const cpuid = @import("libc/cpuid.zig");
 
 comptime {
@@ -14,7 +14,7 @@ const Memcpy = fn (noalias [*]u8, noalias [*]const u8, len: usize) callconv(.C) 
 pub var memcpy_target: Memcpy = switch (arch) {
     // TODO(): Switch to dispatch_memcpy once the surgical linker can support it.
     // .x86_64 => dispatch_memcpy,
-    .x86_64 => musl_memcpy.musl_memcpy,
+    .x86_64 => musl.memcpy,
     else => unreachable,
 };
 
@@ -47,9 +47,13 @@ fn dispatch_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) ca
     switch (arch) {
         .x86_64 => {
             if (cpuid.supports_avx2()) {
-                memcpy_target = musl_memcpy.musl_memcpy;
+                if (cpuid.supports_prefetchw()) {
+                    memcpy_target = musl.memcpy;
+                } else {
+                    memcpy_target = musl.memcpy;
+                }
             } else {
-                memcpy_target = musl_memcpy.musl_memcpy;
+                memcpy_target = musl.memcpy;
             }
         },
         else => unreachable,
