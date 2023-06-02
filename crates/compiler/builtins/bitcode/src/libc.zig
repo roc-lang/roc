@@ -7,7 +7,12 @@ const cpuid = @import("libc/cpuid.zig");
 
 comptime {
     @export(memcpy, .{ .name = "roc_memcpy", .linkage = .Weak });
-    @export(memcpy, .{ .name = "memcpy", .linkage = .Weak });
+    // TODO: remove this workaround.
+    // Wasm does not seem to respect that memcpy is weak.
+    // This is probably a bug in our link steps somewhere.
+    if (arch != .wasm32) {
+        @export(memcpy, .{ .name = "memcpy", .linkage = .Weak });
+    }
 }
 
 const Memcpy = fn (noalias [*]u8, noalias [*]const u8, len: usize) callconv(.C) [*]u8;
