@@ -17,15 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
-        env:
-          AUTH_HEADER: 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
-        run: |
-          ./ci/get_releases_json.sh
-
-      - run: curl -OL $(./ci/get_latest_release_url.sh linux_x86_64)
-      - run: curl -OL $(./ci/get_latest_release_url.sh macos_x86_64)
-      - run: curl -OL $(./ci/get_latest_release_url.sh macos_apple_silicon)
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v3
@@ -171,10 +165,10 @@ jobs:
           cd basic-cli-platform
           mkdir examples
           cd examples
-          curl -OL https://raw.githubusercontent.com/roc-lang/basic-cli/main/examples/http-get.roc
+          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/examples/http-get.roc
           sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
           cd ..
-          curl -OL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
+          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
 
       - run: sudo apt install -y expect
 

@@ -18,24 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: fetch releases data and save to file
-        run: |
-          curl --request GET \
-          --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-          --header 'content-type: application/json' \
-          --output roc_releases.json
-
-      - name: get the url of today`s release for linux (x86_64)
+      - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
-        run: echo "RELEASE_URL=$(./ci/get_today_release_url.sh linux_x86_64)" >> $GITHUB_ENV
+        run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
 
-      - name: get the url of today`s release for macos (x86_64)
+      - name: get the latest release archive for macos (x86_64)
         if: startsWith(matrix.os, 'macos')
-        run: echo "RELEASE_URL=$(./ci/get_today_release_url.sh macos_x86_64)" >> $GITHUB_ENV
-
-      - name: get the archive from the url
-        run: curl -OL ${{ env.RELEASE_URL }}
+        run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
 
       - name: remove everything in this dir except the tar # we want to test like a user who would have downloaded the release, so we clean up all files from the repo checkout
         run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
@@ -65,7 +54,7 @@ jobs:
 
       - name: Install zig
         run: |
-          curl -L -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}.tar.xz && tar -xf zig.tar.xz
+          curl -fL -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}.tar.xz && tar -xf zig.tar.xz
           echo "${GITHUB_WORKSPACE}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}" >> $GITHUB_PATH
       - name: zig version
         run: zig version
