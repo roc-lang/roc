@@ -1172,6 +1172,41 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::InvalidContentHash { expected, actual } => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was able to download this URL:"),
+                alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
+                alloc.concat([
+                    alloc.reflow(r"I use a mechanism to detect if the file might "),
+                    alloc.reflow(r"have been tampered with. This could happen if "),
+                    alloc.reflow(r"the server or domain have been compromised."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"This is the content signature I was "),
+                    alloc.reflow(r"expecting").annotate(Annotation::Emphasized),
+                    alloc.reflow(r":"),
+                ]),
+                alloc.string((&expected).to_string()).annotate(Annotation::PlainText).indent(4),
+                alloc.concat([
+                    alloc.reflow(r"However, this is the content signature I "),
+                    alloc.reflow(r"obtained").annotate(Annotation::Emphasized),
+                    alloc.reflow(r":"),
+                ]),
+                alloc.string((&actual).to_string()).annotate(Annotation::PlainText).indent(4),
+                alloc.reflow(r"To keep you secure, I will not execute this untrusted code."),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check if the URL is correctly formed and if this is the server you are expecting to connect to."),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "INVALID CONTENT HASH".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             // TODO: once all patterns are there, we should remove the _
             let doc = alloc.stack([
