@@ -1261,6 +1261,35 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::HttpErr(reqwest_error) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.reflow(r"But I encountered a network error:"),
+                alloc
+                    .string((&reqwest_error).to_string())
+                    .annotate(Annotation::PlainText)
+                    .indent(4),
+                // TODO: What should the tip for HTTP IO errors be?
+                // Should we import reqwest and check stuff like
+                // reqwest_error.{ is_redirect(), is_status(), is_timeout(), ... } ?
+                //
+                // alloc.concat([
+                //     alloc.tip(),
+                //     alloc.reflow(r"Check the error message."),
+                // ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "HTTP ERROR".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             // TODO: once all patterns are there, we should remove the _
             let doc = alloc.stack([
