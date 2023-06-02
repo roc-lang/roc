@@ -24,10 +24,6 @@ void roc_panic(void* ptr, unsigned int alignment) {
   exit(0);
 }
 
-void* roc_memcpy(void* dest, const void* src, size_t n) {
-  return memcpy(dest, src, n);
-}
-
 void* roc_memmove(void* dest, const void* src, size_t n){
   return memmove(dest, src, n);
 }

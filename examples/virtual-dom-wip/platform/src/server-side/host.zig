@@ -28,10 +28,6 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
 
-export fn roc_memcpy(dest: *anyopaque, src: *anyopaque, count: usize) callconv(.C) void {
-    _ = memcpy(dest, src, count);
-}
-
 export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = tag_id;
     const msg = @ptrCast([*:0]const u8, c_ptr);

@@ -49,7 +49,6 @@ comptime {
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
-        @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
 
         if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
             @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
@@ -83,14 +82,6 @@ fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     @panic("Roc panicked");
 }
 
-fn testing_roc_memcpy(dest: *anyopaque, src: *anyopaque, bytes: usize) callconv(.C) ?*anyopaque {
-    const zig_dest = @ptrCast([*]u8, dest);
-    const zig_src = @ptrCast([*]u8, src);
-
-    @memcpy(zig_dest, zig_src, bytes);
-    return dest;
-}
-
 pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
     return @ptrCast(?[*]u8, roc_alloc(size, alignment));
 }
@@ -101,10 +92,6 @@ pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [
 
 pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
     return roc_dealloc(c_ptr, alignment);
-}
-
-pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
-    roc_memcpy(dst, src, size);
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code

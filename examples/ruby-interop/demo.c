@@ -23,11 +23,6 @@ __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
     rb_raise(rb_eException, "%s", (char *)ptr);
 }
 
-void *roc_memcpy(void *dest, const void *src, size_t n)
-{
-    return memcpy(dest, src, n);
-}
-
 void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 
 // Reference counting
