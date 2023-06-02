@@ -6,6 +6,7 @@ use roc_region::all::LineColumnRegion;
 use std::path::{Path, PathBuf};
 use std::{fmt, io};
 use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
+use byte_unit::Byte;
 
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::Problem;
@@ -1510,6 +1511,7 @@ pub fn to_https_problem_report<'b>(
             }
         }
         Problem::DownloadTooBig(content_len) => {
+            let nice_bytes = Byte::from_bytes(content_len.into()).get_appropriate_unit(false).format(3);
             let doc = alloc.stack([
                 alloc.reflow(r"I was trying to download this URL:"),
                 alloc
@@ -1518,8 +1520,7 @@ pub fn to_https_problem_report<'b>(
                     .indent(4),
                     alloc.concat([
                         alloc.reflow(r"But the server stated this file is "),
-                        // TODO: evaluate taking a dependency on https://docs.rs/byte-unit/ to provide a better formatting
-                        alloc.string(format!("{} bytes", content_len)).annotate(Annotation::Keyword),
+                        alloc.string(nice_bytes).annotate(Annotation::Keyword),
                         alloc.reflow(r" in size. This is larger that the maximum size I can handle (around 32 GB)."),
                     ]),
                 alloc.concat([
