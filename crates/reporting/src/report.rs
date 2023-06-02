@@ -1145,6 +1145,41 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::MultipleEncodings(multiple_encodings) => {
+            let doc = alloc.stack([
+                url_problem_intro_1(),
+                url_problem_intro_2(),
+                alloc.concat([
+                    alloc.reflow(r"But the server replied with multiple "),
+                    alloc.reflow(r"content encodings").annotate(Annotation::Emphasized),
+                    alloc.reflow(r": "),
+                    alloc.string(multiple_encodings).annotate(Annotation::Emphasized),
+                    alloc.reflow(r"."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The supported content encodings are "),
+                    alloc.keyword(r"br"),
+                    alloc.reflow(r", "),
+                    alloc.keyword(r"gzip"),
+                    alloc.reflow(r" and "),
+                    alloc.keyword(r"deflate"),
+                    alloc.reflow(r". However, the server reply can only contain "),
+                    alloc.reflow(r"one").annotate(Annotation::Emphasized),
+                    alloc.reflow(r"."),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Perhaps you can check if the URL is correctly formed, or if the server is correctly configured."),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "MULTIPLE ENCODINGS".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             let doc = alloc.stack([
                 url_problem_intro_1(),
