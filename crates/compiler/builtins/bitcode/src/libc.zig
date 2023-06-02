@@ -29,25 +29,48 @@ pub fn memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callcon
     }
 }
 
+const MemcpyDecision = enum {
+    uninitialized,
+    folly_prefetchw,
+    folly_prefetcht0,
+    musl,
+};
+
+var memcpy_decision: MemcpyDecision = .uninitialized;
+
 fn dispatch_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callconv(.C) [*]u8 {
-    // TODO: Switch this to overwrite the memcpy_target pointer once the surgical linker can support it.
-    // Then dispatch will just happen on the first call instead of every call.
     switch (arch) {
         .x86_64 => {
-            if (cpuid.supports_avx2()) {
-                if (cpuid.supports_prefetchw()) {
-                    // memcpy_target = folly.memcpy_prefetchw;
-                    return folly.memcpy_prefetchw(dest, src, len);
-                } else {
-                    // memcpy_target = folly.memcpy_prefetcht0;
-                    return folly.memcpy_prefetcht0(dest, src, len);
-                }
-            } else {
-                // memcpy_target = musl.memcpy;
-                return musl.memcpy(dest, src, len);
+            // TODO: Switch this to overwrite the memcpy_target pointer once the surgical linker can support it.
+            // Then dispatch will just happen on the first call instead of every call.
+            // if (cpuid.supports_avx2()) {
+            //     if (cpuid.supports_prefetchw()) {
+            //         memcpy_target = folly.memcpy_prefetchw;
+            //     } else {
+            //         memcpy_target = folly.memcpy_prefetcht0;
+            //     }
+            // } else {
+            //     memcpy_target = musl.memcpy;
+            // }
+            // return memcpy_target(dest, src, len);
+            switch (memcpy_decision) {
+                .uninitialized => {
+                    if (cpuid.supports_avx2()) {
+                        if (cpuid.supports_prefetchw()) {
+                            memcpy_decision = .folly_prefetchw;
+                        } else {
+                            memcpy_decision = .folly_prefetcht0;
+                        }
+                    } else {
+                        memcpy_decision = .musl;
+                    }
+                    return dispatch_memcpy(dest, src, len);
+                },
+                .folly_prefetchw => return folly.memcpy_prefetchw(dest, src, len),
+                .folly_prefetcht0 => return folly.memcpy_prefetcht0(dest, src, len),
+                .musl => return musl.memcpy(dest, src, len),
             }
         },
         else => unreachable,
     }
-    // return memcpy_target(dest, src, len);
 }
