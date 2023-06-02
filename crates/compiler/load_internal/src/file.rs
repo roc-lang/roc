@@ -2457,9 +2457,10 @@ fn update<'a>(
                                     }
                                 }
                                 Err(url_err) => {
-                                    let buf = to_https_problem_report_string(Problem::InvalidUrl(
-                                        url_err,
-                                    ));
+                                    let buf = to_https_problem_report_string(
+                                        url,
+                                        Problem::InvalidUrl(url_err),
+                                    );
                                     return Err(LoadingProblem::FormattedReport(buf));
                                 }
                             }
