@@ -1402,6 +1402,44 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingHash) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"I use a mechanism to detect if the file might "),
+                    alloc.reflow(r"have been tampered with. This could happen if "),
+                    alloc.reflow(r"the server or domain have been compromised."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The way this works is that the name of the file "),
+                    alloc.reflow(r"is the cryptographic hash of the contents of the "),
+                    alloc.reflow(r"file itself. If someone would tamper with the file, "),
+                    alloc.reflow(r"I could notify and protect you. However, I could "),
+                    alloc.reflow(r"not find the expected hash on the URL above, "),
+                    alloc.reflow(r"so I cannot apply this tamper-check."),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc
+                        .reflow(r"Check that you have the correct URL for this package/platform. "),
+                    alloc.reflow(r"Here is an example of how such a hash looks like: "),
+                    alloc
+                        .string(r"tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk".to_string())
+                        .annotate(Annotation::Emphasized),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "MISSING PACKAGE HASH".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             // TODO: once all patterns are there, we should remove the _
             let doc = alloc.stack([
