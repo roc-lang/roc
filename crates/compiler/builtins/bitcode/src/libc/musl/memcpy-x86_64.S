@@ -1,6 +1,6 @@
 .global {[function_prefix]s}musl_memcpy
-# Windows does not support the type directive.
-# .type {[function_prefix]s}musl_memcpy,@function
+// Windows does not support the type directive.
+// .type {[function_prefix]s}musl_memcpy,@function
 {[function_prefix]s}musl_memcpy:
 	mov %rdi,%rax
 	cmp $8,%rdx

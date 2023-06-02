@@ -71,7 +71,7 @@
  */
 
 
-        # .type       {[function_prefix]s}__folly_memcpy_short_{[prefetch]s}, @function not supported by windows
+        // .type       {[function_prefix]s}__folly_memcpy_short_{[prefetch]s}, @function not supported by windows
 {[function_prefix]s}__folly_memcpy_short_{[prefetch]s}:
         .cfi_startproc
 
@@ -106,7 +106,7 @@
         ret
 
         .cfi_endproc
-        # .size       {[function_prefix]s}__folly_memcpy_short_{[prefetch]s}, .-{[function_prefix]s}__folly_memcpy_short_{[prefetch]s} not supported by windows
+        // .size       {[function_prefix]s}__folly_memcpy_short_{[prefetch]s}, .-{[function_prefix]s}__folly_memcpy_short_{[prefetch]s} not supported by windows
 
 // memcpy is an alternative entrypoint into the function named __folly_memcpy.
 // The compiler is able to call memcpy since the name is global while
@@ -115,12 +115,12 @@
 // memcpy is being used.
         .balign      64
         .globl      {[function_prefix]s}__folly_memcpy_{[prefetch]s}
-        # .type       {[function_prefix]s}__folly_memcpy_{[prefetch]s}, @function not supported by windows
+        // .type       {[function_prefix]s}__folly_memcpy_{[prefetch]s}, @function not supported by windows
 
 {[function_prefix]s}__folly_memcpy_{[prefetch]s}:
         .cfi_startproc
 
-        mov         %rdi, %rax    # return: $rdi
+        mov         %rdi, %rax    // return: $rdi
 
         test        %rdx, %rdx
         je          .L_EQ0_{[prefetch]s}
@@ -261,8 +261,8 @@
 		// This threshold is half of L1 cache on a Skylake machine, which means that
 		// potentially all of L1 will be populated by this copy once it is executed
 		// (dst and src are cached for temporal copies).
-		# NON_TEMPORAL_STORE_THRESHOLD = $32768
-        # cmp         NON_TEMPORAL_STORE_THRESHOLD, %rdx
+		// NON_TEMPORAL_STORE_THRESHOLD = $32768
+        // cmp         NON_TEMPORAL_STORE_THRESHOLD, %rdx
         cmp         $32768, %rdx
         jae         .L_NON_TEMPORAL_LOOP_{[prefetch]s}
 
@@ -387,7 +387,7 @@
         ret
 
 .L_OVERLAP_BWD_{[prefetch]s}:
-        # Save last 32 bytes.
+        // Save last 32 bytes.
         vmovdqu     -32(%rsi, %rdx), %ymm8
         lea         -32(%rdi, %rdx), %r9
 
@@ -434,4 +434,4 @@
 	ret
 
         .cfi_endproc
-        # .size       {[function_prefix]s}__folly_memcpy_{[prefetch]s}, .-{[function_prefix]s}__folly_memcpy_{[prefetch]s} not supported by windows
+        // .size       {[function_prefix]s}__folly_memcpy_{[prefetch]s}, .-{[function_prefix]s}__folly_memcpy_{[prefetch]s} not supported by windows
