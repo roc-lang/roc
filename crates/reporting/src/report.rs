@@ -1104,19 +1104,11 @@ pub fn to_https_problem_report<'b>(
     url: &'b str,
     https_problem: Problem,
 ) -> Report<'b> {
-    let url_problem_intro_1 = || alloc.reflow(r"I was trying to download this URL:");
-    let url_problem_intro_2 = || {
-        alloc
-            .string((&url).to_string())
-            .annotate(Annotation::Url)
-            .indent(4)
-    };
-
     match https_problem {
         Problem::UnsupportedEncoding(not_supported_encoding) => {
             let doc = alloc.stack([
-                url_problem_intro_1(),
-                url_problem_intro_2(),
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
                 alloc.concat([
                     alloc.reflow(r"But the server replied with a "),
                     alloc.reflow(r"content encoding").annotate(Annotation::Emphasized),
@@ -1147,8 +1139,8 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::MultipleEncodings(multiple_encodings) => {
             let doc = alloc.stack([
-                url_problem_intro_1(),
-                url_problem_intro_2(),
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
                 alloc.concat([
                     alloc.reflow(r"But the server replied with multiple "),
                     alloc.reflow(r"content encodings").annotate(Annotation::Emphasized),
@@ -1181,9 +1173,13 @@ pub fn to_https_problem_report<'b>(
             }
         }
         _ => {
+            // TODO: once all patterns are there, we should remove the _
             let doc = alloc.stack([
-                url_problem_intro_1(),
-                url_problem_intro_2(),
+                alloc.reflow(r"Something went wrong while downloading this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
             ]);
 
             Report {
