@@ -1306,7 +1306,7 @@ pub fn to_https_problem_report<'b>(
                     .annotate(Annotation::Url)
                     .indent(4),
                 alloc.concat([
-                    alloc.reflow(r"However the extension on this file ("),
+                    alloc.reflow(r"However, this file's extension ("),
                     alloc.string(suffix_text).annotate(annotation_style),
                     alloc.reflow(r") is not a supported extension."),
                 ]),
@@ -1328,6 +1328,39 @@ pub fn to_https_problem_report<'b>(
                 filename: "UNKNOWN.roc".into(),
                 doc,
                 title: "INVALID EXTENSION SUFFIX".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingTarExt) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"However, this file's extension is not "),
+                    alloc.keyword(r".tar"),
+                    alloc.reflow(r"."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The supported extensions are "),
+                    alloc.keyword(r".tar"),
+                    alloc.reflow(r", "),
+                    alloc.keyword(r".tar.gz"),
+                    alloc.reflow(r" and "),
+                    alloc.keyword(r".tar.br"),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform."),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "INVALID EXTENSION".to_string(),
                 severity: Severity::Fatal,
             }
         }
