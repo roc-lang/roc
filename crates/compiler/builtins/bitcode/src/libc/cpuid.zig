@@ -2,7 +2,7 @@ const builtin = @import("builtin");
 const arch = builtin.cpu.arch;
 
 // I couldn't manage to define this in a PIE friendly way with inline assembly.
-// Instead, I am definining it as global assembly functions.
+// Instead, I am defining it as global assembly functions.
 comptime {
     switch (arch) {
         .x86_64 => {
