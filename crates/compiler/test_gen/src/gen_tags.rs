@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::helpers::with_larger_debug_stack;
+
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
@@ -2167,9 +2170,10 @@ fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn issue_5162_recast_nested_nullable_unwrapped_layout() {
-    assert_evals_to!(
-        indoc!(
-            r###"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r###"
             app "test" provides [main] to "./platform"
 
             Concept : [
@@ -2184,10 +2188,11 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
                 when Dict.single bottom 0 is
                     _ -> Bool.true
             "###
-        ),
-        true,
-        bool
-    );
+            ),
+            true,
+            bool
+        );
+    })
 }
 
 #[test]
