@@ -1292,7 +1292,6 @@ pub enum LoadingProblem<'a> {
         filename: PathBuf,
         error: io::ErrorKind,
     },
-    HttpsProblem(Problem),
     ParsingFailed(FileError<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
 
@@ -4343,8 +4342,9 @@ fn load_packages<'a>(
                         }
                     }
                     Err(problem) => {
-                        load_messages
-                            .push(Msg::FailedToLoad(LoadingProblem::HttpsProblem(problem)));
+                        let buf = to_https_problem_report_string(src, problem);
+
+                        load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(buf)));
                         return;
                     }
                 }
