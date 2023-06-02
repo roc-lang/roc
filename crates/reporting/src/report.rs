@@ -1466,6 +1466,49 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::MisleadingCharacter) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"I have found one or more potentially misleading "),
+                    alloc.reflow(r"characters in this URL. Misleading characters are "),
+                    alloc.reflow(r"characters that look like others but aren't the same. "),
+                    alloc.reflow(r"The following characters are classified as misleading: "),
+                    alloc.keyword(r"@"),
+                    alloc.reflow(r", "),
+                    alloc.keyword("\u{2044}"),
+                    alloc.reflow(r" (unicode 2044), "),
+                    alloc.keyword("\u{2215}"),
+                    alloc.reflow(r" (unicode 2215), "),
+                    alloc.keyword("\u{FF0F}"),
+                    alloc.reflow(r" (unicode FF0F) and "),
+                    alloc.keyword("\u{29F8}"),
+                    alloc.reflow(r" (unicode 29F8). "),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"If you have a use-case for any of these characters we "),
+                    alloc.reflow(r"would like to hear about it. Reach out on "),
+                    alloc
+                        .string(r"https://github.com/roc-lang/roc/issues/5487".to_string())
+                        .annotate(Annotation::Url),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform."),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "MISLEADING CHARACTERS DETECTED".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             // TODO: once all patterns are there, we should remove the _
             let doc = alloc.stack([
