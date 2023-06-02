@@ -1,1 +1,1 @@
-pub const memcpy = @import("musl/memcpy.zig").musl_memcpy;
+pub const memcpy = @import("musl/memcpy.zig").memcpy;

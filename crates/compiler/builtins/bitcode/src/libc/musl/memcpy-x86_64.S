@@ -1,6 +1,6 @@
 .global musl_memcpy
 # Windows does not support the type directive.
-# .type memcpy,@function
+# .type musl_memcpy,@function
 musl_memcpy:
 	mov %rdi,%rax
 	cmp $8,%rdx
