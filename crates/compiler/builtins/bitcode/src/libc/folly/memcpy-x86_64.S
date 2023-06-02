@@ -71,8 +71,8 @@
  */
 
 
-        # .type       __folly_memcpy_short_{[prefetch]s}, @function not supported by windows
-__folly_memcpy_short_{[prefetch]s}:
+        # .type       {[function_prefix]s}__folly_memcpy_short_{[prefetch]s}, @function not supported by windows
+{[function_prefix]s}__folly_memcpy_short_{[prefetch]s}:
         .cfi_startproc
 
 .L_GE1_LE7_{[prefetch]s}:
@@ -106,7 +106,7 @@ __folly_memcpy_short_{[prefetch]s}:
         ret
 
         .cfi_endproc
-        # .size       __folly_memcpy_short_{[prefetch]s}, .-__folly_memcpy_short_{[prefetch]s} not supported by windows
+        # .size       {[function_prefix]s}__folly_memcpy_short_{[prefetch]s}, .-{[function_prefix]s}__folly_memcpy_short_{[prefetch]s} not supported by windows
 
 // memcpy is an alternative entrypoint into the function named __folly_memcpy.
 // The compiler is able to call memcpy since the name is global while
@@ -114,10 +114,10 @@ __folly_memcpy_short_{[prefetch]s}:
 // This is intended to aid in debugging by making it obvious which version of
 // memcpy is being used.
         .balign      64
-        .globl      __folly_memcpy_{[prefetch]s}
-        # .type       __folly_memcpy_{[prefetch]s}, @function not supported by windows
+        .globl      {[function_prefix]s}__folly_memcpy_{[prefetch]s}
+        # .type       {[function_prefix]s}__folly_memcpy_{[prefetch]s}, @function not supported by windows
 
-__folly_memcpy_{[prefetch]s}:
+{[function_prefix]s}__folly_memcpy_{[prefetch]s}:
         .cfi_startproc
 
         mov         %rdi, %rax    # return: $rdi
@@ -434,4 +434,4 @@ __folly_memcpy_{[prefetch]s}:
 	ret
 
         .cfi_endproc
-        # .size       __folly_memcpy_{[prefetch]s}, .-__folly_memcpy_{[prefetch]s} not supported by windows
+        # .size       {[function_prefix]s}__folly_memcpy_{[prefetch]s}, .-{[function_prefix]s}__folly_memcpy_{[prefetch]s} not supported by windows

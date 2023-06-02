@@ -1,13 +1,15 @@
+const std = @import("std");
 const builtin = @import("builtin");
 const arch = builtin.cpu.arch;
+const function_prefix = @import("../assembly_util.zig").function_prefix;
 
 comptime {
     switch (arch) {
         .x86_64 => {
-            asm (@embedFile("memcpy-x86_64.S"));
+            asm (std.fmt.comptimePrint(@embedFile("memcpy-x86_64.S"), .{ .function_prefix = function_prefix }));
         },
         .i386 => {
-            asm (@embedFile("memcpy-i386.S"));
+            asm (std.fmt.comptimePrint(@embedFile("memcpy-i386.S"), .{ .function_prefix = function_prefix }));
         },
         // TODO: add assembly implementations for other platforms.
         else => {},

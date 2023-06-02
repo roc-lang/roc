@@ -1,7 +1,7 @@
-.global musl_memcpy
+.global {[function_prefix]s}musl_memcpy
 # Windows does not support the type directive.
-# .type memcpy,@function
-musl_memcpy:
+# .type {[function_prefix]s}musl_memcpy,@function
+{[function_prefix]s}musl_memcpy:
 	push %esi
 	push %edi
 	mov 12(%esp),%edi
