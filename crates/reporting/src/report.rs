@@ -1364,6 +1364,44 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::InvalidFragment(
+            invalid_fragment,
+        )) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"However, this URL's fragment (the part after #) "),
+                    alloc.reflow(r"is not valid. When present, the fragment must point to "),
+                    alloc.reflow(r"an existing "),
+                    alloc.keyword(r".roc"),
+                    alloc.reflow(r" file inside the package. Also, the filename can't be empty "),
+                    alloc.reflow(r"so a fragment of #.roc would also not be valid. This is the "),
+                    alloc.reflow(r"problematic fragment I encountered: "),
+                ]),
+                alloc
+                    .string((&invalid_fragment).to_string())
+                    .annotate(Annotation::Emphasized)
+                    .indent(4),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that the fragment points to an existing "),
+                    alloc.keyword(r".roc"),
+                    alloc.reflow(r" file inside the package. You can download this package "),
+                    alloc.reflow(r"and inspect it locally."),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "INVALID FRAGMENT".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             // TODO: once all patterns are there, we should remove the _
             let doc = alloc.stack([
