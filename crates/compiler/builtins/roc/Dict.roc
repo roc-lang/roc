@@ -177,7 +177,7 @@ single = \k, v ->
 ##     |> Dict.insert 4 "Four"
 ##     |> Bool.isEq (Dict.fromList [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")])
 ## ```
-fromList : List (k, v) -> Dict k v | k Hash & Eq
+fromList : List (k, v) -> Dict k v | k implements Hash & Eq
 fromList = \data ->
     # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
     List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
@@ -687,7 +687,7 @@ rehash = \@Dict { metadata, dataIndices, data, size } ->
 
     rehashHelper newDict metadata dataIndices data 0
 
-rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v | k implements Hash & implements 
+rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v | k implements Hash & Eq
 rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
     when List.get oldMetadata index is
         Ok md ->
