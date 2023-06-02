@@ -1207,6 +1207,7 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
         Problem::IoErr(io_error) => {
             let doc = alloc.stack([
                 alloc.reflow(r"I was trying to download this URL:"),
@@ -1217,6 +1218,33 @@ pub fn to_https_problem_report<'b>(
                 alloc.reflow(r"But I encountered an IO (input/output) error:"),
                 alloc
                     .string((&io_error).to_string())
+                    .annotate(Annotation::PlainText)
+                    .indent(4),
+                // TODO: What should the tip for IO errors be?
+                // alloc.concat([
+                //     alloc.tip(),
+                //     alloc.reflow(r"Check the error message."),
+                // ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "IO ERROR".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
+        Problem::FsExtraErr(fs_extra_error) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.reflow(r"But I encountered an IO (input/output) error:"),
+                alloc
+                    .string((&fs_extra_error).to_string())
                     .annotate(Annotation::PlainText)
                     .indent(4),
                 // TODO: What should the tip for IO errors be?
