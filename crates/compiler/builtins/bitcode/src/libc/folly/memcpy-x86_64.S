@@ -89,7 +89,7 @@ __folly_memcpy_short_{[prefetch]s}:
         movw        %r9w, -2(%rdi,%rdx)
         ret
 
-        .align      2
+        .balign      2
 .L_EQ1_{[prefetch]s}:
         movb        (%rsi), %r8b
         movb        %r8b, (%rdi)
@@ -97,7 +97,7 @@ __folly_memcpy_short_{[prefetch]s}:
 
         // Aligning the target of a jump to an even address has a measurable
         // speedup in microbenchmarks.
-        .align      2
+        .balign      2
 .L_GE4_LE7_{[prefetch]s}:
         movl        (%rsi), %r8d
         movl        -4(%rsi,%rdx), %r9d
@@ -113,7 +113,7 @@ __folly_memcpy_short_{[prefetch]s}:
 // stacktraces will show __folly_memcpy since that is the name of the function.
 // This is intended to aid in debugging by making it obvious which version of
 // memcpy is being used.
-        .align      64
+        .balign      64
         .globl      __folly_memcpy_{[prefetch]s}
         # .type       __folly_memcpy_{[prefetch]s}, @function not supported by windows
 
@@ -147,7 +147,7 @@ __folly_memcpy_{[prefetch]s}:
 .L_EQ0_{[prefetch]s}:
         ret
 
-        .align      2
+        .balign      2
 .L_GE17_LE32_{[prefetch]s}:
         movdqu      (%rsi), %xmm0
         movdqu      -16(%rsi,%rdx), %xmm1
@@ -155,7 +155,7 @@ __folly_memcpy_{[prefetch]s}:
         movdqu      %xmm1, -16(%rdi,%rdx)
         ret
 
-        .align      2
+        .balign      2
 .L_GE193_LE256_{[prefetch]s}:
         vmovdqu     %ymm3, 96(%rdi)
         vmovdqu     %ymm4, -128(%rdi,%rdx)
@@ -175,7 +175,7 @@ __folly_memcpy_{[prefetch]s}:
         vzeroupper
         ret
 
-        .align      2
+        .balign      2
 .L_GE33_{[prefetch]s}:
         vmovdqu     (%rsi), %ymm0
         vmovdqu     -32(%rsi,%rdx), %ymm7
@@ -238,7 +238,7 @@ __folly_memcpy_{[prefetch]s}:
         // are unlikely.
         ja          .L_OVERLAP_{[prefetch]s}
 
-        .align      2
+        .balign      2
 .L_NO_OVERLAP_{[prefetch]s}:
         vmovdqu     %ymm0, (%rdi)
         vmovdqu     %ymm1, 32(%rdi)
@@ -266,7 +266,7 @@ __folly_memcpy_{[prefetch]s}:
         cmp         $32768, %rdx
         jae         .L_NON_TEMPORAL_LOOP_{[prefetch]s}
 
-        .align      2
+        .balign      2
 .L_ALIGNED_DST_LOOP_{[prefetch]s}:
         {[prefetch]s}    128(%rdi)
         {[prefetch]s}    192(%rdi)
@@ -298,7 +298,7 @@ __folly_memcpy_{[prefetch]s}:
         vzeroupper
         ret
 
-        .align      2
+        .balign      2
 .L_NON_TEMPORAL_LOOP_{[prefetch]s}:
         testb       $31, %sil
         jne         .L_ALIGNED_DST_LOOP_{[prefetch]s}
@@ -330,7 +330,7 @@ __folly_memcpy_{[prefetch]s}:
 
 
 .L_OVERLAP_{[prefetch]s}:
-        .align      2
+        .balign      2
         cmp         %rdi, %rsi
         jb          .L_OVERLAP_BWD_{[prefetch]s}  // %rsi  < %rdi => backward-copy
         je          .L_RET_{[prefetch]s}          // %rsi == %rdi => return, nothing to copy
