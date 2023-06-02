@@ -1378,9 +1378,9 @@ pub fn to_https_problem_report<'b>(
                     alloc.reflow(r"is not valid. When present, the fragment must point to "),
                     alloc.reflow(r"an existing "),
                     alloc.keyword(r".roc"),
-                    alloc.reflow(r" file inside the package. Also, the filename can't be empty "),
+                    alloc.reflow(r" file inside the package. Also, the filename can't be empty, "),
                     alloc.reflow(r"so a fragment of #.roc would also not be valid. This is the "),
-                    alloc.reflow(r"problematic fragment I encountered: "),
+                    alloc.reflow(r"invalid fragment I encountered: "),
                 ]),
                 alloc
                     .string((&invalid_fragment).to_string())
@@ -1410,13 +1410,13 @@ pub fn to_https_problem_report<'b>(
                     .annotate(Annotation::Url)
                     .indent(4),
                 alloc.concat([
-                    alloc.reflow(r"I use a mechanism to detect if the file might "),
+                    alloc.reflow(r"I use a content hash to detect if the file might "),
                     alloc.reflow(r"have been tampered with. This could happen if "),
                     alloc.reflow(r"the server or domain have been compromised."),
                 ]),
                 alloc.concat([
                     alloc.reflow(r"The way this works is that the name of the file "),
-                    alloc.reflow(r"is the cryptographic hash of the contents of the "),
+                    alloc.reflow(r"is the BLAKE3 hash of the contents of the "),
                     alloc.reflow(r"file itself. If someone would tamper with the file, "),
                     alloc.reflow(r"I could notify and protect you. However, I could "),
                     alloc.reflow(r"not find the expected hash on the URL above, "),
@@ -1505,7 +1505,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "MISLEADING CHARACTERS DETECTED".to_string(),
+                title: "MISLEADING CHARACTERS".to_string(),
                 severity: Severity::Fatal,
             }
         }
