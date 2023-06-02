@@ -1509,20 +1509,31 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
-        _ => {
-            // TODO: once all patterns are there, we should remove the _
+        Problem::DownloadTooBig(content_len) => {
             let doc = alloc.stack([
-                alloc.reflow(r"Something went wrong while downloading this URL:"),
+                alloc.reflow(r"I was trying to download this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
                     .indent(4),
+                    alloc.concat([
+                        alloc.reflow(r"But the server stated this file is "),
+                        // TODO: evaluate taking a dependency on https://docs.rs/byte-unit/ to provide a better formatting
+                        alloc.string(format!("{} bytes", content_len)).annotate(Annotation::Keyword),
+                        alloc.reflow(r" in size. This is larger that the maximum size I can handle (around 32 GB)."),
+                    ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform. "),
+                    alloc.reflow(r"If you do, you should contact the package/platform's author and "),
+                    alloc.reflow(r"notify them about this issue."),
+                ]),
             ]);
 
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "todo!".to_string(),
+                title: "FILE TOO LARGE".to_string(),
                 severity: Severity::Fatal,
             }
         }
