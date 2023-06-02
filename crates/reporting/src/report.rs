@@ -1440,6 +1440,32 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingHttps) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"For your security, I will only attempt to download "),
+                    alloc.reflow(r"files from servers which use the "),
+                    alloc.keyword(r"https"),
+                    alloc.reflow(r" protocol."),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform."),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "HTTPS MANDATORY".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             // TODO: once all patterns are there, we should remove the _
             let doc = alloc.stack([
