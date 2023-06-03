@@ -444,6 +444,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                         "__fixsfti",
                         "__fixunsdfti",
                         "__fixunssfti",
+                        "memcpy_decision",
                     ]
                     .contains(&name.as_str());
                     if *address == 0 && !name.starts_with("roc") && !is_ingested_compiler_rt {
