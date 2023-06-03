@@ -31,12 +31,6 @@ pub fn insert_inc_dec_operations<'a>(
     layout_interner: &STLayoutInterner<'a>,
     procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
-    // Create a SymbolRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
-    let mut symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
-    for proc_symbol in procedures.keys().map(|(symbol, _layout)| *symbol) {
-        symbol_rc_types_env.insert_proc_symbol(proc_symbol);
-    }
-
     // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
     // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
     // Thus, these rc operations are performed on the caller of the wrapper instead, and we skip rc on the lowlevel.
@@ -47,9 +41,7 @@ pub fn insert_inc_dec_operations<'a>(
             LowLevelWrapperType::from_symbol(*symbol),
             LowLevelWrapperType::NotALowLevelWrapper
         ) {
-            // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
-            // As the symbols should be limited in scope for the current proc.
-            let symbol_rc_types_env = symbol_rc_types_env.clone();
+            let symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
             insert_inc_dec_operations_proc(arena, symbol_rc_types_env, proc);
         }
     }
@@ -125,15 +117,6 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
             symbols_rc_type: SymbolRcTypes::default(),
             layout_interner,
         }
-    }
-
-    /**
-    Insert the reference count type of top level functions.
-    As functions are not reference counted, they can be marked as such.
-    */
-    fn insert_proc_symbol(&mut self, proc_symbol: Symbol) {
-        self.symbols_rc_type
-            .insert(proc_symbol, VarRcType::NotReferenceCounted);
     }
 
     /**
