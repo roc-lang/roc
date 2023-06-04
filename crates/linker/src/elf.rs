@@ -140,7 +140,6 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
 
         // special exceptions for roc_ functions that map to libc symbols
         let direct_mapping = match name {
-            "roc_memcpy" => Some("memcpy"),
             "roc_memset" => Some("memset"),
             "roc_memmove" => Some("memmove"),
 
@@ -1771,7 +1770,6 @@ mod tests {
                 "roc_fx_getInt_help",
                 "roc_fx_putInt",
                 "roc_fx_putLine",
-                "roc_memcpy",
                 "roc_memset",
                 "roc_panic",
                 "roc_realloc"

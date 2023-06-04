@@ -6,12 +6,11 @@ const folly = @import("libc/folly.zig");
 const cpuid = @import("libc/cpuid.zig");
 
 comptime {
-    @export(memcpy, .{ .name = "roc_memcpy", .linkage = .Weak });
     // TODO: remove this workaround.
-    // Wasm does not seem to respect that memcpy is weak.
-    // This is probably a bug in our link steps somewhere.
+    // Our wasm llvm pipeline always links in memcpy.
+    // As such, our impl will conflict.
     if (arch != .wasm32) {
-        @export(memcpy, .{ .name = "memcpy", .linkage = .Weak });
+        @export(memcpy, .{ .name = "memcpy", .linkage = .Strong });
     }
 }
 

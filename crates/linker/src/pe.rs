@@ -1319,7 +1319,6 @@ fn relocate_dummy_dll_entries(executable: &mut [u8], md: &PeMetadata) {
 /// Redirect `memcpy` and similar libc functions to their roc equivalents
 pub(crate) fn redirect_libc_functions(name: &str) -> Option<&str> {
     match name {
-        "memcpy" => Some("roc_memcpy"),
         "memset" => Some("roc_memset"),
         "memmove" => Some("roc_memmove"),
         _ => None,
