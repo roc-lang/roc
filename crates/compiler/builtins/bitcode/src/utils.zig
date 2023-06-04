@@ -19,9 +19,6 @@ extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
 // This should never be passed a null pointer.
 extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
-// should work just like libc memcpy (we can't assume libc is present)
-extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
-
 extern fn kill(pid: c_int, sig: c_int) c_int;
 extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
 extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
@@ -49,7 +46,6 @@ comptime {
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
-        @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
 
         if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
             @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
@@ -83,14 +79,6 @@ fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     @panic("Roc panicked");
 }
 
-fn testing_roc_memcpy(dest: *anyopaque, src: *anyopaque, bytes: usize) callconv(.C) ?*anyopaque {
-    const zig_dest = @ptrCast([*]u8, dest);
-    const zig_src = @ptrCast([*]u8, src);
-
-    @memcpy(zig_dest, zig_src, bytes);
-    return dest;
-}
-
 pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
     return @ptrCast(?[*]u8, roc_alloc(size, alignment));
 }
@@ -101,10 +89,6 @@ pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [
 
 pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
     return roc_dealloc(c_ptr, alignment);
-}
-
-pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
-    roc_memcpy(dst, src, size);
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code

@@ -7,6 +7,7 @@ const panic_utils = @import("panic.zig");
 
 comptime {
     _ = @import("compiler_rt.zig");
+    _ = @import("libc.zig");
 }
 
 const ROC_BUILTINS = "roc_builtins";

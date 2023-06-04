@@ -141,9 +141,7 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
         let address = sym.address();
 
         // special exceptions for memcpy and memset.
-        if name == "roc_memcpy" {
-            vaddresses.insert("memcpy".to_string(), address);
-        } else if name == "roc_memset" {
+        if name == "roc_memset" {
             vaddresses.insert("memset".to_string(), address);
         }
 
