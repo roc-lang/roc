@@ -1762,7 +1762,6 @@ mod tests {
 
         assert_eq!(
             [
-                "memcpy",
                 "memset",
                 "roc_alloc",
                 "roc_dealloc",
@@ -1770,6 +1769,7 @@ mod tests {
                 "roc_fx_getInt_help",
                 "roc_fx_putInt",
                 "roc_fx_putLine",
+                "roc_memcpy",
                 "roc_memset",
                 "roc_panic",
                 "roc_realloc"
