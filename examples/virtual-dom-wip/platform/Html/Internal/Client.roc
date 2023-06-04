@@ -22,7 +22,7 @@ interface Html.Internal.Client
             Size,
             translateStatic,
         },
-        Json,
+        TotallyNotJson,
         Action,
     ]
 
@@ -104,7 +104,7 @@ initClientAppHelp : List U8, App state initData -> { state, rendered : RenderedT
 initClientAppHelp = \json, app ->
     state =
         json
-        |> Decode.fromBytes Json.json
+        |> Decode.fromBytes TotallyNotJson.json
         |> app.init
     dynamicView =
         app.render state
@@ -444,7 +444,7 @@ diffAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
                         if accessors == newAccessors then
                             Tuple attrs patches
                         else
-                            json = newAccessors |> Encode.toBytes Json.json
+                            json = newAccessors |> Encode.toBytes TotallyNotJson.json
 
                             Tuple
                                 { attrs & eventListeners: Dict.insert attrs.eventListeners eventName { accessors, handlerId } }
@@ -596,7 +596,7 @@ renderAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
                             newDeletedHandlerCache: deletedHandlerCache,
                         }
             accessorsJson =
-                accessors |> Encode.toBytes Json.json
+                accessors |> Encode.toBytes TotallyNotJson.json
             patch =
                 SetListener nodeId eventType accessorsJson handlerId
 
@@ -774,7 +774,7 @@ expect
 
     initJson : List U8
     initJson =
-        { answer: 42 } |> Encode.toBytes Json.json # panics at mono/src/ir.rs:5739:56
+        { answer: 42 } |> Encode.toBytes TotallyNotJson.json # panics at mono/src/ir.rs:5739:56
     expected : { state : State, rendered : RenderedTree State, patches : List Patch }
     expected = {
         state: { answer: 42 },

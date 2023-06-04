@@ -58,7 +58,7 @@ stringBody = \mimeType, str ->
 
 # jsonBody : a -> Body | a has Encoding
 # jsonBody = \val ->
-#     Body (MimeType "application/json") (Encode.toBytes val Json.format)
+#     Body (MimeType "application/json") (Encode.toBytes val TotallyNotJson.format)
 #
 # multiPartBody : List Part -> Body
 # multiPartBody = \parts ->
