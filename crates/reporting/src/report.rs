@@ -1,3 +1,4 @@
+use byte_unit::Byte;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, ModuleIds, PQModuleName, PackageQualified, Symbol};
@@ -6,7 +7,6 @@ use roc_region::all::LineColumnRegion;
 use std::path::{Path, PathBuf};
 use std::{fmt, io};
 use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
-use byte_unit::Byte;
 
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::Problem;
@@ -1511,7 +1511,9 @@ pub fn to_https_problem_report<'b>(
             }
         }
         Problem::DownloadTooBig(content_len) => {
-            let nice_bytes = Byte::from_bytes(content_len.into()).get_appropriate_unit(false).format(3);
+            let nice_bytes = Byte::from_bytes(content_len.into())
+                .get_appropriate_unit(false)
+                .format(3);
             let doc = alloc.stack([
                 alloc.reflow(r"I was trying to download this URL:"),
                 alloc
