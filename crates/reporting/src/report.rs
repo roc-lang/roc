@@ -1187,13 +1187,13 @@ pub fn to_https_problem_report<'b>(
                     alloc.reflow(r"expecting").annotate(Annotation::Emphasized),
                     alloc.reflow(r":"),
                 ]),
-                alloc.string((&expected).to_string()).annotate(Annotation::PlainText).indent(4),
+                alloc.string(expected).annotate(Annotation::PlainText).indent(4),
                 alloc.concat([
                     alloc.reflow(r"However, this is the content signature I "),
                     alloc.reflow(r"obtained").annotate(Annotation::Emphasized),
                     alloc.reflow(r":"),
                 ]),
-                alloc.string((&actual).to_string()).annotate(Annotation::PlainText).indent(4),
+                alloc.string(actual).annotate(Annotation::PlainText).indent(4),
                 alloc.reflow(r"To keep you secure, I will not execute this untrusted code."),
                 alloc.concat([
                     alloc.tip(),
@@ -1218,7 +1218,7 @@ pub fn to_https_problem_report<'b>(
                     .indent(4),
                 alloc.reflow(r"But I encountered an IO (input/output) error:"),
                 alloc
-                    .string((&io_error).to_string())
+                    .string(io_error.to_string())
                     .annotate(Annotation::PlainText)
                     .indent(4),
                 // TODO: What should the tip for IO errors be?
@@ -1245,7 +1245,7 @@ pub fn to_https_problem_report<'b>(
                     .indent(4),
                 alloc.reflow(r"But I encountered an IO (input/output) error:"),
                 alloc
-                    .string((&fs_extra_error).to_string())
+                    .string(fs_extra_error.to_string())
                     .annotate(Annotation::PlainText)
                     .indent(4),
                 // TODO: What should the tip for IO errors be?
@@ -1271,7 +1271,7 @@ pub fn to_https_problem_report<'b>(
                     .indent(4),
                 alloc.reflow(r"But I encountered a network error:"),
                 alloc
-                    .string((&reqwest_error).to_string())
+                    .string(reqwest_error.to_string())
                     .annotate(Annotation::PlainText)
                     .indent(4),
                 // TODO: What should the tip for HTTP IO errors be?
@@ -1384,7 +1384,7 @@ pub fn to_https_problem_report<'b>(
                     alloc.reflow(r"invalid fragment I encountered: "),
                 ]),
                 alloc
-                    .string((&invalid_fragment).to_string())
+                    .string(invalid_fragment)
                     .annotate(Annotation::Emphasized)
                     .indent(4),
                 alloc.concat([
