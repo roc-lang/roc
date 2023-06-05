@@ -2859,7 +2859,15 @@ pub fn build_exp_stmt<'a, 'ctx>(
 
                         _ if lay.is_refcounted() => {
                             if value.is_pointer_value() {
-                                let value_ptr = value.into_pointer_value();
+                                let value_ptr = match lay.repr {
+                                    LayoutRepr::Union(union_layout)
+                                        if union_layout
+                                            .stores_tag_id_in_pointer(env.target_info) =>
+                                    {
+                                        tag_pointer_clear_tag_id(env, value.into_pointer_value())
+                                    }
+                                    _ => value.into_pointer_value(),
+                                };
 
                                 let then_block = env.context.append_basic_block(parent, "then");
                                 let done_block = env.context.append_basic_block(parent, "done");
