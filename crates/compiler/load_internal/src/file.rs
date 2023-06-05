@@ -53,9 +53,9 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::{
-    to_file_problem_report_string, to_https_problem_report_string, Palette, RenderTarget,
-};
+#[cfg(not(target_family = "wasm"))]
+use roc_reporting::report::to_https_problem_report_string;
+use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;

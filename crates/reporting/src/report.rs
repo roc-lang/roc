@@ -1,4 +1,3 @@
-use byte_unit::Byte;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, ModuleIds, PQModuleName, PackageQualified, Symbol};
@@ -8,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::{fmt, io};
 use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
+#[cfg(not(target_family = "wasm"))]
+use byte_unit::Byte;
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::Problem;
 
@@ -1100,6 +1101,7 @@ pub fn to_https_problem_report_string(url: &str, https_problem: Problem) -> Stri
     buf
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub fn to_https_problem_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
     url: &'b str,
