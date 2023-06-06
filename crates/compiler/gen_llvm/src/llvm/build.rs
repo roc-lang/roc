@@ -1921,15 +1921,30 @@ fn tag_pointer_set_tag_id<'ctx>(
     // we only have 3 bits, so can encode only 0..7 (or on 32-bit targets, 2 bits to encode 0..3)
     debug_assert!((tag_id as u32) < env.target_info.ptr_width() as u32);
 
+    let (_, tag_id_bits_mask) = tag_pointer_tag_id_bits_and_mask(env.target_info);
+
     let ptr_int = env.ptr_int();
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
 
+    let mask = env.ptr_int().const_int(tag_id_bits_mask, false);
+
+    let masked = env.builder.build_and(as_int, mask, "masked");
+
     let tag_id_intval = ptr_int.const_int(tag_id as u64, false);
-    let combined = env.builder.build_or(as_int, tag_id_intval, "store_tag_id");
+
+    let index = env.builder.build_int_sub(tag_id_intval, masked, "index");
+
+    let cast_pointer = env.builder.build_pointer_cast(
+        pointer,
+        env.context.i8_type().ptr_type(AddressSpace::default()),
+        "cast_to_i8_ptr",
+    );
+
+    let indexed_pointer = unsafe { env.builder.build_gep(cast_pointer, &[index], "new_ptr") };
 
     env.builder
-        .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
+        .build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
 }
 
 pub fn tag_pointer_tag_id_bits_and_mask(target_info: TargetInfo) -> (u64, u64) {
