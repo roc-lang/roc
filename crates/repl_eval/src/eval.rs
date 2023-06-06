@@ -265,7 +265,7 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
-const FAKE_EXPR: &'static Loc<Expr> = &Loc::at_zero(Expr::Crash);
+const FAKE_EXPR: &Loc<Expr> = &Loc::at_zero(Expr::Crash);
 
 fn expr_of_tag<'a, M: ReplAppMemory>(
     env: &mut Env<'a, '_>,
