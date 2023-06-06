@@ -230,7 +230,6 @@ fn gen_from_mono_module_llvm<'a>(
         EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };
 
-    let build_procedures_start = Instant::now();
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
         &mut loaded.layout_interner,
