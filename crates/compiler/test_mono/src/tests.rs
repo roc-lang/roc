@@ -3078,3 +3078,16 @@ fn record_update() {
         "#
     )
 }
+
+#[mono_test(mode = "test")]
+fn dbg_in_expect() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        expect
+            dbg ""
+            Bool.true
+        "###
+    )
+}
