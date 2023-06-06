@@ -1929,20 +1929,28 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
 ) -> PointerValue<'ctx> {
     let ptr_int = env.ptr_int();
 
-    let (tag_id_bits_mask, _) = tag_pointer_tag_id_bits_and_mask(env.target_info);
+    let (_, tag_id_bits_mask) = tag_pointer_tag_id_bits_and_mask(env.target_info);
 
     let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
 
-    let mask = {
-        let a = env.ptr_int().const_all_ones();
-        let tag_id_bits = env.ptr_int().const_int(tag_id_bits_mask, false);
-        env.builder.build_left_shift(a, tag_id_bits, "make_mask")
-    };
+    let mask = env.ptr_int().const_int(tag_id_bits_mask, false);
 
     let masked = env.builder.build_and(as_int, mask, "masked");
 
+    let zero = env.ptr_int().const_zero();
+
+    let index = env.builder.build_int_sub(zero, masked, "index");
+
+    let cast_pointer = env.builder.build_pointer_cast(
+        pointer,
+        env.context.i8_type().ptr_type(AddressSpace::default()),
+        "cast_to_i8_ptr",
+    );
+
+    let indexed_pointer = unsafe { env.builder.build_gep(cast_pointer, &[index], "new_ptr") };
+
     env.builder
-        .build_int_to_ptr(masked, pointer.get_type(), "to_ptr")
+        .build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
 }
 
 fn allocate_tag<'a, 'ctx>(
