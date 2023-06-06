@@ -1318,6 +1318,6 @@ fn ordered_tag_union_memory_layout() {
             x = Height 1 { line: 2, column: 3 }
             "#
         ),
-        r#""#,
+        r#"Height 1 { column: 3, line: 2 } : Node"#,
     );
 }
