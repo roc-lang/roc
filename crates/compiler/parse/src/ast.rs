@@ -365,7 +365,7 @@ pub enum Implements<'a> {
     SpaceAfter(&'a Implements<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-/// An ability demand is a value defining the ability; for example `hash : a -> U64 | a implements Hash`
+/// An ability demand is a value defining the ability; for example `hash : a -> U64 where a implements Hash`
 /// for a `Hash` ability.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AbilityMember<'a> {
@@ -399,7 +399,7 @@ pub enum TypeDef<'a> {
 
     /// An ability definition. E.g.
     ///   Hash implements
-    ///     hash : a -> U64 | a implements Hash
+    ///     hash : a -> U64 where a implements Hash
     Ability {
         header: TypeHeader<'a>,
         loc_implements: Loc<Implements<'a>>,
@@ -641,7 +641,7 @@ pub enum TypeAnnotation<'a> {
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
 
-    /// A "where" clause demanding abilities designated by a `|`, e.g. `a -> U64 | a implements Hash`
+    /// A "where" clause demanding abilities designated by a `where`, e.g. `a -> U64 where a implements Hash`
     Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<ImplementsClause<'a>>]),
 
     // We preserve this for the formatter; canonicalization ignores it.

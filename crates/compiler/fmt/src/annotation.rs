@@ -350,16 +350,23 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
             }
 
-            Where(annot, has_clauses) => {
+            Where(annot, implements_clauses) => {
                 annot.format_with_options(buf, parens, newlines, indent);
-                if has_clauses.iter().any(|has| has.is_multiline()) {
+                if implements_clauses
+                    .iter()
+                    .any(|implements| implements.is_multiline())
+                {
                     buf.newline();
                     buf.indent(indent);
                 } else {
                     buf.spaces(1);
                 }
-                for (i, has) in has_clauses.iter().enumerate() {
-                    buf.push(if i == 0 { '|' } else { ',' });
+                for (i, has) in implements_clauses.iter().enumerate() {
+                    buf.push_str(if i == 0 {
+                        roc_parse::keyword::WHERE
+                    } else {
+                        ","
+                    });
                     buf.spaces(1);
                     has.format_with_options(buf, parens, newlines, indent);
                 }

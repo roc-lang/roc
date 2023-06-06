@@ -1,6 +1,6 @@
 app "test" provides [hash] to "./platform"
 
-MHash implements hash : a -> U64 | a implements MHash
+MHash implements hash : a -> U64 where a implements MHash
 
 Id := U64 implements [MHash {hash}]
 

@@ -1,3 +1,3 @@
-f : a | a implements A
+f : a where a implements A
 
 f

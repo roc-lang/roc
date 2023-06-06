@@ -1,7 +1,7 @@
 app "test" provides [main] to "./platform"
 
 X has
-  consume : a -> {} | a implements X
+  consume : a -> {} where a implements X
 
 O := {} implements [X {consume: consumeO}]
 
@@ -12,8 +12,8 @@ P := {} implements [X {consume: consumeP}]
 consumeP = \@P {} -> {}
 
 caller = \x -> consume x
-#                      ^ a | a implements X
-#              ^^^^^^^ X#consume(2): a -[[] + a:consume(2):1]-> {} | a implements X
+#                      ^ a where a implements X
+#              ^^^^^^^ X#consume(2): a -[[] + a:consume(2):1]-> {} where a implements X
 
 main = {
   a: caller (@O {}),

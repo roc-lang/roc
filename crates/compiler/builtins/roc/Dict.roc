@@ -97,7 +97,7 @@ Dict k v := {
     dataIndices : List Nat,
     data : List (k, v),
     size : Nat,
-} | k implements Hash & Eq
+} where k implements Hash & Eq
      implements [
          Eq {
              isEq,
@@ -107,7 +107,7 @@ Dict k v := {
          },
      ]
 
-isEq : Dict k v, Dict k v -> Bool | k implements Hash & Eq, v implements Eq
+isEq : Dict k v, Dict k v -> Bool where k implements Hash & Eq, v implements Eq
 isEq = \xs, ys ->
     if len xs != len ys then
         Bool.false
@@ -120,14 +120,14 @@ isEq = \xs, ys ->
                 _ ->
                     Break Bool.false
 
-hashDict : hasher, Dict k v -> hasher | k implements Hash & Eq, v implements Hash, hasher implements Hasher
+hashDict : hasher, Dict k v -> hasher where k implements Hash & Eq, v implements Hash, hasher implements Hasher
 hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
 
 ## Return an empty dictionary.
 ## ```
 ## emptyDict = Dict.empty {}
 ## ```
-empty : {} -> Dict k v | k implements Hash & Eq
+empty : {} -> Dict k v where k implements Hash & Eq
 empty = \{} ->
     @Dict {
         metadata: List.repeat emptySlot 8,
@@ -144,7 +144,7 @@ empty = \{} ->
 ##
 ## capacityOfDict = Dict.capacity foodDict
 ## ```
-capacity : Dict k v -> Nat | k implements Hash & Eq
+capacity : Dict k v -> Nat where k implements Hash & Eq
 capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
 
@@ -153,7 +153,7 @@ capacity = \@Dict { dataIndices } ->
 ## Return a dictionary with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Dict k v | k implements Hash & Eq
+withCapacity : Nat -> Dict k v where k implements Hash & Eq
 withCapacity = \_ ->
     # TODO: power of 2 * 8 and actual implementation
     empty {}
@@ -164,7 +164,7 @@ withCapacity = \_ ->
 ##     Dict.single "A" "B"
 ##     |> Bool.isEq (Dict.insert (Dict.empty {}) "A" "B")
 ## ```
-single : k, v -> Dict k v | k implements Hash & Eq
+single : k, v -> Dict k v where k implements Hash & Eq
 single = \k, v ->
     insert (empty {}) k v
 
@@ -177,7 +177,7 @@ single = \k, v ->
 ##     |> Dict.insert 4 "Four"
 ##     |> Bool.isEq (Dict.fromList [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")])
 ## ```
-fromList : List (k, v) -> Dict k v | k implements Hash & Eq
+fromList : List (k, v) -> Dict k v where k implements Hash & Eq
 fromList = \data ->
     # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
     List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
@@ -192,7 +192,7 @@ fromList = \data ->
 ##     |> Dict.len
 ##     |> Bool.isEq 3
 ## ```
-len : Dict k v -> Nat | k implements Hash & Eq
+len : Dict k v -> Nat where k implements Hash & Eq
 len = \@Dict { size } ->
     size
 
@@ -208,7 +208,7 @@ len = \@Dict { size } ->
 ##
 ## expect Dict.len clearSongs == 0
 ## ```
-clear : Dict k v -> Dict k v | k implements Hash & Eq
+clear : Dict k v -> Dict k v where k implements Hash & Eq
 clear = \@Dict { metadata, dataIndices, data } ->
     cap = List.len dataIndices
 
@@ -236,7 +236,7 @@ clear = \@Dict { metadata, dataIndices, data } ->
 ##     |> Dict.walk 0 (\count, _, qty -> count + qty)
 ##     |> Bool.isEq 36
 ## ```
-walk : Dict k v, state, (state, k, v -> state) -> state | k implements Hash & Eq
+walk : Dict k v, state, (state, k, v -> state) -> state where k implements Hash & Eq
 walk = \@Dict { data }, initialState, transform ->
     List.walk data initialState (\state, (k, v) -> transform state k v)
 
@@ -268,7 +268,7 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ## expect someoneIsAnAdult == Bool.true
 ## ```
-walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k implements Hash & Eq
+walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state where k implements Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
     List.walkUntil data initialState (\state, (k, v) -> transform state k v)
 
@@ -283,7 +283,7 @@ walkUntil = \@Dict { data }, initialState, transform ->
 ## expect Dict.get dictionary 1 == Ok "Apple"
 ## expect Dict.get dictionary 2000 == Err KeyNotFound
 ## ```
-get : Dict k v, k -> Result v [KeyNotFound] | k implements Hash & Eq
+get : Dict k v, k -> Result v [KeyNotFound] where k implements Hash & Eq
 get = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -311,7 +311,7 @@ get = \@Dict { metadata, dataIndices, data }, key ->
 ##     |> Dict.contains 1234
 ##     |> Bool.isEq Bool.true
 ## ```
-contains : Dict k v, k -> Bool | k implements Hash & Eq
+contains : Dict k v, k -> Bool where k implements Hash & Eq
 contains = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -336,7 +336,7 @@ contains = \@Dict { metadata, dataIndices, data }, key ->
 ##     |> Dict.get "Apples"
 ##     |> Bool.isEq (Ok 12)
 ## ```
-insert : Dict k v, k, v -> Dict k v | k implements Hash & Eq
+insert : Dict k v, k, v -> Dict k v where k implements Hash & Eq
 insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -382,7 +382,7 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
 ##     |> Dict.len
 ##     |> Bool.isEq 0
 ## ```
-remove : Dict k v, k -> Dict k v | k implements Hash & Eq
+remove : Dict k v, k -> Dict k v where k implements Hash & Eq
 remove = \@Dict { metadata, dataIndices, data, size }, key ->
     # TODO: change this from swap remove to tombstone and test is performance is still good.
     hashKey =
@@ -426,7 +426,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
 ## expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
 ## expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty {}
 ## ```
-update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k implements Hash & Eq
+update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v where k implements Hash & Eq
 update = \dict, key, alter ->
     # TODO: look into optimizing by merging substeps and reducing lookups.
     possibleValue =
@@ -449,7 +449,7 @@ update = \dict, key, alter ->
 ##     |> Dict.toList
 ##     |> Bool.isEq [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")]
 ## ```
-toList : Dict k v -> List (k, v) | k implements Hash & Eq
+toList : Dict k v -> List (k, v) where k implements Hash & Eq
 toList = \@Dict { data } ->
     data
 
@@ -464,7 +464,7 @@ toList = \@Dict { data } ->
 ##     |> Dict.keys
 ##     |> Bool.isEq [1,2,3,4]
 ## ```
-keys : Dict k v -> List k | k implements Hash & Eq
+keys : Dict k v -> List k where k implements Hash & Eq
 keys = \@Dict { data } ->
     List.map data (\(k, _) -> k)
 
@@ -479,7 +479,7 @@ keys = \@Dict { data } ->
 ##     |> Dict.values
 ##     |> Bool.isEq ["One","Two","Three","Four"]
 ## ```
-values : Dict k v -> List v | k implements Hash & Eq
+values : Dict k v -> List v where k implements Hash & Eq
 values = \@Dict { data } ->
     List.map data (\(_, v) -> v)
 
@@ -507,7 +507,7 @@ values = \@Dict { data } ->
 ## expect
 ##     Dict.insertAll first second == expected
 ## ```
-insertAll : Dict k v, Dict k v -> Dict k v | k implements Hash & Eq
+insertAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 insertAll = \xs, ys ->
     walk ys xs insert
 
@@ -529,7 +529,7 @@ insertAll = \xs, ys ->
 ##
 ## expect Dict.keepShared first second == first
 ## ```
-keepShared : Dict k v, Dict k v -> Dict k v | k implements Hash & Eq
+keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 keepShared = \xs, ys ->
     walk
         xs
@@ -561,11 +561,11 @@ keepShared = \xs, ys ->
 ##
 ## expect Dict.removeAll first second == expected
 ## ```
-removeAll : Dict k v, Dict k v -> Dict k v | k implements Hash & Eq
+removeAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 removeAll = \xs, ys ->
     walk ys xs (\state, k, _ -> remove state k)
 
-swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v | k implements Hash & Eq
+swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v where k implements Hash & Eq
 swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
     (key, _) = listGetUnsafe data lastIndex
     hashKey =
@@ -629,7 +629,7 @@ nextEmptyOrDeletedHelper = \metadata, probe, offset ->
 
 # TODO: investigate if this needs to be split into more specific helper functions.
 # There is a chance that returning specific sub-info like the value would be faster.
-findIndexHelper : List I8, List Nat, List (k, v), I8, k, Probe, Nat -> Result Nat [NotFound] | k implements Hash & Eq
+findIndexHelper : List I8, List Nat, List (k, v), I8, k, Probe, Nat -> Result Nat [NotFound] where k implements Hash & Eq
 findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
     # For finding a value, we must search past all deleted element tombstones.
     index = Num.addWrap (mul8 probe.slotIndex) offset
@@ -661,7 +661,7 @@ findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
 # This is how we grow the container.
 # If we aren't to the load factor yet, just ignore this.
 # The container must have an updated size including any elements about to be inserted.
-maybeRehash : Dict k v -> Dict k v | k implements Hash & Eq
+maybeRehash : Dict k v -> Dict k v where k implements Hash & Eq
 maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
     cap = List.len dataIndices
     maxLoadCap =
@@ -674,7 +674,7 @@ maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
         @Dict { metadata, dataIndices, data, size }
 
 # TODO: switch rehash to iterate data and eventually clear out tombstones as well.
-rehash : Dict k v -> Dict k v | k implements Hash & Eq
+rehash : Dict k v -> Dict k v where k implements Hash & Eq
 rehash = \@Dict { metadata, dataIndices, data, size } ->
     newLen = 2 * List.len dataIndices
     newDict =
@@ -687,7 +687,7 @@ rehash = \@Dict { metadata, dataIndices, data, size } ->
 
     rehashHelper newDict metadata dataIndices data 0
 
-rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v | k implements Hash & Eq
+rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v where k implements Hash & Eq
 rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
     when List.get oldMetadata index is
         Ok md ->
@@ -708,7 +708,7 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
             # Walked entire list, complete now.
             dict
 
-insertForRehash : Dict k v, k, Nat -> Dict k v | k implements Hash & Eq
+insertForRehash : Dict k v, k, Nat -> Dict k v where k implements Hash & Eq
 insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
     hashKey =
         createLowLevelHasher PseudoRandSeed

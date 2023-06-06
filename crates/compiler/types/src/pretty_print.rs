@@ -602,7 +602,13 @@ fn variable_to_string(
     ctx.able_variables.sort();
     ctx.able_variables.dedup();
     for (i, (var, abilities)) in ctx.able_variables.into_iter().enumerate() {
-        buf.push_str(if i == 0 { " | " } else { ", " });
+        if i == 0 {
+            buf.push(' ');
+            buf.push_str(roc_parse::keyword::WHERE)
+        } else {
+            buf.push(',');
+        }
+        buf.push(' ');
         buf.push_str(var);
         buf.push(' ');
         buf.push_str(roc_parse::keyword::IMPLEMENTS);

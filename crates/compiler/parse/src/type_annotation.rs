@@ -479,14 +479,16 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
     )
 }
 
-/// Parse a chain of `implements` clauses, e.g. " | a implements Hash, b implements Eq".
-/// Returns the clauses and spaces before the starting "|", if there were any.
+/// Parse a chain of `implements` clauses, e.g. " where a implements Hash, b implements Eq".
+/// Returns the clauses and spaces before the starting "where", if there were any.
 fn implements_clause_chain<'a>(
 ) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<ImplementsClause<'a>>]), EType<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
-        let (_, (spaces_before, ()), state) =
-            and!(space0_e(EType::TIndentStart), word1(b'|', EType::TWhereBar))
-                .parse(arena, state, min_indent)?;
+        let (_, (spaces_before, ()), state) = and!(
+            space0_e(EType::TIndentStart),
+            word(crate::keyword::WHERE, EType::TWhereBar)
+        )
+        .parse(arena, state, min_indent)?;
 
         // Parse the first clause (there must be one), then the rest
         let (_, first_clause, state) = implements_clause().parse(arena, state, min_indent)?;
@@ -645,11 +647,12 @@ fn expression<'a>(
         // Finally, try to parse a where clause if there is one.
         // The where clause must be at least as deep as where the type annotation started.
         match implements_clause_chain().parse(arena, state.clone(), min_indent) {
-            Ok((where_progress, (spaces_before, has_chain), state)) => {
-                let region = Region::span_across(&annot.region, &has_chain.last().unwrap().region);
+            Ok((where_progress, (spaces_before, implements_chain), state)) => {
+                let region =
+                    Region::span_across(&annot.region, &implements_chain.last().unwrap().region);
                 let type_annot = if !spaces_before.is_empty() {
-                    // We're transforming the spaces_before the '|'
-                    // into spaces_after the thing before the '|'
+                    // We're transforming the spaces_before the 'where'
+                    // into spaces_after the thing before the 'where'
                     let spaced = arena
                         .alloc(annot.value)
                         .with_spaces_after(spaces_before, annot.region);
@@ -657,7 +660,7 @@ fn expression<'a>(
                 } else {
                     &*arena.alloc(annot)
                 };
-                let where_annot = TypeAnnotation::Where(type_annot, has_chain);
+                let where_annot = TypeAnnotation::Where(type_annot, implements_chain);
                 Ok((
                     where_progress.or(progress),
                     Loc::at(region, where_annot),

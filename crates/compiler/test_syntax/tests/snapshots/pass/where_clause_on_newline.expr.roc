@@ -1,4 +1,4 @@
 f : a -> U64
-    | a implements Hash
+    where a implements Hash
 
 f

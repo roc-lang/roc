@@ -1,15 +1,15 @@
 app "test" provides [main] to "./platform"
 
-J has j : j -> (k -> {}) | j implements J, k implements K
-K has k : k -> {} | k implements K
+J has j : j -> (k -> {}) where j implements J, k implements K
+K has k : k -> {} where k implements K
 
 C := {} implements [J {j: jC}]
 jC = \@C _ -> k
-#^^{-1} C -[[jC(9)]]-> (k -[[] + k:k(4):1]-> {}) | k implements K
+#^^{-1} C -[[jC(9)]]-> (k -[[] + k:k(4):1]-> {}) where k implements K
 
 D := {} implements [J {j: jD}]
 jD = \@D _ -> k
-#^^{-1} D -[[jD(10)]]-> (k -[[] + k:k(4):1]-> {}) | k implements K
+#^^{-1} D -[[jD(10)]]-> (k -[[] + k:k(4):1]-> {}) where k implements K
 
 E := {} implements [K {k: kE}]
 kE = \@E _ -> {}
@@ -20,24 +20,24 @@ kF = \@F _ -> {}
 #^^{-1} F -[[kF(12)]]-> {}
 
 f = \flag, a, b ->
-#             ^ j | j implements J
-#          ^ j | j implements J
+#             ^ j where j implements J
+#          ^ j where j implements J
     it =
-#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j implements J, j1 has J, k implements K
+#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} where j implements J, j1 has J, k implements K
         when flag is
             A -> j a
-            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) | j implements J, j1 has J, k implements K
+            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) where j implements J, j1 has J, k implements K
             B -> j b
-            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j implements J, j1 has J, k implements K
+            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) where j implements J, j1 has J, k implements K
     it
-#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j implements J, j1 has J, k implements K
+#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} where j implements J, j1 has J, k implements K
 
 main =
 #^^^^{-1} {}
     it = \x ->
-#   ^^ k -[[it(21)]]-> {} | k implements K
+#   ^^ k -[[it(21)]]-> {} where k implements K
         (f A (@C {}) (@D {})) x
-#        ^ [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k implements K
+#        ^ [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) where k implements K
     if Bool.true
         then it (@E {})
         #    ^^ E -[[it(21)]]-> {}

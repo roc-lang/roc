@@ -1,5 +1,5 @@
 app "roc-tutorial"
-    packages { pf: "../../../examples/static-site-gen/platform/main.roc" }    
+    packages { pf: "../../../examples/static-site-gen/platform/main.roc" }
     imports [
         pf.Html.{ html, head, body, footer, script, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta },
         pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, class, title, charset, src },
@@ -28,8 +28,8 @@ view = \htmlContent ->
                 text htmlContent,
             ],
             footer [] [
-                text "Made by people who like to make nice things. © 2022"
-            ]
+                text "Made by people who like to make nice things. © 2022",
+            ],
         ],
         script [src "/site.js"] [],
     ]
@@ -62,26 +62,26 @@ viewTutorialStart =
 
 tocLinks =
     { tag, value } <- List.map [
-        { tag: "#installation", value: "Installation" },
-        { tag: "#strings-and-numbers", value: "Strings and Numbers" },
-        { tag: "#building-an-application", value: "Building an Application" },
-        { tag: "#defining-functions", value: "Defining Functions" },
-        { tag: "#if-then-else", value: "if-then-else" },
-        { tag: "#debugging", value: "Debugging" },
-        { tag: "#records", value: "Records" },
-        { tag: "#tags", value: "Tags &amp; Pattern Matching" },
-        { tag: "#booleans", value: "Booleans" },
-        { tag: "#lists", value: "Lists" },
-        { tag: "#types", value: "Types" },
-        { tag: "#numeric-types", value: "Numeric Types" },
-        { tag: "#crashing", value: "Crashing" },
-        { tag: "#tests-and-expectations", value: "Tests and Expectations" },
-        { tag: "#modules", value: "Modules" },
-        { tag: "#tasks", value: "Tasks" },
-        { tag: "#abilities", value: "Abilities" },
-        { tag: "#appendix-advanced-concepts", value: "Advanced Concepts" },
-        { tag: "#operator-desugaring-table", value: "Operator Desugaring Table" },
-    ]
+            { tag: "#installation", value: "Installation" },
+            { tag: "#strings-and-numbers", value: "Strings and Numbers" },
+            { tag: "#building-an-application", value: "Building an Application" },
+            { tag: "#defining-functions", value: "Defining Functions" },
+            { tag: "#if-then-else", value: "if-then-else" },
+            { tag: "#debugging", value: "Debugging" },
+            { tag: "#records", value: "Records" },
+            { tag: "#tags", value: "Tags &amp; Pattern Matching" },
+            { tag: "#booleans", value: "Booleans" },
+            { tag: "#lists", value: "Lists" },
+            { tag: "#types", value: "Types" },
+            { tag: "#numeric-types", value: "Numeric Types" },
+            { tag: "#crashing", value: "Crashing" },
+            { tag: "#tests-and-expectations", value: "Tests and Expectations" },
+            { tag: "#modules", value: "Modules" },
+            { tag: "#tasks", value: "Tasks" },
+            { tag: "#abilities", value: "Abilities" },
+            { tag: "#appendix-advanced-concepts", value: "Advanced Concepts" },
+            { tag: "#operator-desugaring-table", value: "Operator Desugaring Table" },
+        ]
 
     li [] [
         a [href tag] [text value],
@@ -98,8 +98,8 @@ tutorialIntro =
             p [] [text "This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and more!"],
         ],
         section [] [
-            h2 [ id "installation" ] [
-                a [href "#installation"] [text "Installation"]
+            h2 [id "installation"] [
+                a [href "#installation"] [text "Installation"],
             ],
             p [] [
                 text "Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS",
@@ -108,7 +108,7 @@ tutorialIntro =
                 a [href "https://roc.zulipchat.com/#narrow/stream/231634-beginners"] [text " #beginners "],
                 text "on",
                 a [href "https://roc.zulipchat.com/"] [text " Roc Zulip Chat "],
-                text "and ask for assistance!"
-            ]
+                text "and ask for assistance!",
+            ],
         ],
     ]

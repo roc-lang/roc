@@ -1345,7 +1345,7 @@ fn specialize_ability_call() {
         app "test" provides [main] to "./platform"
 
         MHash implements
-            hash : a -> U64 | a implements MHash
+            hash : a -> U64 where a implements MHash
 
         Id := U64 implements [MHash {hash}]
 
@@ -1380,13 +1380,13 @@ fn encode() {
         r#"
         app "test" provides [myU8Bytes] to "./platform"
 
-        MEncoder fmt := List U8, fmt -> List U8 | fmt implements Format
+        MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
         MEncoding implements
-          toEncoder : val -> MEncoder fmt | val implements MEncoding, fmt implements Format
+          toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
         Format implements
-          u8 : U8 -> MEncoder fmt | fmt implements Format
+          u8 : U8 -> MEncoder fmt where fmt implements Format
 
 
         Linear := {} implements [Format {u8}]
@@ -2603,15 +2603,15 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         r#"
         app "test" provides [main] to "./platform"
 
-        MEncoder fmt := List U8, fmt -> List U8 | fmt implements Format
+        MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
         MEncoding implements
-          toEncoder : val -> MEncoder fmt | val implements MEncoding, fmt implements Format
+          toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
         Format implements
-          u8 : {} -> MEncoder fmt | fmt implements Format
-          str : {} -> MEncoder fmt | fmt implements Format
-          tag : MEncoder fmt -> MEncoder fmt | fmt implements Format
+          u8 : {} -> MEncoder fmt where fmt implements Format
+          str : {} -> MEncoder fmt where fmt implements Format
+          tag : MEncoder fmt -> MEncoder fmt where fmt implements Format
 
         Linear := {} implements [Format {u8: lU8, str: lStr, tag: lTag}]
 

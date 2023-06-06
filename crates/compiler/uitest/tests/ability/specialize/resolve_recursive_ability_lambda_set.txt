@@ -1,6 +1,6 @@
 app "test" provides [main] to "./platform"
 
-Diverge has diverge : a -> a | a implements Diverge
+Diverge has diverge : a -> a where a implements Diverge
 
 A := {} implements [Diverge {diverge}]
 

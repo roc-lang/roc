@@ -5457,14 +5457,14 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                A := a | a implements Hash implements [ Eq, Hash ]
+                A := a where a implements Hash implements [ Eq, Hash ]
 
                 0
                 "#
             ),
             indoc!(
                 r#"
-                A := a | a implements Hash
+                A := a where a implements Hash
                      implements [Eq, Hash]
 
                 0
@@ -5568,7 +5568,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            A := a | a implements Other
+            A := a where a implements Other
                  implements [Eq { eq }, Hash { hash }]
 
             0
@@ -5625,7 +5625,7 @@ mod test_fmt {
                     dataIndices : List Nat,
                     data : List (T k v),
                     size : Nat,
-                } | k implements Hash & Eq
+                } where k implements Hash & Eq
 
                 a
                 "#
@@ -5839,10 +5839,10 @@ mod test_fmt {
 
             A implements
                 ## This is member ab
-                ab : a -> a | a implements A
+                ab : a -> a where a implements A
 
                 ## This is member de
-                de : a -> a | a implements A
+                de : a -> a where a implements A
 
             f = g
             "#
@@ -5884,7 +5884,7 @@ mod test_fmt {
     fn clauses_with_multiple_abilities() {
         expr_formats_same(indoc!(
             r#"
-            f : {} -> a | a implements Eq & Hash & Decode
+            f : {} -> a where a implements Eq & Hash & Decode
 
             f
             "#
@@ -5893,7 +5893,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                f : {} -> a | a implements Eq & Hash & Decode,
+                f : {} -> a where a implements Eq & Hash & Decode,
                               b implements Eq & Hash
 
                 f
@@ -5902,10 +5902,10 @@ mod test_fmt {
             indoc!(
                 // TODO: ideally, this would look a bit nicer - consider
                 // f : {} -> a
-                //   | a implements Eq & Hash & Decode,
+                //   where a implements Eq & Hash & Decode,
                 //     b implements Eq & Hash
                 r#"
-                f : {} -> a | a implements Eq & Hash & Decode, b implements Eq & Hash
+                f : {} -> a where a implements Eq & Hash & Decode, b implements Eq & Hash
 
                 f
                 "#

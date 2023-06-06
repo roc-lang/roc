@@ -1,6 +1,6 @@
 app "test" provides [main] to "./platform"
 
-Id has id : a -> a | a implements Id
+Id has id : a -> a where a implements Id
 
 A := {} implements [Id {id}]
 id = \@A {} -> @A {}

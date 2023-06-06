@@ -21,7 +21,7 @@ fn hash_specialization() {
             app "test" provides [main] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             Id := U64 implements [MHash {hash}]
 
@@ -44,7 +44,7 @@ fn hash_specialization_multiple_add() {
             app "test" provides [main] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             Id := U64 implements [ MHash {hash: hashId} ]
 
@@ -71,7 +71,7 @@ fn alias_member_specialization() {
             app "test" provides [main] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             Id := U64 implements [MHash {hash}]
 
@@ -96,9 +96,9 @@ fn ability_constrained_in_non_member_usage() {
             app "test" provides [result] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
-            mulMHashes : a, a -> U64 | a implements MHash
+            mulMHashes : a, a -> U64 where a implements MHash
             mulMHashes = \x, y -> hash x * hash y
 
             Id := U64 implements [MHash {hash}]
@@ -121,7 +121,7 @@ fn ability_constrained_in_non_member_usage_inferred() {
             app "test" provides [result] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             mulMHashes = \x, y -> hash x * hash y
 
@@ -145,9 +145,9 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             app "test" provides [result] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
-            mulMHashes : a, b -> U64 | a implements MHash, b implements MHash
+            mulMHashes : a, b -> U64 where a implements MHash, b implements MHash
             mulMHashes = \x, y -> hash x * hash y
 
             Id := U64 implements [MHash { hash: hashId }]
@@ -173,7 +173,7 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
             app "test" provides [result] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             mulMHashes = \x, y -> hash x * hash y
 
@@ -200,7 +200,7 @@ fn ability_used_as_type_still_compiles() {
             app "test" provides [result] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             mulMHashes : MHash, MHash -> U64
             mulMHashes = \x, y -> hash x * hash y
@@ -227,15 +227,15 @@ fn bounds_to_multiple_abilities() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Idempot implements idempot : a -> a | a implements Idempot
-            Consume implements consume : a -> Str | a implements Consume
+            Idempot implements idempot : a -> a where a implements Idempot
+            Consume implements consume : a -> Str where a implements Consume
 
             Hello := Str implements [Idempot { idempot: idempotHello }, Consume { consume: consumeHello }]
 
             idempotHello = \@Hello msg -> @Hello msg
             consumeHello = \@Hello msg -> msg
 
-            lifecycle : a -> Str | a implements Idempot & Consume
+            lifecycle : a -> Str where a implements Idempot & Consume
             lifecycle = \x -> idempot x |> consume
 
             main = lifecycle (@Hello "hello world")
@@ -254,18 +254,18 @@ fn encode() {
             r#"
             app "test" provides [myU8Bytes] to "./platform"
 
-            MEncoder fmt := List U8, fmt -> List U8 | fmt implements Format
+            MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
             MEncoding implements
-              toEncoder : val -> MEncoder fmt | val implements MEncoding, fmt implements Format
+              toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
             Format implements
-              u8 : U8 -> MEncoder fmt | fmt implements Format
+              u8 : U8 -> MEncoder fmt where fmt implements Format
 
-            appendWith : List U8, MEncoder fmt, fmt -> List U8 | fmt implements Format
+            appendWith : List U8, MEncoder fmt, fmt -> List U8 where fmt implements Format
             appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
 
-            toBytes : val, fmt -> List U8 | val implements MEncoding, fmt implements Format
+            toBytes : val, fmt -> List U8 where val implements MEncoding, fmt implements Format
             toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
@@ -301,19 +301,19 @@ fn decode() {
 
             MDecodeError : [TooShort, Leftover (List U8)]
 
-            MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt implements MDecoderFormatting
+            MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
 
             MDecoding implements
-                decoder : MDecoder val fmt | val implements MDecoding, fmt implements MDecoderFormatting
+                decoder : MDecoder val fmt where val implements MDecoding, fmt implements MDecoderFormatting
 
             MDecoderFormatting implements
-                u8 : MDecoder U8 fmt | fmt implements MDecoderFormatting
+                u8 : MDecoder U8 fmt where fmt implements MDecoderFormatting
 
-            decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt implements MDecoderFormatting
+            decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
             decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
             fromBytes : List U8, fmt -> Result val MDecodeError
-                        | fmt implements MDecoderFormatting, val implements MDecoding
+                        where fmt implements MDecoderFormatting, val implements MDecoding
             fromBytes = \lst, fmt ->
                 when decodeWith lst decoder fmt is
                     { result, rest } ->

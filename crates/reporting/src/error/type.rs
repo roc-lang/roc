@@ -403,7 +403,8 @@ fn underivable_hint<'b>(
                 alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                 alloc.reflow(" clause to bind the type variable, like "),
                 alloc.inline_type_block(alloc.concat([
-                    alloc.string("| ".to_string()),
+                    alloc.keyword(roc_parse::keyword::WHERE),
+                    alloc.space(),
                     alloc.type_variable(v.clone()),
                     alloc.space(),
                     alloc.keyword(roc_parse::keyword::IMPLEMENTS),
@@ -2755,7 +2756,13 @@ fn type_with_able_vars<'b>(
     doc.push(typ);
 
     for (i, (var, abilities)) in able.into_iter().enumerate() {
-        doc.push(alloc.string(if i == 0 { " | " } else { ", " }.to_string()));
+        if i == 0 {
+            doc.push(alloc.space());
+            doc.push(alloc.keyword(roc_parse::keyword::WHERE));
+        } else {
+            doc.push(alloc.string(",".to_string()));
+        }
+        doc.push(alloc.space());
         doc.push(alloc.type_variable(var));
         doc.push(alloc.space());
         doc.push(alloc.keyword(roc_parse::keyword::IMPLEMENTS));

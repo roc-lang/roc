@@ -1,7 +1,7 @@
 app "test" provides [f] to "./platform"
 
-J has j : j -> (k -> {}) | j implements J, k implements K
-K has k : k -> {} | k implements K
+J has j : j -> (k -> {}) where j implements J, k implements K
+K has k : k -> {} where k implements K
 
 C := {} implements [J {j: jC}]
 jC = \@C _ -> k
@@ -18,5 +18,5 @@ f = \flag, a, c ->
             A -> j a
             B -> j a
     it c
-#      ^ k | k implements K
-#   ^^ k -[[] + j:j(2):2]-> {} | j implements J, k implements K
+#      ^ k where k implements K
+#   ^^ k -[[] + j:j(2):2]-> {} where j implements J, k implements K

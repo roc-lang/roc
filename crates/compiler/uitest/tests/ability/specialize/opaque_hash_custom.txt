@@ -5,4 +5,4 @@ Noop := {} implements [Hash {hash}]
 hash = \hasher, @Noop {} -> hasher
 
 main = \hasher -> hash hasher (@Noop {})
-#^^^^{-1} hasher -[[main(0)]]-> hasher | hasher implements Hasher
+#^^^^{-1} hasher -[[main(0)]]-> hasher where hasher implements Hasher

@@ -3,7 +3,7 @@ app "test" provides [main] to "./platform"
 
 Thunk a : {} -> a
 
-Id has id : a -> Thunk a | a implements Id
+Id has id : a -> Thunk a where a implements Id
 
 A := {} implements [Id {id}]
 id = \@A {} -> \{} -> @A {}
@@ -11,7 +11,7 @@ id = \@A {} -> \{} -> @A {}
 
 main =
     alias = \x -> id x
-    #             ^^ Id#id(3): a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) | a implements Id
+    #             ^^ Id#id(3): a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) where a implements Id
 
     a : A
     a = (alias (@A {})) {}

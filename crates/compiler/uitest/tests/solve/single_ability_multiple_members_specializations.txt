@@ -1,8 +1,8 @@
 app "test" provides [hash, hash32] to "./platform"
 
 MHash implements
-    hash : a -> U64 | a implements MHash
-    hash32 : a -> U32 | a implements MHash
+    hash : a -> U64 where a implements MHash
+    hash32 : a -> U32 where a implements MHash
 
 Id := U64 implements [MHash {hash, hash32}]
 

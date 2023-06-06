@@ -1,8 +1,8 @@
 app "test" provides [main] to "./platform"
 
 Bounce has
-    ping : a -> a | a implements Bounce
-    pong : a -> a | a implements Bounce
+    ping : a -> a where a implements Bounce
+    pong : a -> a where a implements Bounce
 
 A := {} implements [Bounce {ping, pong}]
 

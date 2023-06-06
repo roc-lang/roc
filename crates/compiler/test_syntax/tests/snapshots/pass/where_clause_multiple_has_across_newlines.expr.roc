@@ -1,5 +1,5 @@
 f : a -> (b -> c)
-    | a implements Hash,
+    where a implements Hash,
       b implements Eq,
       c implements Ord
 

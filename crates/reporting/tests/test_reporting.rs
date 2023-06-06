@@ -6488,7 +6488,7 @@ In roc, functions are always written as a lambda, like{}
         inference_var_conflict_in_rigid_links,
         indoc!(
             r#"
-            f : a -> (_ -> b) | a implements Eq
+            f : a -> (_ -> b) where a implements Eq
             f = \x -> \y -> if x == y then x else y
             f
             "#
@@ -6499,17 +6499,17 @@ In roc, functions are always written as a lambda, like{}
 
     Something is off with the body of the `f` definition:
 
-    4│      f : a -> (_ -> b) | a implements Eq
+    4│      f : a -> (_ -> b) where a implements Eq
     5│      f = \x -> \y -> if x == y then x else y
                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     The body is an anonymous function of type:
 
-        a -> a | a implements Eq, a implements Eq
+        a -> a where a implements Eq, a implements Eq
 
     But the type annotation on `f` says it should be:
 
-        a -> b | a implements Eq
+        a -> b where a implements Eq
 
     Tip: Your type annotation uses `b` and `a` as separate type variables.
     Your code seems to be saying they are the same though. Maybe they
@@ -8207,7 +8207,7 @@ In roc, functions are always written as a lambda, like{}
         indoc!(
             r#"
             MEq implements
-            eq : a, a -> U64 | a implements MEq
+            eq : a, a -> U64 where a implements MEq
 
             1
             "#
@@ -8219,7 +8219,7 @@ In roc, functions are always written as a lambda, like{}
     here:
 
     4│      MEq implements
-    5│      eq : a, a -> U64 | a implements MEq
+    5│      eq : a, a -> U64 where a implements MEq
             ^
 
     I suspect this line is not indented enough (by 1 spaces)
@@ -8231,8 +8231,8 @@ In roc, functions are always written as a lambda, like{}
         indoc!(
             r#"
             MEq implements
-                eq : a, a -> U64 | a implements MEq
-                    neq : a, a -> U64 | a implements MEq
+                eq : a, a -> U64 where a implements MEq
+                    neq : a, a -> U64 where a implements MEq
 
             1
             "#
@@ -8243,8 +8243,8 @@ In roc, functions are always written as a lambda, like{}
         I was partway through parsing an ability definition, but I got stuck
         here:
 
-        5│          eq : a, a -> U64 | a implements MEq
-        6│              neq : a, a -> U64 | a implements MEq
+        5│          eq : a, a -> U64 where a implements MEq
+        6│              neq : a, a -> U64 where a implements MEq
                         ^
 
         I suspect this line is indented too much (by 4 spaces)"#
@@ -8255,7 +8255,7 @@ In roc, functions are always written as a lambda, like{}
         indoc!(
             r#"
                 MEq implements
-                    eq b c : a, a -> U64 | a implements MEq
+                    eq b c : a, a -> U64 where a implements MEq
 
                 1
                 "#
@@ -8267,7 +8267,7 @@ In roc, functions are always written as a lambda, like{}
         here:
 
         4│      MEq implements
-        5│          eq b c : a, a -> U64 | a implements MEq
+        5│          eq b c : a, a -> U64 where a implements MEq
                        ^
 
         I was expecting to see a : annotating the signature of this value
@@ -8417,7 +8417,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [] to "./platform"
 
             MHash a b c implements
-              hash : a -> U64 | a implements MHash
+              hash : a -> U64 where a implements MHash
             "#
         ),
         @r###"
@@ -8449,7 +8449,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [hash] to "./platform"
 
-            MHash implements hash : a, b -> Num.U64 | a implements MHash, b implements Bool.Bool
+            MHash implements hash : a, b -> Num.U64 where a implements MHash, b implements Bool.Bool
             "#
         ),
         @r###"
@@ -8457,8 +8457,8 @@ In roc, functions are always written as a lambda, like{}
 
     The type referenced in this "implements" clause is not an ability:
 
-    3│  MHash implements hash : a, b -> Num.U64 | a implements MHash, b implements Bool.Bool
-                                                                                   ^^^^^^^^^
+    3│  MHash implements hash : a, b -> Num.U64 where a implements MHash, b implements Bool.Bool
+                                                                                       ^^^^^^^^^
     "###
     );
 
@@ -8468,7 +8468,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [ab1] to "./platform"
 
-            Ab1 implements ab1 : a -> {} | a implements Ab1, a implements Ab1
+            Ab1 implements ab1 : a -> {} where a implements Ab1, a implements Ab1
             "#
         ),
         @r#"
@@ -8476,13 +8476,13 @@ In roc, functions are always written as a lambda, like{}
 
         The `a` name is first defined here:
 
-        3│  Ab1 implements ab1 : a -> {} | a implements Ab1, a implements Ab1
-                                           ^^^^^^^^^^^^^^^^
+        3│  Ab1 implements ab1 : a -> {} where a implements Ab1, a implements Ab1
+                                               ^^^^^^^^^^^^^^^^
 
         But then it's defined a second time here:
 
-        3│  Ab1 implements ab1 : a -> {} | a implements Ab1, a implements Ab1
-                                                             ^^^^^^^^^^^^^^^^
+        3│  Ab1 implements ab1 : a -> {} where a implements Ab1, a implements Ab1
+                                                                 ^^^^^^^^^^^^^^^^
 
         Since these variables have the same name, it's easy to use the wrong
         one by accident. Give one of them a new name.
@@ -8495,9 +8495,9 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [ab] to "./platform"
 
-            Ability implements ab : a -> U64 | a implements Ability
+            Ability implements ab : a -> U64 where a implements Ability
 
-            Ability implements ab1 : a -> U64 | a implements Ability
+            Ability implements ab1 : a -> U64 where a implements Ability
             "#
         ),
         @r#"
@@ -8505,12 +8505,12 @@ In roc, functions are always written as a lambda, like{}
 
         The `Ability` name is first defined here:
 
-        3│  Ability implements ab : a -> U64 | a implements Ability
+        3│  Ability implements ab : a -> U64 where a implements Ability
             ^^^^^^^
 
         But then it's defined a second time here:
 
-        5│  Ability implements ab1 : a -> U64 | a implements Ability
+        5│  Ability implements ab1 : a -> U64 where a implements Ability
             ^^^^^^^
 
         Since these abilities have the same name, it's easy to use the wrong
@@ -8561,7 +8561,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [] to "./platform"
 
-            MEq implements eq : a, b -> Bool.Bool | a implements MEq, b implements MEq
+            MEq implements eq : a, b -> Bool.Bool where a implements MEq, b implements MEq
             "#
         ),
         @r#"
@@ -8570,8 +8570,8 @@ In roc, functions are always written as a lambda, like{}
         The definition of the ability member `eq` includes multiple variables
         bound to the `MEq`` ability:`
 
-        3│  MEq implements eq : a, b -> Bool.Bool | a implements MEq, b implements MEq
-                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        3│  MEq implements eq : a, b -> Bool.Bool where a implements MEq, b implements MEq
+                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
         Ability members can only bind one type variable to their parent
         ability. Otherwise, I wouldn't know what type implements an ability by
@@ -8587,9 +8587,9 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [f] to "./platform"
 
-            MHash implements hash : (a | a implements MHash) -> Num.U64
+            MHash implements hash : (a where a implements MHash) -> Num.U64
 
-            f : a -> Num.U64 | a implements MHash
+            f : a -> Num.U64 where a implements MHash
             "#
         ),
         @r###"
@@ -8597,8 +8597,8 @@ In roc, functions are always written as a lambda, like{}
 
     An `implements` clause is not allowed here:
 
-    3│  MHash implements hash : (a | a implements MHash) -> Num.U64
-                                     ^^^^^^^^^^^^^^^^^^
+    3│  MHash implements hash : (a where a implements MHash) -> Num.U64
+                                         ^^^^^^^^^^^^^^^^^^
 
     `implements` clauses can only be specified on the top-level type
     annotations.
@@ -8608,7 +8608,7 @@ In roc, functions are always written as a lambda, like{}
     The definition of the ability member `hash` does not include an
     `implements` clause binding a type variable to the ability `MHash`:
 
-    3│  MHash implements hash : (a | a implements MHash) -> Num.U64
+    3│  MHash implements hash : (a where a implements MHash) -> Num.U64
                          ^^^^
 
     Ability members must include an `implements` clause binding a type
@@ -8626,7 +8626,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [hash] to "./platform"
 
-            MHash implements hash : a -> U64 | a implements MHash
+            MHash implements hash : a -> U64 where a implements MHash
 
             Id := U32 implements [MHash {hash}]
 
@@ -8658,8 +8658,8 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [eq, le] to "./platform"
 
             MEq implements
-                eq : a, a -> Bool | a implements MEq
-                le : a, a -> Bool | a implements MEq
+                eq : a, a -> Bool where a implements MEq
+                le : a, a -> Bool where a implements MEq
 
             Id := U64 implements [MEq {eq}]
 
@@ -8687,7 +8687,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [hash] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             hash = \_ -> 0u64
             "#
@@ -8712,7 +8712,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [hash, One, Two] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             One := {} implements [MHash {hash}]
             Two := {} implements [MHash {hash}]
@@ -8748,7 +8748,7 @@ In roc, functions are always written as a lambda, like{}
 
     But the type annotation on `hash` says it must match:
 
-        a -> U64 | a implements MHash
+        a -> U64 where a implements MHash
 
     Note: The specialized type is too general, and does not provide a
     concrete type where a type variable is bound to an ability.
@@ -8766,7 +8766,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [hash, One, Two] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             One := {} implements [MHash {hash}]
             Two := {} implements [MHash {hash}]
@@ -8797,7 +8797,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [eq] to "./platform"
 
             MEq implements
-                eq : a, a -> Bool | a implements MEq
+                eq : a, a -> Bool where a implements MEq
 
             You := {} implements [MEq {eq}]
             AndI := {}
@@ -8832,7 +8832,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [hash] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             Id := U64 implements [MHash {hash}]
 
@@ -8866,7 +8866,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [noGoodVeryBadTerrible] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             Id := U64 implements [MHash {hash}]
 
@@ -8914,7 +8914,7 @@ In roc, functions are always written as a lambda, like{}
 
             main =
                 MHash implements
-                    hash : a -> U64 | a implements MHash
+                    hash : a -> U64 where a implements MHash
 
                 123
             "#
@@ -8925,7 +8925,7 @@ In roc, functions are always written as a lambda, like{}
         This ability definition is not on the top-level of a module:
 
         4│>      MHash implements
-        5│>          hash : a -> U64 | a implements MHash
+        5│>          hash : a -> U64 where a implements MHash
 
         Abilities can only be defined on the top-level of a Roc module.
         "#
@@ -8938,12 +8938,12 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [hash, hashable] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             Id := U64 implements [MHash {hash}]
             hash = \@Id n -> n
 
-            hashable : a | a implements MHash
+            hashable : a where a implements MHash
             hashable = @Id 15
             "#
         ),
@@ -8952,7 +8952,7 @@ In roc, functions are always written as a lambda, like{}
 
     Something is off with the body of the `hashable` definition:
 
-     9│  hashable : a | a implements MHash
+     9│  hashable : a where a implements MHash
     10│  hashable = @Id 15
                     ^^^^^^
 
@@ -8962,7 +8962,7 @@ In roc, functions are always written as a lambda, like{}
 
     But the type annotation on `hashable` says it should be:
 
-        a | a implements MHash
+        a where a implements MHash
 
     Note: The type variable `a` says it can take on any value that
     implements the ability `MHash`.
@@ -8979,7 +8979,7 @@ In roc, functions are always written as a lambda, like{}
             app "test" provides [result] to "./platform"
 
             MHash implements
-                hash : a -> U64 | a implements MHash
+                hash : a -> U64 where a implements MHash
 
             mulMHashes : MHash, MHash -> U64
             mulMHashes = \x, y -> hash x * hash y
@@ -9154,7 +9154,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [main] to "./platform"
 
-            Default implements default : {} -> a | a implements Default
+            Default implements default : {} -> a where a implements Default
 
             main =
                 A := {} implements [Default {default}]
@@ -9405,7 +9405,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            MEq implements eq : a, a -> U64 | a implements MEq
+            MEq implements eq : a, a -> U64 where a implements MEq
 
             A := U8 implements [MEq {eq}]
             "#
@@ -9441,7 +9441,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A, myMEq] to "./platform"
 
-            MEq implements eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool where a implements MEq
 
             A := U8 implements [ MEq {eq: aMEq} ]
 
@@ -9482,7 +9482,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A, myMEq] to "./platform"
 
-            MEq implements eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool where a implements MEq
 
             A := U8 implements [ MEq {eq ? aMEq} ]
 
@@ -9560,7 +9560,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            MEq implements eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool where a implements MEq
 
             A := U8 implements [ MEq {eq : Bool.eq} ]
             "#
@@ -9595,7 +9595,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            MEq implements eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool where a implements MEq
 
             A := U8 implements [ MEq {eq : \m, n -> m == n} ]
             "#
@@ -9632,7 +9632,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            MEq implements eq : a, a -> Bool | a implements MEq
+            MEq implements eq : a, a -> Bool where a implements MEq
 
             A := U8 implements [ MEq {eq: eqA, eq: eqA} ]
 
@@ -9685,7 +9685,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [A] to "./platform"
 
-            Ab implements ab : a -> a | a implements Ab
+            Ab implements ab : a -> a where a implements Ab
 
             A := {} implements [Ab]
             "#
@@ -9946,9 +9946,9 @@ In roc, functions are always written as a lambda, like{}
             r#"
             app "test" provides [x] to "./platform"
 
-            Foo implements foo : a -> a | a implements Foo
+            Foo implements foo : a -> a where a implements Foo
 
-            F a b := b | a implements Foo
+            F a b := b where a implements Foo
 
             MHash := {}
 
@@ -10476,7 +10476,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [hash, Id] to "./platform"
 
-            MHash implements hash : a -> U64 | a implements MHash
+            MHash implements hash : a -> U64 where a implements MHash
 
             Id := {}
 
@@ -10502,7 +10502,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [hash, Id, Id2] to "./platform"
 
-            MHash implements hash : a -> U64 | a implements MHash
+            MHash implements hash : a -> U64 where a implements MHash
 
             Id := {} implements [MHash {hash}]
             Id2 := {}
@@ -10659,7 +10659,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
             main =
-                myDecoder : Decoder (a -> a) fmt | fmt implements DecoderFormatting
+                myDecoder : Decoder (a -> a) fmt where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder
@@ -10690,7 +10690,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             A := {}
 
             main =
-                myDecoder : Decoder {x : A} fmt | fmt implements DecoderFormatting
+                myDecoder : Decoder {x : A} fmt where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder
@@ -10909,7 +10909,7 @@ I recommend using camelCase. It's the standard style in Roc code!
              app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
              main =
-                 myDecoder : Decoder {x : Str, y ? Str} fmt | fmt implements DecoderFormatting
+                 myDecoder : Decoder {x : Str, y ? Str} fmt where fmt implements DecoderFormatting
                  myDecoder = decoder
 
                  myDecoder
@@ -11323,7 +11323,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Hash
+             foo : a -> {} where a implements Hash
 
              main = foo {a: "", b: 1}
              "#
@@ -11337,7 +11337,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Hash
+             foo : a -> {} where a implements Hash
 
              t : [A {}, B U8 U64, C Str]
 
@@ -11353,7 +11353,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Hash
+             foo : a -> {} where a implements Hash
 
              main = foo (\x -> x)
              "#
@@ -11380,7 +11380,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Hash
+             foo : a -> {} where a implements Hash
 
              main = foo (A (\x -> x) B)
              "#
@@ -11413,7 +11413,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Hash
+             foo : a -> {} where a implements Hash
 
              main = foo ("", 1)
              "#
@@ -11426,7 +11426,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Hash
+             foo : a -> {} where a implements Hash
 
              main = foo ("", \{} -> {})
              "#
@@ -11709,7 +11709,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Eq
+             foo : a -> {} where a implements Eq
 
              main = foo {a: "", b: 1}
              "#
@@ -11723,7 +11723,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Eq
+             foo : a -> {} where a implements Eq
 
              t : [A {}, B U8 U64, C Str]
 
@@ -11739,7 +11739,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Eq
+             foo : a -> {} where a implements Eq
 
              main = foo (\x -> x)
              "#
@@ -11766,7 +11766,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Eq
+             foo : a -> {} where a implements Eq
 
              main = foo (A (\x -> x) B)
              "#
@@ -11845,7 +11845,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Eq
+             foo : a -> {} where a implements Eq
 
              main = foo ("", 1)
              "#
@@ -11858,7 +11858,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
              app "test" provides [main] to "./platform"
 
-             foo : a -> {} | a implements Eq
+             foo : a -> {} where a implements Eq
 
              main = foo ("", 1.0f64)
              "#
@@ -11938,7 +11938,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [f] to "./platform"
 
-            F a : a | a implements Hash
+            F a : a where a implements Hash
 
             f : F ({} -> {})
             "#
@@ -12037,7 +12037,7 @@ I recommend using camelCase. It's the standard style in Roc code!
         duplicate_ability_in_has_clause,
         indoc!(
             r#"
-            f : a -> {} | a implements Hash & Hash
+            f : a -> {} where a implements Hash & Hash
 
             f
             "#
@@ -12048,8 +12048,8 @@ I recommend using camelCase. It's the standard style in Roc code!
     I already saw that this type variable is bound to the `Hash` ability
     once before:
 
-    4│      f : a -> {} | a implements Hash & Hash
-                                              ^^^^
+    4│      f : a -> {} where a implements Hash & Hash
+                                                  ^^^^
 
     Abilities only need to bound to a type variable once in an `implements`
     clause!
@@ -12062,9 +12062,9 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [main] to "./platform"
 
-            g : x -> x | x implements Decoding & Encoding
+            g : x -> x where x implements Decoding & Encoding
 
-            main : x -> x | x implements Encoding
+            main : x -> x where x implements Encoding
             main = \x -> g x
             "#
         ),
@@ -12078,11 +12078,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `x` value is a:
 
-        x | x implements Encoding
+        x where x implements Encoding
 
     But `g` needs its 1st argument to be:
 
-        x | x implements Encoding & Decoding
+        x where x implements Encoding & Decoding
 
     Note: The type variable `x` says it can take on any value that
     implements only the ability `Encoding`.
@@ -12099,9 +12099,9 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [main] to "./platform"
 
-            g : x -> x | x implements Decoding & Encoding & Hash
+            g : x -> x where x implements Decoding & Encoding & Hash
 
-            main : x -> x | x implements Encoding
+            main : x -> x where x implements Encoding
             main = \x -> g x
             "#
         ),
@@ -12115,11 +12115,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `x` value is a:
 
-        x | x implements Encoding
+        x where x implements Encoding
 
     But `g` needs its 1st argument to be:
 
-        x | x implements Hash & Encoding & Decoding
+        x where x implements Hash & Encoding & Decoding
 
     Note: The type variable `x` says it can take on any value that
     implements only the ability `Encoding`.
@@ -12136,10 +12136,10 @@ I recommend using camelCase. It's the standard style in Roc code!
             r#"
             app "test" provides [main] to "./platform"
 
-            f : x -> x | x implements Hash
-            g : x -> x | x implements Decoding & Encoding
+            f : x -> x where x implements Hash
+            g : x -> x where x implements Decoding & Encoding
 
-            main : x -> x | x implements Hash & Encoding
+            main : x -> x where x implements Hash & Encoding
             main = \x -> g (f x)
             "#
         ),
@@ -12153,11 +12153,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `f` call produces:
 
-        x | x implements Hash & Encoding
+        x where x implements Hash & Encoding
 
     But `g` needs its 1st argument to be:
 
-        x | x implements Encoding & Decoding
+        x where x implements Encoding & Decoding
 
     Note: The type variable `x` says it can take on any value that
     implements only the abilities `Hash` and `Encoding`.
@@ -12905,7 +12905,7 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     Tip: This type variable is not bound to `Eq`. Consider adding an
     `implements` clause to bind the type variable, like
-    `| e implements Bool.Eq`
+    `where e implements Bool.Eq`
     "###
     );
 
@@ -13371,7 +13371,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
             main =
-                myDecoder : Decoder Nat fmt | fmt implements DecoderFormatting
+                myDecoder : Decoder Nat fmt where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder
@@ -13435,7 +13435,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
             main =
-                myDecoder : Decoder (U32, Str) fmt | fmt implements DecoderFormatting
+                myDecoder : Decoder (U32, Str) fmt where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder
@@ -13450,7 +13450,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
 
             main =
-                myDecoder : Decoder (U32, {} -> {}) fmt | fmt implements DecoderFormatting
+                myDecoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
                 myDecoder = decoder
 
                 myDecoder

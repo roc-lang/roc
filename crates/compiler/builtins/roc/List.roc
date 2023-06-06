@@ -363,7 +363,7 @@ join = \lists ->
 
     List.walk lists (List.withCapacity totalLength) (\state, list -> List.concat state list)
 
-contains : List a, a -> Bool | a implements Eq
+contains : List a, a -> Bool where a implements Eq
 contains = \list, needle ->
     List.any list (\x -> x == needle)
 
@@ -1037,7 +1037,7 @@ intersperse = \list, sep ->
 ## is considered to "start with" an empty list.
 ##
 ## If the first list is empty, this only returns `Bool.true` if the second list is empty.
-startsWith : List elem, List elem -> Bool | elem implements Eq
+startsWith : List elem, List elem -> Bool where elem implements Eq
 startsWith = \list, prefix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
@@ -1049,7 +1049,7 @@ startsWith = \list, prefix ->
 ## is considered to "end with" an empty list.
 ##
 ## If the first list is empty, this only returns `Bool.true` if the second list is empty.
-endsWith : List elem, List elem -> Bool | elem implements Eq
+endsWith : List elem, List elem -> Bool where elem implements Eq
 endsWith = \list, suffix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
@@ -1079,7 +1079,7 @@ split = \elements, userSplitIndex ->
 ## ```
 ## List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Z, Baz] }
 ## ```
-splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] | elem implements Eq
+splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] where elem implements Eq
 splitFirst = \list, delimiter ->
     when List.findFirstIndex list (\elem -> elem == delimiter) is
         Ok index ->
@@ -1095,7 +1095,7 @@ splitFirst = \list, delimiter ->
 ## ```
 ## List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Z, Bar], after: [Baz] }
 ## ```
-splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] | elem implements Eq
+splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] where elem implements Eq
 splitLast = \list, delimiter ->
     when List.findLastIndex list (\elem -> elem == delimiter) is
         Ok index ->

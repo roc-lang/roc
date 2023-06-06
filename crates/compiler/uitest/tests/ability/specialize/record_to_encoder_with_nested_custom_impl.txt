@@ -6,4 +6,4 @@ A := {} implements [Encoding {toEncoder}]
 toEncoder = \@A _ -> custom \b, _ -> b
 
 main = toEncoder { a: @A {} }
-     # ^^^^^^^^^ Encoding#toEncoder(2): { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt implements EncoderFormatting
+     # ^^^^^^^^^ Encoding#toEncoder(2): { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt where fmt implements EncoderFormatting

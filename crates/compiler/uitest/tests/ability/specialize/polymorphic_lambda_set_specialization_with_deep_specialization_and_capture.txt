@@ -1,11 +1,11 @@
 app "test" provides [main] to "./platform"
 
-F has f : a, b -> ({} -> ({} -> {})) | a implements F, b implements G
-G has g : b -> ({} -> {}) | b implements G
+F has f : a, b -> ({} -> ({} -> {})) where a implements F, b implements G
+G has g : b -> ({} -> {}) where b implements G
 
 Fo := {} implements [F {f}]
 f = \@Fo {}, b -> \{} -> g b
-#^{-1} Fo#f(7): Fo, b -[[f(7)]]-> ({} -[[13 b]]-> ({} -[[] + b:g(4):2]-> {})) | b implements G
+#^{-1} Fo#f(7): Fo, b -[[f(7)]]-> ({} -[[13 b]]-> ({} -[[] + b:g(4):2]-> {})) where b implements G
 
 Go := {} implements [G {g}]
 g = \@Go {} -> \{} -> {}

@@ -133,7 +133,7 @@ impl<'a> Formattable for TypeDef<'a> {
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                     buf.indent(indent);
                 }
-                buf.push(' ');
+                buf.spaces(1);
                 buf.push_str(roc_parse::keyword::IMPLEMENTS);
 
                 if !self.is_multiline() {
