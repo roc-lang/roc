@@ -2219,13 +2219,13 @@ fn nullable_wrapped_eq_issue_5434() {
                 y : Value
                 y = B 0
                 if x == y then
-                    "OK"
+                    Bool.true
                 else
-                    "FAIL"
+                    Bool.false
             "###
         ),
-        RocStr::from("FAIL"),
-        RocStr
+        false,
+        bool
     );
 }
 
