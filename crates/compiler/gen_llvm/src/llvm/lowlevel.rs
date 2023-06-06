@@ -27,8 +27,9 @@ use crate::llvm::{
         BitcodeReturns,
     },
     build::{
-        complex_bitcast_check_size, create_entry_block_alloca, function_value_by_func_spec,
-        load_roc_value, roc_function_call, tag_pointer_clear_tag_id, BuilderExt, RocReturn,
+        cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
+        function_value_by_func_spec, load_roc_value, roc_function_call, tag_pointer_clear_tag_id,
+        BuilderExt, RocReturn,
     },
     build_list::{
         list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
@@ -1092,6 +1093,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 lhs_layout,
                 rhs_arg,
                 rhs_layout,
+                layout,
                 op,
             )
         }
@@ -1553,12 +1555,13 @@ fn build_int_binop<'ctx>(
 
 pub fn build_num_binop<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     lhs_arg: BasicValueEnum<'ctx>,
     lhs_layout: InLayout<'a>,
     rhs_arg: BasicValueEnum<'ctx>,
     rhs_layout: InLayout<'a>,
+    return_layout: InLayout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     match (
@@ -1588,9 +1591,15 @@ pub fn build_num_binop<'a, 'ctx>(
                     op,
                 ),
 
-                Decimal => {
-                    build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
-                }
+                Decimal => build_dec_binop(
+                    env,
+                    layout_interner,
+                    parent,
+                    lhs_arg,
+                    rhs_arg,
+                    return_layout,
+                    op,
+                ),
                 _ => {
                     unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
                 }
@@ -1927,19 +1936,35 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
     }
 }
 
+/// Zig returns a nominal `WithOverflow(Dec)` struct (see [zig_with_overflow_roc_dec]),
+/// but the Roc side may flatten the overflow struct. LLVM does not admit comparisons
+/// between the two representations, so always cast to the Roc representation.
+fn cast_with_overflow_dec_to_roc_type<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    val: BasicValueEnum<'ctx>,
+    return_layout: InLayout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout);
+    cast_basic_basic(env.builder, val.into(), return_type)
+}
+
 fn build_dec_binop<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     lhs: BasicValueEnum<'ctx>,
-    _lhs_layout: InLayout<'a>,
     rhs: BasicValueEnum<'ctx>,
-    _rhs_layout: InLayout<'a>,
+    return_layout: InLayout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
 
     match op {
-        NumAddChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_ADD_WITH_OVERFLOW),
+        NumAddChecked => {
+            let val = dec_binop_with_overflow(env, bitcode::DEC_ADD_WITH_OVERFLOW, lhs, rhs);
+            cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+        }
         NumSubChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_SUB_WITH_OVERFLOW),
         NumMulChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_MUL_WITH_OVERFLOW),
         NumAdd => build_dec_binop_throw_on_overflow(

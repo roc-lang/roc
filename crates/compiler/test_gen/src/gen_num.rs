@@ -3924,3 +3924,19 @@ fn bool_in_switch() {
         bool
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn add_checked_frac_infer() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = Num.addChecked 2.0dec 4.0dec == Ok 6.0dec
+            "#
+        ),
+        true,
+        bool
+    );
+}
