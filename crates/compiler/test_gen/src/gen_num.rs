@@ -3952,3 +3952,17 @@ fn sub_checked_dec() {
         bool
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn mul_checked_dec() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.mulChecked 5.0dec 2.0dec == Ok 10.0dec
+            "#
+        ),
+        true,
+        bool
+    );
+}
