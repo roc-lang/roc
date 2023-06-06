@@ -3269,10 +3269,7 @@ fn layout_from_flat_type<'a>(
                 inner_repr.newtype()
             } else {
                 let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
-                LayoutRepr::Struct {
-                    field_layouts: layouts.into_bump_slice(),
-                }
-                .direct()
+                LayoutRepr::Struct(layouts.into_bump_slice()).direct()
             };
 
             let result = Ok(env.cache.put_in(Layout { repr, semantic }));

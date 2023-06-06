@@ -2959,7 +2959,7 @@ impl<
                     let temp_sym = Symbol::DEV_TMP5;
                     let layout = self
                         .layout_interner
-                        .insert_no_semantic(LayoutRepr::Struct(other_fields));
+                        .insert_direct_no_semantic(LayoutRepr::Struct(other_fields));
 
                     self.load_literal_symbols(fields);
                     self.storage_manager.create_struct(
@@ -2996,7 +2996,7 @@ impl<
                     let temp_sym = Symbol::DEV_TMP5;
                     let layout = self
                         .layout_interner
-                        .insert_no_semantic(LayoutRepr::Struct(other_fields));
+                        .insert_direct_no_semantic(LayoutRepr::Struct(other_fields));
 
                     self.load_literal_symbols(fields);
                     self.storage_manager.create_struct(

@@ -388,8 +388,7 @@ impl<'a> LowLevelCall<'a> {
                 };
 
                 // Byte offsets of each field in the return struct
-                let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout_raw.repr
-                {
+                let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout_raw {
                     LayoutRepr::Struct(&[f1, f2]) => {
                         let l1 = backend.layout_interner.get_repr(f1);
                         let l2 = backend.layout_interner.get_repr(f2);
