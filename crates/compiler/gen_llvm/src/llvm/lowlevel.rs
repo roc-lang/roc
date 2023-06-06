@@ -1965,7 +1965,10 @@ fn build_dec_binop<'a, 'ctx>(
             let val = dec_binop_with_overflow(env, bitcode::DEC_ADD_WITH_OVERFLOW, lhs, rhs);
             cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
         }
-        NumSubChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_SUB_WITH_OVERFLOW),
+        NumSubChecked => {
+            let val = dec_binop_with_overflow(env, bitcode::DEC_SUB_WITH_OVERFLOW, lhs, rhs);
+            cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+        }
         NumMulChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_MUL_WITH_OVERFLOW),
         NumAdd => build_dec_binop_throw_on_overflow(
             env,

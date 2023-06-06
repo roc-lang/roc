@@ -3927,13 +3927,25 @@ fn bool_in_switch() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
-fn add_checked_frac_infer() {
+fn add_checked_dec() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [main] to "./platform"
+            Num.addChecked 2.0dec 4.0dec == Ok 6.0dec
+            "#
+        ),
+        true,
+        bool
+    );
+}
 
-            main = Num.addChecked 2.0dec 4.0dec == Ok 6.0dec
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn sub_checked_dec() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Num.subChecked 5.0dec 2.0dec == Ok 3.0dec
             "#
         ),
         true,
