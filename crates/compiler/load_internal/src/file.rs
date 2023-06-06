@@ -53,6 +53,8 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
+#[cfg(not(target_family = "wasm"))]
+use roc_reporting::report::to_https_problem_report_string;
 use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
@@ -72,7 +74,7 @@ use std::{env, fs};
 #[cfg(not(target_family = "wasm"))]
 use {
     roc_packaging::cache::{self},
-    roc_packaging::https::PackageMetadata,
+    roc_packaging::https::{PackageMetadata, Problem},
 };
 
 pub use crate::work::Phase;
@@ -2454,11 +2456,11 @@ fn update<'a>(
                                     }
                                 }
                                 Err(url_err) => {
-                                    todo!(
-                                        "Gracefully report URL error for {:?} - {:?}",
+                                    let buf = to_https_problem_report_string(
                                         url,
-                                        url_err
+                                        Problem::InvalidUrl(url_err),
                                     );
+                                    return Err(LoadingProblem::FormattedReport(buf));
                                 }
                             }
                         }
@@ -4329,17 +4331,22 @@ fn load_packages<'a>(
                 // TODO we should do this async; however, with the current
                 // architecture of file.rs (which doesn't use async/await),
                 // this would be very difficult!
-                let (package_dir, opt_root_module) = cache::install_package(roc_cache_dir, src)
-                    .unwrap_or_else(|err| {
-                        todo!("TODO gracefully handle package install error {:?}", err);
-                    });
+                match cache::install_package(roc_cache_dir, src) {
+                    Ok((package_dir, opt_root_module)) => {
+                        // You can optionally specify the root module using the URL fragment,
+                        // e.g. #foo.roc
+                        // (defaults to main.roc)
+                        match opt_root_module {
+                            Some(root_module) => package_dir.join(root_module),
+                            None => package_dir.join("main.roc"),
+                        }
+                    }
+                    Err(problem) => {
+                        let buf = to_https_problem_report_string(src, problem);
 
-                // You can optionally specify the root module using the URL fragment,
-                // e.g. #foo.roc
-                // (defaults to main.roc)
-                match opt_root_module {
-                    Some(root_module) => package_dir.join(root_module),
-                    None => package_dir.join("main.roc"),
+                        load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(buf)));
+                        return;
+                    }
                 }
             }
 

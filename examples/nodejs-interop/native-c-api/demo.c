@@ -27,11 +27,6 @@ void roc_panic(void *ptr, unsigned int alignment)
     napi_throw_error(napi_global_env, NULL, (char *)ptr);
 }
 
-void *roc_memcpy(void *dest, const void *src, size_t n)
-{
-    return memcpy(dest, src, n);
-}
-
 void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 
 // Reference counting
