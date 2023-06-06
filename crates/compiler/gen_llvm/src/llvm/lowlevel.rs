@@ -1946,7 +1946,7 @@ fn cast_with_overflow_dec_to_roc_type<'a, 'ctx>(
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout);
-    cast_basic_basic(env.builder, val.into(), return_type)
+    cast_basic_basic(env.builder, val, return_type)
 }
 
 fn build_dec_binop<'a, 'ctx>(
