@@ -14,6 +14,8 @@ use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
 use roc_std::{RocList, RocStr, U128};
 
+use crate::helpers::with_larger_debug_stack;
+
 #[test]
 fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
@@ -2167,27 +2169,29 @@ fn refcount_nullable_unwrapped_needing_no_refcount_issue_5027() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn issue_5162_recast_nested_nullable_unwrapped_layout() {
-    assert_evals_to!(
-        indoc!(
-            r###"
-            app "test" provides [main] to "./platform"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r###"
+                app "test" provides [main] to "./platform"
 
-            Concept : [
-                AtomicConcept,
-                ExistentialRestriction { role : Str, concept : Concept }
-            ]
+                Concept : [
+                    AtomicConcept,
+                    ExistentialRestriction { role : Str, concept : Concept }
+                ]
 
-            bottom : Concept
-            bottom = AtomicConcept
+                bottom : Concept
+                bottom = AtomicConcept
 
-            main =
-                when Dict.single bottom 0 is
-                    _ -> Bool.true
-            "###
-        ),
-        true,
-        bool
-    );
+                main =
+                    when Dict.single bottom 0 is
+                        _ -> Bool.true
+                "###
+            ),
+            true,
+            bool
+        );
+    });
 }
 
 #[test]
