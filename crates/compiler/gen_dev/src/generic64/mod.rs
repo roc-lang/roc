@@ -3110,7 +3110,7 @@ impl<
                 let temp_sym = Symbol::DEV_TMP5;
                 let layout = self
                     .layout_interner
-                    .insert_no_semantic(LayoutRepr::Struct(field_layouts));
+                    .insert_direct_no_semantic(LayoutRepr::Struct(field_layouts));
 
                 self.load_literal_symbols(fields);
                 self.storage_manager.create_struct(
@@ -3230,7 +3230,7 @@ impl<
                 // construct the payload as a struct on the stack
                 let data_struct_layout = self
                     .layout_interner
-                    .insert_no_semantic(LayoutRepr::Struct(other_fields));
+                    .insert_direct_no_semantic(LayoutRepr::Struct(other_fields));
 
                 let tag_id_layout = union_layout.tag_id_layout();
 
@@ -3248,9 +3248,11 @@ impl<
                     self.load_literal_i64(&tag_id_symbol, tag_id as _);
 
                     let arena = self.env.arena;
-                    let whole_struct_layout = self.layout_interner.insert_no_semantic(
-                        LayoutRepr::Struct(arena.alloc([data_struct_layout, tag_id_layout])),
-                    );
+                    let whole_struct_layout =
+                        self.layout_interner
+                            .insert_direct_no_semantic(LayoutRepr::Struct(
+                                arena.alloc([data_struct_layout, tag_id_layout]),
+                            ));
 
                     self.storage_manager.create_struct(
                         self.layout_interner,
