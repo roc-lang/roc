@@ -653,13 +653,13 @@ fn specialize_drops_stmt<'a, 'i>(
             // We cannot perform this optimization if the joinpoint is recursive.
             // E.g. if the body of a recursive joinpoint contains an increment, we do not want to move that increment up to the remainder.
 
-            let mut remainder_enviroment = environment.clone();
+            let mut remainder_environment = environment.clone();
 
             let new_remainder = specialize_drops_stmt(
                 arena,
                 layout_interner,
                 ident_ids,
-                &mut remainder_enviroment,
+                &mut remainder_environment,
                 remainder,
             );
 
@@ -677,7 +677,7 @@ fn specialize_drops_stmt<'a, 'i>(
                 body,
             );
 
-            let remainder_jump_info = remainder_enviroment.jump_incremented_symbols.get(id);
+            let remainder_jump_info = remainder_environment.jump_incremented_symbols.get(id);
 
             let body_jump_info = body_environment.jump_incremented_symbols.get(id);
 
@@ -718,7 +718,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     // Keep the body and remainder as is.
                     // Update the environment with remainder environment.
 
-                    *environment = remainder_enviroment;
+                    *environment = remainder_environment;
 
                     (new_body, new_remainder)
                 }
