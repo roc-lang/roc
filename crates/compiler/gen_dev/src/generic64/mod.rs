@@ -13,7 +13,7 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+    Builtin, InLayout, LambdaName, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
     TagIdIntType, UnionLayout,
 };
 use roc_mono::low_level::HigherOrder;
@@ -1590,8 +1590,8 @@ impl<
                     HelperOp::Eq,
                 );
 
-                let fn_name = self.function_symbol_to_string(
-                    eq_symbol,
+                let fn_name = self.lambda_name_to_string(
+                    LambdaName::no_niche(eq_symbol),
                     [*arg_layout, *arg_layout].into_iter(),
                     None,
                     Layout::U8,
@@ -1975,8 +1975,8 @@ impl<
                 self.load_layout_stack_size(old_element_layout, old_element_width);
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let caller_string = self.function_symbol_to_string(
-                    caller_proc.proc_symbol,
+                let caller_string = self.lambda_name_to_string(
+                    LambdaName::no_niche(caller_proc.proc_symbol),
                     std::iter::empty(),
                     None,
                     Layout::UNIT,

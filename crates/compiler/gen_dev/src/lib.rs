@@ -20,7 +20,7 @@ use roc_mono::ir::{
     Literal, Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+    Builtin, InLayout, LambdaName, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
     TagIdIntType, UnionLayout,
 };
 use roc_mono::list_element_layout;
@@ -317,9 +317,9 @@ trait Backend<'a> {
         &mut Vec<'a, CallerProc<'a>>,
     );
 
-    fn function_symbol_to_string<'b, I>(
+    fn lambda_name_to_string<'b, I>(
         &self,
-        symbol: Symbol,
+        name: LambdaName,
         arguments: I,
         _lambda_set: Option<InLayout>,
         result: InLayout,
@@ -330,6 +330,8 @@ trait Backend<'a> {
         use std::fmt::Write;
         use std::hash::{BuildHasher, Hash, Hasher};
 
+        let symbol = name.name();
+
         let mut buf = String::with_capacity(1024);
 
         for a in arguments {
@@ -337,7 +339,9 @@ trait Backend<'a> {
         }
 
         // lambda set should not matter; it should already be added as an argument
-        // lambda_set.hash(&mut state);
+        // but the niche of the lambda name may be the only thing differentiating two different
+        // implementations of a function with the same symbol
+        write!(buf, "{:?}", name.niche().dbg_deep(self.interner())).expect("capacity");
 
         write!(buf, "{:?}", self.interner().dbg_deep(result)).expect("capacity");
 
@@ -394,8 +398,8 @@ trait Backend<'a> {
         let element_increment = self.debug_symbol("element_increment");
         let element_increment_symbol = self.build_indirect_inc(layout);
 
-        let element_increment_string = self.function_symbol_to_string(
-            element_increment_symbol,
+        let element_increment_string = self.lambda_name_to_string(
+            LambdaName::no_niche(element_increment_symbol),
             [box_layout].into_iter(),
             None,
             Layout::UNIT,
@@ -414,8 +418,8 @@ trait Backend<'a> {
         let element_decrement = self.debug_symbol("element_decrement");
         let element_decrement_symbol = self.build_indirect_dec(layout);
 
-        let element_decrement_string = self.function_symbol_to_string(
-            element_decrement_symbol,
+        let element_decrement_string = self.lambda_name_to_string(
+            LambdaName::no_niche(element_decrement_symbol),
             [box_layout].into_iter(),
             None,
             Layout::UNIT,
@@ -457,8 +461,8 @@ trait Backend<'a> {
         proc: Proc<'a>,
         layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
-        let proc_name = self.function_symbol_to_string(
-            proc.name.name(),
+        let proc_name = self.lambda_name_to_string(
+            proc.name,
             proc.args.iter().map(|t| t.0),
             proc.closure_data_layout,
             proc.ret_layout,
@@ -695,8 +699,8 @@ trait Backend<'a> {
                             );
                         }
 
-                        let fn_name = self.function_symbol_to_string(
-                            func_sym.name(),
+                        let fn_name = self.lambda_name_to_string(
+                            *func_sym,
                             arg_layouts.iter().copied(),
                             None,
                             *ret_layout,
@@ -1825,12 +1829,12 @@ trait Backend<'a> {
     fn build_builtin(
         &mut self,
         sym: &Symbol,
-        func_sym: Symbol,
+        func_name: Symbol,
         args: &'a [Symbol],
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
-        match func_sym {
+        match func_name {
             Symbol::NUM_IS_ZERO => {
                 debug_assert_eq!(
                     1,
@@ -1853,8 +1857,8 @@ trait Backend<'a> {
             }
             Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
                 // TODO: This is probably simple enough to be worth inlining.
-                let fn_name = self.function_symbol_to_string(
-                    func_sym,
+                let fn_name = self.lambda_name_to_string(
+                    LambdaName::no_niche(func_name),
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
@@ -1885,8 +1889,8 @@ trait Backend<'a> {
             }
             Symbol::STR_IS_VALID_SCALAR => {
                 // just call the function
-                let fn_name = self.function_symbol_to_string(
-                    func_sym,
+                let fn_name = self.lambda_name_to_string(
+                    LambdaName::no_niche(func_name),
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
@@ -1897,8 +1901,8 @@ trait Backend<'a> {
             }
             _other => {
                 // just call the function
-                let fn_name = self.function_symbol_to_string(
-                    func_sym,
+                let fn_name = self.lambda_name_to_string(
+                    LambdaName::no_niche(func_name),
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
