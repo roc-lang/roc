@@ -72,10 +72,6 @@ export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
-export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void {
-    return memcpy(dst, src, size);
-}
-
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
     return memset(dst, value, size);
 }

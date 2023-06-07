@@ -9,7 +9,7 @@ use core::mem::MaybeUninit;
 use glue::Metadata;
 use roc_std::{RocDict, RocList, RocResult, RocStr};
 use std::borrow::{Borrow, Cow};
-use std::ffi::{ OsStr};
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -197,11 +197,6 @@ fn display_roc_fn(module_name: &str, fn_name: &str) -> String {
     };
 
     format!("\u{001B}[36m{module_name}\u{001B}[39m.{fn_name}")
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
 }
 
 #[no_mangle]

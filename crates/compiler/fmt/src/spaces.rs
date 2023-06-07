@@ -761,7 +761,15 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
     match ident {
         BadIdent::Start(_) => BadIdent::Start(Position::zero()),
         BadIdent::Space(e, _) => BadIdent::Space(e, Position::zero()),
-        BadIdent::Underscore(_) => BadIdent::Underscore(Position::zero()),
+        BadIdent::UnderscoreAlone(_) => BadIdent::UnderscoreAlone(Position::zero()),
+        BadIdent::UnderscoreInMiddle(_) => BadIdent::UnderscoreInMiddle(Position::zero()),
+        BadIdent::UnderscoreAtStart {
+            position: _,
+            declaration_region,
+        } => BadIdent::UnderscoreAtStart {
+            position: Position::zero(),
+            declaration_region,
+        },
         BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
         BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
         BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),

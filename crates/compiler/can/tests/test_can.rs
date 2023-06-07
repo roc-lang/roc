@@ -332,7 +332,7 @@ mod test_can {
             matches!(
                 problem,
                 Problem::SignatureDefMismatch { .. }
-                    | Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _))
+                    | Problem::RuntimeError(RuntimeError::LookupNotInScope { .. })
             )
         }));
     }
@@ -360,7 +360,7 @@ mod test_can {
             matches!(
                 problem,
                 Problem::SignatureDefMismatch { .. }
-                    | Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _))
+                    | Problem::RuntimeError(RuntimeError::LookupNotInScope { .. })
             )
         }));
     }

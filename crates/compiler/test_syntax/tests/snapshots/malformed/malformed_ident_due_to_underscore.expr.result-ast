@@ -2,7 +2,7 @@ Closure(
     [
         @1-11 MalformedIdent(
             "the_answer",
-            Underscore(
+            UnderscoreInMiddle(
                 @5,
             ),
         ),
