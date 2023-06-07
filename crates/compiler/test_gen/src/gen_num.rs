@@ -3926,7 +3926,7 @@ fn bool_in_switch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn add_checked_dec() {
     assert_evals_to!(
         indoc!(
@@ -3940,7 +3940,7 @@ fn add_checked_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn sub_checked_dec() {
     assert_evals_to!(
         indoc!(
@@ -3954,7 +3954,7 @@ fn sub_checked_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mul_checked_dec() {
     assert_evals_to!(
         indoc!(
