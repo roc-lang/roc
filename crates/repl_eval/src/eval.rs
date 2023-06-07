@@ -353,7 +353,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         };
     }
 
-    let expr = match env.layout_cache.get_in(layout).repr {
+    let expr = match env.layout_cache.get_repr(layout) {
         LayoutRepr::Builtin(Builtin::Bool) => {
             app.call_function(main_fn_name, |_mem: &A::Memory, num: bool| {
                 bool_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
@@ -475,7 +475,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         env,
                         mem,
                         addr,
-                        layout,
+                        env.layout_cache.get_repr(layout),
                         WhenRecursive::Unreachable,
                         env.subs.get_root_key_without_compacting(raw_var),
                     )
@@ -496,7 +496,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         env,
                         mem,
                         addr,
-                        layout,
+                        env.layout_cache.get_repr(layout),
                         WhenRecursive::Loop(layout),
                         env.subs.get_root_key_without_compacting(raw_var),
                     )
@@ -515,7 +515,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                     env,
                     mem,
                     addr,
-                    layout,
+                    env.layout_cache.get_repr(layout),
                     WhenRecursive::Unreachable,
                     env.subs.get_root_key_without_compacting(raw_var),
                 )
@@ -542,7 +542,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
     env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     when_recursive: WhenRecursive<'a>,
     var: Variable,
 ) -> Expr<'a> {
@@ -557,7 +557,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
     let (newtype_containers, _alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
     let raw_content = env.subs.get_content_without_compacting(raw_var);
 
-    let expr = match (raw_content, env.layout_cache.get_in(layout).repr) {
+    let expr = match (raw_content, layout) {
         (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_)) => {
             OPAQUE_FUNCTION
         }
@@ -650,7 +650,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 },
                 WhenRecursive::Loop(union_layout),
             ) => {
-                addr_to_ast(env, mem, addr, union_layout, when_recursive, *structure)
+                addr_to_ast(env, mem, addr, env.layout_cache.get_repr(union_layout), when_recursive, *structure)
             }
 
             (
@@ -665,9 +665,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 let union_layout = env.layout_cache
                     .from_var(env.arena, *structure, env.subs)
                     .expect("no layout for structure");
-                debug_assert!(matches!(env.layout_cache.get_in(union_layout).repr, LayoutRepr::Union(..)));
+                debug_assert!(matches!(env.layout_cache.get_repr(union_layout), LayoutRepr::Union(..)));
                 let when_recursive = WhenRecursive::Loop(union_layout);
-                addr_to_ast(env, mem, addr, union_layout, when_recursive, *structure)
+                addr_to_ast(env, mem, addr, env.layout_cache.get_repr(union_layout), when_recursive, *structure)
             }
             other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
         },
@@ -873,7 +873,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 env,
                 mem,
                 addr_of_inner,
-                inner_layout,
+                env.layout_cache.get_repr(inner_layout),
                 WhenRecursive::Unreachable,
                 inner_var,
             );
@@ -930,7 +930,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
             env,
             mem,
             elem_addr,
-            elem_layout,
+            env.layout_cache.get_repr(elem_layout),
             WhenRecursive::Unreachable,
             elem_content,
         );
@@ -993,7 +993,14 @@ where
     let mut field_addr = addr;
 
     for (var, layout) in sequence {
-        let expr = addr_to_ast(env, mem, field_addr, *layout, when_recursive, var);
+        let expr = addr_to_ast(
+            env,
+            mem,
+            field_addr,
+            env.layout_cache.get_repr(*layout),
+            when_recursive,
+            var,
+        );
         let loc_expr = Loc::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
@@ -1029,9 +1036,7 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
             .unwrap();
         let inner_layouts = arena.alloc([field_layout]);
 
-        let struct_layout = env
-            .layout_cache
-            .put_in_no_semantic(LayoutRepr::struct_(inner_layouts));
+        let struct_layout = LayoutRepr::struct_(inner_layouts);
         let loc_expr = &*arena.alloc(Loc {
             value: addr_to_ast(
                 env,
@@ -1094,7 +1099,7 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
                     env,
                     mem,
                     field_addr,
-                    field_layout,
+                    env.layout_cache.get_repr(field_layout),
                     WhenRecursive::Unreachable,
                     field_var,
                 ),
@@ -1175,7 +1180,7 @@ fn struct_to_ast_tuple<'a, M: ReplAppMemory>(
                 env,
                 mem,
                 field_addr,
-                elem_layout,
+                env.layout_cache.get_repr(elem_layout),
                 WhenRecursive::Unreachable,
                 elem_var,
             ),

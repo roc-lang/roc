@@ -1,7 +1,13 @@
 procedure Test.1 (Test.4):
-    ret Test.4;
+    let Test.13 : [C Str, C Str] = TagId(0) Test.4;
+    ret Test.13;
 
-procedure Test.5 (Test.12, Test.4):
+procedure Test.1 (Test.4):
+    let Test.18 : [C Str, C Str] = TagId(0) Test.4;
+    ret Test.18;
+
+procedure Test.5 (Test.12, #Attr.12):
+    let Test.4 : Str = UnionAtIndex (Id 0) (Index 0) #Attr.12;
     dec Test.4;
     let Test.14 : Str = "";
     ret Test.14;
@@ -11,13 +17,13 @@ procedure Test.0 ():
     joinpoint Test.9 Test.3:
         ret Test.3;
     in
-    let Test.19 : Int1 = true;
-    let Test.20 : Int1 = lowlevel Eq Test.19 Test.2;
-    if Test.20 then
+    let Test.20 : Int1 = true;
+    let Test.21 : Int1 = lowlevel Eq Test.20 Test.2;
+    if Test.21 then
         let Test.15 : Str = "";
-        let Test.10 : Str = CallByName Test.1 Test.15;
+        let Test.10 : [C Str, C Str] = CallByName Test.1 Test.15;
         jump Test.9 Test.10;
     else
-        let Test.18 : Str = "";
-        let Test.16 : Str = CallByName Test.1 Test.18;
+        let Test.19 : Str = "";
+        let Test.16 : [C Str, C Str] = CallByName Test.1 Test.19;
         jump Test.9 Test.16;

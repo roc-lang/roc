@@ -725,14 +725,14 @@ procedure Json.81 (Json.801, Json.802):
 
 procedure Json.831 (Json.1492):
     let Json.1493 : List Str = StructAtIndex 1 Json.1492;
-    let #Derived_gen.14 : List Str = StructAtIndex 0 Json.1492;
-    dec #Derived_gen.14;
+    let #Derived_gen.16 : List Str = StructAtIndex 0 Json.1492;
+    dec #Derived_gen.16;
     ret Json.1493;
 
 procedure Json.839 (Json.1213):
     let Json.1214 : List Str = StructAtIndex 1 Json.1213;
-    let #Derived_gen.16 : List Str = StructAtIndex 0 Json.1213;
-    dec #Derived_gen.16;
+    let #Derived_gen.15 : List Str = StructAtIndex 0 Json.1213;
+    dec #Derived_gen.15;
     ret Json.1214;
 
 procedure Json.86 (Json.808):
@@ -1362,8 +1362,8 @@ procedure Str.9 (Str.79):
     else
         let Str.300 : U8 = StructAtIndex 3 Str.80;
         let Str.301 : U64 = StructAtIndex 0 Str.80;
-        let #Derived_gen.15 : Str = StructAtIndex 1 Str.80;
-        dec #Derived_gen.15;
+        let #Derived_gen.14 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.14;
         let Str.299 : {U64, U8} = Struct {Str.301, Str.300};
         let Str.298 : [C {U64, U8}, C Str] = TagId(0) Str.299;
         ret Str.298;
