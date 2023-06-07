@@ -4422,7 +4422,32 @@ pub fn with_hole<'a>(
 
         Expect { .. } => unreachable!("I think this is unreachable"),
         ExpectFx { .. } => unreachable!("I think this is unreachable"),
-        Dbg { .. } => unreachable!("I think this is unreachable"),
+        Dbg {
+            loc_condition,
+            loc_continuation,
+            variable: cond_variable,
+            symbol: dbg_symbol,
+        } => {
+            let rest = with_hole(
+                env,
+                loc_continuation.value,
+                variable,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            );
+
+            compile_dbg(
+                env,
+                procs,
+                layout_cache,
+                dbg_symbol,
+                *loc_condition,
+                cond_variable,
+                rest,
+            )
+        }
 
         If {
             cond_var,
@@ -5617,6 +5642,53 @@ pub fn with_hole<'a>(
 
             assign_to_symbol(env, procs, layout_cache, Variable::STR, *msg, msg_sym, stmt)
         }
+    }
+}
+
+/// Compiles a `dbg` expression.
+fn compile_dbg<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    dbg_symbol: Symbol,
+    loc_condition: Loc<roc_can::expr::Expr>,
+    variable: Variable,
+    continuation: Stmt<'a>,
+) -> Stmt<'a> {
+    let spec_var = env
+        .expectation_subs
+        .as_mut()
+        .unwrap()
+        .fresh_unnamed_flex_var();
+
+    let dbg_stmt = Stmt::Dbg {
+        symbol: dbg_symbol,
+        variable: spec_var,
+        remainder: env.arena.alloc(continuation),
+    };
+
+    // Now that the dbg value has been specialized, export its specialized type into the
+    // expectations subs.
+    store_specialized_expectation_lookups(env, [variable], &[spec_var]);
+
+    let symbol_is_reused = matches!(
+        can_reuse_symbol(env, layout_cache, procs, &loc_condition.value, variable),
+        ReuseSymbol::Value(_)
+    );
+
+    // skip evaluating the condition if it's just a symbol
+    if symbol_is_reused {
+        dbg_stmt
+    } else {
+        with_hole(
+            env,
+            loc_condition.value,
+            variable,
+            procs,
+            layout_cache,
+            dbg_symbol,
+            env.arena.alloc(dbg_stmt),
+        )
     }
 }
 
@@ -6824,41 +6896,15 @@ pub fn from_can<'a>(
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
 
-            let spec_var = env
-                .expectation_subs
-                .as_mut()
-                .unwrap()
-                .fresh_unnamed_flex_var();
-
-            let dbg_stmt = Stmt::Dbg {
-                symbol: dbg_symbol,
-                variable: spec_var,
-                remainder: env.arena.alloc(rest),
-            };
-
-            // Now that the dbg value has been specialized, export its specialized type into the
-            // expectations subs.
-            store_specialized_expectation_lookups(env, [variable], &[spec_var]);
-
-            let symbol_is_reused = matches!(
-                can_reuse_symbol(env, layout_cache, procs, &loc_condition.value, variable),
-                ReuseSymbol::Value(_)
-            );
-
-            // skip evaluating the condition if it's just a symbol
-            if symbol_is_reused {
-                dbg_stmt
-            } else {
-                with_hole(
-                    env,
-                    loc_condition.value,
-                    variable,
-                    procs,
-                    layout_cache,
-                    dbg_symbol,
-                    env.arena.alloc(dbg_stmt),
-                )
-            }
+            compile_dbg(
+                env,
+                procs,
+                layout_cache,
+                dbg_symbol,
+                *loc_condition,
+                variable,
+                rest,
+            )
         }
 
         LetRec(defs, cont, _cycle_mark) => {
