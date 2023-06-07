@@ -262,30 +262,18 @@ procedure Test.5 (Test.6, Test.7, Test.4):
     if Test.25 then
         let Test.26 : Str = "A";
         let Test.29 : Str = StructAtIndex 0 Test.4;
-<<<<<<< HEAD
         let #Derived_gen.0 : Str = StructAtIndex 1 Test.4;
         dec #Derived_gen.0;
         let Test.28 : Str = CallByName TotallyNotJson.25 Test.29;
-=======
-        let #Derived_gen.2 : Str = StructAtIndex 1 Test.4;
-        dec #Derived_gen.2;
-        let Test.28 : Str = CallByName Json.24 Test.29;
->>>>>>> 78becc12d (Start drop specialisation for joinpoints)
         let Test.27 : List Str = Array [Test.28];
         let Test.19 : {Str, List Str} = CallByName TotallyNotJson.32 Test.26 Test.27;
         jump Test.20 Test.19;
     else
         let Test.21 : Str = "B";
         let Test.24 : Str = StructAtIndex 1 Test.4;
-<<<<<<< HEAD
         let #Derived_gen.1 : Str = StructAtIndex 0 Test.4;
         dec #Derived_gen.1;
         let Test.23 : Str = CallByName TotallyNotJson.25 Test.24;
-=======
-        let #Derived_gen.3 : Str = StructAtIndex 0 Test.4;
-        dec #Derived_gen.3;
-        let Test.23 : Str = CallByName Json.24 Test.24;
->>>>>>> 78becc12d (Start drop specialisation for joinpoints)
         let Test.22 : List Str = Array [Test.23];
         let Test.19 : {Str, List Str} = CallByName TotallyNotJson.32 Test.21 Test.22;
         jump Test.20 Test.19;

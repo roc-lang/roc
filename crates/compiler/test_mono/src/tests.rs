@@ -3113,7 +3113,7 @@ fn dbg_in_expect() {
 }
 
 #[mono_test]
-fn drop_specialize_inc_after_jump() {
+fn drop_specialize_before_jump() {
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
@@ -3122,15 +3122,14 @@ fn drop_specialize_inc_after_jump() {
 
         main =
             v = "value"
-            t = { left: { left: v, right: v }, right: v }
+            t = { left: v, right: v }
             tupleItem t
 
         tupleItem = \t ->
             true = Bool.true
             l = t.left
             x = if true then 1 else 0
-            t2 = {left: l, right: t}
-            {left: l, right: t2}
+            {left: l, right: {left: l, right: t}}
         "#
     )
 }

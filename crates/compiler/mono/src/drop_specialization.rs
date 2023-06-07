@@ -384,26 +384,22 @@ fn specialize_drops_stmt<'a, 'i>(
                     for (joinpoint, current_incremented_symbols) in
                         environment.jump_incremented_symbols.iter_mut()
                     {
-                        match branch_env.jump_incremented_symbols.get(joinpoint) {
-                            Some(branch_incremented_symbols) => {
-                                let mut to_remove = MutSet::default();
-                                for (key, join_count) in current_incremented_symbols.map.iter_mut()
-                                {
-                                    match branch_incremented_symbols.map.get(key) {
-                                        Some(count) => {
-                                            *join_count = std::cmp::min(*join_count, *count);
-                                        }
-                                        None => {
-                                            to_remove.insert(*key);
-                                        }
+                        if let Some(branch_incremented_symbols) =
+                            branch_env.jump_incremented_symbols.get(joinpoint)
+                        {
+                            let mut to_remove = MutSet::default();
+                            for (key, join_count) in current_incremented_symbols.map.iter_mut() {
+                                match branch_incremented_symbols.map.get(key) {
+                                    Some(count) => {
+                                        *join_count = std::cmp::min(*join_count, *count);
+                                    }
+                                    None => {
+                                        to_remove.insert(*key);
                                     }
                                 }
-                                for key in to_remove.iter() {
-                                    current_incremented_symbols.map.remove(key);
-                                }
                             }
-                            None => {
-                                // Do nothing
+                            for key in to_remove.iter() {
+                                current_incremented_symbols.map.remove(key);
                             }
                         }
                     }
@@ -656,7 +652,7 @@ fn specialize_drops_stmt<'a, 'i>(
         } => {
             let mut remainder_enviroment = environment.clone();
 
-            let _new_remainder = specialize_drops_stmt(
+            let new_remainder = specialize_drops_stmt(
                 arena,
                 layout_interner,
                 ident_ids,
@@ -664,101 +660,142 @@ fn specialize_drops_stmt<'a, 'i>(
                 remainder,
             );
 
-            let remainder_jump_incremented_symbols = remainder_enviroment
+            let jump_symbols_option = remainder_enviroment
                 .jump_incremented_symbols
                 .get(id)
-                .map_or_else(|| CountingMap::new(), |map| map.clone());
+                .and_then(|jump_symbols| {
+                    (!jump_symbols.is_empty()).then_some(jump_symbols.clone())
+                });
 
             let mut body_environment = environment.clone();
             for param in parameters.iter() {
                 body_environment.add_symbol_layout(param.symbol, param.layout);
             }
+            body_environment.incremented_symbols.clear();
 
-            let mut body_jump_incremented_symbols = remainder_jump_incremented_symbols;
-
-            // Perform iteration to get the incremented_symbols for the body.
-            let joinpoint_info = loop {
-                // Update the incremented_symbols to the remainder's incremented_symbols.
-                let mut current_body_environment = body_environment.clone();
-                current_body_environment.incremented_symbols =
-                    body_jump_incremented_symbols.clone();
-                current_body_environment
-                    .jump_incremented_symbols
-                    .insert(*id, body_jump_incremented_symbols.clone());
-
-                let _new_body = specialize_drops_stmt(
-                    arena,
-                    layout_interner,
-                    ident_ids,
-                    &mut current_body_environment,
-                    body,
-                );
-
-                let new_body_jump_incremented_symbols = current_body_environment
-                    .jump_incremented_symbols
-                    .get(id)
-                    .expect("Jump incremented symbols should be present.")
-                    .clone();
-
-                if body_jump_incremented_symbols == new_body_jump_incremented_symbols {
-                    break (
-                        new_body_jump_incremented_symbols,
-                        current_body_environment.incremented_symbols,
+            let (new_body, newer_remainder) = match jump_symbols_option {
+                // The remainder has no jumps with symbols to this joinpoint.
+                None => {
+                    // Determine the body with no usage.
+                    body_environment
+                        .join_incremented_symbols
+                        .insert(*id, JoinUsage::NoUsage);
+                    let new_body = specialize_drops_stmt(
+                        arena,
+                        layout_interner,
+                        ident_ids,
+                        &mut body_environment,
+                        body,
                     );
-                } else {
-                    body_jump_incremented_symbols = new_body_jump_incremented_symbols;
+
+                    // Keep the remainder as is.
+                    *environment = remainder_enviroment;
+
+                    (new_body, new_remainder)
+                }
+                // The remainder has jumps with incremented symbols. We need to perform iteration.
+                Some(remainder_jump_incremented_symbols) => {
+                    // Symbols the join consumes, decreases by iterating.
+                    let mut join_consumes = remainder_jump_incremented_symbols;
+
+                    // Symbols the join returns, increases by iterating.
+                    let mut join_returns = CountingMap::new();
+
+                    // Perform iteration to get the incremented_symbols for the body.
+                    let (new_body, alloced_joinpoint_info) = loop {
+                        // Update the incremented_symbols to the remainder's incremented_symbols.
+                        let mut current_body_environment = body_environment.clone();
+                        current_body_environment.incremented_symbols = join_consumes.clone();
+
+                        let joinpoint_info = JoinUsage::HasUsage {
+                            join_consumes: join_consumes.clone(),
+                            join_returns: join_returns.clone(),
+                        };
+
+                        current_body_environment
+                            .join_incremented_symbols
+                            .insert(*id, joinpoint_info);
+
+                        // TODO make sure fixed point only shrinks.
+
+                        let new_body = specialize_drops_stmt(
+                            arena,
+                            layout_interner,
+                            ident_ids,
+                            &mut current_body_environment,
+                            body,
+                        );
+
+                        let new_join_consumes = current_body_environment
+                            .jump_incremented_symbols
+                            .get(id)
+                            .map_or(join_consumes.clone(), |new_join_consumes| {
+                                new_join_consumes.clone()
+                            });
+                        let new_join_returns = current_body_environment.incremented_symbols;
+
+                        if join_consumes == new_join_consumes && join_returns == new_join_returns {
+                            let new_joinpoint_info = JoinUsage::HasUsage {
+                                join_consumes: new_join_consumes,
+                                join_returns: new_join_returns,
+                            };
+                            break (new_body, new_joinpoint_info);
+                        } else {
+                            join_consumes = new_join_consumes;
+                            join_returns = new_join_returns;
+                        }
+                    };
+
+                    // Update remainder
+                    environment
+                        .join_incremented_symbols
+                        .insert(*id, alloced_joinpoint_info);
+                    let newer_remainder = specialize_drops_stmt(
+                        arena,
+                        layout_interner,
+                        ident_ids,
+                        environment,
+                        remainder,
+                    );
+
+                    (new_body, newer_remainder)
                 }
             };
-
-            let alloced_joinpoint_info = arena.alloc(joinpoint_info.clone());
-
-            body_environment.incremented_symbols = joinpoint_info.0;
-            body_environment
-                .join_incremented_symbols
-                .insert(*id, alloced_joinpoint_info);
-
-            let new_body = specialize_drops_stmt(
-                arena,
-                layout_interner,
-                ident_ids,
-                &mut body_environment,
-                body,
-            );
-
-            environment
-                .join_incremented_symbols
-                .insert(*id, alloced_joinpoint_info);
 
             arena.alloc(Stmt::Join {
                 id: *id,
                 parameters,
                 body: new_body,
-                remainder: specialize_drops_stmt(
-                    arena,
-                    layout_interner,
-                    ident_ids,
-                    environment,
-                    remainder,
-                ),
+                remainder: newer_remainder,
             })
         }
         Stmt::Jump(joinpoint_id, arguments) => {
             match environment.join_incremented_symbols.get(joinpoint_id) {
-                Some((join_usage, join_returns)) => {
-                    // Consume all symbols that were consumed in the join.
-                    for (symbol, count) in join_usage.map.iter() {
-                        for _ in 0..*count {
-                            let popped = environment.incremented_symbols.pop(symbol);
-                            debug_assert!(
-                                popped,
-                                "Every incremented symbol should be available from jumps"
-                            );
+                Some(join_usage) => {
+                    match join_usage {
+                        JoinUsage::NoUsage => {
+                            // Do nothing.
                         }
-                    }
-                    for (symbol, count) in join_returns.map.iter() {
-                        environment
-                            .incremented_symbols
-                            .insert_count(*symbol, *count);
+                        JoinUsage::HasUsage {
+                            join_consumes,
+                            join_returns,
+                        } => {
+                            // Consume all symbols that were consumed in the join.
+                            for (symbol, count) in join_consumes.map.iter() {
+                                for _ in 0..*count {
+                                    let popped = environment.incremented_symbols.pop(symbol);
+                                    debug_assert!(
+                                        popped,
+                                        "Every incremented symbol should be available from jumps"
+                                    );
+                                }
+                            }
+                            for (symbol, count) in join_returns.map.iter() {
+                                environment
+                                    .incremented_symbols
+                                    .insert_count(*symbol, *count);
+                            }
+                        }
                     }
                 }
                 None => {
@@ -909,12 +946,13 @@ fn specialize_union<'a, 'i>(
                     for (index, _layout) in field_layouts.iter().enumerate() {
                         for (child, t, _i) in children_clone
                             .iter()
+                            .rev()
                             .filter(|(_child, _t, i)| *i == index as u64)
                         {
                             debug_assert_eq!(tag, *t);
 
                             let removed = incremented_children.pop(child);
-                            index_symbols.insert(index, (*child, removed));
+                            index_symbols.entry(index).or_insert((*child, removed));
 
                             if removed {
                                 break;
@@ -1164,7 +1202,11 @@ fn specialize_list<'a, 'i>(
                     let mut index_symbols = MutMap::default();
 
                     for index in 0..length {
-                        for (child, i) in children_clone.iter().filter(|(_child, i)| *i == index) {
+                        for (child, i) in children_clone
+                            .iter()
+                            .rev()
+                            .filter(|(_child, i)| *i == index)
+                        {
                             debug_assert!(length > *i);
 
                             let removed = incremented_children.pop(child);
@@ -1419,7 +1461,16 @@ struct DropSpecializationEnvironment<'a> {
     jump_incremented_symbols: MutMap<JoinPointId, CountingMap<Symbol>>,
 
     // A map containing the expected number of symbol increments from joinpoints for a jump.
-    join_incremented_symbols: MutMap<JoinPointId, &'a (CountingMap<Symbol>, CountingMap<Symbol>)>,
+    join_incremented_symbols: MutMap<JoinPointId, JoinUsage>,
+}
+
+#[derive(Clone)]
+enum JoinUsage {
+    NoUsage,
+    HasUsage {
+        join_consumes: CountingMap<Symbol>,
+        join_returns: CountingMap<Symbol>,
+    },
 }
 
 impl<'a> DropSpecializationEnvironment<'a> {
@@ -1495,19 +1546,19 @@ impl<'a> DropSpecializationEnvironment<'a> {
         let mut res = Vec::new_in(self.arena);
 
         if let Some(children) = self.struct_children.get(parent) {
-            res.extend(children.iter().map(|(child, _)| child));
+            res.extend(children.iter().rev().map(|(child, _)| child));
         }
 
         if let Some(children) = self.union_children.get(parent) {
-            res.extend(children.iter().map(|(child, _, _)| child));
+            res.extend(children.iter().rev().map(|(child, _, _)| child));
         }
 
         if let Some(children) = self.box_children.get(parent) {
-            res.extend(children.iter());
+            res.extend(children.iter().rev());
         }
 
         if let Some(children) = self.list_children.get(parent) {
-            res.extend(children.iter().map(|(child, _)| child));
+            res.extend(children.iter().rev().map(|(child, _)| child));
         }
 
         res
@@ -1673,5 +1724,13 @@ where
             *v = 0;
         }
         res
+    }
+
+    fn clear(&mut self) {
+        self.map.clear()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }
