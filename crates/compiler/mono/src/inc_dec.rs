@@ -677,10 +677,17 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
+            let newer_remainder = consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages([*symbol]),
+                new_remainder,
+            );
+
             arena.alloc(Stmt::Dbg {
                 symbol: *symbol,
                 variable: *variable,
-                remainder: new_remainder,
+                remainder: newer_remainder,
             })
         }
         Stmt::Join {
