@@ -1815,6 +1815,34 @@ impl<
         );
     }
 
+    fn build_num_cmp(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    ) {
+        // This implements the expression:
+        //            (x != y) as u8 + (x < y) as u8
+        // For x==y:  (false as u8)  + (false as u8) = 0 = RocOrder::Eq
+        // For x>y:   (true as u8)   + (false as u8) = 1 = RocOrder::Gt
+        // For x<y:   (true as u8)   + (true as u8)  = 2 = RocOrder::Lt
+        // u8 is represented in the stack machine as i32, but written to memory as 1 byte
+        let not_equal = self.debug_symbol("not_equal");
+
+        self.build_neq(&not_equal, src1, src2, arg_layout);
+        self.build_num_lt(dst, src1, src2, arg_layout);
+
+        let neq_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &not_equal);
+        let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
+
+        ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, neq_reg);
+
+        self.free_symbol(&not_equal);
+    }
+
     fn build_num_lt(
         &mut self,
         dst: &Symbol,

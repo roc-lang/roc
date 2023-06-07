@@ -327,18 +327,23 @@ trait Backend<'a> {
     where
         I: Iterator<Item = InLayout<'b>>,
     {
+        use std::fmt::Write;
         use std::hash::{BuildHasher, Hash, Hasher};
 
-        // NOTE: due to randomness, this will not be consistent between runs
-        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
+        let mut buf = String::with_capacity(1024);
+
         for a in arguments {
-            a.hash(&mut state);
+            write!(buf, "{:?}", self.interner().dbg_deep(a)).expect("capacity");
         }
 
         // lambda set should not matter; it should already be added as an argument
         // lambda_set.hash(&mut state);
 
-        result.hash(&mut state);
+        write!(buf, "{:?}", self.interner().dbg_deep(result)).expect("capacity");
+
+        // NOTE: due to randomness, this will not be consistent between runs
+        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
+        buf.hash(&mut state);
 
         let interns = self.interns();
         let ident_string = symbol.as_str(interns);
@@ -1807,6 +1812,10 @@ trait Backend<'a> {
                 );
             }
 
+            LowLevel::NumCompare => {
+                self.build_num_cmp(sym, &args[0], &args[1], &arg_layouts[0]);
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }
@@ -2056,6 +2065,14 @@ trait Backend<'a> {
 
     /// build_not stores the result of `!src` into dst.
     fn build_not(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
+
+    fn build_num_cmp(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    );
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(
