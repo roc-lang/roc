@@ -10152,6 +10152,41 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        forgot_to_remove_underscore,
+        indoc!(
+            r#"
+            \_foo -> foo
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+                Nothing is named `foo` in this scope.
+
+                4│      \_foo -> foo
+                                 ^^^
+
+                There is an ignored identifier of a similar name here:
+
+                4│      \_foo -> foo
+                         ^^^^
+
+                Did you mean to remove the leading underscore?
+
+                If not, did you mean one of these?
+
+                    Box
+                    Bool
+                    U8
+                    F64
+                "###
+            ),
+        )
+    );
+
+    test_report!(
         call_with_underscore_identifier,
         indoc!(
             r#"
@@ -10162,17 +10197,102 @@ In roc, functions are always written as a lambda, like{}
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
-            &format!(
+            indoc!(
                 r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-Underscores are not allowed in identifier names:
+                An underscore is being used as a variable here:
 
-6│      f 1 _ 1
-{}
+                6│      f 1 _ 1
+                            ^
 
-I recommend using camelCase. It's the standard style in Roc code!
-"###,
-                "  " // TODO make the reporter not insert extraneous spaces here in the first place!
+                An underscore can be used to ignore a value when pattern matching, but
+                it cannot be used as a variable.
+                "###
+            ),
+        )
+    );
+
+    test_report!(
+        call_with_declared_identifier_starting_with_underscore,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a _b 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This variable's name starts with an underscore:
+
+                6│      \a, _b -> f a _b 1
+                            ^^
+
+                But then it is used here:
+
+                6│      \a, _b -> f a _b 1
+                                      ^^
+
+                A variable's name can only start with an underscore if the variable is
+                unused. Since you are using this variable, you could remove the
+                underscore from its name in both places.
+                "###
+            ),
+        )
+    );
+
+    test_report!(
+        call_with_undeclared_identifier_starting_with_underscore,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a _r 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"
+                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This variable's name starts with an underscore:
+
+                6│      \a, _b -> f a _r 1
+                                      ^^
+
+                A variable's name can only start with an underscore if the variable is
+                unused. But it looks like the variable is being used here!
+                "###
+            ),
+        )
+    );
+
+    test_report!(
+        underscore_in_middle_of_identifier,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a var_name 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"
+                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                Underscores are not allowed in identifier names:
+
+                6│      \a, _b -> f a var_name 1
+                                      ^^^^^^^^
+
+                I recommend using camelCase. It's the standard style in Roc code!
+                "###
             ),
         )
     );

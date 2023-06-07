@@ -3,7 +3,7 @@ use crate::parser::{BadInputError, EExpr, ParseResult, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::Position;
+use roc_region::all::{Position, Region};
 
 /// A tag, for example. Must start with an uppercase letter
 /// and then contain only letters and numbers afterwards - no dots allowed!
@@ -254,7 +254,14 @@ pub enum BadIdent {
     Start(Position),
     Space(BadInputError, Position),
 
-    Underscore(Position),
+    UnderscoreAlone(Position),
+    UnderscoreInMiddle(Position),
+    UnderscoreAtStart {
+        position: Position,
+        /// If this variable was already declared in a pattern (e.g. \_x -> _x),
+        /// then this is where it was declared.
+        declaration_region: Option<Region>,
+    },
     QualifiedTag(Position),
     WeirdAccessor(Position),
     WeirdDotAccess(Position),
@@ -529,7 +536,7 @@ fn chomp_identifier_chain<'a>(
         // to give good error messages for this case
         Err((
             chomped as u32 + 1,
-            BadIdent::Underscore(pos.bump_column(chomped as u32 + 1)),
+            BadIdent::UnderscoreInMiddle(pos.bump_column(chomped as u32 + 1)),
         ))
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a tag
