@@ -464,7 +464,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
 
     let box_layout = backend
         .interner_mut()
-        .insert_no_semantic(roc_mono::layout::LayoutRepr::Boxed(proc.ret_layout));
+        .insert_direct_no_semantic(roc_mono::layout::LayoutRepr::Boxed(proc.ret_layout));
 
     let mut args = bumpalo::collections::Vec::new_in(arena);
     args.extend(proc.args);

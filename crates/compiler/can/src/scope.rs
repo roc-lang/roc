@@ -41,6 +41,10 @@ pub struct Scope {
 
     /// Identifiers that are in scope, and defined in the current module
     pub locals: ScopedIdentIds,
+
+    /// Ignored variables (variables that start with an underscore).
+    /// We won't intern them because they're only used during canonicalization for error reporting.
+    ignored_locals: VecMap<String, Region>,
 }
 
 impl Scope {
@@ -65,6 +69,7 @@ impl Scope {
             abilities_store: starting_abilities_store,
             shadows: VecMap::default(),
             imports: default_imports,
+            ignored_locals: VecMap::default(),
         }
     }
 
@@ -89,13 +94,17 @@ impl Scope {
         match self.scope_contains_ident(ident) {
             InScope(symbol, _) => Ok(symbol),
             NotInScope(_) | NotPresent => {
-                let error = RuntimeError::LookupNotInScope(
-                    Loc {
+                // identifier not found
+
+                let error = RuntimeError::LookupNotInScope {
+                    loc_name: Loc {
                         region,
                         value: Ident::from(ident),
                     },
-                    self.idents_in_scope().map(|v| v.as_ref().into()).collect(),
-                );
+                    suggestion_options: self.idents_in_scope().map(|v| v.as_ref().into()).collect(),
+                    // Check if the user just forgot to remove an underscore from an ignored identifier
+                    underscored_suggestion_region: self.lookup_ignored_local(ident),
+                };
 
                 Err(error)
             }
@@ -418,11 +427,13 @@ impl Scope {
         // - exposed_ident_count: unchanged
         // - home: unchanged
         let aliases_count = self.aliases.len();
+        let ignored_locals_count = self.ignored_locals.len();
         let locals_snapshot = self.locals.in_scope.len();
 
         let result = f(self);
 
         self.aliases.truncate(aliases_count);
+        self.ignored_locals.truncate(ignored_locals_count);
 
         // anything added in the inner scope is no longer in scope now
         for i in locals_snapshot..self.locals.in_scope.len() {
@@ -443,6 +454,19 @@ impl Scope {
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique_symbol(&mut self) -> Symbol {
         Symbol::new(self.home, self.locals.gen_unique())
+    }
+
+    /// Introduce a new ignored variable (variable starting with an underscore).
+    /// The underscore itself should not be included in `ident`.
+    pub fn introduce_ignored_local(&mut self, ident: &str, region: Region) {
+        self.ignored_locals.insert(ident.to_owned(), region);
+    }
+
+    /// Lookup an ignored variable (variable starting with an underscore).
+    /// The underscore itself should not be included in `ident`.
+    /// Returns the source code region of the ignored variable if it's found.
+    pub fn lookup_ignored_local(&self, ident: &str) -> Option<Region> {
+        self.ignored_locals.get(&ident.to_owned()).copied()
     }
 }
 

@@ -10,8 +10,8 @@ use crate::ir::{
     Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, LambdaName, Layout, LayoutInterner, LayoutRepr, Niche, STLayoutInterner,
-    UnionLayout,
+    Builtin, InLayout, LambdaName, Layout, LayoutInterner, LayoutRepr, LayoutWrapper, Niche,
+    STLayoutInterner, UnionLayout,
 };
 
 mod equality;
@@ -286,11 +286,11 @@ impl<'a> CodeGenHelp<'a> {
         self.debug_recursion_depth += 1;
 
         let layout = if matches!(
-            layout_interner.get(called_layout).repr,
+            layout_interner.get_repr(called_layout),
             LayoutRepr::RecursivePointer(_)
         ) {
             let union_layout = ctx.recursive_union.unwrap();
-            layout_interner.insert_no_semantic(LayoutRepr::Union(union_layout))
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout))
         } else {
             called_layout
         };
@@ -301,7 +301,7 @@ impl<'a> CodeGenHelp<'a> {
 
             let (ret_layout, arg_layouts): (InLayout<'a>, &'a [InLayout<'a>]) = {
                 let arg = self.replace_rec_ptr(ctx, layout_interner, layout);
-                let box_arg = layout_interner.insert_no_semantic(LayoutRepr::Boxed(arg));
+                let box_arg = layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(arg));
 
                 match ctx.op {
                     Dec | DecRef(_) => (LAYOUT_UNIT, self.arena.alloc([arg])),
@@ -430,12 +430,14 @@ impl<'a> CodeGenHelp<'a> {
                 }
                 Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
                 IndirectInc => {
-                    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
+                    let box_layout =
+                        layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(layout));
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([(box_layout, ARG_1), inc_amount])
                 }
                 IndirectDec => {
-                    let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
+                    let box_layout =
+                        layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(layout));
                     self.arena.alloc([(box_layout, ARG_1)])
                 }
                 Eq => self.arena.alloc([roc_value, (layout, ARG_2)]),
@@ -483,7 +485,8 @@ impl<'a> CodeGenHelp<'a> {
                 niche: Niche::NONE,
             },
             HelperOp::IndirectInc => {
-                let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
+                let box_layout =
+                    layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(layout));
 
                 ProcLayout {
                     arguments: self.arena.alloc([box_layout, self.layout_isize]),
@@ -492,7 +495,8 @@ impl<'a> CodeGenHelp<'a> {
                 }
             }
             HelperOp::IndirectDec => {
-                let box_layout = layout_interner.insert_no_semantic(LayoutRepr::Boxed(layout));
+                let box_layout =
+                    layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(layout));
 
                 ProcLayout {
                     arguments: self.arena.alloc([box_layout]),
@@ -532,8 +536,9 @@ impl<'a> CodeGenHelp<'a> {
         layout_interner: &mut STLayoutInterner<'a>,
         layout: InLayout<'a>,
     ) -> InLayout<'a> {
-        let lay = layout_interner.get(layout);
-        let repr = match lay.repr {
+        let lay = layout_interner.get_repr(layout);
+        let semantic = layout_interner.get_semantic(layout);
+        let repr = match lay {
             LayoutRepr::Builtin(Builtin::List(v)) => {
                 let v = self.replace_rec_ptr(ctx, layout_interner, v);
                 LayoutRepr::Builtin(Builtin::List(v))
@@ -580,7 +585,7 @@ impl<'a> CodeGenHelp<'a> {
             LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
         };
 
-        layout_interner.insert(Layout::new(repr, lay.semantic()))
+        layout_interner.insert(Layout::new(LayoutWrapper::Direct(repr), semantic))
     }
 
     fn union_tail_recursion_fields(
@@ -664,16 +669,16 @@ impl<'a> CallerProc<'a> {
         };
 
         let box_capture_layout = if let Some(capture_layout) = capture_layout {
-            layout_interner.insert_no_semantic(LayoutRepr::Boxed(capture_layout))
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(capture_layout))
         } else {
-            layout_interner.insert_no_semantic(LayoutRepr::Boxed(Layout::UNIT))
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(Layout::UNIT))
         };
 
         let box_argument_layout = layout_interner
-            .insert_no_semantic(LayoutRepr::Boxed(passed_function.argument_layouts[0]));
+            .insert_direct_no_semantic(LayoutRepr::Boxed(passed_function.argument_layouts[0]));
 
-        let box_return_layout =
-            layout_interner.insert_no_semantic(LayoutRepr::Boxed(passed_function.return_layout));
+        let box_return_layout = layout_interner
+            .insert_direct_no_semantic(LayoutRepr::Boxed(passed_function.return_layout));
 
         let proc_layout = ProcLayout {
             arguments: arena.alloc([box_capture_layout, box_argument_layout, box_return_layout]),
@@ -822,7 +827,7 @@ fn layout_needs_helper_proc<'a>(
     layout: InLayout<'a>,
     op: HelperOp,
 ) -> bool {
-    match layout_interner.get(layout).repr {
+    match layout_interner.get_repr(layout) {
         LayoutRepr::Builtin(
             Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
         ) => false,

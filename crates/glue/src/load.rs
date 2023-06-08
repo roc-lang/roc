@@ -416,9 +416,10 @@ pub fn load_types(
 
             let layout = layout_cache.interner.get(in_layout);
 
-            // dbg!(layout);
-
-            if layout.has_varying_stack_size(&layout_cache.interner, arena) {
+            if layout_cache
+                .interner
+                .has_varying_stack_size(in_layout, arena)
+            {
                 let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
                 let answer = generate_glue_procs(
                     home,

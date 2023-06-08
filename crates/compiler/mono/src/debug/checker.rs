@@ -199,7 +199,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         // lazily.
         loop {
             layout = self.interner.chase_recursive_in(layout);
-            match self.interner.get(layout).repr {
+            match self.interner.get_repr(layout) {
                 LayoutRepr::LambdaSet(ls) => layout = ls.representation,
                 _ => return layout,
             }
@@ -292,7 +292,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
             } => {
                 self.check_sym_layout(*cond_symbol, *cond_layout, UseKind::SwitchCond);
                 let layout = self.resolve(*cond_layout);
-                match self.interner.get(layout).repr {
+                match self.interner.get_repr(layout) {
                     LayoutRepr::Builtin(Builtin::Int(_)) => {}
                     LayoutRepr::Builtin(Builtin::Bool) => {}
                     _ => self.problem(ProblemKind::BadSwitchConditionLayout {
@@ -400,7 +400,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
             } => {
                 let interned_layout = self
                     .interner
-                    .insert_no_semantic(LayoutRepr::Union(tag_layout));
+                    .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
                 self.check_tag_expr(interned_layout, tag_layout, tag_id, arguments);
                 Some(interned_layout)
             }
@@ -440,7 +440,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 }
                 Some(
                     self.interner
-                        .insert_no_semantic(LayoutRepr::Builtin(Builtin::List(*elem_layout))),
+                        .insert_direct_no_semantic(LayoutRepr::Builtin(Builtin::List(
+                            *elem_layout,
+                        ))),
                 )
             }
             Expr::EmptyArray => {
@@ -449,11 +451,14 @@ impl<'a, 'r> Ctx<'a, 'r> {
             }
             &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
                 let inner = layout;
-                Some(ctx.interner.insert_no_semantic(LayoutRepr::Boxed(inner)))
+                Some(
+                    ctx.interner
+                        .insert_direct_no_semantic(LayoutRepr::Boxed(inner)),
+                )
             }),
             &Expr::ExprUnbox { symbol } => self.with_sym_layout(symbol, |ctx, def_line, layout| {
                 let layout = ctx.resolve(layout);
-                match ctx.interner.get(layout).repr {
+                match ctx.interner.get_repr(layout) {
                     LayoutRepr::Boxed(inner) => Some(inner),
                     _ => {
                         ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
@@ -471,7 +476,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
             } => {
                 let union = self
                     .interner
-                    .insert_no_semantic(LayoutRepr::Union(tag_layout));
+                    .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
                 self.check_sym_layout(symbol, union, UseKind::TagReuse);
                 // TODO also check update arguments
                 Some(union)
@@ -494,7 +499,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
     fn check_struct_at_index(&mut self, structure: Symbol, index: u64) -> Option<InLayout<'a>> {
         self.with_sym_layout(structure, |ctx, def_line, layout| {
             let layout = ctx.resolve(layout);
-            match ctx.interner.get(layout).repr {
+            match ctx.interner.get_repr(layout) {
                 LayoutRepr::Struct(field_layouts) => {
                     if index as usize >= field_layouts.len() {
                         ctx.problem(ProblemKind::StructIndexOOB {
@@ -529,7 +534,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
     ) -> Option<InLayout<'a>> {
         let union = self
             .interner
-            .insert_no_semantic(LayoutRepr::Union(union_layout));
+            .insert_direct_no_semantic(LayoutRepr::Union(union_layout));
         self.with_sym_layout(structure, |ctx, def_line, _layout| {
             ctx.check_sym_layout(structure, union, UseKind::TagExpr);
 

@@ -9,6 +9,7 @@ pub fn mono_test(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut no_check = false;
     let mut allow_type_errors = false;
     let mut mode = "exec".to_owned();
+    let mut large_stack = false;
     for arg in syn::parse_macro_input!(args as syn::AttributeArgs) {
         use syn::{Lit, Meta, MetaNameValue, NestedMeta};
         if let NestedMeta::Meta(Meta::NameValue(MetaNameValue {
@@ -25,6 +26,9 @@ pub fn mono_test(args: TokenStream, item: TokenStream) -> TokenStream {
             }
             if path.is_ident("allow_type_errors") {
                 allow_type_errors = true;
+            }
+            if path.is_ident("large_stack") {
+                large_stack = true;
             }
         }
     }
@@ -44,8 +48,11 @@ pub fn mono_test(args: TokenStream, item: TokenStream) -> TokenStream {
         #[test]
         #(#attributes)*
         #visibility fn #name(#args) {
-            compiles_to_ir(#name_str, #body, &#mode, #allow_type_errors, #no_check);
-
+            if #large_stack {
+                with_larger_debug_stack(|| compiles_to_ir(#name_str, #body, &#mode, #allow_type_errors, #no_check));
+            } else {
+                compiles_to_ir(#name_str, #body, &#mode, #allow_type_errors, #no_check);
+            }
         }
     };
     result.into()

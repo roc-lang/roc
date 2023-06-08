@@ -55,7 +55,7 @@ pub fn insert_wrapper_for_layout<'a>(
         }
     };
 
-    match interner.get(layout).repr {
+    match interner.get_repr(layout) {
         LayoutRepr::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
             i8::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }

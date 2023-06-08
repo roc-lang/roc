@@ -483,9 +483,9 @@ fn specialize_drops_stmt<'a, 'i>(
 
                     // This decremented symbol was not incremented before, perhaps the children were.
                     let in_layout = environment.get_symbol_layout(symbol);
-                    let runtime_layout = layout_interner.runtime_representation(*in_layout);
+                    let runtime_repr = layout_interner.runtime_representation(*in_layout);
 
-                    let updated_stmt = match runtime_layout.repr {
+                    let updated_stmt = match runtime_repr {
                         // Layout has children, try to inline them.
                         LayoutRepr::Struct(field_layouts) => specialize_struct(
                             arena,

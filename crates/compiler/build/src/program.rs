@@ -34,7 +34,9 @@ pub const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
-    pub code_gen: Duration,
+    pub generate_final_ir: Duration,
+    pub code_gen_object: Duration,
+    pub total: Duration,
 }
 
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
@@ -144,7 +146,7 @@ fn gen_from_mono_module_llvm<'a>(
     use inkwell::module::Linkage;
     use inkwell::targets::{FileType, RelocMode};
 
-    let code_gen_start = Instant::now();
+    let all_code_gen_start = Instant::now();
 
     // Generate the binary
     let target_info = roc_target::TargetInfo::from(target);
@@ -237,6 +239,10 @@ fn gen_from_mono_module_llvm<'a>(
         Some(&app_ll_file),
         &loaded.glue_layouts,
     );
+
+    // We are now finished building the LLVM IR.
+    let generate_final_ir = all_code_gen_start.elapsed();
+    let code_gen_object_start = Instant::now();
 
     env.dibuilder.finalize();
 
@@ -439,11 +445,16 @@ fn gen_from_mono_module_llvm<'a>(
         }
     };
 
-    let code_gen = code_gen_start.elapsed();
+    let code_gen_object = code_gen_object_start.elapsed();
+    let total = all_code_gen_start.elapsed();
 
     (
         CodeObject::MemoryBuffer(memory_buffer),
-        CodeGenTiming { code_gen },
+        CodeGenTiming {
+            generate_final_ir,
+            code_gen_object,
+            total,
+        },
         ExpectMetadata {
             interns: env.interns,
             layout_interner: loaded.layout_interner,
@@ -503,7 +514,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
-    let code_gen_start = Instant::now();
+    let all_code_gen_start = Instant::now();
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -550,11 +561,18 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         procedures,
     );
 
-    let code_gen = code_gen_start.elapsed();
+    let generate_final_ir = all_code_gen_start.elapsed();
+    let code_gen_object_start = Instant::now();
+    let code_gen_object = code_gen_object_start.elapsed();
+    let total = all_code_gen_start.elapsed();
 
     (
         CodeObject::Vector(final_binary_bytes),
-        CodeGenTiming { code_gen },
+        CodeGenTiming {
+            generate_final_ir,
+            code_gen_object,
+            total,
+        },
         ExpectMetadata {
             interns,
             layout_interner,
@@ -569,7 +587,7 @@ fn gen_from_mono_module_dev_assembly<'a>(
     target: &target_lexicon::Triple,
     backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
-    let code_gen_start = Instant::now();
+    let all_code_gen_start = Instant::now();
 
     let lazy_literals = true;
 
@@ -593,15 +611,23 @@ fn gen_from_mono_module_dev_assembly<'a>(
     let module_object =
         roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
-    let code_gen = code_gen_start.elapsed();
+    let generate_final_ir = all_code_gen_start.elapsed();
+    let code_gen_object_start = Instant::now();
 
     let module_out = module_object
         .write()
         .expect("failed to build output object");
 
+    let code_gen_object = code_gen_object_start.elapsed();
+    let total = all_code_gen_start.elapsed();
+
     (
         CodeObject::Vector(module_out),
-        CodeGenTiming { code_gen },
+        CodeGenTiming {
+            generate_final_ir,
+            code_gen_object,
+            total,
+        },
         ExpectMetadata {
             interns,
             layout_interner,
@@ -919,9 +945,12 @@ fn build_loaded_file<'a>(
 
     report_timing(
         buf,
-        "Generate Assembly from Mono IR",
-        code_gen_timing.code_gen,
+        "Generate final IR from Mono IR",
+        code_gen_timing.generate_final_ir,
     );
+    report_timing(buf, "Generate object", code_gen_timing.code_gen_object);
+    buf.push('\n');
+    report_timing(buf, "Total", code_gen_timing.total);
 
     let compilation_end = compilation_start.elapsed();
     let size = roc_app_bytes.len();

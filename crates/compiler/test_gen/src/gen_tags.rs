@@ -17,6 +17,8 @@ use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
 use roc_std::{RocList, RocStr, U128};
 
+use crate::helpers::with_larger_debug_stack;
+
 #[test]
 fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
@@ -28,7 +30,7 @@ fn width_and_alignment_u8_u8() {
     let t = &[Layout::U8] as &[_];
     let tt = [t, t];
 
-    let layout = Layout::no_semantic(LayoutRepr::Union(UnionLayout::NonRecursive(&tt)));
+    let layout = LayoutRepr::Union(UnionLayout::NonRecursive(&tt));
 
     assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
     assert_eq!(layout.stack_size(&interner, target_info), 2);
@@ -2174,25 +2176,25 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
         assert_evals_to!(
             indoc!(
                 r###"
-            app "test" provides [main] to "./platform"
+                app "test" provides [main] to "./platform"
 
-            Concept : [
-                AtomicConcept,
-                ExistentialRestriction { role : Str, concept : Concept }
-            ]
+                Concept : [
+                    AtomicConcept,
+                    ExistentialRestriction { role : Str, concept : Concept }
+                ]
 
-            bottom : Concept
-            bottom = AtomicConcept
+                bottom : Concept
+                bottom = AtomicConcept
 
-            main =
-                when Dict.single bottom 0 is
-                    _ -> Bool.true
-            "###
+                main =
+                    when Dict.single bottom 0 is
+                        _ -> Bool.true
+                "###
             ),
             true,
             bool
         );
-    })
+    });
 }
 
 #[test]

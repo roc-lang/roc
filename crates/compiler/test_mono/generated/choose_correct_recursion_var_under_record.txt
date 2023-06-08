@@ -97,7 +97,7 @@ procedure Test.2 (Test.6):
             decref Test.6;
             jump #Derived_gen.0;
     else
-        let Test.9 : List [<r>C List *self, C *self] = UnionAtIndex (Id 0) (Index 0) Test.6;
+        let Test.9 : List [<r>C List [<r>C List *self, C *self], C [<r>C List *self, C *self]] = UnionAtIndex (Id 0) (Index 0) Test.6;
         joinpoint #Derived_gen.2:
             let Test.24 : {} = Struct {};
             let Test.23 : List Str = CallByName List.5 Test.9 Test.24;
@@ -116,7 +116,7 @@ procedure Test.2 (Test.6):
             jump #Derived_gen.2;
 
 procedure Test.0 ():
-    let Test.32 : List [<r>C List *self, C *self] = Array [];
+    let Test.32 : List [<r>C List [<r>C List *self, C *self], C [<r>C List *self, C *self]] = Array [];
     let Test.15 : [<r>C List *self, C *self] = TagId(0) Test.32;
     let Test.14 : Str = CallByName Test.2 Test.15;
     ret Test.14;
