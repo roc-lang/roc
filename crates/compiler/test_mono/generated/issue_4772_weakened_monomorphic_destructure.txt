@@ -248,8 +248,8 @@ procedure Str.9 (Str.79):
     else
         let Str.314 : U8 = StructAtIndex 3 Str.80;
         let Str.315 : U64 = StructAtIndex 0 Str.80;
-        let #Derived_gen.1 : Str = StructAtIndex 1 Str.80;
-        dec #Derived_gen.1;
+        let #Derived_gen.0 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.0;
         let Str.313 : {U64, U8} = Struct {Str.315, Str.314};
         let Str.312 : [C {U64, U8}, C Str] = TagId(0) Str.313;
         ret Str.312;
@@ -397,8 +397,8 @@ procedure TotallyNotJson.534 (TotallyNotJson.535):
 
 procedure TotallyNotJson.536 (TotallyNotJson.1192):
     let TotallyNotJson.1193 : List U8 = StructAtIndex 1 TotallyNotJson.1192;
-    let #Derived_gen.0 : List U8 = StructAtIndex 0 TotallyNotJson.1192;
-    dec #Derived_gen.0;
+    let #Derived_gen.1 : List U8 = StructAtIndex 0 TotallyNotJson.1192;
+    dec #Derived_gen.1;
     ret TotallyNotJson.1193;
 
 procedure TotallyNotJson.60 ():

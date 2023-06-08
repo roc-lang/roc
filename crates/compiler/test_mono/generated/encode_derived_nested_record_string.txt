@@ -1331,14 +1331,14 @@ procedure TotallyNotJson.82 (TotallyNotJson.802, TotallyNotJson.803):
 
 procedure TotallyNotJson.832 (TotallyNotJson.1493):
     let TotallyNotJson.1868 : List Str = StructAtIndex 1 TotallyNotJson.1493;
-    let #Derived_gen.30 : List Str = StructAtIndex 0 TotallyNotJson.1493;
-    dec #Derived_gen.30;
+    let #Derived_gen.29 : List Str = StructAtIndex 0 TotallyNotJson.1493;
+    dec #Derived_gen.29;
     ret TotallyNotJson.1868;
 
 procedure TotallyNotJson.840 (TotallyNotJson.1214):
     let TotallyNotJson.1589 : List Str = StructAtIndex 1 TotallyNotJson.1214;
-    let #Derived_gen.29 : List Str = StructAtIndex 0 TotallyNotJson.1214;
-    dec #Derived_gen.29;
+    let #Derived_gen.30 : List Str = StructAtIndex 0 TotallyNotJson.1214;
+    dec #Derived_gen.30;
     ret TotallyNotJson.1589;
 
 procedure TotallyNotJson.87 (TotallyNotJson.809):

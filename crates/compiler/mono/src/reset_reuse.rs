@@ -1277,7 +1277,7 @@ fn symbol_layout_reusability<'a>(
     symbol: &Symbol,
     layout: &InLayout<'a>,
 ) -> Reuse<'a> {
-    match layout_interner.get(*layout).repr {
+    match layout_interner.get_repr(*layout) {
         LayoutRepr::Union(union_layout) => {
             can_reuse_union_layout_tag(union_layout, environment.get_symbol_tag(symbol))
         }

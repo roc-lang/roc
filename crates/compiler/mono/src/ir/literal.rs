@@ -83,7 +83,7 @@ pub fn make_num_literal<'a>(
     num_str: &str,
     num_value: IntOrFloatValue,
 ) -> NumLiteral {
-    match interner.get(layout).repr {
+    match interner.get_repr(layout) {
         LayoutRepr::Builtin(Builtin::Int(width)) => match num_value {
             IntOrFloatValue::Int(IntValue::I128(n)) => NumLiteral::Int(n, width),
             IntOrFloatValue::Int(IntValue::U128(n)) => NumLiteral::U128(n),

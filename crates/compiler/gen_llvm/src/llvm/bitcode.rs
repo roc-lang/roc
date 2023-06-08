@@ -610,7 +610,7 @@ pub fn build_compare_wrapper<'a, 'ctx>(
 
             let closure_data_repr = closure_data_layout.runtime_representation();
 
-            let arguments_cast = match layout_interner.get(closure_data_repr).repr {
+            let arguments_cast = match layout_interner.get_repr(closure_data_repr) {
                 LayoutRepr::Struct(&[]) => {
                     // nothing to add
                     &default

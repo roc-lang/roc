@@ -1066,7 +1066,7 @@ impl<'a> Procs<'a> {
         let is_self_recursive = match top_level
             .arguments
             .last()
-            .map(|l| layout_cache.get_in(*l).repr)
+            .map(|l| layout_cache.get_repr(*l))
         {
             Some(LayoutRepr::LambdaSet(lambda_set)) => lambda_set.contains(name.name()),
             _ => false,
@@ -3509,10 +3509,10 @@ fn specialize_proc_help<'a>(
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout_cache
-                                    .get_in(**layout1)
+                                    .get_repr(**layout1)
                                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
                                 let size2 = layout_cache
-                                    .get_in(**layout2)
+                                    .get_repr(**layout2)
                                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
@@ -3557,10 +3557,10 @@ fn specialize_proc_help<'a>(
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout_cache
-                                    .get_in(**layout1)
+                                    .get_repr(**layout1)
                                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
                                 let size2 = layout_cache
-                                    .get_in(**layout2)
+                                    .get_repr(**layout2)
                                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
@@ -4145,9 +4145,9 @@ pub fn with_hole<'a>(
 
         IngestedFile(_, bytes, var) => {
             let interned = layout_cache.from_var(env.arena, var, env.subs).unwrap();
-            let layout = layout_cache.get_in(interned);
+            let layout = layout_cache.get_repr(interned);
 
-            match layout.repr {
+            match layout {
                 LayoutRepr::Builtin(Builtin::List(elem_layout)) if elem_layout == Layout::U8 => {
                     let mut elements = Vec::with_capacity_in(bytes.len(), env.arena);
                     for byte in bytes.iter() {
@@ -4422,7 +4422,32 @@ pub fn with_hole<'a>(
 
         Expect { .. } => unreachable!("I think this is unreachable"),
         ExpectFx { .. } => unreachable!("I think this is unreachable"),
-        Dbg { .. } => unreachable!("I think this is unreachable"),
+        Dbg {
+            loc_condition,
+            loc_continuation,
+            variable: cond_variable,
+            symbol: dbg_symbol,
+        } => {
+            let rest = with_hole(
+                env,
+                loc_continuation.value,
+                variable,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            );
+
+            compile_dbg(
+                env,
+                procs,
+                layout_cache,
+                dbg_symbol,
+                *loc_condition,
+                cond_variable,
+                rest,
+            )
+        }
 
         If {
             cond_var,
@@ -4627,13 +4652,14 @@ pub fn with_hole<'a>(
                 Ok(elem_layout) => {
                     let expr = Expr::EmptyArray;
                     let list_layout = layout_cache
-                        .put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
+                        .put_in_direct_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
                     Stmt::Let(assigned, expr, list_layout, hole)
                 }
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
-                    let list_layout = layout_cache
-                        .put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(Layout::VOID)));
+                    let list_layout = layout_cache.put_in_direct_no_semantic(LayoutRepr::Builtin(
+                        Builtin::List(Layout::VOID),
+                    ));
                     Stmt::Let(assigned, expr, list_layout, hole)
                 }
                 Err(LayoutProblem::Erroneous) => panic!("list element is error type"),
@@ -4679,8 +4705,8 @@ pub fn with_hole<'a>(
                 elems: elements.into_bump_slice(),
             };
 
-            let list_layout =
-                layout_cache.put_in_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
+            let list_layout = layout_cache
+                .put_in_direct_no_semantic(LayoutRepr::Builtin(Builtin::List(elem_layout)));
 
             let stmt = Stmt::Let(assigned, expr, list_layout, hole);
 
@@ -4994,7 +5020,7 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, record_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-            let field_layouts = match layout_cache.get_in(record_layout).repr {
+            let field_layouts = match layout_cache.get_repr(record_layout) {
                 LayoutRepr::Struct(field_layouts) => field_layouts,
                 _ => arena.alloc([record_layout]),
             };
@@ -5620,6 +5646,53 @@ pub fn with_hole<'a>(
     }
 }
 
+/// Compiles a `dbg` expression.
+fn compile_dbg<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    dbg_symbol: Symbol,
+    loc_condition: Loc<roc_can::expr::Expr>,
+    variable: Variable,
+    continuation: Stmt<'a>,
+) -> Stmt<'a> {
+    let spec_var = env
+        .expectation_subs
+        .as_mut()
+        .unwrap()
+        .fresh_unnamed_flex_var();
+
+    let dbg_stmt = Stmt::Dbg {
+        symbol: dbg_symbol,
+        variable: spec_var,
+        remainder: env.arena.alloc(continuation),
+    };
+
+    // Now that the dbg value has been specialized, export its specialized type into the
+    // expectations subs.
+    store_specialized_expectation_lookups(env, [variable], &[spec_var]);
+
+    let symbol_is_reused = matches!(
+        can_reuse_symbol(env, layout_cache, procs, &loc_condition.value, variable),
+        ReuseSymbol::Value(_)
+    );
+
+    // skip evaluating the condition if it's just a symbol
+    if symbol_is_reused {
+        dbg_stmt
+    } else {
+        with_hole(
+            env,
+            loc_condition.value,
+            variable,
+            procs,
+            layout_cache,
+            dbg_symbol,
+            env.arena.alloc(dbg_stmt),
+        )
+    }
+}
+
 /// Compiles an access into a tuple or record.
 fn compile_struct_like_access<'a>(
     env: &mut Env<'a, '_>,
@@ -5917,10 +5990,10 @@ where
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout_cache
-                    .get_in(**layout1)
+                    .get_repr(**layout1)
                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
                 let size2 = layout_cache
-                    .get_in(**layout2)
+                    .get_repr(**layout2)
                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
@@ -5951,10 +6024,10 @@ where
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout_cache
-                    .get_in(**layout1)
+                    .get_repr(**layout1)
                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
                 let size2 = layout_cache
-                    .get_in(**layout2)
+                    .get_repr(**layout2)
                     .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
@@ -5967,9 +6040,7 @@ where
 
             debug_assert_eq!(
                 LayoutRepr::struct_(field_layouts),
-                layout_cache
-                    .get_in(lambda_set.runtime_representation())
-                    .repr
+                layout_cache.get_repr(lambda_set.runtime_representation())
             );
 
             let expr = Expr::Struct(symbols);
@@ -6170,7 +6241,7 @@ fn convert_tag_union<'a>(
                 layout_cache.from_var(env.arena, variant_var, env.subs),
                 "Wrapped"
             );
-            let union_layout = match layout_cache.interner.chase_recursive(variant_layout).repr {
+            let union_layout = match layout_cache.interner.chase_recursive(variant_layout) {
                 LayoutRepr::Union(ul) => ul,
                 other => internal_error!(
                     "unexpected layout {:?} for {:?}",
@@ -6301,7 +6372,8 @@ fn convert_tag_union<'a>(
                 }
             };
 
-            let union_layout = layout_cache.put_in_no_semantic(LayoutRepr::Union(union_layout));
+            let union_layout =
+                layout_cache.put_in_direct_no_semantic(LayoutRepr::Union(union_layout));
 
             let stmt = Stmt::Let(assigned, tag, union_layout, hole);
             let iter = field_symbols_temp
@@ -6440,7 +6512,7 @@ fn sorted_field_symbols<'a>(
         };
 
         let alignment = layout_cache
-            .get_in(layout)
+            .get_repr(layout)
             .alignment_bytes(&layout_cache.interner, env.target_info);
 
         let symbol = possible_reuse_symbol_or_specialize(env, procs, layout_cache, &arg.value, var);
@@ -6824,41 +6896,15 @@ pub fn from_can<'a>(
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
 
-            let spec_var = env
-                .expectation_subs
-                .as_mut()
-                .unwrap()
-                .fresh_unnamed_flex_var();
-
-            let dbg_stmt = Stmt::Dbg {
-                symbol: dbg_symbol,
-                variable: spec_var,
-                remainder: env.arena.alloc(rest),
-            };
-
-            // Now that the dbg value has been specialized, export its specialized type into the
-            // expectations subs.
-            store_specialized_expectation_lookups(env, [variable], &[spec_var]);
-
-            let symbol_is_reused = matches!(
-                can_reuse_symbol(env, layout_cache, procs, &loc_condition.value, variable),
-                ReuseSymbol::Value(_)
-            );
-
-            // skip evaluating the condition if it's just a symbol
-            if symbol_is_reused {
-                dbg_stmt
-            } else {
-                with_hole(
-                    env,
-                    loc_condition.value,
-                    variable,
-                    procs,
-                    layout_cache,
-                    dbg_symbol,
-                    env.arena.alloc(dbg_stmt),
-                )
-            }
+            compile_dbg(
+                env,
+                procs,
+                layout_cache,
+                dbg_symbol,
+                *loc_condition,
+                variable,
+                rest,
+            )
         }
 
         LetRec(defs, cont, _cycle_mark) => {
@@ -7887,7 +7933,7 @@ fn specialize_symbol<'a>(
                             let layout = match raw {
                                 RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
                                 RawFunctionLayout::Function(_, lambda_set, _) => layout_cache
-                                    .put_in_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
+                                    .put_in_direct_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
                             };
 
                             let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
@@ -9764,7 +9810,7 @@ where
         ($tag_id:expr, $layout:expr, $union_layout:expr, $field_layouts: expr) => {{
             if $field_layouts.iter().any(|l| {
                 layout_interner
-                    .get(*l)
+                    .get_repr(*l)
                     .has_varying_stack_size(layout_interner, arena)
             }) {
                 let procs = generate_glue_procs_for_tag_fields(
@@ -9789,7 +9835,7 @@ where
     }
 
     while let Some(layout) = stack.pop() {
-        match layout.repr {
+        match layout.repr(layout_interner) {
             LayoutRepr::Builtin(builtin) => match builtin {
                 Builtin::Int(_)
                 | Builtin::Float(_)
@@ -9801,7 +9847,7 @@ where
             LayoutRepr::Struct(field_layouts) => {
                 if field_layouts.iter().any(|l| {
                     layout_interner
-                        .get(*l)
+                        .get_repr(*l)
                         .has_varying_stack_size(layout_interner, arena)
                 }) {
                     let procs = generate_glue_procs_for_struct_fields(
@@ -9892,11 +9938,11 @@ where
 {
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
     let boxed_struct_layout =
-        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout));
+        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
-    let field_layouts = match layout_interner.get(interned_unboxed_struct_layout).repr {
+    let field_layouts = match layout_interner.get_repr(interned_unboxed_struct_layout) {
         LayoutRepr::Struct(field_layouts) => field_layouts,
         other => {
             unreachable!(
@@ -10003,7 +10049,7 @@ where
     I: LayoutInterner<'a>,
 {
     let interned = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 

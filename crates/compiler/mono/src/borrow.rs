@@ -4,7 +4,7 @@ use std::hash::Hash;
 use crate::ir::{
     Expr, HigherOrderLowLevel, JoinPointId, Param, PassedFunction, Proc, ProcLayout, Stmt,
 };
-use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
+use crate::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -29,7 +29,7 @@ impl Ownership {
 
     /// For reference-counted types (lists, (big) strings, recursive tags), owning a value
     /// means incrementing its reference count. Hence, we prefer borrowing for these types
-    fn from_layout(layout: &Layout) -> Self {
+    fn from_layout(layout: &LayoutRepr) -> Self {
         match layout.is_refcounted() {
             true => Ownership::Borrowed,
             false => Ownership::Owned,
@@ -265,7 +265,7 @@ impl<'a> ParamMap<'a> {
     ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|p| Param {
-                ownership: Ownership::from_layout(&interner.get(p.layout)),
+                ownership: Ownership::from_layout(&interner.get_repr(p.layout)),
                 layout: p.layout,
                 symbol: p.symbol,
             }),
@@ -281,7 +281,7 @@ impl<'a> ParamMap<'a> {
     ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                ownership: Ownership::from_layout(&interner.get(*layout)),
+                ownership: Ownership::from_layout(&interner.get_repr(*layout)),
                 layout: *layout,
                 symbol: *symbol,
             }),

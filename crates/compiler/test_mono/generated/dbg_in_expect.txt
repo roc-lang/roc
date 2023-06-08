@@ -1,0 +1,12 @@
+procedure Bool.2 ():
+    let Bool.23 : Int1 = true;
+    ret Bool.23;
+
+procedure Test.1 ():
+    let Test.0 : Str = "";
+    dbg Test.0;
+    dec Test.0;
+    let Test.3 : Int1 = CallByName Bool.2;
+    expect Test.3;
+    let Test.2 : {} = Struct {};
+    ret Test.2;

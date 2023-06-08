@@ -934,6 +934,29 @@ fn encode_derived_generic_tag_with_different_field_types() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn specialize_unique_newtype_records() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, Json]
+                provides [main] to "./platform"
+
+            main =
+                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} Json.json) is
+                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} Json.json) is
+                        Ok t -> "\(s)\(t)"
+                        _ -> "<bad>"
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":true}{"b":true}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_use_stdlib() {
     assert_evals_to!(
         indoc!(

@@ -665,7 +665,7 @@ impl<
 
         let mut in_layout = *layout;
         let layout = loop {
-            match layout_interner.get(in_layout).repr {
+            match layout_interner.get_repr(in_layout) {
                 LayoutRepr::LambdaSet(inner) => in_layout = inner.runtime_representation(),
                 other => break other,
             }
@@ -728,7 +728,7 @@ impl<
         sym: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match layout_interner.get(*layout).repr {
+        match layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(builtin) => match builtin {
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::I128 | IntWidth::U128 => {
@@ -1104,7 +1104,7 @@ impl<
         symbol: Symbol,
         layout: InLayout<'a>,
     ) {
-        match layout_interner.get(layout).repr {
+        match layout_interner.get_repr(layout) {
             single_register_layouts!() | pointer_layouts!() => {
                 let base_offset = self.claim_stack_size(8);
                 self.symbol_storage_map.insert(
@@ -1169,7 +1169,7 @@ impl<
         layout: InLayout<'a>,
         base_offset: i32,
     ) {
-        match layout_interner.get(layout).repr {
+        match layout_interner.get_repr(layout) {
             single_register_integers!() | pointer_layouts!() => {
                 let reg = self.load_to_general_reg(buf, &symbol);
                 ASM::mov_base32_reg64(buf, base_offset, reg);
@@ -1491,7 +1491,7 @@ impl<
 }
 
 fn is_primitive(layout_interner: &mut STLayoutInterner<'_>, layout: InLayout<'_>) -> bool {
-    match layout_interner.get(layout).repr {
+    match layout_interner.get_repr(layout) {
         single_register_layouts!() => true,
         pointer_layouts!() => true,
         LayoutRepr::LambdaSet(lambda_set) => {

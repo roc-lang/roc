@@ -1383,28 +1383,26 @@ fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tags, var, types, layout, Some(rec_root))
         }
-        Content::Structure(FlatType::Apply(symbol, _)) => {
-            match env.layout_cache.get_in(layout).repr {
-                LayoutRepr::Builtin(builtin) => {
-                    add_builtin_type(env, builtin, var, opt_name, types, layout)
-                }
-                _ => {
-                    if symbol.is_builtin() {
-                        todo!(
-                            "Handle Apply for builtin symbol {:?} and layout {:?}",
-                            symbol,
-                            layout
-                        )
-                    } else {
-                        todo!(
-                            "Handle non-builtin Apply for symbol {:?} and layout {:?}",
-                            symbol,
-                            layout
-                        )
-                    }
+        Content::Structure(FlatType::Apply(symbol, _)) => match env.layout_cache.get_repr(layout) {
+            LayoutRepr::Builtin(builtin) => {
+                add_builtin_type(env, builtin, var, opt_name, types, layout)
+            }
+            _ => {
+                if symbol.is_builtin() {
+                    todo!(
+                        "Handle Apply for builtin symbol {:?} and layout {:?}",
+                        symbol,
+                        layout
+                    )
+                } else {
+                    todo!(
+                        "Handle non-builtin Apply for symbol {:?} and layout {:?}",
+                        symbol,
+                        layout
+                    )
                 }
             }
-        }
+        },
         Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
             let is_toplevel = false; // or in any case, we cannot assume that we are
 
@@ -1432,7 +1430,7 @@ fn add_type_help<'a>(
         }
         Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
-                match env.layout_cache.get_in(layout).repr {
+                match env.layout_cache.get_repr(layout) {
                     LayoutRepr::Builtin(builtin) => {
                         add_builtin_type(env, builtin, var, opt_name, types, layout)
                     }
@@ -1687,7 +1685,7 @@ fn add_builtin_type<'a>(
             Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                env.layout_cache.get_in(elem_layout).repr,
+                env.layout_cache.get_repr(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
@@ -1737,7 +1735,7 @@ fn add_builtin_type<'a>(
             Alias(Symbol::SET_SET, _alias_vars, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                env.layout_cache.get_in(elem_layout).repr,
+                env.layout_cache.get_repr(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
@@ -1842,7 +1840,10 @@ where
     let layout = env.layout_cache.interner.get(in_layout);
     let struct_fields = match env.glue_procs_by_layout.get(&layout) {
         Some(&glue_procs) => {
-            debug_assert!(layout.has_varying_stack_size(&env.layout_cache.interner, arena));
+            debug_assert!(env
+                .layout_cache
+                .interner
+                .has_varying_stack_size(in_layout, arena));
 
             let fields: Vec<(String, TypeId, Accessors)> = sortables
                 .into_iter()
@@ -1910,7 +1911,7 @@ fn tag_union_type_from_layout<'a>(
 ) -> RocTagUnion {
     let subs = env.subs;
 
-    match env.layout_cache.get_in(layout).repr {
+    match env.layout_cache.get_repr(layout) {
         _ if union_tags.is_newtype_wrapper(subs)
             && matches!(
                 subs.get_content_without_compacting(var),
@@ -2228,7 +2229,9 @@ fn single_tag_payload_fields<'a, 'b>(
     // anyway just so we have some warning in case that relationship somehow didn't hold!
     debug_assert_eq!(
         env.glue_procs_by_layout.get(&layout).is_some(),
-        layout.has_varying_stack_size(&env.layout_cache.interner, env.arena)
+        env.layout_cache
+            .interner
+            .has_varying_stack_size(in_layout, env.arena)
     );
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
@@ -2309,7 +2312,7 @@ fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, var
     vars.into_iter().fold(0, |count, var| {
         let layout = env.layout_cache.from_var(arena, var, subs).unwrap();
 
-        if env.layout_cache.get_in(layout).is_dropped_because_empty() {
+        if env.layout_cache.get_repr(layout).is_dropped_because_empty() {
             count
         } else {
             count + 1
