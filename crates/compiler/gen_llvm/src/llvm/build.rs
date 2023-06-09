@@ -7,7 +7,7 @@ use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
-use crate::llvm::struct_::{self, struct_from_fields, RocStruct};
+use crate::llvm::struct_::{struct_from_fields, RocStruct};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -1269,8 +1269,9 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             index, structure, ..
         } => {
             let (value, layout) = scope.load_symbol_and_layout(structure);
+            let struct_val = RocStruct::from(value);
 
-            struct_::load_at_index(env, layout_interner, layout, value, *index)
+            struct_val.load_at_index(env, layout_interner, layout, *index)
         }
 
         EmptyArray => empty_polymorphic_list(env),

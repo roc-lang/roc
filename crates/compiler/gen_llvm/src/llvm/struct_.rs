@@ -61,6 +61,7 @@ fn basic_type_from_record<'a, 'ctx>(
         .struct_type(field_types.into_bump_slice(), false)
 }
 
+#[derive(Debug)]
 pub(crate) enum RocStruct<'ctx> {
     /// The roc struct should be passed by rvalue.
     ByValue(StructValue<'ctx>),
@@ -69,6 +70,16 @@ pub(crate) enum RocStruct<'ctx> {
 impl<'ctx> Into<BasicValueEnum<'ctx>> for RocStruct<'ctx> {
     fn into(self) -> BasicValueEnum<'ctx> {
         self.as_basic_value_enum()
+    }
+}
+
+impl<'ctx> From<BasicValueEnum<'ctx>> for RocStruct<'ctx> {
+    #[track_caller]
+    fn from(basic_value: BasicValueEnum<'ctx>) -> Self {
+        match basic_value {
+            BasicValueEnum::StructValue(struct_value) => RocStruct::ByValue(struct_value),
+            _ => panic!("Expected struct value"),
+        }
     }
 }
 
@@ -88,6 +99,62 @@ impl<'ctx> RocStruct<'ctx> {
             RocStruct::ByValue(struct_val) => struct_val.as_basic_value_enum(),
         }
     }
+
+    pub fn load_at_index<'a>(
+        &self,
+        env: &Env<'a, 'ctx, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        layout: InLayout<'a>,
+        index: u64,
+    ) -> BasicValueEnum<'ctx> {
+        let layout = if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get_repr(layout) {
+            lambda_set.runtime_representation()
+        } else {
+            layout
+        };
+
+        match (self, layout_interner.get_repr(layout)) {
+            (Self::ByValue(argument), LayoutRepr::Struct(field_layouts)) => {
+                index_struct_value(env, layout_interner, field_layouts, *argument, index)
+            }
+            (other, layout) => {
+                unreachable!(
+                    "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
+                    other, layout, index
+                )
+            }
+        }
+    }
+}
+
+fn index_struct_value<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    field_layouts: &[InLayout<'a>],
+    argument: StructValue<'ctx>,
+    index: u64,
+) -> BasicValueEnum<'ctx> {
+    debug_assert!(!field_layouts.is_empty());
+
+    let field_value = env
+        .builder
+        .build_extract_value(
+            argument,
+            index as u32,
+            env.arena
+                .alloc(format!("struct_field_access_record_{}", index)),
+        )
+        .unwrap();
+
+    let field_layout = field_layouts[index as usize];
+
+    use_roc_value(
+        env,
+        layout_interner,
+        field_layout,
+        field_value,
+        "struct_field_tag",
+    )
 }
 
 fn build_struct_value<'a, 'ctx>(
@@ -156,51 +223,4 @@ where
     }
 
     struct_value.into_struct_value()
-}
-
-pub fn load_at_index<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout<'a>,
-    value: BasicValueEnum<'ctx>,
-    index: u64,
-) -> BasicValueEnum<'ctx> {
-    let layout = if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get_repr(layout) {
-        lambda_set.runtime_representation()
-    } else {
-        layout
-    };
-
-    // extract field from a record
-    match (value, layout_interner.get_repr(layout)) {
-        (BasicValueEnum::StructValue(argument), LayoutRepr::Struct(field_layouts)) => {
-            debug_assert!(!field_layouts.is_empty());
-
-            let field_value = env
-                .builder
-                .build_extract_value(
-                    argument,
-                    index as u32,
-                    env.arena
-                        .alloc(format!("struct_field_access_record_{}", index)),
-                )
-                .unwrap();
-
-            let field_layout = field_layouts[index as usize];
-            use_roc_value(
-                env,
-                layout_interner,
-                field_layout,
-                field_value,
-                "struct_field_tag",
-            )
-        }
-        (other, layout) => {
-            // potential cause: indexing into an unwrapped 1-element record/tag?
-            unreachable!(
-                "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
-                other, layout, index
-            )
-        }
-    }
 }
