@@ -12,6 +12,8 @@ use roc_std::RocList;
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::RocStr;
 
+use crate::helpers::with_larger_debug_stack;
+
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn hash_specialization() {
@@ -935,9 +937,10 @@ fn encode_derived_generic_tag_with_different_field_types() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn specialize_unique_newtype_records() {
-    assert_evals_to!(
-        indoc!(
-            r#"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
             app "test"
                 imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
@@ -949,10 +952,11 @@ fn specialize_unique_newtype_records() {
                         _ -> "<bad>"
                     _ -> "<bad>"
             "#
-        ),
-        RocStr::from(r#"{"a":true}{"b":true}"#),
-        RocStr
-    )
+            ),
+            RocStr::from(r#"{"a":true}{"b":true}"#),
+            RocStr
+        )
+    });
 }
 
 #[test]
