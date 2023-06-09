@@ -1,5 +1,5 @@
 app "test"
-    imports [Json]
+    imports [TotallyNotJson]
     provides [main] to "./platform"
 
 HelloWorld := {} has [Encoding {toEncoder}]
@@ -10,7 +10,7 @@ toEncoder = \@HelloWorld {} ->
         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
 f =
-    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.json) is
+    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json) is
         Ok s -> s
         _ -> "<bad>"
 

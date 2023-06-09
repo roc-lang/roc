@@ -6,7 +6,7 @@ platform "server-side"
         Html.Internal.Shared.{ App },
         Html.Internal.Server.{ initServerApp },
         Html.{ renderStatic },
-        Json,
+        TotallyNotJson,
     ]
     provides [main]
 
@@ -14,7 +14,7 @@ main : Str, Str -> Result Str Str
 main = \initJson, hostJavaScript ->
     initJson
     |> Str.toUtf8
-    |> Decode.fromBytes Json.json
+    |> Decode.fromBytes TotallyNotJson.json
     |> Result.try \initData -> initServerApp app initData hostJavaScript
     |> Result.map renderStatic
     |> Result.mapErr \err ->

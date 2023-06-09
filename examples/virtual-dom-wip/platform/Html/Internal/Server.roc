@@ -5,7 +5,7 @@ interface Html.Internal.Server
     ]
     imports [
         Html.Internal.Shared.{ Html, Attribute, App, translateStatic, text, element },
-        Json,
+        TotallyNotJson,
     ]
 
 # -------------------------------
@@ -71,7 +71,7 @@ insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
     encode =
         \value ->
             value
-            |> Encode.toBytes Json.json
+            |> Encode.toBytes TotallyNotJson.json
             |> Str.fromUtf8
             |> Result.withDefault ""
 

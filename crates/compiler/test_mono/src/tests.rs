@@ -1476,7 +1476,7 @@ fn encode_custom_type() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         HelloWorld := {}
@@ -1486,7 +1486,7 @@ fn encode_custom_type() {
                     |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.json)
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1499,11 +1499,11 @@ fn encode_derived_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes "abc" Json.json)
+            result = Str.fromUtf8 (Encode.toBytes "abc" TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1517,11 +1517,11 @@ fn encode_derived_record() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "a"} Json.json)
+            result = Str.fromUtf8 (Encode.toBytes {a: "a"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1859,11 +1859,11 @@ fn encode_derived_record_one_field_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.json)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1876,11 +1876,11 @@ fn encode_derived_record_two_field_strings() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.json)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1893,11 +1893,11 @@ fn encode_derived_nested_record_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.json)
+            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1910,13 +1910,13 @@ fn encode_derived_tag_one_field_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
             x : [A Str]
             x = A "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.json)
+            result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1951,13 +1951,13 @@ fn encode_derived_tag_two_payloads_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.json)
+            result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2224,11 +2224,11 @@ fn issue_4705() {
 fn issue_4749() {
     indoc!(
         r###"
-        interface Test exposes [] imports [Json]
+        interface Test exposes [] imports [TotallyNotJson]
 
         expect
             input = [82, 111, 99]
-            got = Decode.fromBytes input Json.json
+            got = Decode.fromBytes input TotallyNotJson.json
             got == Ok "Roc"
         "###
     )
@@ -2464,10 +2464,10 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
 fn issue_4772_weakened_monomorphic_destructure() {
     indoc!(
         r###"
-        interface Test exposes [] imports [Json]
+        interface Test exposes [] imports [TotallyNotJson]
 
         getNumber =
-            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.json
+            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") TotallyNotJson.json
 
             when result is
                 Ok val ->
@@ -2661,7 +2661,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
     // rather than collapsing to `[[] + [A, B]:toEncoder:1]`.
     indoc!(
         r#"
-        app "test" imports [Json] provides [main] to "./platform"
+        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
         Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
 
@@ -2676,7 +2676,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         accessor = @Q {a : A, b: B}
 
         main =
-            Encode.toBytes accessor Json.json
+            Encode.toBytes accessor TotallyNotJson.json
         "#
     )
 }
@@ -2699,7 +2699,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
     // `t.a` and `t.b` are filled in.
     indoc!(
         r#"
-        app "test" imports [Json] provides [main] to "./platform"
+        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
         Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
 
@@ -2716,7 +2716,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
             @Q {a : x, b: x}
 
         main =
-            Encode.toBytes accessor Json.json
+            Encode.toBytes accessor TotallyNotJson.json
         "#
     )
 }
