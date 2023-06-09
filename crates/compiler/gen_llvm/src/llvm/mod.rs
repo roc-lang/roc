@@ -9,3 +9,5 @@ pub mod externs;
 mod intrinsics;
 mod lowlevel;
 pub mod refcounting;
+
+mod struct_;

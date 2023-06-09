@@ -14,10 +14,10 @@ use roc_mono::layout::{Builtin, InLayout, LayoutIds, LayoutInterner, STLayoutInt
 
 use super::bitcode::{call_list_bitcode_fn, BitcodeReturns};
 use super::build::{
-    create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value, struct_from_fields,
-    BuilderExt,
+    create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value, BuilderExt,
 };
 use super::convert::zig_list_type;
+use super::struct_::struct_from_fields;
 
 fn call_list_bitcode_fn_1<'ctx>(
     env: &Env<'_, 'ctx, '_>,

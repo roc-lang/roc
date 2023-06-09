@@ -1,5 +1,5 @@
 use crate::llvm::build::{BuilderExt, Env};
-use bumpalo::collections::Vec;
+use crate::llvm::struct_::RocStructType;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
@@ -11,23 +11,7 @@ use roc_mono::layout::{
 };
 use roc_target::TargetInfo;
 
-fn basic_type_from_record<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    fields: &[InLayout<'_>],
-) -> BasicTypeEnum<'ctx> {
-    let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
-
-    for field_layout in fields.iter() {
-        let typ = basic_type_from_layout(env, layout_interner, *field_layout);
-
-        field_types.push(typ);
-    }
-
-    env.context
-        .struct_type(field_types.into_bump_slice(), false)
-        .as_basic_type_enum()
-}
+use super::struct_::RocStruct;
 
 pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -37,7 +21,9 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     use LayoutRepr::*;
 
     match layout_interner.get_repr(layout) {
-        Struct(sorted_fields, ..) => basic_type_from_record(env, layout_interner, sorted_fields),
+        Struct(sorted_fields, ..) => {
+            RocStructType::build(env, layout_interner, sorted_fields).into()
+        }
         LambdaSet(lambda_set) => {
             basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation())
         }
@@ -362,10 +348,12 @@ impl<'ctx> RocUnion<'ctx> {
     pub fn as_struct_value<'a, 'env>(
         &self,
         env: &Env<'a, 'ctx, 'env>,
-        data: StructValue<'ctx>,
+        data: RocStruct<'ctx>,
         tag_id: Option<usize>,
     ) -> StructValue<'ctx> {
         debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
+
+        let RocStruct::ByValue(data) = data;
 
         let tag_alloca = env.builder.build_alloca(self.struct_type(), "tag_alloca");
 

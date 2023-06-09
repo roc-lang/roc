@@ -7,6 +7,7 @@ use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
+use crate::llvm::struct_::{self, struct_from_fields, RocStruct};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -22,7 +23,7 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{
     AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
 };
-use inkwell::values::BasicValueEnum::{self, *};
+use inkwell::values::BasicValueEnum::{self};
 use inkwell::values::{
     BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PhiValue,
     PointerValue, StructValue,
@@ -1013,29 +1014,6 @@ pub fn build_exp_call<'a, 'ctx>(
     }
 }
 
-pub fn struct_from_fields<'a, 'ctx, 'env, I>(
-    env: &Env<'a, 'ctx, 'env>,
-    struct_type: StructType<'ctx>,
-    values: I,
-) -> StructValue<'ctx>
-where
-    I: Iterator<Item = (usize, BasicValueEnum<'ctx>)>,
-{
-    let mut struct_value = struct_type.const_zero().into();
-
-    // Insert field exprs into struct_val
-    for (index, field_val) in values {
-        let index: u32 = index as u32;
-
-        struct_value = env
-            .builder
-            .build_insert_value(struct_value, field_val, index, "insert_record_field")
-            .unwrap();
-    }
-
-    struct_value.into_struct_value()
-}
-
 fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -1097,7 +1075,9 @@ pub fn build_exp_expr<'a, 'ctx>(
             call,
         ),
 
-        Struct(sorted_fields) => build_struct(env, layout_interner, scope, sorted_fields).into(),
+        Struct(sorted_fields) => {
+            RocStruct::build(env, layout_interner, scope, sorted_fields).into()
+        }
 
         Reuse {
             arguments,
@@ -1323,45 +1303,7 @@ pub fn build_exp_expr<'a, 'ctx>(
         } => {
             let (value, layout) = load_symbol_and_layout(scope, structure);
 
-            let layout = if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get_repr(layout)
-            {
-                lambda_set.runtime_representation()
-            } else {
-                layout
-            };
-
-            // extract field from a record
-            match (value, layout_interner.get_repr(layout)) {
-                (StructValue(argument), LayoutRepr::Struct(field_layouts)) => {
-                    debug_assert!(!field_layouts.is_empty());
-
-                    let field_value = env
-                        .builder
-                        .build_extract_value(
-                            argument,
-                            *index as u32,
-                            env.arena
-                                .alloc(format!("struct_field_access_record_{}", index)),
-                        )
-                        .unwrap();
-
-                    let field_layout = field_layouts[*index as usize];
-                    use_roc_value(
-                        env,
-                        layout_interner,
-                        field_layout,
-                        field_value,
-                        "struct_field_tag",
-                    )
-                }
-                (other, layout) => {
-                    // potential cause: indexing into an unwrapped 1-element record/tag?
-                    unreachable!(
-                        "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
-                        other, layout, index
-                    )
-                }
-            }
+            struct_::load_at_index(env, layout_interner, layout, value, *index)
         }
 
         EmptyArray => empty_polymorphic_list(env),
@@ -1679,51 +1621,6 @@ fn build_tag_fields<'a, 'r, 'ctx, 'env>(
     (field_types, field_values)
 }
 
-fn build_struct<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    scope: &Scope<'a, 'ctx>,
-    sorted_fields: &[Symbol],
-) -> StructValue<'ctx> {
-    let ctx = env.context;
-
-    // Determine types
-    let num_fields = sorted_fields.len();
-    let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-    let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-    for symbol in sorted_fields.iter() {
-        // Zero-sized fields have no runtime representation.
-        // The layout of the struct expects them to be dropped!
-        let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
-        if !layout_interner
-            .get_repr(field_layout)
-            .is_dropped_because_empty()
-        {
-            let field_type = basic_type_from_layout(env, layout_interner, field_layout);
-            field_types.push(field_type);
-
-            if layout_interner.is_passed_by_reference(field_layout) {
-                let field_value = env.builder.new_build_load(
-                    field_type,
-                    field_expr.into_pointer_value(),
-                    "load_tag_to_put_in_struct",
-                );
-
-                field_vals.push(field_value);
-            } else {
-                field_vals.push(field_expr);
-            }
-        }
-    }
-
-    // Create the struct_type
-    let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-
-    // Insert field exprs into struct_val
-    struct_from_fields(env, struct_type, field_vals.into_iter().enumerate())
-}
-
 fn build_tag<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -1740,7 +1637,7 @@ fn build_tag<'a, 'ctx>(
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let data = build_struct(env, layout_interner, scope, arguments);
+            let data = RocStruct::build(env, layout_interner, scope, arguments);
 
             let roc_union =
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
@@ -1873,7 +1770,7 @@ fn build_tag<'a, 'ctx>(
                 &[other_fields],
             );
 
-            let data = build_struct(env, layout_interner, scope, arguments);
+            let data = RocStruct::build(env, layout_interner, scope, arguments);
 
             let value = roc_union.as_struct_value(env, data, None);
 
