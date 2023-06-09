@@ -31,10 +31,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
         }
     }
 
-    pub(crate) fn load_symbol_and_layout(
-        &self,
-        symbol: &Symbol,
-    ) -> (BasicValueEnum<'ctx>, InLayout<'a>) {
+    pub fn load_symbol_and_layout(&self, symbol: &Symbol) -> (BasicValueEnum<'ctx>, InLayout<'a>) {
         match self.symbols.get(symbol) {
             Some((layout, ptr)) => (*ptr, *layout),
             None => panic!("There was no entry for {:?} in scope {:?}", symbol, self),
