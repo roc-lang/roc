@@ -18,9 +18,7 @@ use roc_mono::layout::{
 use roc_region::all::Region;
 
 use super::build::BuilderExt;
-use super::build::{
-    add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, LlvmBackendMode,
-};
+use super::build::{add_func, load_roc_value, use_roc_value, FunctionSpec, LlvmBackendMode};
 use super::convert::struct_type_from_union_layout;
 use super::scope::Scope;
 
@@ -209,7 +207,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
     for lookup in lookups.iter() {
         lookup_starts.push(offset);
 
-        let (value, layout) = load_symbol_and_layout(scope, lookup);
+        let (value, layout) = scope.load_symbol_and_layout(lookup);
 
         let stack_size = env
             .ptr_int()

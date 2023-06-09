@@ -54,10 +54,7 @@ use crate::llvm::{
 };
 
 use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec, scope::Scope};
-use super::{
-    build::{load_symbol_and_layout, Env},
-    convert::zig_dec_type,
-};
+use super::{build::Env, convert::zig_dec_type};
 
 pub(crate) fn run_low_level<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
@@ -97,7 +94,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // look at that, a usage for if let ... else
             let [$(($x, $y)),+] = match &args {
                 [$($x),+] => {
-                    [ $(load_symbol_and_layout(scope, $x)),+ ]
+                    [ $(scope.load_symbol_and_layout($x)),+ ]
                 }
                 _ => {
                     // we could get fancier with reporting here, but this macro is used a bunch
@@ -323,7 +320,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // Str.fromInt : Int -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let (int, int_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (int, int_layout) = scope.load_symbol_and_layout(&args[0]);
             let int = int.into_int_value();
 
             let int_width = match layout_interner.get_repr(int_layout) {
@@ -343,7 +340,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // Str.fromFloat : Float * -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (float, float_layout) = scope.load_symbol_and_layout(&args[0]);
 
             let float_width = match layout_interner.get_repr(float_layout) {
                 LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width,
@@ -683,7 +680,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
 
-            let (first_list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (first_list, list_layout) = scope.load_symbol_and_layout(&args[0]);
 
             let second_list = scope.load_symbol(&args[1]);
 
@@ -702,7 +699,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             debug_assert_eq!(args.len(), 2);
 
             let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
             list_append_unsafe(env, layout_interner, original_wrapper, elem, elem_layout)
         }
@@ -711,7 +708,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             debug_assert_eq!(args.len(), 2);
 
             let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
             list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
         }
@@ -719,7 +716,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.reserve : List elem, Nat -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let element_layout = list_element_layout!(layout_interner, list_layout);
             let spare = scope.load_symbol(&args[1]);
 
@@ -736,7 +733,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.releaseExcessCapacity: List elem -> List elem
             debug_assert_eq!(args.len(), 1);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let element_layout = list_element_layout!(layout_interner, list_layout);
 
             list_release_excess_capacity(env, layout_interner, list, element_layout, update_mode)
@@ -745,7 +742,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.swap : List elem, Nat, Nat -> List elem
             debug_assert_eq!(args.len(), 3);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
             let index_1 = scope.load_symbol(&args[1]);
@@ -765,7 +762,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         ListSublist => {
             debug_assert_eq!(args.len(), 3);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
             let start = scope.load_symbol(&args[1]);
@@ -786,7 +783,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.dropAt : List elem, Nat -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
             let count = scope.load_symbol(&args[1]);
@@ -868,7 +865,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     )
                 }
                 LayoutRepr::Builtin(Builtin::Float(_float_width)) => {
-                    let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+                    let (float, float_layout) = scope.load_symbol_and_layout(&args[0]);
 
                     let float_width = match layout_interner.get_repr(float_layout) {
                         LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width,
@@ -2491,7 +2488,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
     match op {
         ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
+            let (list, list_layout) = scope.load_symbol_and_layout(xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2530,8 +2527,8 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
             }
         }
         ListMap2 { xs, ys } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2575,9 +2572,9 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
             }
         }
         ListMap3 { xs, ys, zs } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
+            let (list3, list3_layout) = scope.load_symbol_and_layout(zs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2625,10 +2622,10 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
             }
         }
         ListMap4 { xs, ys, zs, ws } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
-            let (list4, list4_layout) = load_symbol_and_layout(scope, ws);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
+            let (list3, list3_layout) = scope.load_symbol_and_layout(zs);
+            let (list4, list4_layout) = scope.load_symbol_and_layout(ws);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2686,7 +2683,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
         }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
+            let (list, list_layout) = scope.load_symbol_and_layout(xs);
 
             let (function, closure, closure_layout) = function_details!();
 

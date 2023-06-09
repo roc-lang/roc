@@ -1083,7 +1083,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
         ),
 
         ExprBox { symbol } => {
-            let (value, layout) = load_symbol_and_layout(scope, symbol);
+            let (value, layout) = scope.load_symbol_and_layout(symbol);
             let basic_type = basic_type_from_layout(env, layout_interner, layout);
             let allocation = reserve_with_refcount_help(
                 env,
@@ -1121,7 +1121,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 .update_mode(update_var)
                 .unwrap_or(UpdateMode::Immutable);
 
-            let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
+            let (tag_ptr, layout) = scope.load_symbol_and_layout(symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 
             // reset is only generated for union values
@@ -1208,7 +1208,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 .update_mode(update_var)
                 .unwrap_or(UpdateMode::Immutable);
 
-            let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
+            let (tag_ptr, layout) = scope.load_symbol_and_layout(symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 
             let ctx = env.context;
@@ -1268,7 +1268,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
         StructAtIndex {
             index, structure, ..
         } => {
-            let (value, layout) = load_symbol_and_layout(scope, structure);
+            let (value, layout) = scope.load_symbol_and_layout(structure);
 
             struct_::load_at_index(env, layout_interner, layout, value, *index)
         }
@@ -1286,7 +1286,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             union_layout,
         } => {
             // cast the argument bytes into the desired shape for this tag
-            let (argument, structure_layout) = load_symbol_and_layout(scope, structure);
+            let (argument, structure_layout) = scope.load_symbol_and_layout(structure);
 
             match union_layout {
                 UnionLayout::NonRecursive(tag_layouts) => {
@@ -1427,7 +1427,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             union_layout,
         } => {
             // cast the argument bytes into the desired shape for this tag
-            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+            let (argument, _structure_layout) = scope.load_symbol_and_layout(structure);
 
             get_tag_id(env, layout_interner, parent, union_layout, argument).into()
         }
@@ -2456,7 +2456,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             result
         }
         Ret(symbol) => {
-            let (value, layout) = load_symbol_and_layout(scope, symbol);
+            let (value, layout) = scope.load_symbol_and_layout(symbol);
 
             match RocReturn::from_layout(env, layout_interner, layout) {
                 RocReturn::Return => {
@@ -2653,7 +2653,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             let current_block = builder.get_insert_block().unwrap();
 
             for (phi_value, argument) in argument_phi_values.iter().zip(arguments.iter()) {
-                let (value, _) = load_symbol_and_layout(scope, argument);
+                let (value, _) = scope.load_symbol_and_layout(argument);
 
                 phi_value.add_incoming(&[(&value, current_block)]);
             }
@@ -2669,7 +2669,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 
             match modify {
                 Inc(symbol, inc_amount) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+                    let (value, layout) = scope.load_symbol_and_layout(symbol);
                     if layout_interner.contains_refcounted(layout) {
                         increment_refcount_layout(
                             env,
@@ -2692,7 +2692,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                     )
                 }
                 Dec(symbol) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+                    let (value, layout) = scope.load_symbol_and_layout(symbol);
 
                     if layout_interner.contains_refcounted(layout) {
                         decrement_refcount_layout(env, layout_interner, layout_ids, value, layout);
@@ -2709,7 +2709,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                     )
                 }
                 DecRef(symbol) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+                    let (value, layout) = scope.load_symbol_and_layout(symbol);
 
                     let lay = layout_interner.get_repr(layout);
                     match lay {
@@ -2820,7 +2820,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             let bd = env.builder;
             let context = env.context;
 
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
+            let (cond, _cond_layout) = scope.load_symbol_and_layout(cond_symbol);
 
             let condition = bd.build_int_compare(
                 IntPredicate::EQ,
@@ -2892,7 +2892,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             let bd = env.builder;
             let context = env.context;
 
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
+            let (cond, _cond_layout) = scope.load_symbol_and_layout(cond_symbol);
 
             let condition = bd.build_int_compare(
                 IntPredicate::EQ,
@@ -2957,16 +2957,6 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             let zero = env.context.i64_type().const_zero();
             zero.into()
         }
-    }
-}
-
-pub(crate) fn load_symbol_and_layout<'a, 'ctx>(
-    scope: &Scope<'a, 'ctx>,
-    symbol: &Symbol,
-) -> (BasicValueEnum<'ctx>, InLayout<'a>) {
-    match scope.get(symbol) {
-        Some((layout, ptr)) => (*ptr, *layout),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
 
@@ -3278,7 +3268,7 @@ fn build_switch_ir<'a, 'ctx>(
     let scope = &mut copy;
 
     let cond_symbol = &cond_symbol;
-    let (cond_value, stored_layout) = load_symbol_and_layout(scope, cond_symbol);
+    let (cond_value, stored_layout) = scope.load_symbol_and_layout(cond_symbol);
 
     debug_assert_eq!(
         basic_type_from_layout(env, layout_interner, cond_layout),
@@ -5795,7 +5785,7 @@ fn build_foreign_symbol<'a, 'ctx>(
             let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
 
             for symbol in argument_symbols {
-                let (value, _) = load_symbol_and_layout(scope, symbol);
+                let (value, _) = scope.load_symbol_and_layout(symbol);
 
                 arguments.push(value);
             }
@@ -5821,7 +5811,7 @@ fn build_foreign_symbol<'a, 'ctx>(
             let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
 
             for symbol in argument_symbols {
-                let (value, layout) = load_symbol_and_layout(scope, symbol);
+                let (value, layout) = scope.load_symbol_and_layout(symbol);
 
                 cc_argument_types.push(to_cc_type(env, layout_interner, layout));
 

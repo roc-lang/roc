@@ -11,7 +11,7 @@ use roc_mono::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner};
 use crate::llvm::build::use_roc_value;
 
 use super::{
-    build::{load_symbol_and_layout, BuilderExt, Env},
+    build::{BuilderExt, Env},
     convert::basic_type_from_layout,
     scope::Scope,
 };
@@ -106,7 +106,7 @@ fn build_struct_value<'a, 'ctx>(
     for symbol in sorted_fields.iter() {
         // Zero-sized fields have no runtime representation.
         // The layout of the struct expects them to be dropped!
-        let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
+        let (field_expr, field_layout) = scope.load_symbol_and_layout(symbol);
         if !layout_interner
             .get_repr(field_layout)
             .is_dropped_because_empty()
