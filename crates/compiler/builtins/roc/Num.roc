@@ -788,7 +788,7 @@ mul : Num a, Num a -> Num a
 ## ```
 min : Num a, Num a -> Num a
 min = \a, b ->
-    if a < b then 
+    if a < b then
         a
     else
         b
@@ -802,7 +802,7 @@ min = \a, b ->
 ## ```
 max : Num a, Num a -> Num a
 max = \a, b ->
-    if a > b then 
+    if a > b then
         a
     else
         b
