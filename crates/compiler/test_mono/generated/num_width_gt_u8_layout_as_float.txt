@@ -1,6 +1,6 @@
 procedure Num.37 (#Attr.2, #Attr.3):
-    let Num.281 : Float64 = lowlevel NumDivFrac #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.287 : Float64 = lowlevel NumDivFrac #Attr.2 #Attr.3;
+    ret Num.287;
 
 procedure Test.0 ():
     let Test.2 : Float64 = 1f64;

@@ -196,40 +196,40 @@ procedure List.93 (List.436, List.437, List.438):
     ret List.598;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.284 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.290 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.334 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.334;
+    let Num.340 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.340;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.296 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.296;
-
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.333 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.333;
-
-procedure Num.23 (#Attr.2, #Attr.3):
-    let Num.302 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
+    let Num.302 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
     ret Num.302;
 
-procedure Num.25 (#Attr.2, #Attr.3):
-    let Num.308 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.339 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.339;
+
+procedure Num.23 (#Attr.2, #Attr.3):
+    let Num.308 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
     ret Num.308;
 
+procedure Num.25 (#Attr.2, #Attr.3):
+    let Num.314 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
+    ret Num.314;
+
 procedure Num.71 (#Attr.2, #Attr.3):
-    let Num.281 : U8 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.287 : U8 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
+    ret Num.287;
 
 procedure Num.72 (#Attr.2, #Attr.3):
-    let Num.282 : U8 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
-    ret Num.282;
+    let Num.288 : U8 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
+    ret Num.288;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.330 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.330;
+    let Num.336 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.336;
 
 procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
     let Str.307 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
