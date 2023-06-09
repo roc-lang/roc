@@ -7,7 +7,6 @@ use crate::helpers::dev::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
 
-#[allow(unused_imports)]
 use crate::helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
 #[allow(unused_imports)]
@@ -3820,6 +3819,8 @@ mod pattern_match {
     #[cfg(feature = "gen-dev")]
     use crate::helpers::dev::assert_evals_to;
 
+    use crate::helpers::with_larger_debug_stack;
+
     use super::RocList;
 
     #[test]
@@ -3857,62 +3858,66 @@ mod pattern_match {
 
     #[test]
     fn ranged_matches_head() {
-        assert_evals_to!(
-            r#"
-            helper = \l -> when l is
-                [] -> 1u8
-                [A] -> 2u8
-                [A, A, ..] -> 3u8
-                [A, B, ..] -> 4u8
-                [B, ..] -> 5u8
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                r#"
+                helper = \l -> when l is
+                    [] -> 1u8
+                    [A] -> 2u8
+                    [A, A, ..] -> 3u8
+                    [A, B, ..] -> 4u8
+                    [B, ..] -> 5u8
 
-            [
-                helper [],
-                helper [A],
-                helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
-                helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
-                helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
-            ]
-            "#,
-            RocList::from_slice(&[
-                1, //
-                2, //
-                3, 3, 3, 3, //
-                4, 4, 4, 4, //
-                5, 5, 5, 5, //
-            ]),
-            RocList<u8>
-        )
+                [
+                    helper [],
+                    helper [A],
+                    helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
+                    helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
+                    helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
+                ]
+                "#,
+                RocList::from_slice(&[
+                    1, //
+                    2, //
+                    3, 3, 3, 3, //
+                    4, 4, 4, 4, //
+                    5, 5, 5, 5, //
+                ]),
+                RocList<u8>
+            )
+        });
     }
 
     #[test]
     fn ranged_matches_tail() {
-        assert_evals_to!(
-            r#"
-            helper = \l -> when l is
-                [] -> 1u8
-                [A] -> 2u8
-                [.., A, A] -> 3u8
-                [.., B, A] -> 4u8
-                [.., B] -> 5u8
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                r#"
+                helper = \l -> when l is
+                    [] -> 1u8
+                    [A] -> 2u8
+                    [.., A, A] -> 3u8
+                    [.., B, A] -> 4u8
+                    [.., B] -> 5u8
 
-            [
-                helper [],
-                helper [A],
-                helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
-                helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
-                helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
-            ]
-            "#,
-            RocList::from_slice(&[
-                1, //
-                2, //
-                3, 3, 3, 3, //
-                4, 4, 4, 4, //
-                5, 5, 5, 5, //
-            ]),
-            RocList<u8>
-        )
+                [
+                    helper [],
+                    helper [A],
+                    helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
+                    helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
+                    helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
+                ]
+                "#,
+                RocList::from_slice(&[
+                    1, //
+                    2, //
+                    3, 3, 3, 3, //
+                    4, 4, 4, 4, //
+                    5, 5, 5, 5, //
+                ]),
+                RocList<u8>
+            )
+        })
     }
 
     #[test]
