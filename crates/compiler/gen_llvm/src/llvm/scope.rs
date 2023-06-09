@@ -20,12 +20,8 @@ pub(crate) struct Scope<'a, 'ctx> {
 pub(crate) struct JoinPointNotFound;
 
 impl<'a, 'ctx> Scope<'a, 'ctx> {
-    pub fn get(&self, symbol: &Symbol) -> Option<&(InLayout<'a>, BasicValueEnum<'ctx>)> {
-        self.symbols.get(symbol)
-    }
-
     pub fn load_symbol(&self, symbol: &Symbol) -> BasicValueEnum<'ctx> {
-        match self.get(symbol) {
+        match self.symbols.get(symbol) {
             Some((_, ptr)) => *ptr,
 
             None => panic!(
@@ -39,7 +35,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
         &self,
         symbol: &Symbol,
     ) -> (BasicValueEnum<'ctx>, InLayout<'a>) {
-        match self.get(symbol) {
+        match self.symbols.get(symbol) {
             Some((layout, ptr)) => (*ptr, *layout),
             None => panic!("There was no entry for {:?} in scope {:?}", symbol, self),
         }

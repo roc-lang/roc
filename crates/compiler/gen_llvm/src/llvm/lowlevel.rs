@@ -2736,12 +2736,9 @@ fn load_symbol_and_lambda_set<'a, 'ctx>(
     scope: &Scope<'a, 'ctx>,
     symbol: &Symbol,
 ) -> (BasicValueEnum<'ctx>, LambdaSet<'a>) {
-    match scope
-        .get(symbol)
-        .map(|(l, v)| (layout_interner.get_repr(*l), v))
-    {
-        Some((LayoutRepr::LambdaSet(lambda_set), ptr)) => (*ptr, lambda_set),
-        Some((other, ptr)) => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    let (ptr, layout) = scope.load_symbol_and_layout(symbol);
+    match layout_interner.get_repr(layout) {
+        LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
+        other => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
     }
 }
