@@ -24,6 +24,17 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
         self.symbols.get(symbol)
     }
 
+    pub fn load_symbol(&self, symbol: &Symbol) -> BasicValueEnum<'ctx> {
+        match self.get(symbol) {
+            Some((_, ptr)) => *ptr,
+
+            None => panic!(
+                "There was no entry for {:?} {} in scope {:?}",
+                symbol, symbol, self
+            ),
+        }
+    }
+
     pub fn insert(&mut self, symbol: Symbol, value: (InLayout<'a>, BasicValueEnum<'ctx>)) {
         self.symbols.insert(symbol, value);
     }

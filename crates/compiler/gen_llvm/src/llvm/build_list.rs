@@ -11,9 +11,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, InLayout, LayoutIds, LayoutInterner, STLayoutInterner};
 
 use super::bitcode::{call_list_bitcode_fn, BitcodeReturns};
-use super::build::{
-    create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value, BuilderExt,
-};
+use super::build::{create_entry_block_alloca, load_roc_value, store_roc_value, BuilderExt};
 use super::convert::zig_list_type;
 use super::scope::Scope;
 use super::struct_::struct_from_fields;
@@ -41,7 +39,7 @@ pub(crate) fn list_symbol_to_c_abi<'a, 'ctx>(
     let list_type = zig_list_type(env);
     let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
 
-    let list = load_symbol(scope, &symbol);
+    let list = scope.load_symbol(&symbol);
     env.builder.build_store(list_alloca, list);
 
     list_alloca

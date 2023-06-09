@@ -913,7 +913,7 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
                 Vec::with_capacity_in(arguments.len(), env.arena);
 
             for symbol in arguments.iter() {
-                arg_tuples.push(load_symbol(scope, symbol));
+                arg_tuples.push(scope.load_symbol(symbol));
             }
 
             let bytes = specialization_id.to_bytes();
@@ -1053,7 +1053,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             symbol,
             ..
         } => {
-            let reset = load_symbol(scope, symbol).into_pointer_value();
+            let reset = scope.load_symbol(symbol).into_pointer_value();
             build_tag(
                 env,
                 layout_interner,
@@ -1098,7 +1098,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
         }
 
         ExprUnbox { symbol } => {
-            let value = load_symbol(scope, symbol);
+            let value = scope.load_symbol(symbol);
 
             debug_assert!(value.is_pointer_value());
 
@@ -1579,7 +1579,7 @@ fn build_tag_fields<'a, 'r, 'ctx, 'env>(
         let field_type = basic_type_from_layout(env, layout_interner, *tag_field_layout);
         field_types.push(field_type);
 
-        let raw_value: BasicValueEnum<'ctx> = load_symbol(scope, field_symbol);
+        let raw_value: BasicValueEnum<'ctx> = scope.load_symbol(field_symbol);
         let field_value = build_tag_field_value(env, layout_interner, raw_value, *tag_field_layout);
 
         field_values.push((*tag_field_layout, field_value));
@@ -2184,7 +2184,7 @@ fn list_literal<'a, 'ctx>(
                         global_elements.push(val.into_int_value());
                     }
                     ListLiteralElement::Symbol(symbol) => {
-                        let val = load_symbol(scope, symbol);
+                        let val = scope.load_symbol(symbol);
 
                         // here we'd like to furthermore check for intval.is_const().
                         // if all elements are const for LLVM, we could make the array a constant.
@@ -2273,7 +2273,7 @@ fn list_literal<'a, 'ctx>(
                 ListLiteralElement::Literal(literal) => {
                     build_exp_literal(env, layout_interner, parent, element_layout, literal)
                 }
-                ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
+                ListLiteralElement::Symbol(symbol) => scope.load_symbol(symbol),
             };
             let index_val = ctx.i64_type().const_int(index as u64, false);
             let elem_ptr = unsafe {
@@ -2957,17 +2957,6 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             let zero = env.context.i64_type().const_zero();
             zero.into()
         }
-    }
-}
-
-pub(crate) fn load_symbol<'ctx>(scope: &Scope<'_, 'ctx>, symbol: &Symbol) -> BasicValueEnum<'ctx> {
-    match scope.get(symbol) {
-        Some((_, ptr)) => *ptr,
-
-        None => panic!(
-            "There was no entry for {:?} {} in scope {:?}",
-            symbol, symbol, scope
-        ),
     }
 }
 
@@ -6063,7 +6052,7 @@ pub(crate) fn throw_exception<'a, 'ctx>(
     message: &Symbol,
     tag: CrashTag,
 ) {
-    let msg_val = load_symbol(scope, message);
+    let msg_val = scope.load_symbol(message);
 
     env.call_panic(env, msg_val, tag);
 

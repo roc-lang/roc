@@ -55,7 +55,7 @@ use crate::llvm::{
 
 use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec, scope::Scope};
 use super::{
-    build::{load_symbol, load_symbol_and_layout, Env},
+    build::{load_symbol_and_layout, Env},
     convert::zig_dec_type,
 };
 
@@ -80,7 +80,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // look at that, a usage for if let ... else
             let [$($x),+] = match &args {
                 [$($x),+] => {
-                    [ $(load_symbol(scope, $x)),+ ]
+                    [ $(scope.load_symbol($x)),+ ]
                 }
                 _ => {
                     // we could get fancier with reporting here, but this macro is used a bunch
@@ -685,7 +685,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             let (first_list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let second_list = load_symbol(scope, &args[1]);
+            let second_list = scope.load_symbol(&args[1]);
 
             let element_layout = list_element_layout!(layout_interner, list_layout);
 
@@ -701,7 +701,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.appendUnsafe : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
+            let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             list_append_unsafe(env, layout_interner, original_wrapper, elem, elem_layout)
@@ -710,7 +710,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.prepend : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
+            let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
@@ -721,7 +721,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let element_layout = list_element_layout!(layout_interner, list_layout);
-            let spare = load_symbol(scope, &args[1]);
+            let spare = scope.load_symbol(&args[1]);
 
             list_reserve(
                 env,
@@ -748,8 +748,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let index_1 = load_symbol(scope, &args[1]);
-            let index_2 = load_symbol(scope, &args[2]);
+            let index_1 = scope.load_symbol(&args[1]);
+            let index_2 = scope.load_symbol(&args[2]);
 
             let element_layout = list_element_layout!(layout_interner, list_layout);
             list_swap(
@@ -768,8 +768,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let start = load_symbol(scope, &args[1]);
-            let len = load_symbol(scope, &args[2]);
+            let start = scope.load_symbol(&args[1]);
+            let len = scope.load_symbol(&args[2]);
 
             let element_layout = list_element_layout!(layout_interner, list_layout);
             list_sublist(
@@ -789,7 +789,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let count = load_symbol(scope, &args[1]);
+            let count = scope.load_symbol(&args[1]);
 
             let element_layout = list_element_layout!(layout_interner, list_layout);
             list_drop_at(
