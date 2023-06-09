@@ -3966,3 +3966,27 @@ fn mul_checked_dec() {
         bool
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn num_min() {
+    assert_evals_to!(r#"Num.min 0 0"#, 0, i8);
+    assert_evals_to!(r#"Num.min 1 2"#, 1, i8);
+    assert_evals_to!(r#"Num.min 2 1"#, 1, i8);
+    assert_evals_to!(r#"Num.min 2 -2"#, -2, i8);
+    assert_evals_to!(r#"Num.min -2 2"#, -2, i8);
+    assert_evals_to!(r#"Num.min Num.minI8 Num.maxI8"#, i8::MIN, i8);
+    assert_evals_to!(r#"Num.min Num.maxI8 Num.minI8"#, i8::MIN, i8);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn num_max() {
+    assert_evals_to!(r#"Num.max 0 0"#, 0, i8);
+    assert_evals_to!(r#"Num.max 1 2"#, 2, i8);
+    assert_evals_to!(r#"Num.max 2 1"#, 2, i8);
+    assert_evals_to!(r#"Num.max 2 -2"#, 2, i8);
+    assert_evals_to!(r#"Num.max -2 2"#, 2, i8);
+    assert_evals_to!(r#"Num.max Num.minI8 Num.maxI8"#, i8::MAX, i8);
+    assert_evals_to!(r#"Num.max Num.maxI8 Num.minI8"#, i8::MAX, i8);
+}
