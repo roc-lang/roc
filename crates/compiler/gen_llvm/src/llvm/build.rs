@@ -2435,7 +2435,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 // access itself!
                 // scope = scope.clone();
 
-                scope.insert(*symbol, (*layout, val));
+                scope.insert(*symbol, *layout, val);
                 stack.push(*symbol);
             }
 
@@ -5233,7 +5233,7 @@ fn build_proc<'a, 'ctx>(
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
         arg_val.set_name(arg_symbol.as_str(&env.interns));
-        scope.insert(*arg_symbol, (*layout, arg_val));
+        scope.insert(*arg_symbol, *layout, arg_val);
     }
 
     let body = build_exp_stmt(
