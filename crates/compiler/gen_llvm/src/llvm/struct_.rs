@@ -11,11 +11,12 @@ use roc_mono::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner};
 use crate::llvm::build::use_roc_value;
 
 use super::{
-    build::{load_symbol_and_layout, BuilderExt, Env, Scope},
+    build::{load_symbol_and_layout, BuilderExt, Env},
     convert::basic_type_from_layout,
+    scope::Scope,
 };
 
-pub enum RocStructType<'ctx> {
+pub(crate) enum RocStructType<'ctx> {
     /// The roc struct should be passed by rvalue.
     ByValue(StructType<'ctx>),
 }
@@ -60,7 +61,7 @@ fn basic_type_from_record<'a, 'ctx>(
         .struct_type(field_types.into_bump_slice(), false)
 }
 
-pub enum RocStruct<'ctx> {
+pub(crate) enum RocStruct<'ctx> {
     /// The roc struct should be passed by rvalue.
     ByValue(StructValue<'ctx>),
 }

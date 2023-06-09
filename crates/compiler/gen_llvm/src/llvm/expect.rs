@@ -20,9 +20,9 @@ use roc_region::all::Region;
 use super::build::BuilderExt;
 use super::build::{
     add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, LlvmBackendMode,
-    Scope,
 };
 use super::convert::struct_type_from_union_layout;
+use super::scope::Scope;
 
 pub(crate) struct SharedMemoryPointer<'ctx>(PointerValue<'ctx>);
 

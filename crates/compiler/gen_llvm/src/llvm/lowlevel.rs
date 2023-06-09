@@ -53,9 +53,9 @@ use crate::llvm::{
     refcounting::PointerToRefcount,
 };
 
-use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec};
+use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec, scope::Scope};
 use super::{
-    build::{load_symbol, load_symbol_and_layout, Env, Scope},
+    build::{load_symbol, load_symbol_and_layout, Env},
     convert::zig_dec_type,
 };
 

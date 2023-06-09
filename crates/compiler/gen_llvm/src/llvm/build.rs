@@ -11,7 +11,6 @@ use crate::llvm::struct_::{self, struct_from_fields, RocStruct};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::attributes::{Attribute, AttributeLoc};
-use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::debug_info::{
@@ -25,8 +24,8 @@ use inkwell::types::{
 };
 use inkwell::values::BasicValueEnum::{self};
 use inkwell::values::{
-    BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PhiValue,
-    PointerValue, StructValue,
+    BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PointerValue,
+    StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -34,13 +33,13 @@ use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
-use roc_collections::all::{ImMap, MutMap, MutSet};
+use roc_collections::all::{MutMap, MutSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet, JoinPointId,
+    BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet,
     ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
@@ -59,6 +58,7 @@ use super::intrinsics::{
     LLVM_STACK_SAVE,
 };
 use super::lowlevel::run_higher_order_low_level;
+use super::scope::Scope;
 
 pub(crate) trait BuilderExt<'ctx> {
     fn new_build_struct_gep(
@@ -159,39 +159,6 @@ macro_rules! debug_info_init {
         );
         $env.builder.set_current_debug_location(loc);
     }};
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct Scope<'a, 'ctx> {
-    symbols: ImMap<Symbol, (InLayout<'a>, BasicValueEnum<'ctx>)>,
-    pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
-    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, std::vec::Vec<PhiValue<'ctx>>)>,
-}
-
-impl<'a, 'ctx> Scope<'a, 'ctx> {
-    pub(crate) fn get(&self, symbol: &Symbol) -> Option<&(InLayout<'a>, BasicValueEnum<'ctx>)> {
-        self.symbols.get(symbol)
-    }
-    pub(crate) fn insert(&mut self, symbol: Symbol, value: (InLayout<'a>, BasicValueEnum<'ctx>)) {
-        self.symbols.insert(symbol, value);
-    }
-    pub(crate) fn insert_top_level_thunk(
-        &mut self,
-        symbol: Symbol,
-        layout: ProcLayout<'a>,
-        function_value: FunctionValue<'ctx>,
-    ) {
-        self.top_level_thunks
-            .insert(symbol, (layout, function_value));
-    }
-    fn remove(&mut self, symbol: &Symbol) {
-        self.symbols.remove(symbol);
-    }
-
-    pub fn retain_top_level_thunks_for_module(&mut self, module_id: ModuleId) {
-        self.top_level_thunks
-            .retain(|s, _| s.module_id() == module_id);
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -919,7 +886,7 @@ fn small_str_ptr_width_4<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> St
     )
 }
 
-pub fn build_exp_call<'a, 'ctx>(
+pub(crate) fn build_exp_call<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1043,7 +1010,7 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
     }
 }
 
-pub fn build_exp_expr<'a, 'ctx>(
+pub(crate) fn build_exp_expr<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
@@ -2419,7 +2386,7 @@ pub fn store_roc_value<'a, 'ctx>(
     }
 }
 
-pub fn build_exp_stmt<'a, 'ctx>(
+pub(crate) fn build_exp_stmt<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
@@ -2636,7 +2603,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
             }
 
             // store this join point
-            scope.join_points.insert(*id, (cont_block, joinpoint_args));
+            scope.insert_join_point(*id, cont_block, joinpoint_args);
 
             // construct the blocks that may jump to this join point
             build_exp_stmt(
@@ -2655,11 +2622,9 @@ pub fn build_exp_stmt<'a, 'ctx>(
             builder.position_at_end(cont_block);
 
             // bind the values
-            let ref_join_points = &scope.join_points.get(id).unwrap().1;
-            for (phi_value, param) in ref_join_points.iter().zip(parameters.iter()) {
-                let value = phi_value.as_basic_value();
-                scope.symbols.insert(param.symbol, (param.layout, value));
-            }
+            scope
+                .bind_parameters_to_join_point(*id, parameters.iter())
+                .expect("join point not found, but it was inserted above");
 
             // put the continuation in
             let result = build_exp_stmt(
@@ -2673,7 +2638,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
             );
 
             // remove this join point again
-            scope.join_points.remove(id);
+            scope.remove_join_point(*id);
 
             cont_block.move_after(phi_block).unwrap();
 
@@ -2683,7 +2648,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
         Jump(join_point, arguments) => {
             let builder = env.builder;
             let context = env.context;
-            let (cont_block, argument_phi_values) = scope.join_points.get(join_point).unwrap();
+            let (cont_block, argument_phi_values) = scope.get_join_point(*join_point).unwrap();
 
             let current_block = builder.get_insert_block().unwrap();
 
@@ -2995,7 +2960,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
     }
 }
 
-pub fn load_symbol<'ctx>(scope: &Scope<'_, 'ctx>, symbol: &Symbol) -> BasicValueEnum<'ctx> {
+pub(crate) fn load_symbol<'ctx>(scope: &Scope<'_, 'ctx>, symbol: &Symbol) -> BasicValueEnum<'ctx> {
     match scope.get(symbol) {
         Some((_, ptr)) => *ptr,
 
@@ -4556,7 +4521,7 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     wrapper_function
 }
 
-pub fn build_proc_headers<'a, 'r, 'ctx>(
+pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
     env: &'r Env<'a, 'ctx, '_>,
     layout_interner: &'r mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,

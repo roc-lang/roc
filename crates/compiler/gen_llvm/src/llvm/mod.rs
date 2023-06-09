@@ -10,4 +10,5 @@ mod intrinsics;
 mod lowlevel;
 pub mod refcounting;
 
+mod scope;
 mod struct_;

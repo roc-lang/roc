@@ -1,7 +1,5 @@
 use crate::llvm::bitcode::build_dec_wrapper;
-use crate::llvm::build::{
-    allocate_with_refcount_help, cast_basic_basic, Env, RocFunctionCall, Scope,
-};
+use crate::llvm::build::{allocate_with_refcount_help, cast_basic_basic, Env, RocFunctionCall};
 use crate::llvm::convert::basic_type_from_layout;
 use inkwell::builder::Builder;
 use inkwell::types::{BasicType, PointerType};
@@ -17,6 +15,7 @@ use super::build::{
     create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value, BuilderExt,
 };
 use super::convert::zig_list_type;
+use super::scope::Scope;
 use super::struct_::struct_from_fields;
 
 fn call_list_bitcode_fn_1<'ctx>(
