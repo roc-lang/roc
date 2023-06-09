@@ -939,12 +939,12 @@ fn specialize_unique_newtype_records() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
-                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} Json.json) is
-                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} Json.json) is
+                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} TotallyNotJson.json) is
+                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} TotallyNotJson.json) is
                         Ok t -> "\(s)\(t)"
                         _ -> "<bad>"
                     _ -> "<bad>"
