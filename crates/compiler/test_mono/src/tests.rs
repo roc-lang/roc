@@ -2220,7 +2220,7 @@ fn issue_4705() {
     )
 }
 
-#[mono_test(mode = "test")]
+#[mono_test(mode = "test", large_stack = "true")]
 fn issue_4749() {
     indoc!(
         r###"
@@ -2460,7 +2460,7 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     )
 }
 
-#[mono_test(mode = "test")]
+#[mono_test(mode = "test", large_stack = "true")]
 fn issue_4772_weakened_monomorphic_destructure() {
     indoc!(
         r###"
@@ -2956,7 +2956,7 @@ fn binary_tree_fbip() {
     )
 }
 
-#[mono_test]
+#[mono_test(large_stack = "true")]
 fn rb_tree_fbip() {
     indoc!(
         r#"
