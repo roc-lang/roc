@@ -1,41 +1,6 @@
-## JSON is a data format that is easy for humans to read and write. It is
-## commonly used to exchange data between two systems such as a server and a
-## client (e.g. web browser).
-##
-## This module implements functionality to serialize and de-serialize Roc types
-## to and from JSON data. Using the `Encode` and `Decode` builtins this process
-## can be achieved without the need to write custom encoder and decoder functions
-## to parse UTF-8 strings.
-##
-## Here is a basic example which shows how to parse a JSON record into a Roc
-## type named `Language` which includes a `name` field. The JSON string is
-## decoded and then the field is encoded back into a UTF-8 string.
-##
-## ```
-## Language : {
-##     name : Str,
-## }
-##
-## jsonStr = Str.toUtf8 "{\"name\":\"Röc Lang\"}"
-##
-## result : Result Language _
-## result =
-##     jsonStr
-##     |> Decode.fromBytes Json.json # returns `Ok {name : "Röc Lang"}`
-##
-## name =
-##     decodedValue <- Result.map result
-##
-##     Encode.toBytes decodedValue.name Json.json
-##
-## expect name == Ok (Str.toUtf8 "\"Röc Lang\"")
-## ```
-##
-## **Note:** This module is likely to be moved out of the builtins in future.
-## It is currently located here to facilitate development of the Abilities
-## language feature and testing. You are welcome to use this module, just note
-## that it will be moved into a package in a future update.
-interface Json
+## THIS MODULE IS DEPRECATED AND CURRENTLY IN THE PROCESS OF BEING REMOVED
+## FROM STD LIBRARY
+interface TotallyNotJson
     exposes [
         Json,
         json,

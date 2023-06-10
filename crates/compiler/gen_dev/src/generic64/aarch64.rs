@@ -459,11 +459,6 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
-    fn base_pointer() -> AArch64GeneralReg {
-        AArch64GeneralReg::FP
-    }
-
-    #[inline(always)]
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
         cmp_reg64_imm12(buf, src, 0);
         cneg_reg64_reg64_cond(buf, dst, src, ConditionCode::MI);
@@ -668,12 +663,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn jne_reg64_imm64_imm32(
-        buf: &mut Vec<'_, u8>,
+    fn jne_reg64_imm64_imm32<'a, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, '_, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         reg: AArch64GeneralReg,
         imm: u64,
         offset: i32,
-    ) -> usize {
+    ) -> usize
+    where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
         if imm < (1 << 12) {
             cmp_reg64_imm12(buf, reg, imm as u16);
         } else {
@@ -788,6 +788,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src: AArch64GeneralReg,
     ) {
         todo!("move with sign extension");
+    }
+
+    #[inline(always)]
+    fn movzx_reg_reg(
+        _buf: &mut Vec<'_, u8>,
+        _input_width: RegisterWidth,
+        _dst: AArch64GeneralReg,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!("move with zero extension");
     }
 
     #[inline(always)]
@@ -1078,6 +1088,28 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         src2: AArch64GeneralReg,
     ) {
         cmp_reg64_reg64(buf, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::NE);
+    }
+
+    fn eq_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
+        width: FloatWidth,
+    ) {
+        fcmp_freg_freg(buf, width, src1, src2);
+        cset_reg64_cond(buf, dst, ConditionCode::EQ);
+    }
+
+    fn neq_freg_freg_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
+        width: FloatWidth,
+    ) {
+        fcmp_freg_freg(buf, width, src1, src2);
         cset_reg64_cond(buf, dst, ConditionCode::NE);
     }
 

@@ -109,6 +109,7 @@ enum Test<'a> {
         arguments: Vec<(Pattern<'a>, InLayout<'a>)>,
     },
     IsInt([u8; 16], IntWidth),
+    // stores the f64 bits; u64 so that this type can impl Hash
     IsFloat(u64, FloatWidth),
     IsDecimal([u8; 16]),
     IsStr(Box<str>),
@@ -131,7 +132,7 @@ impl<'a> Test<'a> {
                 // llvm does not like switching on 128-bit values
                 !matches!(int_width, IntWidth::U128 | IntWidth::I128)
             }
-            Test::IsFloat(_, _) => true,
+            Test::IsFloat(_, _) => false,
             Test::IsDecimal(_) => false,
             Test::IsStr(_) => false,
             Test::IsBit(_) => true,
@@ -2251,7 +2252,7 @@ fn decide_to_branching<'a>(
 
                 let tag = match test {
                     Test::IsInt(v, _) => i128::from_ne_bytes(v) as u64,
-                    Test::IsFloat(v, _) => v,
+                    Test::IsFloat(_, _) => unreachable!("floats cannot be switched on"),
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
                     Test::IsCtor { tag_id, .. } => tag_id as u64,

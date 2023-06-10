@@ -10997,10 +10997,10 @@ In roc, functions are always written as a lambda, like{}
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
                 when decoded is
                     Ok rcd -> rcd.first rcd.second
                     _ -> "something went wrong"

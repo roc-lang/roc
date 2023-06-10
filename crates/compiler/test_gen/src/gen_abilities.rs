@@ -355,7 +355,7 @@ fn encode_use_stdlib() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             HelloWorld := {} implements [Encoding {toEncoder}]
@@ -365,7 +365,7 @@ fn encode_use_stdlib() {
                         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.json)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -383,14 +383,14 @@ fn encode_use_stdlib_without_wrapping_custom() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             HelloWorld := {} implements [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} -> Encode.string "Hello, World!\n"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.json)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -409,13 +409,13 @@ fn encode_derive_to_encoder_for_opaque() {
         indoc!(
             r#"
             app "test"
-                imports [Json]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             HelloWorld := { a: Str } implements [Encoding]
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) Json.json)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -433,7 +433,7 @@ fn to_encoder_encode_custom_has_capture() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             HelloWorld := Str implements [Encoding {toEncoder}]
@@ -443,7 +443,7 @@ fn to_encoder_encode_custom_has_capture() {
                         |> Encode.appendWith (Encode.string s1) fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.json)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -473,10 +473,10 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Encode, Json] provides [main] to "./platform"
+                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes "foo" Json.json) is
+                    when Str.fromUtf8 (Encode.toBytes "foo" TotallyNotJson.json) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -492,10 +492,10 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Encode, Json] provides [main] to "./platform"
+                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] Json.json) is
+                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] TotallyNotJson.json) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -511,10 +511,10 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Encode, Json] provides [main] to "./platform"
+                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes Bool.false Json.json) is
+                    when Str.fromUtf8 (Encode.toBytes Bool.false TotallyNotJson.json) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -532,10 +532,10 @@ mod encode_immediate {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app "test" imports [Encode, Json] provides [main] to "./platform"
+                        app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
 
                         main =
-                            when Str.fromUtf8 (Encode.toBytes {}{} Json.json) is
+                            when Str.fromUtf8 (Encode.toBytes {}{} TotallyNotJson.json) is
                                 Ok s -> s
                                 _ -> "<bad>"
                         "#
@@ -572,11 +572,11 @@ fn encode_derived_record_one_field_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.json)
+                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -595,12 +595,12 @@ fn encode_derived_record_two_fields_strings() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 rcd = {a: "foo", b: "bar"}
-                result = Str.fromUtf8 (Encode.toBytes rcd Json.json)
+                result = Str.fromUtf8 (Encode.toBytes rcd TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -619,12 +619,12 @@ fn encode_derived_nested_record_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 rcd = {a: {b: "bar"}}
-                encoded = Encode.toBytes rcd Json.json
+                encoded = Encode.toBytes rcd TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -643,12 +643,12 @@ fn encode_derived_tag_one_payload_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 x = A "foo"
-                result = Str.fromUtf8 (Encode.toBytes x Json.json)
+                result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -666,12 +666,12 @@ fn encode_derived_tag_two_payloads_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 x = A "foo" "bar"
-                result = Str.fromUtf8 (Encode.toBytes x Json.json)
+                result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -689,12 +689,12 @@ fn encode_derived_nested_tag_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 x = A (B "foo" "bar")
-                encoded = Encode.toBytes x Json.json
+                encoded = Encode.toBytes x TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -714,12 +714,12 @@ fn encode_derived_nested_record_tag_record() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 x = {a: (B ({c: "foo"}))}
-                encoded = Encode.toBytes x Json.json
+                encoded = Encode.toBytes x TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -738,12 +738,12 @@ fn encode_derived_list_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 lst = ["foo", "bar", "baz"]
-                encoded = Encode.toBytes lst Json.json
+                encoded = Encode.toBytes lst TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -763,12 +763,12 @@ fn encode_derived_list_of_records() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 lst = [{a: "foo"}, {a: "bar"}, {a: "baz"}]
-                encoded = Encode.toBytes lst Json.json
+                encoded = Encode.toBytes lst TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -787,12 +787,12 @@ fn encode_derived_list_of_lists_of_strings() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 lst = [["a", "b"], ["c", "d", "e"], ["f"]]
-                encoded = Encode.toBytes lst Json.json
+                encoded = Encode.toBytes lst TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -812,14 +812,14 @@ fn encode_derived_record_with_many_types() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 fresh : [Fresh Str, Rotten Str]
                 fresh = Fresh "tomatoes"
                 rcd = {actors: ["Idris Elba", "Mila Kunis"], year: 2004u16, rating: {average: 7u8, min: 1u8, max: 10u8, sentiment: fresh}}
-                result = Str.fromUtf8 (Encode.toBytes rcd Json.json)
+                result = Str.fromUtf8 (Encode.toBytes rcd TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -839,12 +839,12 @@ fn encode_derived_tuple_two_fields() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 tup = ("foo", 10u8)
-                result = Str.fromUtf8 (Encode.toBytes tup Json.json)
+                result = Str.fromUtf8 (Encode.toBytes tup TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -862,12 +862,12 @@ fn encode_derived_tuple_of_tuples() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 tup = ( ("foo", 10u8), (23u8, "bar", 15u8) )
-                result = Str.fromUtf8 (Encode.toBytes tup Json.json)
+                result = Str.fromUtf8 (Encode.toBytes tup TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -886,7 +886,7 @@ fn encode_derived_generic_record_with_different_field_types() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             Q a b := {a: a, b: b} implements [Encoding]
@@ -894,7 +894,7 @@ fn encode_derived_generic_record_with_different_field_types() {
             q = @Q {a: 10u32, b: "fieldb"}
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes q Json.json)
+                result = Str.fromUtf8 (Encode.toBytes q TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -912,7 +912,7 @@ fn encode_derived_generic_tag_with_different_field_types() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             Q a b := [A a, B b] implements [Encoding]
@@ -921,7 +921,7 @@ fn encode_derived_generic_tag_with_different_field_types() {
             q = @Q (B 67)
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes q Json.json)
+                result = Str.fromUtf8 (Encode.toBytes q TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -939,12 +939,12 @@ fn specialize_unique_newtype_records() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
-                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} Json.json) is
-                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} Json.json) is
+                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} TotallyNotJson.json) is
+                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} TotallyNotJson.json) is
                         Ok t -> "\(s)\(t)"
                         _ -> "<bad>"
                     _ -> "<bad>"
@@ -962,7 +962,7 @@ fn decode_use_stdlib() {
         indoc!(
             r#"
             app "test"
-                imports [Json]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             MyNum := U8 implements [Decoding {decoder: myDecoder}]
@@ -976,7 +976,7 @@ fn decode_use_stdlib() {
                                 Err e -> {result: Err e, rest}
 
             main =
-                when Decode.fromBytes [49, 53] Json.json is
+                when Decode.fromBytes [49, 53] TotallyNotJson.json is
                     Ok (@MyNum n) -> n
                     _ -> 101
             "#
@@ -996,13 +996,13 @@ fn decode_derive_decoder_for_opaque() {
         indoc!(
             r#"
             app "test"
-                imports [Json]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             HelloWorld := { a: Str } implements [Decoding]
 
             main =
-                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes TotallyNotJson.json is
                     Ok (@HelloWorld {a}) -> a
                     _ -> "FAIL"
             "#
@@ -1019,7 +1019,7 @@ fn decode_use_stdlib_json_list() {
         indoc!(
             r#"
             app "test"
-                imports [Json]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
             MyNumList := List U8 implements [Decoding {decoder: myDecoder}]
@@ -1033,7 +1033,7 @@ fn decode_use_stdlib_json_list() {
                                 Err e -> {result: Err e, rest}
 
             main =
-                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes TotallyNotJson.json is
                     Ok (@MyNumList lst) -> lst
                     _ -> []
             "#
@@ -1062,10 +1062,10 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Json] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Str.toUtf8 "\"foo\"" |> Decode.fromBytes Json.json is
+                    when Str.toUtf8 "\"foo\"" |> Decode.fromBytes TotallyNotJson.json is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -1081,13 +1081,13 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Json] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
                     input = Str.toUtf8 "[1,2,3]"
                     expected = [1,2,3]
 
-                    actual = Decode.fromBytes input Json.json |> Result.withDefault []
+                    actual = Decode.fromBytes input TotallyNotJson.json |> Result.withDefault []
 
                     actual == expected
                 "#
@@ -1103,10 +1103,10 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Json] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Str.toUtf8 "false" |> Decode.fromBytes Json.json is
+                    when Str.toUtf8 "false" |> Decode.fromBytes TotallyNotJson.json is
                         Ok s -> s
                         _ -> Bool.true
                 "#
@@ -1124,10 +1124,10 @@ mod decode_immediate {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app "test" imports [Json] provides [main] to "./platform"
+                        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                         main =
-                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes Json.json is
+                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes TotallyNotJson.json is
                                 Ok n -> n
                                 _ -> 101{}
                         "#
@@ -1162,10 +1162,10 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Json] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes Json.json is
+                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes TotallyNotJson.json is
                         Ok n -> n
                         _ -> 101dec
                 "#
@@ -1182,10 +1182,10 @@ fn decode_list_of_strings() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes TotallyNotJson.json is
                     Ok l -> Str.joinWith l ","
                     _ -> "<bad>"
             "#
@@ -1201,10 +1201,10 @@ fn encode_then_decode_list_of_strings() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Encode.toBytes ["a", "b", "c"] Json.json |> Decode.fromBytes Json.json is
+                when Encode.toBytes ["a", "b", "c"] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
                     Ok l -> Str.joinWith l ","
                     _ -> "something went wrong"
             "#
@@ -1221,10 +1221,10 @@ fn encode_then_decode_list_of_lists_of_strings() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] Json.json |> Decode.fromBytes Json.json is
+                when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
                     Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
                     _ -> "something went wrong"
             "#
@@ -1243,10 +1243,10 @@ fn decode_record_two_fields() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {first: "ab", second: "cd"} -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1265,10 +1265,10 @@ fn decode_record_two_fields_string_and_int() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {first: "ab", second: 10u8} -> "ab10"
                     _ -> "something went wrong"
             "#
@@ -1287,10 +1287,10 @@ fn decode_record_two_fields_string_and_string_infer() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {first, second} -> Str.concat first second
                     _ -> "something went wrong"
             "#
@@ -1309,10 +1309,10 @@ fn decode_record_two_fields_string_and_string_infer_local_var() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
                 when decoded is
                     Ok rcd -> Str.concat rcd.first rcd.second
                     _ -> "something went wrong"
@@ -1332,10 +1332,10 @@ fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.json
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
                 when decoded is
                     Ok {first, second} -> Str.concat first second
                     _ -> "something went wrong"
@@ -1353,10 +1353,10 @@ fn decode_empty_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{}" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "{}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {} -> "empty"
                     _ -> "something went wrong"
             "#
@@ -1376,10 +1376,10 @@ fn decode_record_of_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {outer: {inner: "a"}, other: {one: "b", two: 10u8}} -> "ab10"
                     _ -> "something went wrong"
             "#
@@ -1398,10 +1398,10 @@ fn decode_tuple_two_elements() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "[\"ab\",10]" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "[\"ab\",10]" |> Decode.fromBytes TotallyNotJson.json is
                     Ok ("ab", 10u8) -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1420,10 +1420,10 @@ fn decode_tuple_of_tuples() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "[[\"ab\",10],[\"cd\",25]]" |> Decode.fromBytes Json.json is
+                when Str.toUtf8 "[[\"ab\",10],[\"cd\",25]]" |> Decode.fromBytes TotallyNotJson.json is
                     Ok ( ("ab", 10u8), ("cd", 25u8) ) -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -2139,11 +2139,11 @@ fn issue_4772_weakened_monomorphic_destructure() {
         indoc!(
             r###"
             app "test"
-                    imports [Json]
+                    imports [TotallyNotJson]
                     provides [main] to "./platform"
 
             getNumber =
-                { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") Json.json
+                { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") TotallyNotJson.json
                         
                 when result is 
                     Ok val -> 
