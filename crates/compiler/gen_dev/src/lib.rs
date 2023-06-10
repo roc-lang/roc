@@ -692,7 +692,7 @@ trait Backend<'a> {
                             // implementation in `build_builtin` inlines some of the symbols.
                             return self.build_builtin(
                                 sym,
-                                func_sym.name(),
+                                *func_sym,
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
@@ -1829,12 +1829,12 @@ trait Backend<'a> {
     fn build_builtin(
         &mut self,
         sym: &Symbol,
-        func_name: Symbol,
+        func_name: LambdaName,
         args: &'a [Symbol],
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
-        match func_name {
+        match func_name.name() {
             Symbol::NUM_IS_ZERO => {
                 debug_assert_eq!(
                     1,
@@ -1858,7 +1858,7 @@ trait Backend<'a> {
             Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
                 // TODO: This is probably simple enough to be worth inlining.
                 let fn_name = self.lambda_name_to_string(
-                    LambdaName::no_niche(func_name),
+                    func_name,
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
@@ -1890,7 +1890,7 @@ trait Backend<'a> {
             Symbol::STR_IS_VALID_SCALAR => {
                 // just call the function
                 let fn_name = self.lambda_name_to_string(
-                    LambdaName::no_niche(func_name),
+                    func_name,
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
@@ -1902,7 +1902,7 @@ trait Backend<'a> {
             _other => {
                 // just call the function
                 let fn_name = self.lambda_name_to_string(
-                    LambdaName::no_niche(func_name),
+                    func_name,
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
