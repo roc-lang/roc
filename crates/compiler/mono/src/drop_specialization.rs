@@ -26,7 +26,7 @@ use crate::layout::{
 
 use bumpalo::Bump;
 
-use roc_collections::{MutMap, MutSet};
+use roc_collections::MutMap;
 
 /**
 Try to find increments of symbols followed by decrements of the symbol they were indexed out of (their parent).
@@ -384,23 +384,17 @@ fn specialize_drops_stmt<'a, 'i>(
                     for (joinpoint, current_incremented_symbols) in
                         environment.jump_incremented_symbols.iter_mut()
                     {
-                        if let Some(branch_incremented_symbols) =
-                            branch_env.jump_incremented_symbols.get(joinpoint)
-                        {
-                            let mut to_remove = MutSet::default();
-                            for (key, join_count) in current_incremented_symbols.map.iter_mut() {
-                                match branch_incremented_symbols.map.get(key) {
-                                    Some(count) => {
-                                        *join_count = std::cmp::min(*join_count, *count);
-                                    }
-                                    None => {
-                                        to_remove.insert(*key);
-                                    }
+                        let opt_symbols = branch_env.jump_incremented_symbols.get(joinpoint);
+                        if let Some(branch_incremented_symbols) = opt_symbols {
+                            current_incremented_symbols.map.retain(|key, join_count| {
+                                let opt_count = branch_incremented_symbols.map.get(key);
+                                if let Some(count) = opt_count {
+                                    *join_count = std::cmp::min(*join_count, *count);
                                 }
-                            }
-                            for key in to_remove.iter() {
-                                current_incremented_symbols.map.remove(key);
-                            }
+
+                                // retain only the Some cases
+                                opt_count.is_some()
+                            });
                         }
                     }
 
