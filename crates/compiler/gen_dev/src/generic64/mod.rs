@@ -1263,6 +1263,12 @@ impl<
     }
 
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
+        // for the time being, `num_mul` is implemented as wrapping multiplication. In roc, the normal
+        // `mul` should panic on overflow, but we just don't do that yet
+        self.build_num_mul_wrap(dst, src1, src2, layout)
+    }
+
+    fn build_num_mul_wrap(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         use Builtin::Int;
 
         match self.layout_interner.get_repr(*layout) {
@@ -1324,7 +1330,7 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => todo!("NumMul: layout, {:?}", x),
+            x => todo!("NumMulWrap: layout, {:?}", x),
         }
     }
 

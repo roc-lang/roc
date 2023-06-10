@@ -960,7 +960,7 @@ trait Backend<'a> {
                 ret_layout,
             ),
             LowLevel::NumMul => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
-            LowLevel::NumMulWrap => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
+            LowLevel::NumMulWrap => self.build_num_mul_wrap(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
                 debug_assert_eq!(
                     2,
@@ -1963,6 +1963,9 @@ trait Backend<'a> {
 
     /// build_num_mul stores `src1 * src2` into dst.
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    /// build_num_mul_wrap stores `src1 * src2` into dst.
+    fn build_num_mul_wrap(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_mul stores `src1 / src2` into dst.
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
