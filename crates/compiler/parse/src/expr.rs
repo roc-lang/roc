@@ -617,14 +617,14 @@ pub fn parse_single_def<'a>(
             };
 
             if let Some((name, name_region, args)) = opt_tag_and_args {
-                if let Ok((_, loc_has, state)) =
+                if let Ok((_, loc_implements, state)) =
                     loc_implements_parser().parse(arena, state.clone(), min_indent)
                 {
                     let (_, (type_def, def_region), state) = finish_parsing_ability_def_help(
                         min_indent,
                         Loc::at(name_region, name),
                         args,
-                        loc_has,
+                        loc_implements,
                         arena,
                         state,
                     )?;
@@ -1370,7 +1370,7 @@ fn finish_parsing_ability_def_help<'a>(
     start_column: u32,
     name: Loc<&'a str>,
     args: &'a [Loc<Pattern<'a>>],
-    loc_has: Loc<Implements<'a>>,
+    loc_implements: Loc<Implements<'a>>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, (TypeDef<'a>, Region), EExpr<'a>> {
@@ -1408,7 +1408,7 @@ fn finish_parsing_ability_def_help<'a>(
     let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
     let type_def = TypeDef::Ability {
         header: TypeHeader { name, vars: args },
-        loc_implements: loc_has,
+        loc_implements,
         members: demands.into_bump_slice(),
     };
 

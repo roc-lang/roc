@@ -1681,11 +1681,11 @@ impl<'a> Malformed for TypeDef<'a> {
             } => header.is_malformed() || typ.is_malformed() || derived.is_malformed(),
             TypeDef::Ability {
                 header,
-                loc_implements: loc_has,
+                loc_implements,
                 members,
             } => {
                 header.is_malformed()
-                    || loc_has.is_malformed()
+                    || loc_implements.is_malformed()
                     || members.iter().any(|member| member.is_malformed())
             }
         }
