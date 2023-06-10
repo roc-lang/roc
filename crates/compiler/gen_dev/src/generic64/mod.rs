@@ -1268,7 +1268,13 @@ impl<
         self.build_num_mul_wrap(dst, src1, src2, layout)
     }
 
-    fn build_num_mul_wrap(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
+    fn build_num_mul_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    ) {
         use Builtin::Int;
 
         match self.layout_interner.get_repr(*layout) {
