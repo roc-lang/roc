@@ -1304,9 +1304,17 @@ impl<'a> Niche<'a> {
     pub fn dbg_deep<'r, I: LayoutInterner<'a>>(
         &'r self,
         interner: &'r I,
-    ) -> crate::layout::intern::dbg::DbgFields<'a, 'r, I> {
+    ) -> crate::layout::intern::dbg_deep::DbgFields<'a, 'r, I> {
         let NichePriv::Captures(caps) = &self.0;
         interner.dbg_deep_iter(caps)
+    }
+
+    pub fn dbg_stable<'r, I: LayoutInterner<'a>>(
+        &'r self,
+        interner: &'r I,
+    ) -> crate::layout::intern::dbg_stable::DbgFields<'a, 'r, I> {
+        let NichePriv::Captures(caps) = &self.0;
+        interner.dbg_stable_iter(caps)
     }
 }
 
