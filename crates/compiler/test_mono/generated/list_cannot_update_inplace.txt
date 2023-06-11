@@ -22,12 +22,12 @@ procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
     ret List.528;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.281 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.287 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.287;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.282 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.282;
+    let Num.288 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.288;
 
 procedure Test.1 ():
     let Test.8 : List I64 = Array [1i64, 2i64, 3i64];

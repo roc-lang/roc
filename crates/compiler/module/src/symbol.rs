@@ -1262,6 +1262,8 @@ define_builtins! {
         156 NUM_IS_NAN: "isNaN"
         157 NUM_IS_INFINITE: "isInfinite"
         158 NUM_IS_FINITE: "isFinite"
+        159 NUM_MIN: "min"
+        160 NUM_MAX: "max"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias

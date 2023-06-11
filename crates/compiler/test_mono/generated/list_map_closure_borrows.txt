@@ -27,8 +27,8 @@ procedure List.66 (#Attr.2, #Attr.3):
     ret List.526;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.281 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.287 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.287;
 
 procedure Str.16 (#Attr.2, #Attr.3):
     let Str.298 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;

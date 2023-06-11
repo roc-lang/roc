@@ -82,16 +82,16 @@ procedure List.93 (List.436, List.437, List.438):
     ret List.534;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.281 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.287 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.287;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.284 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.290 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Test.1 (Test.77):
     joinpoint Test.26 Test.6:

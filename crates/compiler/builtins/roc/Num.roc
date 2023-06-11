@@ -39,6 +39,8 @@ interface Num
         add,
         sub,
         mul,
+        min,
+        max,
         isLt,
         isLte,
         isGt,
@@ -776,6 +778,34 @@ sub : Num a, Num a -> Num a
 ## *overflow*. For [F64] and [F32], overflow results in an answer of either
 ## ∞ or -∞. For all other number types, overflow results in a panic.
 mul : Num a, Num a -> Num a
+
+## Obtains the smaller between two numbers of the same type.
+##
+## ```
+## Num.min 100 0
+##
+## Num.min 3.0 -3.0
+## ```
+min : Num a, Num a -> Num a
+min = \a, b ->
+    if a < b then
+        a
+    else
+        b
+
+## Obtains the greater between two numbers of the same type.
+##
+## ```
+## Num.max 100 0
+##
+## Num.max 3.0 -3.0
+## ```
+max : Num a, Num a -> Num a
+max = \a, b ->
+    if a > b then
+        a
+    else
+        b
 
 sin : Frac a -> Frac a
 cos : Frac a -> Frac a

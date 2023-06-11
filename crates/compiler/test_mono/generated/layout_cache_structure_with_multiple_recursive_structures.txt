@@ -37,12 +37,12 @@ procedure List.93 (List.436, List.437, List.438):
     ret List.524;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.281 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.287 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.287;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.282 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.282;
+    let Num.288 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.288;
 
 procedure Test.7 (Test.11, Test.12):
     let Test.17 : {[<rnu>C *self, <null>], [<rnu><null>, C {[<rnu>C *self, <null>], *self}]} = Struct {Test.12, Test.11};

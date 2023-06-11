@@ -1,10 +1,10 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.281 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.287 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.287;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.282 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.282;
+    let Num.288 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.288;
 
 procedure Test.1 (Test.15, Test.16):
     joinpoint Test.7 Test.2 Test.3:
