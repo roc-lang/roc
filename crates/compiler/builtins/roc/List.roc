@@ -222,6 +222,13 @@ isEmpty = \list ->
 # but will cause a reference count increment on the value it got out of the list
 getUnsafe : List a, Nat -> a
 
+## Returns an element from a list at the given index.
+##
+## Returns `Err OutOfBounds` if the given index exceeds the List's length
+## ```
+## expect List.get [100, 200, 300] 1 == Ok 200
+## expect List.get [100, 200, 300] 5 == Err OutOfBounds
+## ```
 get : List a, Nat -> Result a [OutOfBounds]
 get = \list, index ->
     if index < List.len list then
