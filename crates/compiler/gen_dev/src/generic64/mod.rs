@@ -391,10 +391,19 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     /// Sign extends the data at `offset` with `size` as it copies it to `dst`
     /// size must be less than or equal to 8.
-    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
-    /// Zero extends the data at `offset` with `size` as it copies it to `dst`
-    /// size must be less than or equal to 8.
-    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
+    fn movsx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+    );
+
+    fn movzx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+    );
 
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
@@ -4075,10 +4084,12 @@ impl<
                     }
                     IntWidth::I16 | IntWidth::U16 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                        ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
                         ASM::mov_reg16_mem16_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                     IntWidth::I8 | IntWidth::U8 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                        ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
                         ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                 },
@@ -4093,6 +4104,8 @@ impl<
                 Builtin::Bool => {
                     // the same as an 8-bit integer
                     let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+
+                    ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
                     ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, offset);
                 }
                 Builtin::Decimal => {
