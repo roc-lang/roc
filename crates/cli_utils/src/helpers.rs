@@ -35,7 +35,7 @@ where
 // Since glue is always compiling the same plugin, it can not be run in parallel.
 // That would lead to a race condition in writing the output shared library.
 // Thus, all calls to glue in a test are made sequential.
-// TODO: In the future, look into compiling the shared libary once and then caching it.
+// TODO: In the future, look into compiling the shared library once and then caching it.
 static GLUE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn run_glue<I, S>(args: I) -> Out
