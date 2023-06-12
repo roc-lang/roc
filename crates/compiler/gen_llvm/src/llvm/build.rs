@@ -3759,7 +3759,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
         builder.position_at_end(last_block);
 
         let wrapper_result = layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(
-            env.arena.alloc([Layout::U64, return_layout]),
+            env.arena.alloc([Layout::U64, Layout::STR, return_layout]),
         ));
 
         call_roc_function(
