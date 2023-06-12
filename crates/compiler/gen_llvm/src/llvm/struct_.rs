@@ -8,7 +8,7 @@ use inkwell::{
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner};
 
-use crate::llvm::build::use_roc_value;
+use crate::llvm::build::{load_roc_value, use_roc_value};
 
 use super::{
     build::{BuilderExt, Env},
@@ -134,6 +134,9 @@ impl<'ctx> RocStruct<'ctx> {
             (Self::ByValue(argument), LayoutRepr::Struct(field_layouts)) => {
                 index_struct_value(env, layout_interner, field_layouts, *argument, index)
             }
+            (Self::ByReference(ptr), LayoutRepr::Struct(field_layouts)) => {
+                index_struct_ptr(env, layout_interner, field_layouts, *ptr, index)
+            }
             (other, layout) => {
                 unreachable!(
                     "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
@@ -170,7 +173,37 @@ fn index_struct_value<'a, 'ctx>(
         layout_interner,
         field_layout,
         field_value,
-        "struct_field_tag",
+        "struct_field",
+    )
+}
+
+fn index_struct_ptr<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    field_layouts: &[InLayout<'a>],
+    ptr: PointerValue<'ctx>,
+    index: u64,
+) -> BasicValueEnum<'ctx> {
+    debug_assert!(!field_layouts.is_empty());
+
+    let field_value = env
+        .builder
+        .build_struct_gep(
+            ptr,
+            index as u32,
+            env.arena
+                .alloc(format!("struct_field_access_record_{}", index)),
+        )
+        .unwrap();
+
+    let field_layout = field_layouts[index as usize];
+
+    load_roc_value(
+        env,
+        layout_interner,
+        field_layout,
+        field_value,
+        "struct_field",
     )
 }
 
