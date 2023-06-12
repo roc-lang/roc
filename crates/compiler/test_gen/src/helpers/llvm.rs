@@ -279,23 +279,26 @@ fn create_llvm_module<'a>(
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
+    let panic_bad_llvm = |errors| {
+        let path = std::env::temp_dir().join("test.ll");
+        env.module.print_to_file(&path).unwrap();
+        panic!(
+            "Errors defining module:\n\n{}\n\nI have written the full module to `{:?}`",
+            errors, path
+        );
+    };
+
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
-        panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
+        panic_bad_llvm(main_fn_name);
     }
 
     module_pass.run_on(env.module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        let path = std::env::temp_dir().join("test.ll");
-        env.module.print_to_file(&path).unwrap();
-        panic!(
-            "Errors defining module:\n\n{}\n\nI have written the full module to `{:?}`",
-            errors.to_string(),
-            path
-        );
+        panic_bad_llvm(&errors.to_string());
     }
 
     if let Ok(path) = std::env::var("ROC_DEBUG_LLVM") {
