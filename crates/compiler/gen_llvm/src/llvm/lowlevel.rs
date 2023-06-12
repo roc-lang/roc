@@ -1304,7 +1304,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             BasicValueEnum::IntValue(refcount_ptr.is_1(env))
         }
 
-        Unreachable => match RocReturn::from_layout(env, layout_interner, layout) {
+        Unreachable => match RocReturn::from_layout(layout_interner, layout) {
             RocReturn::Return => {
                 let basic_type = basic_type_from_layout(env, layout_interner, layout);
                 basic_type.const_zero()

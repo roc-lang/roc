@@ -2466,7 +2466,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         Ret(symbol) => {
             let (value, layout) = scope.load_symbol_and_layout(symbol);
 
-            match RocReturn::from_layout(env, layout_interner, layout) {
+            match RocReturn::from_layout(layout_interner, layout) {
                 RocReturn::Return => {
                     if let Some(block) = env.builder.get_insert_block() {
                         if block.get_terminator().is_none() {
@@ -3830,7 +3830,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
     let return_type = basic_type_from_layout(env, layout_interner, return_layout);
 
     let cc_return = to_cc_return(env, layout_interner, return_layout);
-    let roc_return = RocReturn::from_layout(env, layout_interner, return_layout);
+    let roc_return = RocReturn::from_layout(layout_interner, return_layout);
 
     let c_function_spec = FunctionSpec::cconv(env, cc_return, Some(return_type), &argument_types);
 
@@ -4444,7 +4444,7 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     let builder = env.builder;
 
     let roc_function_type = roc_function.get_type();
-    let argument_types = match RocReturn::from_layout(env, layout_interner, return_layout) {
+    let argument_types = match RocReturn::from_layout(layout_interner, return_layout) {
         RocReturn::Return => roc_function_type.get_param_types(),
         RocReturn::ByPointer => {
             // Our fastcc passes the return pointer as the last parameter.
@@ -4880,7 +4880,7 @@ fn build_proc_header<'a, 'ctx>(
         arg_basic_types.push(arg_type);
     }
 
-    let roc_return = RocReturn::from_layout(env, layout_interner, proc.ret_layout);
+    let roc_return = RocReturn::from_layout(layout_interner, proc.ret_layout);
     let fn_spec = FunctionSpec::fastcc(env, roc_return, ret_type, arg_basic_types);
 
     let fn_val = add_func(
@@ -5356,7 +5356,7 @@ pub fn call_roc_function<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let pass_by_pointer = roc_function.get_type().get_param_types().len() == arguments.len() + 1;
 
-    match RocReturn::from_layout(env, layout_interner, result_layout) {
+    match RocReturn::from_layout(layout_interner, result_layout) {
         RocReturn::ByPointer if !pass_by_pointer => {
             // WARNING this is a hack!!
             let it = arguments.iter().map(|x| (*x).into());
@@ -5574,40 +5574,15 @@ pub(crate) enum RocReturn {
 }
 
 impl RocReturn {
-    fn roc_return_by_pointer(
-        interner: &STLayoutInterner,
-        target_info: TargetInfo,
-        layout: InLayout,
-    ) -> bool {
-        match interner.get_repr(layout) {
-            LayoutRepr::Builtin(builtin) => {
-                use Builtin::*;
-
-                match target_info.ptr_width() {
-                    roc_target::PtrWidth::Bytes4 => false,
-
-                    roc_target::PtrWidth::Bytes8 => {
-                        //
-                        matches!(builtin, Str)
-                    }
-                }
-            }
-            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => true,
-            LayoutRepr::LambdaSet(lambda_set) => RocReturn::roc_return_by_pointer(
-                interner,
-                target_info,
-                lambda_set.runtime_representation(),
-            ),
-            _ => false,
-        }
+    fn roc_return_by_pointer(interner: &STLayoutInterner, layout: InLayout) -> bool {
+        interner.is_passed_by_reference(layout)
     }
 
     pub(crate) fn from_layout<'a>(
-        env: &Env<'a, '_, '_>,
         layout_interner: &mut STLayoutInterner<'a>,
         layout: InLayout<'a>,
     ) -> Self {
-        if Self::roc_return_by_pointer(layout_interner, env.target_info, layout) {
+        if Self::roc_return_by_pointer(layout_interner, layout) {
             RocReturn::ByPointer
         } else {
             RocReturn::Return
@@ -5809,7 +5784,7 @@ fn build_foreign_symbol<'a, 'ctx>(
             // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
 
             let return_type = basic_type_from_layout(env, layout_interner, ret_layout);
-            let roc_return = RocReturn::from_layout(env, layout_interner, ret_layout);
+            let roc_return = RocReturn::from_layout(layout_interner, ret_layout);
             let cc_return = to_cc_return(env, layout_interner, ret_layout);
 
             let mut cc_argument_types =
