@@ -1576,9 +1576,6 @@ define_builtins! {
         20 HASH_HASH_LIST: "hashList"
         21 HASH_HASH_UNORDERED: "hashUnordered"
     }
-    14 JSON: "TotallyNotJson" => {
-        0 JSON_JSON: "TotallyNotJson"
-    }
 
-    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 14 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }
