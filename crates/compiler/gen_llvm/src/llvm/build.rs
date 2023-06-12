@@ -2466,88 +2466,9 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         Ret(symbol) => {
             let (value, layout) = scope.load_symbol_and_layout(symbol);
 
-            match RocReturn::from_layout(layout_interner, layout) {
-                RocReturn::Return => {
-                    if let Some(block) = env.builder.get_insert_block() {
-                        if block.get_terminator().is_none() {
-                            env.builder.build_return(Some(&value));
-                        }
-                    }
+            build_return(env, layout_interner, layout, value, parent);
 
-                    value
-                }
-                RocReturn::ByPointer => {
-                    // we need to write our value into the final argument of the current function
-                    let parameters = parent.get_params();
-                    let out_parameter = parameters.last().unwrap();
-                    debug_assert!(out_parameter.is_pointer_value());
-
-                    // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
-
-                    let destination = out_parameter.into_pointer_value();
-                    if layout_interner.is_passed_by_reference(layout) {
-                        let align_bytes = layout_interner.alignment_bytes(layout);
-
-                        if align_bytes > 0 {
-                            debug_assert!(
-                                value.is_pointer_value(),
-                                "{:?}: {:?}\n{:?}",
-                                parent.get_name(),
-                                value,
-                                layout
-                            );
-
-                            // What we want to do here is
-                            //
-                            // let value_ptr = value.into_pointer_value();
-                            // if value_ptr.get_first_use().is_some() {
-                            //   value_ptr.replace_all_uses_with(destination);
-                            //
-                            // In other words, if the source pointer is used,
-                            // then we just subsitute the source for the input pointer, done.
-                            //
-                            // Only that does not work if the source is not written to.
-                            // A simple example is the identity function
-                            //
-                            // A slightly more complex case that will also make the above not
-                            // work is when the source pointer is only incremented, but not
-                            // written to. Then there is a first_use, but it's still invalid to
-                            // subsitute source with destination
-                            //
-                            // Hence, we explicitly memcpy source to destination, and rely on
-                            // LLVM optimizing away any inefficiencies.
-                            let width = layout_interner.stack_size(layout);
-                            let size = env.ptr_int().const_int(width as _, false);
-
-                            env.builder
-                                .build_memcpy(
-                                    destination,
-                                    align_bytes,
-                                    value.into_pointer_value(),
-                                    align_bytes,
-                                    size,
-                                )
-                                .unwrap();
-                        }
-                    } else {
-                        env.builder.build_store(destination, value);
-                    }
-
-                    if let Some(block) = env.builder.get_insert_block() {
-                        match block.get_terminator() {
-                            None => {
-                                env.builder.build_return(None);
-                            }
-                            Some(terminator) => {
-                                terminator.remove_from_basic_block();
-                                env.builder.build_return(None);
-                            }
-                        }
-                    }
-
-                    env.context.i8_type().const_zero().into()
-                }
-            }
+            env.context.i8_type().const_zero().into()
         }
 
         Switch {
@@ -2964,6 +2885,93 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             // unused value (must return a BasicValue)
             let zero = env.context.i64_type().const_zero();
             zero.into()
+        }
+    }
+}
+
+fn build_return<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
+    value: BasicValueEnum<'ctx>,
+    parent: FunctionValue<'ctx>,
+) {
+    match RocReturn::from_layout(layout_interner, layout) {
+        RocReturn::Return => {
+            if let Some(block) = env.builder.get_insert_block() {
+                if block.get_terminator().is_none() {
+                    env.builder.build_return(Some(&value));
+                }
+            }
+        }
+        RocReturn::ByPointer => {
+            // we need to write our value into the final argument of the current function
+            let parameters = parent.get_params();
+            let out_parameter = parameters.last().unwrap();
+            debug_assert!(out_parameter.is_pointer_value());
+
+            // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
+
+            let destination = out_parameter.into_pointer_value();
+            if layout_interner.is_passed_by_reference(layout) {
+                let align_bytes = layout_interner.alignment_bytes(layout);
+
+                if align_bytes > 0 {
+                    debug_assert!(
+                        value.is_pointer_value(),
+                        "{:?}: {:?}\n{:?}",
+                        parent.get_name(),
+                        value,
+                        layout
+                    );
+
+                    // What we want to do here is
+                    //
+                    // let value_ptr = value.into_pointer_value();
+                    // if value_ptr.get_first_use().is_some() {
+                    //   value_ptr.replace_all_uses_with(destination);
+                    //
+                    // In other words, if the source pointer is used,
+                    // then we just subsitute the source for the input pointer, done.
+                    //
+                    // Only that does not work if the source is not written to.
+                    // A simple example is the identity function
+                    //
+                    // A slightly more complex case that will also make the above not
+                    // work is when the source pointer is only incremented, but not
+                    // written to. Then there is a first_use, but it's still invalid to
+                    // subsitute source with destination
+                    //
+                    // Hence, we explicitly memcpy source to destination, and rely on
+                    // LLVM optimizing away any inefficiencies.
+                    let width = layout_interner.stack_size(layout);
+                    let size = env.ptr_int().const_int(width as _, false);
+
+                    env.builder
+                        .build_memcpy(
+                            destination,
+                            align_bytes,
+                            value.into_pointer_value(),
+                            align_bytes,
+                            size,
+                        )
+                        .unwrap();
+                }
+            } else {
+                env.builder.build_store(destination, value);
+            }
+
+            if let Some(block) = env.builder.get_insert_block() {
+                match block.get_terminator() {
+                    None => {
+                        env.builder.build_return(None);
+                    }
+                    Some(terminator) => {
+                        terminator.remove_from_basic_block();
+                        env.builder.build_return(None);
+                    }
+                }
+            }
         }
     }
 }
@@ -3750,7 +3758,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    let call_result = {
+    let (call_result, call_result_layout) = {
         let last_block = builder.get_insert_block().unwrap();
 
         let roc_wrapper_function =
@@ -3764,13 +3772,15 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
             env.target_info,
         ));
 
-        call_roc_function(
+        let roc_value = call_roc_function(
             env,
             layout_interner,
             roc_wrapper_function,
             wrapper_result,
             arguments_for_call,
-        )
+        );
+
+        (roc_value, wrapper_result)
     };
 
     let output_arg_index = args_length - 1;
@@ -3780,7 +3790,13 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
         .unwrap()
         .into_pointer_value();
 
-    builder.build_store(output_arg, call_result);
+    store_roc_value(
+        env,
+        layout_interner,
+        call_result_layout,
+        output_arg,
+        call_result,
+    );
     builder.build_return(None);
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
@@ -4271,14 +4287,23 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
+    // The roc function to call
     roc_function: FunctionValue<'ctx>,
-    arguments: &[BasicValueEnum<'ctx>],
-    return_layout: InLayout<'a>,
+    roc_arguments: &[BasicValueEnum<'ctx>],
+    roc_return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let context = env.context;
     let builder = env.builder;
 
-    let return_type = basic_type_from_layout(env, layout_interner, return_layout);
+    let return_type = basic_type_from_layout(env, layout_interner, roc_return_layout);
+    let call_result_return_conv = {
+        let layout = layout_interner.insert_direct_no_semantic(roc_call_result_layout(
+            env.arena,
+            roc_return_layout,
+            env.target_info,
+        ));
+        RocReturn::from_layout(layout_interner, layout)
+    };
     let call_result_type = roc_call_result_type(env, return_type.as_basic_type_enum());
     let result_alloca = builder.build_alloca(call_result_type, "result");
 
@@ -4301,10 +4326,16 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     {
         builder.position_at_end(then_block);
 
-        let call_result =
-            call_roc_function(env, layout_interner, roc_function, return_layout, arguments);
+        let call_result = call_roc_function(
+            env,
+            layout_interner,
+            roc_function,
+            roc_return_layout,
+            roc_arguments,
+        );
 
-        let return_value = make_good_roc_result(env, layout_interner, return_layout, call_result);
+        let return_value =
+            make_good_roc_result(env, layout_interner, roc_return_layout, call_result);
 
         builder.build_store(result_alloca, return_value);
 
@@ -4342,11 +4373,14 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
 
     env.builder.position_at_end(cont_block);
 
-    builder.new_build_load(
-        call_result_type,
-        result_alloca,
-        "set_jump_and_catch_long_jump_load_result",
-    )
+    match call_result_return_conv {
+        RocReturn::Return => builder.new_build_load(
+            call_result_type,
+            result_alloca,
+            "set_jump_and_catch_long_jump_load_result",
+        ),
+        RocReturn::ByPointer => result_alloca.into(),
+    }
 }
 
 fn make_exception_catcher<'a, 'ctx>(
@@ -4375,11 +4409,12 @@ fn roc_call_result_layout<'a>(
     return_layout: InLayout<'a>,
     target_info: TargetInfo,
 ) -> LayoutRepr<'a> {
-    let elements = [Layout::U64, Layout::usize(target_info), return_layout];
+    let elements = [Layout::U64, Layout::STR_PTR, return_layout];
 
     LayoutRepr::struct_(arena.alloc(elements))
 }
 
+// TODO: coalesce with `roc_call_result_layout`?
 fn roc_call_result_type<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     return_type: BasicTypeEnum<'ctx>,
@@ -4445,12 +4480,25 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     let context = env.context;
     let builder = env.builder;
 
+    // TODO: pass these, and the roc function, in directly?
+    let wrapper_return_layout = layout_interner.insert_direct_no_semantic(roc_call_result_layout(
+        env.arena,
+        return_layout,
+        env.target_info,
+    ));
+
+    let wrapper_return_type = roc_call_result_type(
+        env,
+        basic_type_from_layout(env, layout_interner, return_layout),
+    );
+
     let roc_function_type = roc_function.get_type();
     let argument_types = match RocReturn::from_layout(layout_interner, return_layout) {
         RocReturn::Return => roc_function_type.get_param_types(),
         RocReturn::ByPointer => {
-            // Our fastcc passes the return pointer as the last parameter.
-            // Remove the return pointer since we now intend to return the result by value.
+            // Our fastcc passes the return pointer as the last parameter. Remove it from the
+            // argument types used for the wrapper, since the wrapper's return type will go here
+            // when we build the wrapper function spec below.
             let mut types = roc_function_type.get_param_types();
             types.pop();
 
@@ -4458,19 +4506,13 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
         }
     };
 
-    let wrapper_return_type = roc_call_result_type(
-        env,
-        basic_type_from_layout(env, layout_interner, return_layout),
-    );
+    let wrapper_return_conv = RocReturn::from_layout(layout_interner, wrapper_return_layout);
 
-    // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::default()).into());
-
-    // let wrapper_function_type = env.context.void_type().fn_type(&argument_types, false);
-    let wrapper_function_spec = FunctionSpec::cconv(
+    let wrapper_function_spec = FunctionSpec::fastcc(
         env,
-        CCReturn::Return,
-        Some(wrapper_return_type.as_basic_type_enum()),
-        &argument_types,
+        wrapper_return_conv,
+        wrapper_return_type.into(),
+        Vec::from_iter_in(argument_types, env.arena),
     );
 
     // Add main to the module.
@@ -4485,27 +4527,42 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     let subprogram = env.new_subprogram(wrapper_function_name);
     wrapper_function.set_subprogram(subprogram);
 
-    // our exposed main function adheres to the C calling convention
+    // The exposed main function must adhere to the C calling convention, but the wrapper can still be fastcc.
     wrapper_function.set_call_conventions(FAST_CALL_CONV);
 
     // invoke instead of call, so that we can catch any exceptions thrown in Roc code
-    let arguments = wrapper_function.get_params();
+    let roc_function_arguments = {
+        let mut params = wrapper_function.get_params();
+        match wrapper_return_conv {
+            RocReturn::Return => { /* passthrough */ }
+            RocReturn::ByPointer => {
+                params.pop();
+            }
+        }
+        params
+    };
 
     let basic_block = context.append_basic_block(wrapper_function, "entry");
     builder.position_at_end(basic_block);
 
     debug_info_init!(env, wrapper_function);
 
-    let result = set_jump_and_catch_long_jump(
+    let wrapper_return_result = set_jump_and_catch_long_jump(
         env,
         layout_interner,
         wrapper_function,
         roc_function,
-        &arguments,
+        &roc_function_arguments,
         return_layout,
     );
 
-    builder.build_return(Some(&result));
+    build_return(
+        env,
+        layout_interner,
+        wrapper_return_layout,
+        wrapper_return_result,
+        wrapper_function,
+    );
 
     wrapper_function
 }

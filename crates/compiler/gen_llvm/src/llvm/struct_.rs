@@ -81,7 +81,8 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for RocStruct<'ctx> {
     fn from(basic_value: BasicValueEnum<'ctx>) -> Self {
         match basic_value {
             BasicValueEnum::StructValue(struct_value) => RocStruct::ByValue(struct_value),
-            _ => panic!("Expected struct value"),
+            BasicValueEnum::PointerValue(struct_ptr) => RocStruct::ByReference(struct_ptr),
+            _ => panic!("Expected struct or pointer value"),
         }
     }
 }
