@@ -353,8 +353,6 @@ impl<'ctx> RocUnion<'ctx> {
     ) -> StructValue<'ctx> {
         debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
 
-        let RocStruct::ByValue(data) = data;
-
         let tag_alloca = env.builder.build_alloca(self.struct_type(), "tag_alloca");
 
         let data_buffer = env
@@ -367,16 +365,36 @@ impl<'ctx> RocUnion<'ctx> {
             )
             .unwrap();
 
-        let cast_pointer = env.builder.build_pointer_cast(
-            data_buffer,
-            data.get_type().ptr_type(AddressSpace::default()),
-            "to_data_ptr",
-        );
+        match data {
+            // NOTE: the data may be smaller than the buffer, so there might be uninitialized
+            // bytes in the buffer. We should never touch those, but e.g. valgrind might not
+            // realize that. If that comes up, the solution is to just fill it with zeros
+            RocStruct::ByValue(value) => {
+                let cast_pointer = env.builder.build_pointer_cast(
+                    data_buffer,
+                    value.get_type().ptr_type(AddressSpace::default()),
+                    "to_data_ptr",
+                );
+                env.builder.build_store(cast_pointer, value);
+            }
+            RocStruct::ByReference(ptr) => {
+                let cast_pointer =
+                    env.builder
+                        .build_pointer_cast(data_buffer, ptr.get_type(), "to_data_ptr");
 
-        // NOTE: the data may be smaller than the buffer, so there might be uninitialized
-        // bytes in the buffer. We should never touch those, but e.g. valgrind might not
-        // realize that. If that comes up, the solution is to just fill it with zeros
-        env.builder.build_store(cast_pointer, data);
+                env.builder
+                    .build_memcpy(
+                        cast_pointer,
+                        self.data_align,
+                        ptr,
+                        self.data_align,
+                        env.context
+                            .i32_type()
+                            .const_int(self.data_width as _, false),
+                    )
+                    .expect("memcpy invariants must have been upheld");
+            }
+        }
 
         // set the tag id
         //

@@ -3,7 +3,7 @@
 use bumpalo::collections::Vec as AVec;
 use inkwell::{
     types::{BasicType, BasicTypeEnum, StructType},
-    values::{BasicValue, BasicValueEnum, StructValue},
+    values::{BasicValue, BasicValueEnum, PointerValue, StructValue},
 };
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner};
@@ -65,6 +65,9 @@ fn basic_type_from_record<'a, 'ctx>(
 pub(crate) enum RocStruct<'ctx> {
     /// The roc struct should be passed by rvalue.
     ByValue(StructValue<'ctx>),
+
+    /// The roc struct should be passed by reference.
+    ByReference(PointerValue<'ctx>),
 }
 
 impl<'ctx> Into<BasicValueEnum<'ctx>> for RocStruct<'ctx> {
@@ -87,16 +90,30 @@ impl<'ctx> RocStruct<'ctx> {
     pub fn build<'a>(
         env: &Env<'a, 'ctx, '_>,
         layout_interner: &mut STLayoutInterner<'a>,
+        layout_repr: LayoutRepr<'a>,
         scope: &Scope<'a, 'ctx>,
         sorted_fields: &[Symbol],
     ) -> Self {
-        let struct_val = build_struct_value(env, layout_interner, scope, sorted_fields);
-        RocStruct::ByValue(struct_val)
+        let BuildStruct {
+            struct_type,
+            struct_val,
+        } = build_struct_helper(env, layout_interner, scope, sorted_fields);
+
+        let passed_by_ref = layout_repr.is_passed_by_reference(layout_interner, env.target_info);
+
+        if passed_by_ref {
+            let alloca = env.builder.build_alloca(struct_type, "struct_alloca");
+            env.builder.build_store(alloca, struct_val);
+            RocStruct::ByReference(alloca)
+        } else {
+            RocStruct::ByValue(struct_val)
+        }
     }
 
     pub fn as_basic_value_enum(&self) -> BasicValueEnum<'ctx> {
         match self {
             RocStruct::ByValue(struct_val) => struct_val.as_basic_value_enum(),
+            RocStruct::ByReference(struct_ptr) => struct_ptr.as_basic_value_enum(),
         }
     }
 
@@ -157,12 +174,17 @@ fn index_struct_value<'a, 'ctx>(
     )
 }
 
-fn build_struct_value<'a, 'ctx>(
+struct BuildStruct<'ctx> {
+    struct_type: StructType<'ctx>,
+    struct_val: StructValue<'ctx>,
+}
+
+fn build_struct_helper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     sorted_fields: &[Symbol],
-) -> StructValue<'ctx> {
+) -> BuildStruct<'ctx> {
     let ctx = env.context;
 
     // Determine types
@@ -197,9 +219,12 @@ fn build_struct_value<'a, 'ctx>(
 
     // Create the struct_type
     let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+    let struct_val = struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
 
-    // Insert field exprs into struct_val
-    struct_from_fields(env, struct_type, field_vals.into_iter().enumerate())
+    BuildStruct {
+        struct_type,
+        struct_val,
+    }
 }
 
 pub fn struct_from_fields<'a, 'ctx, 'env, I>(

@@ -1042,9 +1042,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             call,
         ),
 
-        Struct(sorted_fields) => {
-            RocStruct::build(env, layout_interner, scope, sorted_fields).into()
-        }
+        Struct(sorted_fields) => RocStruct::build(
+            env,
+            layout_interner,
+            layout_interner.get_repr(layout),
+            scope,
+            sorted_fields,
+        )
+        .into(),
 
         Reuse {
             arguments,
@@ -1605,7 +1610,8 @@ fn build_tag<'a, 'ctx>(
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let data = RocStruct::build(env, layout_interner, scope, arguments);
+            let data_layout_repr = LayoutRepr::Struct(tags[tag_id as usize]);
+            let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
             let roc_union =
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
@@ -1738,7 +1744,8 @@ fn build_tag<'a, 'ctx>(
                 &[other_fields],
             );
 
-            let data = RocStruct::build(env, layout_interner, scope, arguments);
+            let data_layout_repr = LayoutRepr::Struct(other_fields);
+            let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
             let value = roc_union.as_struct_value(env, data, None);
 
