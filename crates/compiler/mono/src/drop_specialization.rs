@@ -1121,7 +1121,7 @@ fn specialize_list<'a, 'i>(
     environment: &mut DropSpecializationEnvironment<'a>,
     incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
-    item_layout: InLayout,
+    item_layout: InLayout<'a>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     let current_length = environment.list_length.get(symbol).copied();
@@ -1138,11 +1138,11 @@ fn specialize_list<'a, 'i>(
         layout_interner.contains_refcounted(item_layout),
         current_length,
     ) {
+        // Only specialize lists if the amount of children is known.
+        // Otherwise we might have to insert an unbouned number of decrements.
         (true, Some(length)) => {
             match environment.list_children.get(symbol) {
-                // Only specialize lists if all children are known.
-                // Otherwise we might have to insert an unbouned number of decrements.
-                Some(children) if children.len() as u64 == length => {
+                Some(children) => {
                     // TODO perhaps this allocation can be avoided.
                     let children_clone = children.clone();
 
@@ -1182,15 +1182,54 @@ fn specialize_list<'a, 'i>(
 
                     // Reversed to ensure that the generated code decrements the items in the correct order.
                     for i in (0..length).rev() {
-                        let (s, popped) = index_symbols.get(&i).unwrap();
+                        match index_symbols.get(&i) {
+                            // If the symbol is known, we can decrement it (if incremented before).
+                            Some((s, popped)) => {
+                                if !*popped {
+                                    // Decrement the children that were not incremented before. And thus don't cancel out.
+                                    newer_continuation = arena.alloc(Stmt::Refcounting(
+                                        ModifyRc::Dec(*s),
+                                        newer_continuation,
+                                    ));
+                                }
 
-                        if !*popped {
-                            // Decrement the children that were not incremented before. And thus don't cancel out.
-                            newer_continuation = arena
-                                .alloc(Stmt::Refcounting(ModifyRc::Dec(*s), newer_continuation));
-                        }
+                                // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                            }
+                            // If the symbol is unknown, we have to get the value from the list.
+                            // Should only happen when list elements are discarded.
+                            None => {
+                                let field_symbol = environment
+                                    .create_symbol(ident_ids, &format!("field_val_{}", i));
 
-                        // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                                let index_symbol = environment
+                                    .create_symbol(ident_ids, &format!("index_val_{}", i));
+
+                                let dec = arena.alloc(Stmt::Refcounting(
+                                    ModifyRc::Dec(field_symbol),
+                                    newer_continuation,
+                                ));
+
+                                let index = arena.alloc(Stmt::Let(
+                                    field_symbol,
+                                    Expr::Call(Call {
+                                        call_type: CallType::LowLevel {
+                                            op: LowLevel::ListGetUnsafe,
+                                            update_mode: UpdateModeId::BACKEND_DUMMY,
+                                        },
+                                        arguments: arena.alloc([*symbol, index_symbol]),
+                                    }),
+                                    item_layout,
+                                    dec,
+                                ));
+
+                                newer_continuation = arena.alloc(Stmt::Let(
+                                    index_symbol,
+                                    Expr::Literal(Literal::Int(i128::to_ne_bytes(i as i128))),
+                                    Layout::isize(layout_interner.target_info()),
+                                    index,
+                                ));
+                            }
+                        };
                     }
 
                     newer_continuation
