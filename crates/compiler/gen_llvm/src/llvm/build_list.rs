@@ -8,10 +8,14 @@ use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, InLayout, LayoutIds, LayoutInterner, STLayoutInterner};
+use roc_mono::layout::{
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+};
 
 use super::bitcode::{call_list_bitcode_fn, BitcodeReturns};
-use super::build::{create_entry_block_alloca, load_roc_value, store_roc_value, BuilderExt};
+use super::build::{
+    create_entry_block_alloca, load_roc_value, store_roc_value, use_roc_value, BuilderExt,
+};
 use super::convert::zig_list_type;
 use super::scope::Scope;
 use super::struct_::struct_from_fields;
@@ -360,12 +364,17 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     let element_first = element_align > env.target_info.ptr_width() as u32;
 
     let fields = if element_first {
-        [element_type, zig_list_type(env).into()]
+        [element_layout, Layout::LIST_U8 /* any list works */]
     } else {
-        [zig_list_type(env).into(), element_type]
+        [Layout::LIST_U8 /* any list works */, element_layout]
     };
+    // TODO: have use_roc_value take LayoutRepr
+    let result_layout =
+        layout_interner.insert_direct_no_semantic(LayoutRepr::Struct(env.arena.alloc(fields)));
+    let result_struct_type =
+        basic_type_from_layout(env, layout_interner, result_layout).into_struct_type();
 
-    let result = env.context.struct_type(&fields, false).const_zero();
+    let result = result_struct_type.const_zero();
 
     let (list_index, element_index) = if element_first { (1, 0) } else { (0, 1) };
 
@@ -374,11 +383,18 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
         .build_insert_value(result, new_list, list_index, "insert_list")
         .unwrap();
 
-    env.builder
+    let result = env
+        .builder
         .build_insert_value(result, old_element, element_index, "insert_value")
-        .unwrap()
-        .into_struct_value()
-        .into()
+        .unwrap();
+
+    use_roc_value(
+        env,
+        layout_interner,
+        result_layout,
+        result.into_struct_value().into(),
+        "use_replace_result_record",
+    )
 }
 
 fn bounds_check_comparison<'ctx>(
