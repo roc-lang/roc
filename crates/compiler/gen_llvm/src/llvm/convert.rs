@@ -15,7 +15,7 @@ use super::struct_::RocStruct;
 
 pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &'env mut STLayoutInterner<'a>,
+    layout_interner: &'env STLayoutInterner<'a>,
     layout: InLayout<'_>,
 ) -> BasicTypeEnum<'ctx> {
     use LayoutRepr::*;
@@ -45,7 +45,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
 
 fn basic_type_from_record<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     fields: &[InLayout<'_>],
 ) -> StructType<'ctx> {
     let mut field_types = AVec::with_capacity_in(fields.len(), env.arena);
@@ -62,7 +62,7 @@ fn basic_type_from_record<'a, 'ctx>(
 
 pub fn struct_type_from_union_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     union_layout: &UnionLayout<'_>,
 ) -> StructType<'ctx> {
     use UnionLayout::*;
@@ -101,7 +101,7 @@ pub fn struct_type_from_union_layout<'a, 'ctx>(
 
 fn basic_type_from_union_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     union_layout: &UnionLayout<'_>,
 ) -> BasicTypeEnum<'ctx> {
     use UnionLayout::*;

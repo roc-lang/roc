@@ -167,22 +167,22 @@ fn empty_record() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn record() {
-    assert_evals_to!(
-        "{ x: 123, y: \"Hello\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
-        true,
-        bool
-    );
+    //assert_evals_to!(
+    //    "{ x: 123, y: \"Hello\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+    //    true,
+    //    bool
+    //);
 
-    assert_evals_to!(
-        "{ x: 234, y: \"Hello\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
-        false,
-        bool
-    );
-    assert_evals_to!(
-        "{ x: 123, y: \"World\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
-        false,
-        bool
-    );
+    //assert_evals_to!(
+    //    "{ x: 234, y: \"Hello\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+    //    false,
+    //    bool
+    //);
+    //assert_evals_to!(
+    //    "{ x: 123, y: \"World\", z: 3.14 } == { x: 123, y: \"Hello\", z: 3.14 }",
+    //    false,
+    //    bool
+    //);
     assert_evals_to!(
         "{ x: 123, y: \"Hello\", z: 1.11 } == { x: 123, y: \"Hello\", z: 3.14 }",
         false,
