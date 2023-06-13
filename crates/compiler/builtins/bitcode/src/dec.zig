@@ -29,6 +29,18 @@ pub const RocDec = extern struct {
         return .{ .num = num * one_point_zero_i128 };
     }
 
+    pub fn fromI128(num: i128) RocDec {
+        return .{ .num = num };
+    }
+
+    pub fn fromU128(num: u128) ?RocDec {
+        if (num > comptime @intCast(u128, math.maxInt(i128))) {
+            return null;
+        }
+
+        return .{ .num = @intCast(i128, num) };
+    }
+
     pub fn fromF64(num: f64) ?RocDec {
         var result: f64 = num * comptime @intToFloat(f64, one_point_zero_i128);
 
@@ -1123,6 +1135,14 @@ pub fn toStr(arg: RocDec) callconv(.C) RocStr {
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
     return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");
+}
+
+pub fn fromI128(arg: i128) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.fromI128, .{arg});
+}
+
+pub fn fromU128(arg: u128) callconv(.C) i128 {
+    return if (@call(.{ .modifier = always_inline }, RocDec.fromU128, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert u128 to RocDec");
 }
 
 pub fn toI128(arg: RocDec) callconv(.C) i128 {
