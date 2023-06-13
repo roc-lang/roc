@@ -1302,13 +1302,20 @@ fn eq_ptr_to_struct<'a, 'ctx>(
         "opaque_to_correct",
     );
 
-    let struct1 = env
-        .builder
-        .new_build_load(wrapper_type, struct1_ptr, "load_struct1");
-
-    let struct2 = env
-        .builder
-        .new_build_load(wrapper_type, struct2_ptr, "load_struct2");
+    let struct1 = load_roc_value(
+        env,
+        layout_interner,
+        struct_layout,
+        struct1_ptr,
+        "load_struct1",
+    );
+    let struct2 = load_roc_value(
+        env,
+        layout_interner,
+        struct_layout,
+        struct2_ptr,
+        "load_struct2",
+    );
 
     build_struct_eq(
         env,
