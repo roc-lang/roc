@@ -15,7 +15,6 @@ use bumpalo::collections::CollectIn;
 
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_target::TargetInfo;
 
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
@@ -38,19 +37,11 @@ pub fn specialize_drops<'a, 'i>(
     layout_interner: &'i mut STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     for ((_symbol, proc_layout), proc) in procs.iter_mut() {
         let mut environment = DropSpecializationEnvironment::new(arena, home, proc_layout.result);
-        specialize_drops_proc(
-            arena,
-            layout_interner,
-            ident_ids,
-            target_info,
-            &mut environment,
-            proc,
-        );
+        specialize_drops_proc(arena, layout_interner, ident_ids, &mut environment, proc);
     }
 }
 
@@ -58,7 +49,6 @@ fn specialize_drops_proc<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     proc: &mut Proc<'a>,
 ) {
@@ -66,14 +56,8 @@ fn specialize_drops_proc<'a, 'i>(
         environment.add_symbol_layout(symbol, layout);
     }
 
-    let new_body = specialize_drops_stmt(
-        arena,
-        layout_interner,
-        ident_ids,
-        target_info,
-        environment,
-        &proc.body,
-    );
+    let new_body =
+        specialize_drops_stmt(arena, layout_interner, ident_ids, environment, &proc.body);
 
     proc.body = new_body.clone();
 }
@@ -82,7 +66,6 @@ fn specialize_drops_stmt<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     stmt: &Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -96,7 +79,6 @@ fn specialize_drops_stmt<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
-                        target_info,
                         $environment,
                         continuation,
                     );
@@ -306,7 +288,6 @@ fn specialize_drops_stmt<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
-                        target_info,
                         &mut branch_env,
                         branch,
                     );
@@ -327,7 +308,6 @@ fn specialize_drops_stmt<'a, 'i>(
                     arena,
                     layout_interner,
                     ident_ids,
-                    target_info,
                     &mut branch_env,
                     branch,
                 );
@@ -435,7 +415,6 @@ fn specialize_drops_stmt<'a, 'i>(
                     arena,
                     layout_interner,
                     ident_ids,
-                    target_info,
                     environment,
                     continuation,
                 );
@@ -477,7 +456,6 @@ fn specialize_drops_stmt<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
-                        target_info,
                         environment,
                         continuation,
                     )
@@ -513,7 +491,6 @@ fn specialize_drops_stmt<'a, 'i>(
                             arena,
                             layout_interner,
                             ident_ids,
-                            target_info,
                             environment,
                             symbol,
                             field_layouts,
@@ -524,7 +501,6 @@ fn specialize_drops_stmt<'a, 'i>(
                             arena,
                             layout_interner,
                             ident_ids,
-                            target_info,
                             environment,
                             symbol,
                             union_layout,
@@ -535,7 +511,6 @@ fn specialize_drops_stmt<'a, 'i>(
                             arena,
                             layout_interner,
                             ident_ids,
-                            target_info,
                             environment,
                             &mut incremented_children,
                             symbol,
@@ -545,7 +520,6 @@ fn specialize_drops_stmt<'a, 'i>(
                             arena,
                             layout_interner,
                             ident_ids,
-                            target_info,
                             environment,
                             &mut incremented_children,
                             symbol,
@@ -558,7 +532,6 @@ fn specialize_drops_stmt<'a, 'i>(
                                 arena,
                                 layout_interner,
                                 ident_ids,
-                                target_info,
                                 environment,
                                 continuation,
                             );
@@ -586,7 +559,6 @@ fn specialize_drops_stmt<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
-                        target_info,
                         environment,
                         continuation,
                     ),
@@ -608,7 +580,6 @@ fn specialize_drops_stmt<'a, 'i>(
                 arena,
                 layout_interner,
                 ident_ids,
-                target_info,
                 environment,
                 remainder,
             ),
@@ -628,7 +599,6 @@ fn specialize_drops_stmt<'a, 'i>(
                 arena,
                 layout_interner,
                 ident_ids,
-                target_info,
                 environment,
                 remainder,
             ),
@@ -644,7 +614,6 @@ fn specialize_drops_stmt<'a, 'i>(
                 arena,
                 layout_interner,
                 ident_ids,
-                target_info,
                 environment,
                 remainder,
             ),
@@ -666,7 +635,6 @@ fn specialize_drops_stmt<'a, 'i>(
                 arena,
                 layout_interner,
                 ident_ids,
-                target_info,
                 &mut new_environment,
                 body,
             );
@@ -679,7 +647,6 @@ fn specialize_drops_stmt<'a, 'i>(
                     arena,
                     layout_interner,
                     ident_ids,
-                    target_info,
                     environment,
                     remainder,
                 ),
@@ -694,7 +661,6 @@ fn specialize_struct<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     symbol: &Symbol,
     struct_layout: &'a [InLayout],
@@ -723,14 +689,8 @@ fn specialize_struct<'a, 'i>(
                 }
             }
 
-            let mut new_continuation = specialize_drops_stmt(
-                arena,
-                layout_interner,
-                ident_ids,
-                target_info,
-                environment,
-                continuation,
-            );
+            let mut new_continuation =
+                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
 
             // Make sure every field is decremented.
             // Reversed to ensure that the generated code decrements the fields in the correct order.
@@ -778,14 +738,8 @@ fn specialize_struct<'a, 'i>(
         }
         None => {
             // No known children, keep decrementing the symbol.
-            let new_continuation = specialize_drops_stmt(
-                arena,
-                layout_interner,
-                ident_ids,
-                target_info,
-                environment,
-                continuation,
-            );
+            let new_continuation =
+                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
 
             arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
         }
@@ -796,7 +750,6 @@ fn specialize_union<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     symbol: &Symbol,
     union_layout: UnionLayout<'a>,
@@ -807,14 +760,8 @@ fn specialize_union<'a, 'i>(
 
     macro_rules! keep_original_decrement {
         () => {{
-            let new_continuation = specialize_drops_stmt(
-                arena,
-                layout_interner,
-                ident_ids,
-                target_info,
-                environment,
-                continuation,
-            );
+            let new_continuation =
+                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
             arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
         }};
     }
@@ -826,14 +773,9 @@ fn specialize_union<'a, 'i>(
         }
 
         // The union is null, so we can skip the decrement.
-        UnionFieldLayouts::Null => specialize_drops_stmt(
-            arena,
-            layout_interner,
-            ident_ids,
-            target_info,
-            environment,
-            continuation,
-        ),
+        UnionFieldLayouts::Null => {
+            specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation)
+        }
 
         // We know the tag, we can specialize the decrement for the tag.
         UnionFieldLayouts::Found { field_layouts, tag } => {
@@ -867,7 +809,6 @@ fn specialize_union<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
-                        target_info,
                         environment,
                         continuation,
                     );
@@ -1016,7 +957,6 @@ fn specialize_boxed<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
@@ -1031,14 +971,8 @@ fn specialize_boxed<'a, 'i>(
         None => None,
     };
 
-    let new_continuation = specialize_drops_stmt(
-        arena,
-        layout_interner,
-        ident_ids,
-        target_info,
-        environment,
-        continuation,
-    );
+    let new_continuation =
+        specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
 
     match removed {
         Some(s) => {
@@ -1080,7 +1014,6 @@ fn specialize_list<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
@@ -1091,14 +1024,8 @@ fn specialize_list<'a, 'i>(
 
     macro_rules! keep_original_decrement {
         () => {{
-            let new_continuation = specialize_drops_stmt(
-                arena,
-                layout_interner,
-                ident_ids,
-                target_info,
-                environment,
-                continuation,
-            );
+            let new_continuation =
+                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
             arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
         }};
     }
@@ -1136,7 +1063,6 @@ fn specialize_list<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
-                        target_info,
                         environment,
                         continuation,
                     );
@@ -1191,7 +1117,7 @@ fn specialize_list<'a, 'i>(
                                 newer_continuation = arena.alloc(Stmt::Let(
                                     index_symbol,
                                     Expr::Literal(Literal::Int(i128::to_ne_bytes(i as i128))),
-                                    Layout::isize(target_info),
+                                    Layout::isize(layout_interner.target_info()),
                                     index,
                                 ));
                             }

@@ -20,7 +20,6 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
 use roc_collections::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_target::TargetInfo;
 
 /**
  Insert reset and reuse operations into the IR.
@@ -31,7 +30,6 @@ pub fn insert_reset_reuse_operations<'a, 'i>(
     layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     update_mode_ids: &'i mut UpdateModeIds,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
@@ -46,7 +44,6 @@ pub fn insert_reset_reuse_operations<'a, 'i>(
             layout_interner,
             home,
             ident_ids,
-            target_info,
             update_mode_ids,
             global_layouts.clone(),
             proc.clone(),
@@ -60,7 +57,6 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
     layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     update_mode_ids: &'i mut UpdateModeIds,
     mut symbol_layout: SymbolLayout<'a>,
     mut proc: Proc<'a>,
@@ -82,7 +78,6 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
         layout_interner,
         home,
         ident_ids,
-        target_info,
         update_mode_ids,
         &mut env,
         arena.alloc(proc.body),
@@ -100,7 +95,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
     layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
-    target_info: TargetInfo,
     update_mode_ids: &'i mut UpdateModeIds,
     environment: &mut ReuseEnvironment<'a>,
     stmt: &'a Stmt<'a>,
@@ -145,7 +139,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 // See if we have a token.
                                 match environment.pop_reuse_token(&get_reuse_layout_info(
                                     layout_interner,
-                                    target_info,
                                     union_layout,
                                 )) {
                                     // We have a reuse token for this layout, use it.
@@ -214,7 +207,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 layout_interner,
                 home,
                 ident_ids,
-                target_info,
                 update_mode_ids,
                 environment,
                 current_stmt,
@@ -258,7 +250,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         layout_interner,
                         home,
                         ident_ids,
-                        target_info,
                         update_mode_ids,
                         &mut branch_env,
                         branch,
@@ -286,7 +277,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     layout_interner,
                     home,
                     ident_ids,
-                    target_info,
                     update_mode_ids,
                     &mut branch_env,
                     branch,
@@ -428,11 +418,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                                     environment.push_reuse_token(
                                         arena,
-                                        get_reuse_layout_info(
-                                            layout_interner,
-                                            target_info,
-                                            union_layout,
-                                        ),
+                                        get_reuse_layout_info(layout_interner, union_layout),
                                         reuse_token,
                                         layout,
                                     );
@@ -451,7 +437,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 layout_interner,
                 home,
                 ident_ids,
-                target_info,
                 update_mode_ids,
                 environment,
                 continuation,
@@ -459,21 +444,15 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
             // If we inserted a reuse token, we need to insert a reset reuse operation if the reuse token is consumed.
             if let Some((layout, union_layout, symbol, reuse_token, dec_ref)) = reuse_pair {
-                let stack_reuse_token = environment.peek_reuse_token(&get_reuse_layout_info(
-                    layout_interner,
-                    target_info,
-                    union_layout,
-                ));
+                let stack_reuse_token = environment
+                    .peek_reuse_token(&get_reuse_layout_info(layout_interner, union_layout));
 
                 match stack_reuse_token {
                     Some(token_with_layout) if token_with_layout.token == reuse_token => {
                         // The token we inserted is still on the stack, so we don't need to insert a reset operation.
                         // We do need to remove the token from the environment. To prevent errors higher in the tree.
-                        let _ = environment.pop_reuse_token(&get_reuse_layout_info(
-                            layout_interner,
-                            target_info,
-                            union_layout,
-                        ));
+                        let _ = environment
+                            .pop_reuse_token(&get_reuse_layout_info(layout_interner, union_layout));
                     }
                     _ => {
                         // The token we inserted is no longer on the stack, it must have been consumed.
@@ -525,7 +504,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 layout_interner,
                 home,
                 ident_ids,
-                target_info,
                 update_mode_ids,
                 environment,
                 remainder,
@@ -551,7 +529,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 layout_interner,
                 home,
                 ident_ids,
-                target_info,
                 update_mode_ids,
                 environment,
                 remainder,
@@ -575,7 +552,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 layout_interner,
                 home,
                 ident_ids,
-                target_info,
                 update_mode_ids,
                 environment,
                 remainder,
@@ -611,7 +587,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     layout_interner,
                     home,
                     ident_ids,
-                    target_info,
                     update_mode_ids,
                     &mut first_pass_environment,
                     remainder,
@@ -693,7 +668,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     layout_interner,
                     home,
                     ident_ids,
-                    target_info,
                     update_mode_ids,
                     &mut first_pass_body_environment,
                     body,
@@ -784,7 +758,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     layout_interner,
                     home,
                     ident_ids,
-                    target_info,
                     update_mode_ids,
                     environment,
                     remainder,
@@ -871,7 +844,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     layout_interner,
                     home,
                     ident_ids,
-                    target_info,
                     update_mode_ids,
                     &mut body_environment,
                     body,
@@ -1340,10 +1312,10 @@ fn drop_unused_reuse_tokens<'a>(
 
 fn get_reuse_layout_info<'a, 'i>(
     layout_interner: &'i STLayoutInterner<'a>,
-    target_info: TargetInfo,
     union_layout: UnionLayout<'a>,
 ) -> TokenLayout {
-    let (size, alignment) = union_layout.data_size_and_alignment(layout_interner, target_info);
+    let (size, alignment) =
+        union_layout.data_size_and_alignment(layout_interner, layout_interner.target_info());
     let has_tag = match union_layout {
         UnionLayout::NonRecursive(_) => unreachable!("Non recursive unions should not be reused."),
         // The memory for union layouts that has a tag_id can be reused for new allocations with tag_id.
