@@ -148,7 +148,7 @@ pub fn basic_type_from_builtin<'ctx>(
 /// is not currently implemented
 pub fn argument_type_from_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> BasicTypeEnum<'ctx> {
     use LayoutRepr::*;
@@ -174,7 +174,7 @@ pub fn argument_type_from_layout<'a, 'ctx>(
 /// Some records are passed by-reference.
 fn argument_type_from_struct_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     struct_layout: InLayout<'a>,
 ) -> BasicTypeEnum<'ctx> {
     let stack_type = basic_type_from_layout(env, layout_interner, struct_layout);
@@ -189,7 +189,7 @@ fn argument_type_from_struct_layout<'a, 'ctx>(
 /// Non-recursive tag unions are stored on the stack, but passed by-reference
 pub fn argument_type_from_union_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     union_layout: &UnionLayout<'_>,
 ) -> BasicTypeEnum<'ctx> {
     let heap_type = basic_type_from_union_layout(env, layout_interner, union_layout);
