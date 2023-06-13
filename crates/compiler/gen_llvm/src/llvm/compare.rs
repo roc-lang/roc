@@ -14,9 +14,10 @@ use roc_mono::layout::{
     Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
-use super::build::{load_roc_value, use_roc_value, BuilderExt};
-use super::convert::argument_type_from_union_layout;
+use super::build::{load_roc_value, BuilderExt};
+use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 use super::lowlevel::dec_binop_with_unchecked;
+use super::struct_;
 
 pub fn generic_eq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
@@ -171,8 +172,8 @@ fn build_eq<'a, 'ctx>(
             layout_ids,
             *lhs_layout,
             field_layouts,
-            lhs_val.into_struct_value(),
-            rhs_val.into_struct_value(),
+            lhs_val,
+            rhs_val,
         ),
 
         LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closures"),
@@ -360,8 +361,8 @@ fn build_neq<'a, 'ctx>(
                 layout_ids,
                 lhs_layout,
                 field_layouts,
-                lhs_val.into_struct_value(),
-                rhs_val.into_struct_value(),
+                lhs_val,
+                rhs_val,
             )
             .into_int_value();
 
@@ -633,8 +634,8 @@ fn build_struct_eq<'a, 'ctx>(
     layout_ids: &mut LayoutIds<'a>,
     struct_layout: InLayout<'a>,
     field_layouts: &'a [InLayout<'a>],
-    struct1: StructValue<'ctx>,
-    struct2: StructValue<'ctx>,
+    struct1: BasicValueEnum<'ctx>,
+    struct2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -647,7 +648,7 @@ fn build_struct_eq<'a, 'ctx>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout(env, layout_interner, struct_layout);
+            let arg_type = argument_type_from_layout(env, layout_interner, struct_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -661,6 +662,7 @@ fn build_struct_eq<'a, 'ctx>(
                 layout_interner,
                 layout_ids,
                 function_value,
+                struct_layout,
                 field_layouts,
             );
 
@@ -684,6 +686,7 @@ fn build_struct_eq_help<'a, 'ctx>(
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
+    struct_layout: InLayout<'a>,
     field_layouts: &[InLayout<'a>],
 ) {
     let ctx = env.context;
@@ -712,8 +715,8 @@ fn build_struct_eq_help<'a, 'ctx>(
 
     // Add args to scope
     let mut it = parent.get_param_iter();
-    let struct1 = it.next().unwrap().into_struct_value();
-    let struct2 = it.next().unwrap().into_struct_value();
+    let struct1 = it.next().unwrap();
+    let struct2 = it.next().unwrap();
 
     struct1.set_name(Symbol::ARG_1.as_str(&env.interns));
     struct2.set_name(Symbol::ARG_2.as_str(&env.interns));
@@ -731,15 +734,19 @@ fn build_struct_eq_help<'a, 'ctx>(
     for (index, field_layout) in field_layouts.iter().enumerate() {
         env.builder.position_at_end(current);
 
-        let field1 = env
-            .builder
-            .build_extract_value(struct1, index as u32, "eq_field")
-            .unwrap();
+        let field1 = struct_::RocStruct::from(struct1).load_at_index(
+            env,
+            layout_interner,
+            struct_layout,
+            index as _,
+        );
 
-        let field2 = env
-            .builder
-            .build_extract_value(struct2, index as u32, "eq_field")
-            .unwrap();
+        let field2 = struct_::RocStruct::from(struct2).load_at_index(
+            env,
+            layout_interner,
+            struct_layout,
+            index as _,
+        );
 
         let are_equal = if let LayoutRepr::RecursivePointer(rec_layout) =
             layout_interner.get_repr(*field_layout)
@@ -776,14 +783,12 @@ fn build_struct_eq_help<'a, 'ctx>(
             )
             .into_int_value()
         } else {
-            let lhs = use_roc_value(env, layout_interner, *field_layout, field1, "field1");
-            let rhs = use_roc_value(env, layout_interner, *field_layout, field2, "field2");
             build_eq(
                 env,
                 layout_interner,
                 layout_ids,
-                lhs,
-                rhs,
+                field1,
+                field2,
                 *field_layout,
                 *field_layout,
             )
@@ -1299,13 +1304,11 @@ fn eq_ptr_to_struct<'a, 'ctx>(
 
     let struct1 = env
         .builder
-        .new_build_load(wrapper_type, struct1_ptr, "load_struct1")
-        .into_struct_value();
+        .new_build_load(wrapper_type, struct1_ptr, "load_struct1");
 
     let struct2 = env
         .builder
-        .new_build_load(wrapper_type, struct2_ptr, "load_struct2")
-        .into_struct_value();
+        .new_build_load(wrapper_type, struct2_ptr, "load_struct2");
 
     build_struct_eq(
         env,

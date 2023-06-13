@@ -153,6 +153,7 @@ pub fn argument_type_from_layout<'a, 'ctx>(
 ) -> BasicTypeEnum<'ctx> {
     use LayoutRepr::*;
 
+    // TODO: can this just be "basic_type_from_layout => ptr if passed_by_ref"?
     match layout_interner.get_repr(layout) {
         LambdaSet(lambda_set) => {
             argument_type_from_layout(env, layout_interner, lambda_set.runtime_representation())
@@ -167,6 +168,7 @@ pub fn argument_type_from_layout<'a, 'ctx>(
                 base
             }
         }
+        Struct(_) => argument_type_from_struct_layout(env, layout_interner, layout),
         _ => basic_type_from_layout(env, layout_interner, layout),
     }
 }

@@ -73,18 +73,20 @@ impl<'ctx> RocStruct<'ctx> {
         }
     }
 
+    /// Compile an [roc_mono::ir::Expr::StructAtIndex] expression.
     pub fn load_at_index<'a>(
         &self,
         env: &Env<'a, 'ctx, '_>,
-        layout_interner: &mut STLayoutInterner<'a>,
-        layout: InLayout<'a>,
+        layout_interner: &STLayoutInterner<'a>,
+        struct_layout: InLayout<'a>,
         index: u64,
     ) -> BasicValueEnum<'ctx> {
-        let layout = if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get_repr(layout) {
-            lambda_set.runtime_representation()
-        } else {
-            layout
-        };
+        let layout =
+            if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get_repr(struct_layout) {
+                lambda_set.runtime_representation()
+            } else {
+                struct_layout
+            };
 
         match (self, layout_interner.get_repr(layout)) {
             (Self::ByValue(argument), LayoutRepr::Struct(field_layouts)) => {
@@ -105,22 +107,20 @@ impl<'ctx> RocStruct<'ctx> {
 
 fn index_struct_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     field_layouts: &[InLayout<'a>],
     argument: StructValue<'ctx>,
     index: u64,
 ) -> BasicValueEnum<'ctx> {
     debug_assert!(!field_layouts.is_empty());
 
-    let field_value = env
-        .builder
-        .build_extract_value(
-            argument,
-            index as u32,
-            env.arena
-                .alloc(format!("struct_field_access_record_{}", index)),
-        )
-        .unwrap();
+    let field_value = get_field_from_value(
+        env,
+        argument,
+        index as _,
+        env.arena
+            .alloc(format!("struct_field_access_record_{}", index)),
+    );
 
     let field_layout = field_layouts[index as usize];
 
@@ -135,24 +135,24 @@ fn index_struct_value<'a, 'ctx>(
 
 fn index_struct_ptr<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     field_layouts: &[InLayout<'a>],
     ptr: PointerValue<'ctx>,
     index: u64,
 ) -> BasicValueEnum<'ctx> {
     debug_assert!(!field_layouts.is_empty());
 
-    let field_value = env
-        .builder
-        .build_struct_gep(
-            ptr,
-            index as u32,
-            env.arena
-                .alloc(format!("struct_field_access_record_{}", index)),
-        )
-        .unwrap();
+    let field_value = get_field_from_ptr(
+        env,
+        ptr,
+        index as _,
+        env.arena
+            .alloc(format!("struct_field_access_record_{}", index)),
+    );
 
     let field_layout = field_layouts[index as usize];
+
+    dbg!(layout_interner.dbg(field_layout));
 
     load_roc_value(
         env,
@@ -161,6 +161,26 @@ fn index_struct_ptr<'a, 'ctx>(
         field_value,
         "struct_field",
     )
+}
+
+fn get_field_from_value<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    argument: StructValue<'ctx>,
+    index: u32,
+    name: &str,
+) -> BasicValueEnum<'ctx> {
+    env.builder
+        .build_extract_value(argument, index, name)
+        .unwrap()
+}
+
+fn get_field_from_ptr<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    ptr: PointerValue<'ctx>,
+    index: u32,
+    name: &str,
+) -> PointerValue<'ctx> {
+    env.builder.build_struct_gep(ptr, index, name).unwrap()
 }
 
 struct BuildStruct<'ctx> {
