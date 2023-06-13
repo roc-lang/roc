@@ -92,6 +92,9 @@ flags! {
     /// Prints all type mismatches hit during type unification.
     ROC_PRINT_MISMATCHES
 
+    /// Prints all type variables entered for fixpoint-fixing.
+    ROC_PRINT_FIXPOINT_FIXING
+
     /// Verifies that after let-generalization of a def, any rigid variables in the type annotation
     /// of the def are indeed generalized.
     ///
