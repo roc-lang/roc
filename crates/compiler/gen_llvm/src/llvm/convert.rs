@@ -171,6 +171,21 @@ pub fn argument_type_from_layout<'a, 'ctx>(
     }
 }
 
+/// Some records are passed by-reference.
+fn argument_type_from_struct_layout<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    struct_layout: InLayout<'a>,
+) -> BasicTypeEnum<'ctx> {
+    let stack_type = basic_type_from_layout(env, layout_interner, struct_layout);
+
+    if layout_interner.is_passed_by_reference(struct_layout) {
+        stack_type.ptr_type(AddressSpace::default()).into()
+    } else {
+        stack_type
+    }
+}
+
 /// Non-recursive tag unions are stored on the stack, but passed by-reference
 pub fn argument_type_from_union_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
