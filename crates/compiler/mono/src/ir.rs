@@ -6891,7 +6891,7 @@ pub fn from_can<'a>(
         Dbg {
             loc_condition,
             loc_continuation,
-            variable,
+            variable: cond_variable,
             symbol: dbg_symbol,
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
@@ -6902,7 +6902,7 @@ pub fn from_can<'a>(
                 layout_cache,
                 dbg_symbol,
                 *loc_condition,
-                variable,
+                cond_variable,
                 rest,
             )
         }
