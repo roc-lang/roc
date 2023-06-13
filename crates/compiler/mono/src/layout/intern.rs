@@ -77,8 +77,9 @@ cache_interned_layouts! {
     17, OPAQUE_PTR,  pub, nosema!(LayoutRepr::OPAQUE_PTR)
     18, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
     19, STR_PTR, pub, nosema!(LayoutRepr::Boxed(Layout::STR))
+    20, LIST_U8, pub, nosema!(LayoutRepr::Builtin(crate::layout::Builtin::List(Layout::U8)))
 
-    ; 20
+    ; 21
 }
 
 macro_rules! impl_to_from_int_width {
@@ -468,6 +469,7 @@ impl std::fmt::Debug for InLayout<'_> {
             Layout::OPAQUE_PTR => f.write_str("InLayout(OPAQUE_PTR)"),
             Layout::NAKED_RECURSIVE_PTR => f.write_str("InLayout(NAKED_RECURSIVE_PTR)"),
             Layout::STR_PTR => f.write_str("InLayout(STR_PTR)"),
+            Layout::LIST_U8 => f.write_str("InLayout(LIST_U8)"),
             _ => f.debug_tuple("InLayout").field(&self.0).finish(),
         }
     }
