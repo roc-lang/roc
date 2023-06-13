@@ -399,7 +399,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             }
 
-            crate::llvm::build_str::decode_from_utf8_result(env, result_ptr).into()
+            crate::llvm::build_str::decode_from_utf8_result(env, layout_interner, result_ptr).into()
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8
