@@ -23,6 +23,8 @@ use RegStorage::*;
 use StackStorage::*;
 use Storage::*;
 
+use super::RegisterWidth;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
     General(GeneralReg),
@@ -343,10 +345,19 @@ impl<
                 sign_extend,
             }) => {
                 let reg = self.get_general_reg(buf);
+
+                let register_width = match size {
+                    8 => RegisterWidth::W64,
+                    4 => RegisterWidth::W32,
+                    2 => RegisterWidth::W16,
+                    1 => RegisterWidth::W8,
+                    _ => internal_error!("Invalid size: {size}"),
+                };
+
                 if sign_extend {
-                    ASM::movsx_reg64_base32(buf, reg, base_offset, size as u8);
+                    ASM::movsx_reg_base32(buf, register_width, reg, base_offset);
                 } else {
-                    ASM::movzx_reg64_base32(buf, reg, base_offset, size as u8);
+                    ASM::movzx_reg_base32(buf, register_width, reg, base_offset);
                 }
                 self.general_used_regs.push((reg, *sym));
                 self.symbol_storage_map.insert(*sym, Reg(General(reg)));
@@ -469,10 +480,18 @@ impl<
             }) => {
                 debug_assert!(*size <= 8);
 
+                let register_width = match size {
+                    8 => RegisterWidth::W64,
+                    4 => RegisterWidth::W32,
+                    2 => RegisterWidth::W16,
+                    1 => RegisterWidth::W8,
+                    _ => internal_error!("Invalid size: {size}"),
+                };
+
                 if *sign_extend {
-                    ASM::movsx_reg64_base32(buf, reg, *base_offset, *size as u8)
+                    ASM::movsx_reg_base32(buf, register_width, reg, *base_offset)
                 } else {
-                    ASM::movzx_reg64_base32(buf, reg, *base_offset, *size as u8)
+                    ASM::movzx_reg_base32(buf, register_width, reg, *base_offset)
                 }
             }
             Stack(Complex { size, .. }) => {

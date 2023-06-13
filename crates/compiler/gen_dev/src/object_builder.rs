@@ -343,8 +343,8 @@ fn build_object<'a, B: Backend<'a>>(
     for ((sym, layout), proc) in helper_symbols_and_layouts.into_iter().zip(helper_procs) {
         debug_assert_eq!(sym, proc.name.name());
 
-        let fn_name = backend.function_symbol_to_string(
-            sym,
+        let fn_name = backend.lambda_name_to_string(
+            LambdaName::no_niche(sym),
             layout.arguments.iter().copied(),
             None,
             layout.result,
@@ -559,8 +559,8 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
         Exposed::Exposed => layout_ids
             .get_toplevel(sym, &layout)
             .to_exposed_symbol_string(sym, backend.interns()),
-        Exposed::NotExposed => backend.function_symbol_to_string(
-            sym,
+        Exposed::NotExposed => backend.lambda_name_to_string(
+            proc.name,
             layout.arguments.iter().copied(),
             None,
             layout.result,

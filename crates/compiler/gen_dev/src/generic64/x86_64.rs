@@ -1687,29 +1687,39 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
-        debug_assert!(size <= 8);
-        match size {
-            8 => Self::mov_reg64_base32(buf, dst, offset),
-            4 => movsx_reg64_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
-            2 => movsx_reg64_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
-            1 => movsx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
-            _ => internal_error!("Invalid size for sign extension: {size}"),
+    fn movsx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        use RegisterWidth::*;
+
+        match register_width {
+            W64 => Self::mov_reg64_base32(buf, dst, offset),
+            W32 => movsx_reg64_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            W16 => movsx_reg64_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            W8 => movsx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
         }
     }
     #[inline(always)]
-    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32, size: u8) {
-        debug_assert!(size <= 8);
-        match size {
-            8 => Self::mov_reg64_base32(buf, dst, offset),
-            4 => {
+    fn movzx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        use RegisterWidth::*;
+
+        match register_width {
+            W64 => Self::mov_reg64_base32(buf, dst, offset),
+            W32 => {
                 // The Intel documentation (3.4.1.1 General-Purpose Registers in 64-Bit Mode in manual Basic Architecture))
                 // 32-bit operands generate a 32-bit result, zero-extended to a 64-bit result in the destination general-purpose register.
                 Self::mov_reg64_base32(buf, dst, offset)
             }
-            2 => movzx_reg64_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
-            1 => movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
-            _ => internal_error!("Invalid size for zero extension: {size}"),
+            W16 => movzx_reg64_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            W8 => movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
         }
     }
 

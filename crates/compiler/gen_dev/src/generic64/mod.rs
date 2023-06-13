@@ -13,7 +13,7 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+    Builtin, InLayout, LambdaName, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
     TagIdIntType, UnionLayout,
 };
 use roc_mono::low_level::HigherOrder;
@@ -391,10 +391,19 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     /// Sign extends the data at `offset` with `size` as it copies it to `dst`
     /// size must be less than or equal to 8.
-    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
-    /// Zero extends the data at `offset` with `size` as it copies it to `dst`
-    /// size must be less than or equal to 8.
-    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
+    fn movsx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+    );
+
+    fn movzx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+    );
 
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
@@ -1590,8 +1599,8 @@ impl<
                     HelperOp::Eq,
                 );
 
-                let fn_name = self.function_symbol_to_string(
-                    eq_symbol,
+                let fn_name = self.lambda_name_to_string(
+                    LambdaName::no_niche(eq_symbol),
                     [*arg_layout, *arg_layout].into_iter(),
                     None,
                     Layout::U8,
@@ -1815,6 +1824,34 @@ impl<
         );
     }
 
+    fn build_num_cmp(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    ) {
+        // This implements the expression:
+        //            (x != y) as u8 + (x < y) as u8
+        // For x==y:  (false as u8)  + (false as u8) = 0 = RocOrder::Eq
+        // For x>y:   (true as u8)   + (false as u8) = 1 = RocOrder::Gt
+        // For x<y:   (true as u8)   + (true as u8)  = 2 = RocOrder::Lt
+        // u8 is represented in the stack machine as i32, but written to memory as 1 byte
+        let not_equal = self.debug_symbol("not_equal");
+
+        self.build_neq(&not_equal, src1, src2, arg_layout);
+        self.build_num_lt(dst, src1, src2, arg_layout);
+
+        let neq_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &not_equal);
+        let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
+
+        ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, neq_reg);
+
+        self.free_symbol(&not_equal);
+    }
+
     fn build_num_lt(
         &mut self,
         dst: &Symbol,
@@ -1947,8 +1984,8 @@ impl<
                 self.load_layout_stack_size(old_element_layout, old_element_width);
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let caller_string = self.function_symbol_to_string(
-                    caller_proc.proc_symbol,
+                let caller_string = self.lambda_name_to_string(
+                    LambdaName::no_niche(caller_proc.proc_symbol),
                     std::iter::empty(),
                     None,
                     Layout::UNIT,
@@ -4047,10 +4084,12 @@ impl<
                     }
                     IntWidth::I16 | IntWidth::U16 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                        ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
                         ASM::mov_reg16_mem16_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                     IntWidth::I8 | IntWidth::U8 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                        ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
                         ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, offset);
                     }
                 },
@@ -4065,6 +4104,8 @@ impl<
                 Builtin::Bool => {
                     // the same as an 8-bit integer
                     let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+
+                    ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
                     ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, offset);
                 }
                 Builtin::Decimal => {
