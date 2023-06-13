@@ -2297,7 +2297,7 @@ fn list_literal<'a, 'ctx>(
 
 pub fn load_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     source: PointerValue<'ctx>,
     name: &str,
@@ -2317,7 +2317,7 @@ pub fn load_roc_value<'a, 'ctx>(
 
 pub fn use_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     source: BasicValueEnum<'ctx>,
     name: &str,
@@ -2339,7 +2339,7 @@ pub fn use_roc_value<'a, 'ctx>(
 
 pub fn store_roc_value_opaque<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     opaque_destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -2355,7 +2355,7 @@ pub fn store_roc_value_opaque<'a, 'ctx>(
 
 pub fn store_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
