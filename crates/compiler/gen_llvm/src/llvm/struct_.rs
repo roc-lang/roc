@@ -25,9 +25,9 @@ pub(crate) enum RocStruct<'ctx> {
     ByReference(PointerValue<'ctx>),
 }
 
-impl<'ctx> Into<BasicValueEnum<'ctx>> for RocStruct<'ctx> {
-    fn into(self) -> BasicValueEnum<'ctx> {
-        self.as_basic_value_enum()
+impl<'ctx> From<RocStruct<'ctx>> for BasicValueEnum<'ctx> {
+    fn from(roc_struct: RocStruct<'ctx>) -> Self {
+        roc_struct.as_basic_value_enum()
     }
 }
 
