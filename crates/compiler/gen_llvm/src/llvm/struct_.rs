@@ -2,7 +2,7 @@
 
 use bumpalo::collections::Vec as AVec;
 use inkwell::{
-    types::{BasicType, BasicTypeEnum, StructType},
+    types::StructType,
     values::{BasicValue, BasicValueEnum, PointerValue, StructValue},
 };
 use roc_module::symbol::Symbol;
@@ -15,51 +15,6 @@ use super::{
     convert::basic_type_from_layout,
     scope::Scope,
 };
-
-pub(crate) enum RocStructType<'ctx> {
-    /// The roc struct should be passed by rvalue.
-    ByValue(StructType<'ctx>),
-}
-
-impl<'ctx> Into<BasicTypeEnum<'ctx>> for RocStructType<'ctx> {
-    fn into(self) -> BasicTypeEnum<'ctx> {
-        self.as_basic_type_enum()
-    }
-}
-
-impl<'ctx> RocStructType<'ctx> {
-    pub fn build<'a>(
-        env: &Env<'a, 'ctx, '_>,
-        layout_interner: &mut STLayoutInterner<'a>,
-        fields: &[InLayout<'_>],
-    ) -> Self {
-        let struct_type = basic_type_from_record(env, layout_interner, fields);
-        RocStructType::ByValue(struct_type)
-    }
-
-    pub fn as_basic_type_enum(&self) -> BasicTypeEnum<'ctx> {
-        match self {
-            RocStructType::ByValue(struct_type) => struct_type.as_basic_type_enum(),
-        }
-    }
-}
-
-fn basic_type_from_record<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    fields: &[InLayout<'_>],
-) -> StructType<'ctx> {
-    let mut field_types = AVec::with_capacity_in(fields.len(), env.arena);
-
-    for field_layout in fields.iter() {
-        let typ = basic_type_from_layout(env, layout_interner, *field_layout);
-
-        field_types.push(typ);
-    }
-
-    env.context
-        .struct_type(field_types.into_bump_slice(), false)
-}
 
 #[derive(Debug)]
 pub(crate) enum RocStruct<'ctx> {

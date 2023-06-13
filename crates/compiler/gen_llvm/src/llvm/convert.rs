@@ -1,5 +1,5 @@
 use crate::llvm::build::{BuilderExt, Env};
-use crate::llvm::struct_::RocStructType;
+use bumpalo::collections::Vec as AVec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
@@ -22,7 +22,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
 
     match layout_interner.get_repr(layout) {
         Struct(sorted_fields, ..) => {
-            RocStructType::build(env, layout_interner, sorted_fields).into()
+            basic_type_from_record(env, layout_interner, sorted_fields).into()
         }
         LambdaSet(lambda_set) => {
             basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation())
@@ -41,6 +41,23 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
 
         Builtin(builtin) => basic_type_from_builtin(env, &builtin),
     }
+}
+
+fn basic_type_from_record<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    fields: &[InLayout<'_>],
+) -> StructType<'ctx> {
+    let mut field_types = AVec::with_capacity_in(fields.len(), env.arena);
+
+    for field_layout in fields.iter() {
+        let typ = basic_type_from_layout(env, layout_interner, *field_layout);
+
+        field_types.push(typ);
+    }
+
+    env.context
+        .struct_type(field_types.into_bump_slice(), false)
 }
 
 pub fn struct_type_from_union_layout<'a, 'ctx>(
@@ -82,7 +99,7 @@ pub fn struct_type_from_union_layout<'a, 'ctx>(
     }
 }
 
-pub fn basic_type_from_union_layout<'a, 'ctx>(
+fn basic_type_from_union_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     union_layout: &UnionLayout<'_>,
