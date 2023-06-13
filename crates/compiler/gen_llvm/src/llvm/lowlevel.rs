@@ -1882,6 +1882,32 @@ fn dec_to_i128<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basi
     }
 }
 
+fn dec_from_i128<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    int: IntValue<'ctx>,
+    signed: bool,
+) -> BasicValueEnum<'ctx> {
+    use roc_target::OperatingSystem::*;
+
+    let bitcode_fn = if signed {
+        bitcode::DEC_FROM_I128
+    } else {
+        bitcode::DEC_FROM_U128
+    };
+
+    match env.target_info.operating_system {
+        Windows => {
+            let alloca = env
+                .builder
+                .build_alloca(env.context.i128_type(), "i128_alloca");
+            env.builder.build_store(alloca, int);
+            call_bitcode_fn(env, &[alloca.into()], bitcode_fn)
+        }
+        Unix => call_bitcode_fn(env, &[int.into()], bitcode_fn),
+        Wasi => unimplemented!(),
+    }
+}
+
 fn dec_binop_with_overflow<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     fn_name: &str,
@@ -2107,20 +2133,26 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
         }
         NumToFrac => {
             // This is an Int, so we need to convert it.
-
-            let target_float_type = match layout_interner.get_repr(return_layout) {
+            match layout_interner.get_repr(return_layout) {
                 LayoutRepr::Builtin(Builtin::Float(float_width)) => {
-                    convert::float_type_from_float_width(env, float_width)
+                    let target_float_type = convert::float_type_from_float_width(env, float_width);
+
+                    bd.build_cast(
+                        InstructionOpcode::SIToFP,
+                        arg,
+                        target_float_type,
+                        "i64_to_f64",
+                    )
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    let is_signed = arg_width.is_signed();
+                    let name = if is_signed { "to_i128" } else { "to_u128" };
+                    let cast_int =
+                        bd.build_int_cast_sign_flag(arg, env.context.i128_type(), is_signed, name);
+                    dec_from_i128(env, cast_int, is_signed)
                 }
                 _ => internal_error!("There can only be floats here!"),
-            };
-
-            bd.build_cast(
-                InstructionOpcode::SIToFP,
-                arg,
-                target_float_type,
-                "i64_to_f64",
-            )
+            }
         }
         NumToIntChecked => {
             // return_layout : Result N [OutOfBounds]* ~ { result: N, out_of_bounds: bool }

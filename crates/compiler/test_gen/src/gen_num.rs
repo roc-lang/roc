@@ -3990,3 +3990,33 @@ fn num_max() {
     assert_evals_to!(r#"Num.max Num.minI64 Num.maxI64"#, i64::MAX, i64);
     assert_evals_to!(r#"Num.max Num.maxI64 Num.minI64"#, i64::MAX, i64);
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn int_to_frac_dec_unsigned() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = Num.toFrac 11u8
+            x == 11.0dec
+            "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn int_to_frac_dec_signed() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x = Num.toFrac 11i8
+            x == 11.0dec
+            "#
+        ),
+        true,
+        bool
+    );
+}
