@@ -2220,7 +2220,7 @@ fn issue_4705() {
     )
 }
 
-#[mono_test(mode = "test")]
+#[mono_test(mode = "test", large_stack = "true")]
 fn issue_4749() {
     indoc!(
         r###"
@@ -2460,7 +2460,7 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     )
 }
 
-#[mono_test(mode = "test")]
+#[mono_test(mode = "test", large_stack = "true")]
 fn issue_4772_weakened_monomorphic_destructure() {
     indoc!(
         r###"
@@ -2956,7 +2956,7 @@ fn binary_tree_fbip() {
     )
 }
 
-#[mono_test]
+#[mono_test(large_stack = "true")]
 fn rb_tree_fbip() {
     indoc!(
         r#"
@@ -3076,6 +3076,29 @@ fn record_update() {
     )
 }
 
+#[mono_test]
+fn drop_specialize_after_jump() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: { left: v, right: v }, right: v }
+            tupleItem t
+        
+        tupleItem = \t ->
+            true = Bool.true
+            l = t.left
+            x = if true then 1 else 0
+            ll = l.left
+            { left: t, right: ll}
+        "#
+    )
+}
+
 #[mono_test(mode = "test")]
 fn dbg_in_expect() {
     indoc!(
@@ -3086,5 +3109,27 @@ fn dbg_in_expect() {
             dbg ""
             Bool.true
         "###
+    )
+}
+
+#[mono_test]
+fn drop_specialize_before_jump() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: v, right: v }
+            tupleItem t
+
+        tupleItem = \t ->
+            true = Bool.true
+            l = t.left
+            x = if true then 1 else 0
+            {left: l, right: {left: l, right: t}}
+        "#
     )
 }

@@ -375,9 +375,29 @@ fn specialize_drops_stmt<'a, 'i>(
                 }};
             }
 
+            environment.jump_incremented_symbols =
+                new_default_branch.2.jump_incremented_symbols.clone();
+
             let newer_branches = new_branches
                 .iter()
                 .map(|(label, info, branch, branch_env)| {
+                    for (joinpoint, current_incremented_symbols) in
+                        environment.jump_incremented_symbols.iter_mut()
+                    {
+                        let opt_symbols = branch_env.jump_incremented_symbols.get(joinpoint);
+                        if let Some(branch_incremented_symbols) = opt_symbols {
+                            current_incremented_symbols.map.retain(|key, join_count| {
+                                let opt_count = branch_incremented_symbols.map.get(key);
+                                if let Some(count) = opt_count {
+                                    *join_count = std::cmp::min(*join_count, *count);
+                                }
+
+                                // retain only the Some cases
+                                opt_count.is_some()
+                            });
+                        }
+                    }
+
                     let new_branch = insert_incs!(branch_env, branch);
 
                     (*label, info.clone(), new_branch.clone())
@@ -624,35 +644,118 @@ fn specialize_drops_stmt<'a, 'i>(
             body,
             remainder,
         } => {
-            let mut new_environment = environment.clone();
-            new_environment.incremented_symbols.clear();
+            // We cannot perform this optimization if the joinpoint is recursive.
+            // E.g. if the body of a recursive joinpoint contains an increment, we do not want to move that increment up to the remainder.
 
+            let mut remainder_environment = environment.clone();
+
+            let new_remainder = specialize_drops_stmt(
+                arena,
+                layout_interner,
+                ident_ids,
+                &mut remainder_environment,
+                remainder,
+            );
+
+            let mut body_environment = environment.clone();
             for param in parameters.iter() {
-                new_environment.add_symbol_layout(param.symbol, param.layout);
+                body_environment.add_symbol_layout(param.symbol, param.layout);
             }
+            body_environment.incremented_symbols.clear();
 
             let new_body = specialize_drops_stmt(
                 arena,
                 layout_interner,
                 ident_ids,
-                &mut new_environment,
+                &mut body_environment,
                 body,
             );
+
+            let remainder_jump_info = remainder_environment.jump_incremented_symbols.get(id);
+
+            let body_jump_info = body_environment.jump_incremented_symbols.get(id);
+
+            let (newer_body, newer_remainder) = match (remainder_jump_info, body_jump_info) {
+                // We have info from the remainder, and the body is not recursive.
+                // Meaning we can pass the incremented_symbols from the remainder to the body.
+                (Some(jump_info), None) if !jump_info.is_empty() => {
+                    // Update body with incremented symbols from remainder
+                    body_environment.incremented_symbols = jump_info.clone();
+
+                    let newer_body = specialize_drops_stmt(
+                        arena,
+                        layout_interner,
+                        ident_ids,
+                        &mut body_environment,
+                        body,
+                    );
+
+                    // Update remainder
+                    environment.join_incremented_symbols.insert(
+                        *id,
+                        JoinUsage {
+                            join_consumes: jump_info.clone(),
+                            join_returns: body_environment.incremented_symbols,
+                        },
+                    );
+                    let newer_remainder = specialize_drops_stmt(
+                        arena,
+                        layout_interner,
+                        ident_ids,
+                        environment,
+                        remainder,
+                    );
+
+                    (newer_body, newer_remainder)
+                }
+                _ => {
+                    // Keep the body and remainder as is.
+                    // Update the environment with remainder environment.
+
+                    *environment = remainder_environment;
+
+                    (new_body, new_remainder)
+                }
+            };
 
             arena.alloc(Stmt::Join {
                 id: *id,
                 parameters,
-                body: new_body,
-                remainder: specialize_drops_stmt(
-                    arena,
-                    layout_interner,
-                    ident_ids,
-                    environment,
-                    remainder,
-                ),
+                body: newer_body,
+                remainder: newer_remainder,
             })
         }
-        Stmt::Jump(joinpoint_id, arguments) => arena.alloc(Stmt::Jump(*joinpoint_id, arguments)),
+        Stmt::Jump(joinpoint_id, arguments) => {
+            match environment.join_incremented_symbols.get(joinpoint_id) {
+                Some(JoinUsage {
+                    join_consumes,
+                    join_returns,
+                }) => {
+                    // Consume all symbols that were consumed in the join.
+                    for (symbol, count) in join_consumes.map.iter() {
+                        for _ in 0..*count {
+                            let popped = environment.incremented_symbols.pop(symbol);
+                            debug_assert!(
+                                popped,
+                                "Every incremented symbol should be available from jumps"
+                            );
+                        }
+                    }
+                    for (symbol, count) in join_returns.map.iter() {
+                        environment
+                            .incremented_symbols
+                            .insert_count(*symbol, *count);
+                    }
+                }
+                None => {
+                    // No join usage, let the join know the minimum amount of symbols that were incremented from each jump.
+                    environment
+                        .jump_incremented_symbols
+                        .insert(*joinpoint_id, environment.incremented_symbols.clone());
+                }
+            }
+            arena.alloc(Stmt::Jump(*joinpoint_id, arguments))
+        }
         Stmt::Crash(symbol, crash_tag) => arena.alloc(Stmt::Crash(*symbol, *crash_tag)),
     }
 }
@@ -792,12 +895,13 @@ fn specialize_union<'a, 'i>(
                     for (index, _layout) in field_layouts.iter().enumerate() {
                         for (child, t, _i) in children_clone
                             .iter()
+                            .rev()
                             .filter(|(_child, _t, i)| *i == index as u64)
                         {
                             debug_assert_eq!(tag, *t);
 
                             let removed = incremented_children.pop(child);
-                            index_symbols.insert(index, (*child, removed));
+                            index_symbols.entry(index).or_insert((*child, removed));
 
                             if removed {
                                 break;
@@ -1047,7 +1151,11 @@ fn specialize_list<'a, 'i>(
                     let mut index_symbols = MutMap::default();
 
                     for index in 0..length {
-                        for (child, i) in children_clone.iter().filter(|(_child, i)| *i == index) {
+                        for (child, i) in children_clone
+                            .iter()
+                            .rev()
+                            .filter(|(_child, i)| *i == index)
+                        {
                             debug_assert!(length > *i);
 
                             let removed = incremented_children.pop(child);
@@ -1297,6 +1405,18 @@ struct DropSpecializationEnvironment<'a> {
 
     // Map containing the current known length of a list.
     list_length: MutMap<Symbol, u64>,
+
+    // A map containing the minimum number of symbol increments from jumps for a joinpoint.
+    jump_incremented_symbols: MutMap<JoinPointId, CountingMap<Symbol>>,
+
+    // A map containing the expected number of symbol increments from joinpoints for a jump.
+    join_incremented_symbols: MutMap<JoinPointId, JoinUsage>,
+}
+
+#[derive(Clone)]
+struct JoinUsage {
+    join_consumes: CountingMap<Symbol>,
+    join_returns: CountingMap<Symbol>,
 }
 
 impl<'a> DropSpecializationEnvironment<'a> {
@@ -1314,6 +1434,8 @@ impl<'a> DropSpecializationEnvironment<'a> {
             symbol_tag: MutMap::default(),
             symbol_index: MutMap::default(),
             list_length: MutMap::default(),
+            jump_incremented_symbols: MutMap::default(),
+            join_incremented_symbols: MutMap::default(),
         }
     }
 
@@ -1370,19 +1492,19 @@ impl<'a> DropSpecializationEnvironment<'a> {
         let mut res = Vec::new_in(self.arena);
 
         if let Some(children) = self.struct_children.get(parent) {
-            res.extend(children.iter().map(|(child, _)| child));
+            res.extend(children.iter().rev().map(|(child, _)| child));
         }
 
         if let Some(children) = self.union_children.get(parent) {
-            res.extend(children.iter().map(|(child, _, _)| child));
+            res.extend(children.iter().rev().map(|(child, _, _)| child));
         }
 
         if let Some(children) = self.box_children.get(parent) {
-            res.extend(children.iter());
+            res.extend(children.iter().rev());
         }
 
         if let Some(children) = self.list_children.get(parent) {
-            res.extend(children.iter().map(|(child, _)| child));
+            res.extend(children.iter().rev().map(|(child, _)| child));
         }
 
         res
@@ -1501,8 +1623,8 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 
 /// Map that contains a count for each key.
 /// Keys with a count of 0 are kept around, so that it can be seen that they were once present.
-#[derive(Clone)]
-struct CountingMap<K> {
+#[derive(Clone, PartialEq, Eq)]
+struct CountingMap<K: std::cmp::Eq + std::hash::Hash> {
     map: MutMap<K, u64>,
 }
 
@@ -1551,6 +1673,10 @@ where
     }
 
     fn clear(&mut self) {
-        self.map.clear();
+        self.map.clear()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }

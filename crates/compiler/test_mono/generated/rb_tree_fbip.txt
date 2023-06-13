@@ -25,13 +25,13 @@ procedure Test.3 (Test.9, Test.10, Test.11):
             let Test.18 : I64 = UnionAtIndex (Id 1) (Index 1) Test.9;
             let Test.19 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.9;
             let Test.17 : I32 = UnionAtIndex (Id 1) (Index 3) Test.9;
-            joinpoint #Derived_gen.16 #Derived_gen.22:
+            joinpoint #Derived_gen.72 #Derived_gen.78:
                 let Test.179 : Int1 = CallByName Num.22 Test.10 Test.17;
                 if Test.179 then
-                    joinpoint Test.238 #Derived_gen.96:
+                    joinpoint Test.238 #Derived_gen.152:
                         let Test.233 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.16 Test.10 Test.11;
                         let Test.232 : Int1 = false;
-                        let Test.231 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.96 UpdateModeId { id: 71 } TagId(1) Test.233 Test.18 Test.19 Test.17 Test.232;
+                        let Test.231 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.152 UpdateModeId { id: 71 } TagId(1) Test.233 Test.18 Test.19 Test.17 Test.232;
                         ret Test.231;
                     in
                     let Test.236 : U8 = 1i64;
@@ -43,7 +43,7 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                         let Test.239 : Int1 = lowlevel Eq Test.235 Test.234;
                         if Test.239 then
                             let Test.180 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.16 Test.10 Test.11;
-                            joinpoint Test.199 #Derived_gen.128:
+                            joinpoint Test.199 #Derived_gen.184:
                                 let Test.198 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                 let Test.20 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.198;
                                 inc Test.20;
@@ -54,52 +54,52 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                 let Test.25 : I64 = UnionAtIndex (Id 1) (Index 1) Test.180;
                                 let Test.26 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.180;
                                 let Test.24 : I32 = UnionAtIndex (Id 1) (Index 3) Test.180;
-                                joinpoint #Derived_gen.0 #Derived_gen.132 #Derived_gen.133 #Derived_gen.134:
+                                joinpoint #Derived_gen.30 #Derived_gen.188 #Derived_gen.189 #Derived_gen.190:
                                     let Test.186 : Int1 = false;
-                                    let Test.183 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.134 UpdateModeId { id: 107 } TagId(1) Test.20 Test.22 Test.23 Test.21 Test.186;
+                                    let Test.183 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.190 UpdateModeId { id: 107 } TagId(1) Test.20 Test.22 Test.23 Test.21 Test.186;
                                     let Test.185 : Int1 = false;
-                                    let Test.184 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.133 UpdateModeId { id: 106 } TagId(1) Test.26 Test.18 Test.19 Test.17 Test.185;
+                                    let Test.184 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.189 UpdateModeId { id: 106 } TagId(1) Test.26 Test.18 Test.19 Test.17 Test.185;
                                     let Test.182 : Int1 = true;
-                                    let Test.181 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.132 UpdateModeId { id: 105 } TagId(1) Test.183 Test.25 Test.184 Test.24 Test.182;
+                                    let Test.181 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.188 UpdateModeId { id: 105 } TagId(1) Test.183 Test.25 Test.184 Test.24 Test.182;
                                     ret Test.181;
                                 in
-                                let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.180;
-                                if #Derived_gen.1 then
-                                    let #Derived_gen.135 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.198, id: UpdateModeId { id: 108 } };
-                                    let #Derived_gen.136 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 109 } };
-                                    jump #Derived_gen.0 #Derived_gen.136 #Derived_gen.135 #Derived_gen.128;
+                                let #Derived_gen.31 : Int1 = lowlevel RefCountIsUnique Test.180;
+                                if #Derived_gen.31 then
+                                    let #Derived_gen.191 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.198, id: UpdateModeId { id: 108 } };
+                                    let #Derived_gen.192 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 109 } };
+                                    jump #Derived_gen.30 #Derived_gen.192 #Derived_gen.191 #Derived_gen.184;
                                 else
                                     inc Test.26;
-                                    let #Derived_gen.137 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 110 } };
-                                    let #Derived_gen.138 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                    jump #Derived_gen.0 #Derived_gen.137 #Derived_gen.128 #Derived_gen.138;
+                                    let #Derived_gen.193 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 110 } };
+                                    let #Derived_gen.194 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                                    jump #Derived_gen.30 #Derived_gen.193 #Derived_gen.184 #Derived_gen.194;
                             in
                             let Test.228 : U8 = 1i64;
                             let Test.229 : U8 = GetTagId Test.180;
                             let Test.230 : Int1 = lowlevel Eq Test.228 Test.229;
                             if Test.230 then
-                                joinpoint Test.225 #Derived_gen.150:
-                                    joinpoint Test.216 #Derived_gen.151:
+                                joinpoint Test.225 #Derived_gen.206:
+                                    joinpoint Test.216 #Derived_gen.207:
                                         let Test.46 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                         let Test.48 : I64 = UnionAtIndex (Id 1) (Index 1) Test.180;
                                         let Test.49 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.180;
                                         let Test.47 : I32 = UnionAtIndex (Id 1) (Index 3) Test.180;
-                                        joinpoint #Derived_gen.2 #Derived_gen.154 #Derived_gen.155:
+                                        joinpoint #Derived_gen.24 #Derived_gen.210 #Derived_gen.211:
                                             let Test.196 : Int1 = true;
-                                            let Test.195 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.155 UpdateModeId { id: 126 } TagId(1) Test.46 Test.48 Test.49 Test.47 Test.196;
+                                            let Test.195 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.211 UpdateModeId { id: 126 } TagId(1) Test.46 Test.48 Test.49 Test.47 Test.196;
                                             let Test.194 : Int1 = false;
-                                            let Test.193 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.154 UpdateModeId { id: 125 } TagId(1) Test.195 Test.18 Test.19 Test.17 Test.194;
+                                            let Test.193 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.210 UpdateModeId { id: 125 } TagId(1) Test.195 Test.18 Test.19 Test.17 Test.194;
                                             ret Test.193;
                                         in
-                                        let #Derived_gen.3 : Int1 = lowlevel RefCountIsUnique Test.180;
-                                        if #Derived_gen.3 then
-                                            let #Derived_gen.156 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 127 } };
-                                            jump #Derived_gen.2 #Derived_gen.156 #Derived_gen.151;
+                                        let #Derived_gen.25 : Int1 = lowlevel RefCountIsUnique Test.180;
+                                        if #Derived_gen.25 then
+                                            let #Derived_gen.212 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 127 } };
+                                            jump #Derived_gen.24 #Derived_gen.212 #Derived_gen.207;
                                         else
                                             inc Test.46;
                                             inc Test.49;
-                                            let #Derived_gen.157 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 128 } };
-                                            jump #Derived_gen.2 #Derived_gen.157 #Derived_gen.151;
+                                            let #Derived_gen.213 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 128 } };
+                                            jump #Derived_gen.24 #Derived_gen.213 #Derived_gen.207;
                                     in
                                     let Test.213 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                     let Test.214 : U8 = 1i64;
@@ -111,11 +111,11 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                         let Test.212 : Int1 = true;
                                         let Test.217 : Int1 = lowlevel Eq Test.212 Test.211;
                                         if Test.217 then
-                                            jump Test.199 #Derived_gen.150;
+                                            jump Test.199 #Derived_gen.206;
                                         else
-                                            jump Test.216 #Derived_gen.150;
+                                            jump Test.216 #Derived_gen.206;
                                     else
-                                        jump Test.216 #Derived_gen.150;
+                                        jump Test.216 #Derived_gen.206;
                                 in
                                 let Test.222 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.180;
                                 let Test.223 : U8 = 1i64;
@@ -127,7 +127,7 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                     let Test.221 : Int1 = true;
                                     let Test.226 : Int1 = lowlevel Eq Test.221 Test.220;
                                     if Test.226 then
-                                        joinpoint Test.207 #Derived_gen.158:
+                                        joinpoint Test.207 #Derived_gen.214:
                                             let Test.33 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                             let Test.35 : I64 = UnionAtIndex (Id 1) (Index 1) Test.180;
                                             let Test.200 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.180;
@@ -138,25 +138,25 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                             inc Test.39;
                                             let Test.37 : I32 = UnionAtIndex (Id 1) (Index 3) Test.200;
                                             let Test.34 : I32 = UnionAtIndex (Id 1) (Index 3) Test.180;
-                                            joinpoint #Derived_gen.4 #Derived_gen.162 #Derived_gen.163 #Derived_gen.164:
+                                            joinpoint #Derived_gen.28 #Derived_gen.218 #Derived_gen.219 #Derived_gen.220:
                                                 let Test.192 : Int1 = false;
-                                                let Test.189 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.164 UpdateModeId { id: 135 } TagId(1) Test.33 Test.35 Test.36 Test.34 Test.192;
+                                                let Test.189 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.220 UpdateModeId { id: 135 } TagId(1) Test.33 Test.35 Test.36 Test.34 Test.192;
                                                 let Test.191 : Int1 = false;
-                                                let Test.190 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.163 UpdateModeId { id: 134 } TagId(1) Test.39 Test.18 Test.19 Test.17 Test.191;
+                                                let Test.190 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.219 UpdateModeId { id: 134 } TagId(1) Test.39 Test.18 Test.19 Test.17 Test.191;
                                                 let Test.188 : Int1 = true;
-                                                let Test.187 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.162 UpdateModeId { id: 133 } TagId(1) Test.189 Test.38 Test.190 Test.37 Test.188;
+                                                let Test.187 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.218 UpdateModeId { id: 133 } TagId(1) Test.189 Test.38 Test.190 Test.37 Test.188;
                                                 ret Test.187;
                                             in
-                                            let #Derived_gen.5 : Int1 = lowlevel RefCountIsUnique Test.180;
-                                            if #Derived_gen.5 then
-                                                let #Derived_gen.165 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.200, id: UpdateModeId { id: 136 } };
-                                                let #Derived_gen.166 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 137 } };
-                                                jump #Derived_gen.4 #Derived_gen.166 #Derived_gen.165 #Derived_gen.158;
+                                            let #Derived_gen.29 : Int1 = lowlevel RefCountIsUnique Test.180;
+                                            if #Derived_gen.29 then
+                                                let #Derived_gen.221 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.200, id: UpdateModeId { id: 136 } };
+                                                let #Derived_gen.222 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 137 } };
+                                                jump #Derived_gen.28 #Derived_gen.222 #Derived_gen.221 #Derived_gen.214;
                                             else
                                                 inc Test.33;
-                                                let #Derived_gen.167 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 138 } };
-                                                let #Derived_gen.168 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                                jump #Derived_gen.4 #Derived_gen.167 #Derived_gen.158 #Derived_gen.168;
+                                                let #Derived_gen.223 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 138 } };
+                                                let #Derived_gen.224 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                                                jump #Derived_gen.28 #Derived_gen.223 #Derived_gen.214 #Derived_gen.224;
                                         in
                                         let Test.204 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                         let Test.205 : U8 = 1i64;
@@ -168,31 +168,31 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                             let Test.203 : Int1 = true;
                                             let Test.208 : Int1 = lowlevel Eq Test.203 Test.202;
                                             if Test.208 then
-                                                jump Test.199 #Derived_gen.22;
+                                                jump Test.199 #Derived_gen.78;
                                             else
-                                                jump Test.207 #Derived_gen.22;
+                                                jump Test.207 #Derived_gen.78;
                                         else
-                                            jump Test.207 #Derived_gen.22;
+                                            jump Test.207 #Derived_gen.78;
                                     else
-                                        jump Test.225 #Derived_gen.22;
+                                        jump Test.225 #Derived_gen.78;
                                 else
-                                    jump Test.225 #Derived_gen.22;
+                                    jump Test.225 #Derived_gen.78;
                             else
-                                decref #Derived_gen.22;
+                                decref #Derived_gen.78;
                                 dec Test.19;
                                 let Test.197 : [<rnu>C *self I64 *self I32 Int1, <null>] = TagId(0) ;
                                 ret Test.197;
                         else
-                            jump Test.238 #Derived_gen.22;
+                            jump Test.238 #Derived_gen.78;
                     else
-                        jump Test.238 #Derived_gen.22;
+                        jump Test.238 #Derived_gen.78;
                 else
                     let Test.117 : Int1 = CallByName Num.24 Test.10 Test.17;
                     if Test.117 then
-                        joinpoint Test.176 #Derived_gen.271:
+                        joinpoint Test.176 #Derived_gen.327:
                             let Test.171 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.19 Test.10 Test.11;
                             let Test.170 : Int1 = false;
-                            let Test.169 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.271 UpdateModeId { id: 241 } TagId(1) Test.16 Test.18 Test.171 Test.17 Test.170;
+                            let Test.169 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.327 UpdateModeId { id: 241 } TagId(1) Test.16 Test.18 Test.171 Test.17 Test.170;
                             ret Test.169;
                         in
                         let Test.174 : U8 = 1i64;
@@ -204,9 +204,9 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                             let Test.177 : Int1 = lowlevel Eq Test.173 Test.172;
                             if Test.177 then
                                 inc Test.19;
-                                let #Derived_gen.272 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.16, id: UpdateModeId { id: 242 } };
+                                let #Derived_gen.328 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.16, id: UpdateModeId { id: 242 } };
                                 let Test.118 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.19 Test.10 Test.11;
-                                joinpoint Test.137 #Derived_gen.317 #Derived_gen.318:
+                                joinpoint Test.137 #Derived_gen.373 #Derived_gen.374:
                                     let Test.136 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                     let Test.57 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.136;
                                     inc Test.57;
@@ -217,52 +217,52 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                     let Test.62 : I64 = UnionAtIndex (Id 1) (Index 1) Test.118;
                                     let Test.63 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
                                     let Test.61 : I32 = UnionAtIndex (Id 1) (Index 3) Test.118;
-                                    joinpoint #Derived_gen.6 #Derived_gen.323 #Derived_gen.324 #Derived_gen.325:
+                                    joinpoint #Derived_gen.70 #Derived_gen.379 #Derived_gen.380 #Derived_gen.381:
                                         let Test.124 : Int1 = false;
-                                        let Test.121 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.325 UpdateModeId { id: 295 } TagId(1) Test.57 Test.59 Test.60 Test.58 Test.124;
+                                        let Test.121 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.381 UpdateModeId { id: 295 } TagId(1) Test.57 Test.59 Test.60 Test.58 Test.124;
                                         let Test.123 : Int1 = false;
-                                        let Test.122 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.324 UpdateModeId { id: 294 } TagId(1) Test.63 Test.18 Test.19 Test.17 Test.123;
+                                        let Test.122 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.380 UpdateModeId { id: 294 } TagId(1) Test.63 Test.18 Test.19 Test.17 Test.123;
                                         let Test.120 : Int1 = true;
-                                        let Test.119 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.323 UpdateModeId { id: 293 } TagId(1) Test.121 Test.62 Test.122 Test.61 Test.120;
+                                        let Test.119 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.379 UpdateModeId { id: 293 } TagId(1) Test.121 Test.62 Test.122 Test.61 Test.120;
                                         ret Test.119;
                                     in
-                                    let #Derived_gen.7 : Int1 = lowlevel RefCountIsUnique Test.118;
-                                    if #Derived_gen.7 then
-                                        decref #Derived_gen.317;
-                                        let #Derived_gen.326 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.136, id: UpdateModeId { id: 296 } };
-                                        let #Derived_gen.327 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 297 } };
-                                        jump #Derived_gen.6 #Derived_gen.327 #Derived_gen.326 #Derived_gen.318;
+                                    let #Derived_gen.71 : Int1 = lowlevel RefCountIsUnique Test.118;
+                                    if #Derived_gen.71 then
+                                        decref #Derived_gen.373;
+                                        let #Derived_gen.382 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.136, id: UpdateModeId { id: 296 } };
+                                        let #Derived_gen.383 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 297 } };
+                                        jump #Derived_gen.70 #Derived_gen.383 #Derived_gen.382 #Derived_gen.374;
                                     else
                                         inc Test.63;
-                                        let #Derived_gen.328 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 298 } };
-                                        jump #Derived_gen.6 #Derived_gen.328 #Derived_gen.318 #Derived_gen.317;
+                                        let #Derived_gen.384 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 298 } };
+                                        jump #Derived_gen.70 #Derived_gen.384 #Derived_gen.374 #Derived_gen.373;
                                 in
                                 let Test.166 : U8 = 1i64;
                                 let Test.167 : U8 = GetTagId Test.118;
                                 let Test.168 : Int1 = lowlevel Eq Test.166 Test.167;
                                 if Test.168 then
-                                    joinpoint Test.163 #Derived_gen.341 #Derived_gen.342:
-                                        joinpoint Test.154 #Derived_gen.344:
+                                    joinpoint Test.163 #Derived_gen.397 #Derived_gen.398:
+                                        joinpoint Test.154 #Derived_gen.400:
                                             let Test.83 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                             let Test.85 : I64 = UnionAtIndex (Id 1) (Index 1) Test.118;
                                             let Test.86 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
                                             let Test.84 : I32 = UnionAtIndex (Id 1) (Index 3) Test.118;
-                                            joinpoint #Derived_gen.8 #Derived_gen.348 #Derived_gen.349:
+                                            joinpoint #Derived_gen.60 #Derived_gen.404 #Derived_gen.405:
                                                 let Test.134 : Int1 = true;
-                                                let Test.133 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.349 UpdateModeId { id: 319 } TagId(1) Test.83 Test.85 Test.86 Test.84 Test.134;
+                                                let Test.133 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.405 UpdateModeId { id: 319 } TagId(1) Test.83 Test.85 Test.86 Test.84 Test.134;
                                                 let Test.132 : Int1 = false;
-                                                let Test.131 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.348 UpdateModeId { id: 318 } TagId(1) Test.133 Test.18 Test.19 Test.17 Test.132;
+                                                let Test.131 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.404 UpdateModeId { id: 318 } TagId(1) Test.133 Test.18 Test.19 Test.17 Test.132;
                                                 ret Test.131;
                                             in
-                                            let #Derived_gen.9 : Int1 = lowlevel RefCountIsUnique Test.118;
-                                            if #Derived_gen.9 then
-                                                let #Derived_gen.350 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 320 } };
-                                                jump #Derived_gen.8 #Derived_gen.350 #Derived_gen.344;
+                                            let #Derived_gen.61 : Int1 = lowlevel RefCountIsUnique Test.118;
+                                            if #Derived_gen.61 then
+                                                let #Derived_gen.406 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 320 } };
+                                                jump #Derived_gen.60 #Derived_gen.406 #Derived_gen.400;
                                             else
                                                 inc Test.83;
                                                 inc Test.86;
-                                                let #Derived_gen.351 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 321 } };
-                                                jump #Derived_gen.8 #Derived_gen.351 #Derived_gen.344;
+                                                let #Derived_gen.407 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 321 } };
+                                                jump #Derived_gen.60 #Derived_gen.407 #Derived_gen.400;
                                         in
                                         let Test.151 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                         let Test.152 : U8 = 1i64;
@@ -274,13 +274,13 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                             let Test.150 : Int1 = true;
                                             let Test.155 : Int1 = lowlevel Eq Test.150 Test.149;
                                             if Test.155 then
-                                                jump Test.137 #Derived_gen.342 #Derived_gen.341;
+                                                jump Test.137 #Derived_gen.398 #Derived_gen.397;
                                             else
-                                                decref #Derived_gen.341;
-                                                jump Test.154 #Derived_gen.342;
+                                                decref #Derived_gen.397;
+                                                jump Test.154 #Derived_gen.398;
                                         else
-                                            decref #Derived_gen.341;
-                                            jump Test.154 #Derived_gen.342;
+                                            decref #Derived_gen.397;
+                                            jump Test.154 #Derived_gen.398;
                                     in
                                     let Test.160 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
                                     let Test.161 : U8 = 1i64;
@@ -292,7 +292,7 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                         let Test.159 : Int1 = true;
                                         let Test.164 : Int1 = lowlevel Eq Test.159 Test.158;
                                         if Test.164 then
-                                            joinpoint Test.145 #Derived_gen.352 #Derived_gen.353:
+                                            joinpoint Test.145 #Derived_gen.408 #Derived_gen.409:
                                                 let Test.70 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                                 let Test.72 : I64 = UnionAtIndex (Id 1) (Index 1) Test.118;
                                                 let Test.138 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
@@ -303,25 +303,25 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                                 inc Test.76;
                                                 let Test.74 : I32 = UnionAtIndex (Id 1) (Index 3) Test.138;
                                                 let Test.71 : I32 = UnionAtIndex (Id 1) (Index 3) Test.118;
-                                                joinpoint #Derived_gen.10 #Derived_gen.358 #Derived_gen.359 #Derived_gen.360:
+                                                joinpoint #Derived_gen.64 #Derived_gen.414 #Derived_gen.415 #Derived_gen.416:
                                                     let Test.130 : Int1 = false;
-                                                    let Test.127 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.360 UpdateModeId { id: 330 } TagId(1) Test.70 Test.72 Test.73 Test.71 Test.130;
+                                                    let Test.127 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.416 UpdateModeId { id: 330 } TagId(1) Test.70 Test.72 Test.73 Test.71 Test.130;
                                                     let Test.129 : Int1 = false;
-                                                    let Test.128 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.359 UpdateModeId { id: 329 } TagId(1) Test.76 Test.18 Test.19 Test.17 Test.129;
+                                                    let Test.128 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.415 UpdateModeId { id: 329 } TagId(1) Test.76 Test.18 Test.19 Test.17 Test.129;
                                                     let Test.126 : Int1 = true;
-                                                    let Test.125 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.358 UpdateModeId { id: 328 } TagId(1) Test.127 Test.75 Test.128 Test.74 Test.126;
+                                                    let Test.125 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.414 UpdateModeId { id: 328 } TagId(1) Test.127 Test.75 Test.128 Test.74 Test.126;
                                                     ret Test.125;
                                                 in
-                                                let #Derived_gen.11 : Int1 = lowlevel RefCountIsUnique Test.118;
-                                                if #Derived_gen.11 then
-                                                    decref #Derived_gen.352;
-                                                    let #Derived_gen.361 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.138, id: UpdateModeId { id: 331 } };
-                                                    let #Derived_gen.362 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 332 } };
-                                                    jump #Derived_gen.10 #Derived_gen.362 #Derived_gen.361 #Derived_gen.353;
+                                                let #Derived_gen.65 : Int1 = lowlevel RefCountIsUnique Test.118;
+                                                if #Derived_gen.65 then
+                                                    decref #Derived_gen.408;
+                                                    let #Derived_gen.417 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.138, id: UpdateModeId { id: 331 } };
+                                                    let #Derived_gen.418 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 332 } };
+                                                    jump #Derived_gen.64 #Derived_gen.418 #Derived_gen.417 #Derived_gen.409;
                                                 else
                                                     inc Test.70;
-                                                    let #Derived_gen.363 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 333 } };
-                                                    jump #Derived_gen.10 #Derived_gen.363 #Derived_gen.353 #Derived_gen.352;
+                                                    let #Derived_gen.419 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 333 } };
+                                                    jump #Derived_gen.64 #Derived_gen.419 #Derived_gen.409 #Derived_gen.408;
                                             in
                                             let Test.142 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                             let Test.143 : U8 = 1i64;
@@ -333,84 +333,84 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                                 let Test.141 : Int1 = true;
                                                 let Test.146 : Int1 = lowlevel Eq Test.141 Test.140;
                                                 if Test.146 then
-                                                    jump Test.137 #Derived_gen.272 #Derived_gen.22;
+                                                    jump Test.137 #Derived_gen.328 #Derived_gen.78;
                                                 else
-                                                    jump Test.145 #Derived_gen.272 #Derived_gen.22;
+                                                    jump Test.145 #Derived_gen.328 #Derived_gen.78;
                                             else
-                                                jump Test.145 #Derived_gen.272 #Derived_gen.22;
+                                                jump Test.145 #Derived_gen.328 #Derived_gen.78;
                                         else
-                                            jump Test.163 #Derived_gen.272 #Derived_gen.22;
+                                            jump Test.163 #Derived_gen.328 #Derived_gen.78;
                                     else
-                                        jump Test.163 #Derived_gen.272 #Derived_gen.22;
+                                        jump Test.163 #Derived_gen.328 #Derived_gen.78;
                                 else
-                                    decref #Derived_gen.272;
-                                    decref #Derived_gen.22;
-                                    joinpoint #Derived_gen.12:
+                                    decref #Derived_gen.328;
+                                    decref #Derived_gen.78;
+                                    joinpoint #Derived_gen.66:
                                         let Test.135 : [<rnu>C *self I64 *self I32 Int1, <null>] = TagId(0) ;
                                         ret Test.135;
                                     in
-                                    let #Derived_gen.15 : Int1 = lowlevel RefCountIsUnique Test.19;
-                                    if #Derived_gen.15 then
-                                        let #Derived_gen.14 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.19;
-                                        dec #Derived_gen.14;
-                                        let #Derived_gen.13 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.19;
-                                        dec #Derived_gen.13;
+                                    let #Derived_gen.69 : Int1 = lowlevel RefCountIsUnique Test.19;
+                                    if #Derived_gen.69 then
+                                        let #Derived_gen.68 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.19;
+                                        dec #Derived_gen.68;
+                                        let #Derived_gen.67 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.19;
+                                        dec #Derived_gen.67;
                                         decref Test.19;
-                                        jump #Derived_gen.12;
+                                        jump #Derived_gen.66;
                                     else
                                         decref Test.19;
-                                        jump #Derived_gen.12;
+                                        jump #Derived_gen.66;
                             else
-                                jump Test.176 #Derived_gen.22;
+                                jump Test.176 #Derived_gen.78;
                         else
-                            jump Test.176 #Derived_gen.22;
+                            jump Test.176 #Derived_gen.78;
                     else
                         let Test.116 : Int1 = false;
-                        let Test.115 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.22 UpdateModeId { id: 2 } TagId(1) Test.16 Test.11 Test.19 Test.10 Test.116;
+                        let Test.115 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.78 UpdateModeId { id: 2 } TagId(1) Test.16 Test.11 Test.19 Test.10 Test.116;
                         ret Test.115;
             in
-            let #Derived_gen.17 : Int1 = lowlevel RefCountIsUnique Test.9;
-            if #Derived_gen.17 then
-                let #Derived_gen.373 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.9, id: UpdateModeId { id: 343 } };
-                jump #Derived_gen.16 #Derived_gen.373;
+            let #Derived_gen.73 : Int1 = lowlevel RefCountIsUnique Test.9;
+            if #Derived_gen.73 then
+                let #Derived_gen.429 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.9, id: UpdateModeId { id: 343 } };
+                jump #Derived_gen.72 #Derived_gen.429;
             else
                 inc Test.16;
                 inc Test.19;
-                let #Derived_gen.374 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.9, id: UpdateModeId { id: 344 } };
-                jump #Derived_gen.16 #Derived_gen.374;
+                let #Derived_gen.430 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.9, id: UpdateModeId { id: 344 } };
+                jump #Derived_gen.72 #Derived_gen.430;
         else
             let Test.96 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.9;
             let Test.98 : I64 = UnionAtIndex (Id 1) (Index 1) Test.9;
             let Test.99 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.9;
             let Test.97 : I32 = UnionAtIndex (Id 1) (Index 3) Test.9;
-            joinpoint #Derived_gen.18 #Derived_gen.377:
+            joinpoint #Derived_gen.74 #Derived_gen.433:
                 let Test.247 : Int1 = CallByName Num.22 Test.10 Test.97;
                 if Test.247 then
                     let Test.250 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.96 Test.10 Test.11;
                     let Test.249 : Int1 = true;
-                    let Test.248 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.377 UpdateModeId { id: 347 } TagId(1) Test.250 Test.98 Test.99 Test.97 Test.249;
+                    let Test.248 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.433 UpdateModeId { id: 347 } TagId(1) Test.250 Test.98 Test.99 Test.97 Test.249;
                     ret Test.248;
                 else
                     let Test.243 : Int1 = CallByName Num.24 Test.10 Test.97;
                     if Test.243 then
                         let Test.246 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.99 Test.10 Test.11;
                         let Test.245 : Int1 = true;
-                        let Test.244 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.377 UpdateModeId { id: 347 } TagId(1) Test.96 Test.98 Test.246 Test.97 Test.245;
+                        let Test.244 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.433 UpdateModeId { id: 347 } TagId(1) Test.96 Test.98 Test.246 Test.97 Test.245;
                         ret Test.244;
                     else
                         let Test.242 : Int1 = true;
-                        let Test.241 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.377 UpdateModeId { id: 347 } TagId(1) Test.96 Test.11 Test.99 Test.10 Test.242;
+                        let Test.241 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.433 UpdateModeId { id: 347 } TagId(1) Test.96 Test.11 Test.99 Test.10 Test.242;
                         ret Test.241;
             in
-            let #Derived_gen.19 : Int1 = lowlevel RefCountIsUnique Test.9;
-            if #Derived_gen.19 then
-                let #Derived_gen.378 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.9, id: UpdateModeId { id: 348 } };
-                jump #Derived_gen.18 #Derived_gen.378;
+            let #Derived_gen.75 : Int1 = lowlevel RefCountIsUnique Test.9;
+            if #Derived_gen.75 then
+                let #Derived_gen.434 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.9, id: UpdateModeId { id: 348 } };
+                jump #Derived_gen.74 #Derived_gen.434;
             else
                 inc Test.96;
                 inc Test.99;
-                let #Derived_gen.379 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.9, id: UpdateModeId { id: 349 } };
-                jump #Derived_gen.18 #Derived_gen.379;
+                let #Derived_gen.435 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.9, id: UpdateModeId { id: 349 } };
+                jump #Derived_gen.74 #Derived_gen.435;
 
 procedure Test.0 ():
     let Test.281 : [<rnu>C *self I64 *self I32 Int1, <null>] = TagId(0) ;
