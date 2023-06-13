@@ -15,6 +15,7 @@ use bumpalo::collections::CollectIn;
 
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_target::TargetInfo;
 
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
@@ -37,11 +38,19 @@ pub fn specialize_drops<'a, 'i>(
     layout_interner: &'i mut STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
+    target_info: TargetInfo,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     for ((_symbol, proc_layout), proc) in procs.iter_mut() {
         let mut environment = DropSpecializationEnvironment::new(arena, home, proc_layout.result);
-        specialize_drops_proc(arena, layout_interner, ident_ids, &mut environment, proc);
+        specialize_drops_proc(
+            arena,
+            layout_interner,
+            ident_ids,
+            target_info,
+            &mut environment,
+            proc,
+        );
     }
 }
 
@@ -49,6 +58,7 @@ fn specialize_drops_proc<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
+    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     proc: &mut Proc<'a>,
 ) {
@@ -56,8 +66,14 @@ fn specialize_drops_proc<'a, 'i>(
         environment.add_symbol_layout(symbol, layout);
     }
 
-    let new_body =
-        specialize_drops_stmt(arena, layout_interner, ident_ids, environment, &proc.body);
+    let new_body = specialize_drops_stmt(
+        arena,
+        layout_interner,
+        ident_ids,
+        target_info,
+        environment,
+        &proc.body,
+    );
 
     proc.body = new_body.clone();
 }
@@ -66,6 +82,7 @@ fn specialize_drops_stmt<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
+    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     stmt: &Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -79,6 +96,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
+                        target_info,
                         $environment,
                         continuation,
                     );
@@ -288,6 +306,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
+                        target_info,
                         &mut branch_env,
                         branch,
                     );
@@ -308,6 +327,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     arena,
                     layout_interner,
                     ident_ids,
+                    target_info,
                     &mut branch_env,
                     branch,
                 );
@@ -415,6 +435,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     arena,
                     layout_interner,
                     ident_ids,
+                    target_info,
                     environment,
                     continuation,
                 );
@@ -456,6 +477,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
+                        target_info,
                         environment,
                         continuation,
                     )
@@ -491,6 +513,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             arena,
                             layout_interner,
                             ident_ids,
+                            target_info,
                             environment,
                             symbol,
                             field_layouts,
@@ -501,6 +524,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             arena,
                             layout_interner,
                             ident_ids,
+                            target_info,
                             environment,
                             symbol,
                             union_layout,
@@ -511,6 +535,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             arena,
                             layout_interner,
                             ident_ids,
+                            target_info,
                             environment,
                             &mut incremented_children,
                             symbol,
@@ -520,6 +545,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             arena,
                             layout_interner,
                             ident_ids,
+                            target_info,
                             environment,
                             &mut incremented_children,
                             symbol,
@@ -532,6 +558,7 @@ fn specialize_drops_stmt<'a, 'i>(
                                 arena,
                                 layout_interner,
                                 ident_ids,
+                                target_info,
                                 environment,
                                 continuation,
                             );
@@ -559,6 +586,7 @@ fn specialize_drops_stmt<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
+                        target_info,
                         environment,
                         continuation,
                     ),
@@ -580,6 +608,7 @@ fn specialize_drops_stmt<'a, 'i>(
                 arena,
                 layout_interner,
                 ident_ids,
+                target_info,
                 environment,
                 remainder,
             ),
@@ -599,6 +628,7 @@ fn specialize_drops_stmt<'a, 'i>(
                 arena,
                 layout_interner,
                 ident_ids,
+                target_info,
                 environment,
                 remainder,
             ),
@@ -614,6 +644,7 @@ fn specialize_drops_stmt<'a, 'i>(
                 arena,
                 layout_interner,
                 ident_ids,
+                target_info,
                 environment,
                 remainder,
             ),
@@ -635,6 +666,7 @@ fn specialize_drops_stmt<'a, 'i>(
                 arena,
                 layout_interner,
                 ident_ids,
+                target_info,
                 &mut new_environment,
                 body,
             );
@@ -647,6 +679,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     arena,
                     layout_interner,
                     ident_ids,
+                    target_info,
                     environment,
                     remainder,
                 ),
@@ -661,6 +694,7 @@ fn specialize_struct<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
+    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     symbol: &Symbol,
     struct_layout: &'a [InLayout],
@@ -689,8 +723,14 @@ fn specialize_struct<'a, 'i>(
                 }
             }
 
-            let mut new_continuation =
-                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
+            let mut new_continuation = specialize_drops_stmt(
+                arena,
+                layout_interner,
+                ident_ids,
+                target_info,
+                environment,
+                continuation,
+            );
 
             // Make sure every field is decremented.
             // Reversed to ensure that the generated code decrements the fields in the correct order.
@@ -738,8 +778,14 @@ fn specialize_struct<'a, 'i>(
         }
         None => {
             // No known children, keep decrementing the symbol.
-            let new_continuation =
-                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
+            let new_continuation = specialize_drops_stmt(
+                arena,
+                layout_interner,
+                ident_ids,
+                target_info,
+                environment,
+                continuation,
+            );
 
             arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
         }
@@ -750,6 +796,7 @@ fn specialize_union<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
+    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     symbol: &Symbol,
     union_layout: UnionLayout<'a>,
@@ -760,8 +807,14 @@ fn specialize_union<'a, 'i>(
 
     macro_rules! keep_original_decrement {
         () => {{
-            let new_continuation =
-                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
+            let new_continuation = specialize_drops_stmt(
+                arena,
+                layout_interner,
+                ident_ids,
+                target_info,
+                environment,
+                continuation,
+            );
             arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
         }};
     }
@@ -773,9 +826,14 @@ fn specialize_union<'a, 'i>(
         }
 
         // The union is null, so we can skip the decrement.
-        UnionFieldLayouts::Null => {
-            specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation)
-        }
+        UnionFieldLayouts::Null => specialize_drops_stmt(
+            arena,
+            layout_interner,
+            ident_ids,
+            target_info,
+            environment,
+            continuation,
+        ),
 
         // We know the tag, we can specialize the decrement for the tag.
         UnionFieldLayouts::Found { field_layouts, tag } => {
@@ -809,6 +867,7 @@ fn specialize_union<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
+                        target_info,
                         environment,
                         continuation,
                     );
@@ -957,6 +1016,7 @@ fn specialize_boxed<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
+    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
@@ -971,8 +1031,14 @@ fn specialize_boxed<'a, 'i>(
         None => None,
     };
 
-    let new_continuation =
-        specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
+    let new_continuation = specialize_drops_stmt(
+        arena,
+        layout_interner,
+        ident_ids,
+        target_info,
+        environment,
+        continuation,
+    );
 
     match removed {
         Some(s) => {
@@ -1014,18 +1080,25 @@ fn specialize_list<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
     ident_ids: &'i mut IdentIds,
+    target_info: TargetInfo,
     environment: &mut DropSpecializationEnvironment<'a>,
     incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
-    item_layout: InLayout,
+    item_layout: InLayout<'a>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     let current_length = environment.list_length.get(symbol).copied();
 
     macro_rules! keep_original_decrement {
         () => {{
-            let new_continuation =
-                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
+            let new_continuation = specialize_drops_stmt(
+                arena,
+                layout_interner,
+                ident_ids,
+                target_info,
+                environment,
+                continuation,
+            );
             arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
         }};
     }
@@ -1034,11 +1107,11 @@ fn specialize_list<'a, 'i>(
         layout_interner.contains_refcounted(item_layout),
         current_length,
     ) {
+        // Only specialize lists if the amount of children is known.
+        // Otherwise we might have to insert an unbouned number of decrements.
         (true, Some(length)) => {
             match environment.list_children.get(symbol) {
-                // Only specialize lists if all children are known.
-                // Otherwise we might have to insert an unbouned number of decrements.
-                Some(children) if children.len() as u64 == length => {
+                Some(children) => {
                     // TODO perhaps this allocation can be avoided.
                     let children_clone = children.clone();
 
@@ -1063,6 +1136,7 @@ fn specialize_list<'a, 'i>(
                         arena,
                         layout_interner,
                         ident_ids,
+                        target_info,
                         environment,
                         continuation,
                     );
@@ -1074,15 +1148,54 @@ fn specialize_list<'a, 'i>(
 
                     // Reversed to ensure that the generated code decrements the items in the correct order.
                     for i in (0..length).rev() {
-                        let (s, popped) = index_symbols.get(&i).unwrap();
+                        match index_symbols.get(&i) {
+                            // If the symbol is known, we can decrement it (if incremented before).
+                            Some((s, popped)) => {
+                                if !*popped {
+                                    // Decrement the children that were not incremented before. And thus don't cancel out.
+                                    newer_continuation = arena.alloc(Stmt::Refcounting(
+                                        ModifyRc::Dec(*s),
+                                        newer_continuation,
+                                    ));
+                                }
 
-                        if !*popped {
-                            // Decrement the children that were not incremented before. And thus don't cancel out.
-                            newer_continuation = arena
-                                .alloc(Stmt::Refcounting(ModifyRc::Dec(*s), newer_continuation));
-                        }
+                                // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                            }
+                            // If the symbol is unknown, we have to get the value from the list.
+                            // Should only happen when list elements are discarded.
+                            None => {
+                                let field_symbol = environment
+                                    .create_symbol(ident_ids, &format!("field_val_{}", i));
 
-                        // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                                let index_symbol = environment
+                                    .create_symbol(ident_ids, &format!("index_val_{}", i));
+
+                                let dec = arena.alloc(Stmt::Refcounting(
+                                    ModifyRc::Dec(field_symbol),
+                                    newer_continuation,
+                                ));
+
+                                let index = arena.alloc(Stmt::Let(
+                                    field_symbol,
+                                    Expr::Call(Call {
+                                        call_type: CallType::LowLevel {
+                                            op: LowLevel::ListGetUnsafe,
+                                            update_mode: UpdateModeId::BACKEND_DUMMY,
+                                        },
+                                        arguments: arena.alloc([*symbol, index_symbol]),
+                                    }),
+                                    item_layout,
+                                    dec,
+                                ));
+
+                                newer_continuation = arena.alloc(Stmt::Let(
+                                    index_symbol,
+                                    Expr::Literal(Literal::Int(i128::to_ne_bytes(i as i128))),
+                                    Layout::isize(target_info),
+                                    index,
+                                ));
+                            }
+                        };
                     }
 
                     newer_continuation
