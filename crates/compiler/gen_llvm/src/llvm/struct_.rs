@@ -152,8 +152,6 @@ fn index_struct_ptr<'a, 'ctx>(
 
     let field_layout = field_layouts[index as usize];
 
-    dbg!(layout_interner.dbg(field_layout));
-
     load_roc_value(
         env,
         layout_interner,
