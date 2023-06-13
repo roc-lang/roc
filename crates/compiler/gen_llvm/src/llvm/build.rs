@@ -3625,11 +3625,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
 
         builder.position_at_end(entry);
 
-        let wrapped_layout = layout_interner.insert_direct_no_semantic(roc_call_result_layout(
-            env.arena,
-            return_layout,
-            env.target_info,
-        ));
+        let wrapped_layout = layout_interner
+            .insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
         call_roc_function(
             env,
             layout_interner,
@@ -3766,11 +3763,8 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
         builder.position_at_end(last_block);
 
-        let wrapper_result = layout_interner.insert_direct_no_semantic(roc_call_result_layout(
-            env.arena,
-            return_layout,
-            env.target_info,
-        ));
+        let wrapper_result = layout_interner
+            .insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
 
         let roc_value = call_roc_function(
             env,
@@ -4297,11 +4291,8 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
 
     let return_type = basic_type_from_layout(env, layout_interner, roc_return_layout);
     let call_result_return_conv = {
-        let layout = layout_interner.insert_direct_no_semantic(roc_call_result_layout(
-            env.arena,
-            roc_return_layout,
-            env.target_info,
-        ));
+        let layout = layout_interner
+            .insert_direct_no_semantic(roc_call_result_layout(env.arena, roc_return_layout));
         RocReturn::from_layout(layout_interner, layout)
     };
     let call_result_type = roc_call_result_type(env, return_type.as_basic_type_enum());
@@ -4404,11 +4395,7 @@ fn make_exception_catcher<'a, 'ctx>(
     function_value
 }
 
-fn roc_call_result_layout<'a>(
-    arena: &'a Bump,
-    return_layout: InLayout<'a>,
-    target_info: TargetInfo,
-) -> LayoutRepr<'a> {
+fn roc_call_result_layout<'a>(arena: &'a Bump, return_layout: InLayout<'a>) -> LayoutRepr<'a> {
     let elements = [Layout::U64, Layout::STR_PTR, return_layout];
 
     LayoutRepr::struct_(arena.alloc(elements))
@@ -4481,11 +4468,8 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     let builder = env.builder;
 
     // TODO: pass these, and the roc function, in directly?
-    let wrapper_return_layout = layout_interner.insert_direct_no_semantic(roc_call_result_layout(
-        env.arena,
-        return_layout,
-        env.target_info,
-    ));
+    let wrapper_return_layout =
+        layout_interner.insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
 
     let wrapper_return_type = roc_call_result_type(
         env,
