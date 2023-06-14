@@ -1594,6 +1594,51 @@ fn build_tag_fields<'a, 'r, 'ctx, 'env>(
     (field_types, field_values)
 }
 
+fn legacy_build_struct_while_debugging<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    scope: &Scope<'a, 'ctx>,
+    sorted_fields: &[Symbol],
+) -> StructValue<'ctx> {
+    let ctx = env.context;
+
+    // Determine types
+    let num_fields = sorted_fields.len();
+    let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+    let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+    for symbol in sorted_fields.iter() {
+        // Zero-sized fields have no runtime representation.
+        // The layout of the struct expects them to be dropped!
+        let (field_expr, field_layout) = scope.load_symbol_and_layout(symbol);
+        if !layout_interner
+            .get_repr(field_layout)
+            .is_dropped_because_empty()
+        {
+            let field_type = basic_type_from_layout(env, layout_interner, field_layout);
+            field_types.push(field_type);
+
+            if layout_interner.is_passed_by_reference(field_layout) {
+                let field_value = env.builder.new_build_load(
+                    field_type,
+                    field_expr.into_pointer_value(),
+                    "load_tag_to_put_in_struct",
+                );
+
+                field_vals.push(field_value);
+            } else {
+                field_vals.push(field_expr);
+            }
+        }
+    }
+
+    // Create the struct_type
+    let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+
+    // Insert field exprs into struct_val
+    struct_from_fields(env, struct_type, field_vals.into_iter().enumerate())
+}
+
 fn build_tag<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -1610,12 +1655,14 @@ fn build_tag<'a, 'ctx>(
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let data_layout_repr = LayoutRepr::Struct(tags[tag_id as usize]);
-            let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
+            // TODO: this is the representation we want.
+            // let data_layout_repr = LayoutRepr::Struct(tags[tag_id as usize]);
+            // let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
+            let data = legacy_build_struct_while_debugging(env, layout_interner, scope, arguments);
 
             let roc_union =
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
-            let value = roc_union.as_struct_value(env, data, Some(tag_id as _));
+            let value = roc_union.as_struct_value(env, RocStruct::ByValue(data), Some(tag_id as _));
 
             let alloca = create_entry_block_alloca(
                 env,
@@ -1744,10 +1791,12 @@ fn build_tag<'a, 'ctx>(
                 &[other_fields],
             );
 
-            let data_layout_repr = LayoutRepr::Struct(other_fields);
-            let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
+            // TODO: this is the representation we want.
+            // let data_layout_repr = LayoutRepr::Struct(other_fields);
+            // let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
+            let data = legacy_build_struct_while_debugging(env, layout_interner, scope, arguments);
 
-            let value = roc_union.as_struct_value(env, data, None);
+            let value = roc_union.as_struct_value(env, RocStruct::ByValue(data), None);
 
             env.builder.build_store(data_ptr, value);
 
@@ -5430,20 +5479,6 @@ pub fn call_roc_function<'a, 'ctx>(
 
             let result_type = basic_type_from_layout(env, layout_interner, result_layout);
             let result_alloca = entry_block_alloca_zerofill(env, result_type, "result_value");
-
-            match layout_interner.get_repr(result_layout) {
-                LayoutRepr::LambdaSet(_) => {
-                    let size = layout_interner.stack_size(result_layout);
-
-                    if size == 152 {
-                        dbg!(size, result_layout);
-                        dbg!(layout_interner.dbg(result_layout));
-                        env.builder
-                            .build_store(result_alloca, result_type.const_zero());
-                    }
-                }
-                _ => {}
-            }
 
             arguments.push(result_alloca.into());
 
