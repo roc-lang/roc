@@ -3133,3 +3133,16 @@ fn drop_specialize_before_jump() {
         "#
     )
 }
+
+#[mono_test]
+fn dbg_str_followed_by_number() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            dbg ""
+            42
+        "#
+    )
+}
