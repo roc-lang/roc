@@ -4958,7 +4958,7 @@ fn build_proc_header<'a, 'ctx>(
         fn_val.add_attribute(AttributeLoc::Function, enum_attr);
     }
 
-    if false {
+    if true {
         let kind_id = Attribute::get_named_enum_kind_id("noinline");
         debug_assert!(kind_id > 0);
         let enum_attr = env.context.create_enum_attribute(kind_id, 1);
@@ -5430,6 +5430,20 @@ pub fn call_roc_function<'a, 'ctx>(
 
             let result_type = basic_type_from_layout(env, layout_interner, result_layout);
             let result_alloca = entry_block_alloca_zerofill(env, result_type, "result_value");
+
+            match layout_interner.get_repr(result_layout) {
+                LayoutRepr::LambdaSet(_) => {
+                    let size = layout_interner.stack_size(result_layout);
+
+                    if size == 152 {
+                        dbg!(size, result_layout);
+                        dbg!(layout_interner.dbg(result_layout));
+                        env.builder
+                            .build_store(result_alloca, result_type.const_zero());
+                    }
+                }
+                _ => {}
+            }
 
             arguments.push(result_alloca.into());
 
