@@ -336,12 +336,10 @@ where
         eprintln!("{}", program.to_source_string());
     }
 
-    //    match opt_level {
-    //        OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
-    //        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve(program),
-    //    }
-
-    morphic_lib::solve_trivial(program)
+    match opt_level {
+        OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
+        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve(program),
+    }
 }
 
 /// if you want an "escape hatch" which allows you construct "best-case scenario" values
