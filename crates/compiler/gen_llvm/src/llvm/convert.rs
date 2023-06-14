@@ -179,6 +179,10 @@ fn argument_type_from_struct_layout<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     struct_layout: InLayout<'a>,
 ) -> BasicTypeEnum<'ctx> {
+    debug_assert!(matches!(
+        layout_interner.get_repr(struct_layout),
+        LayoutRepr::Struct(_)
+    ));
     let stack_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
     if layout_interner.is_passed_by_reference(struct_layout) {
