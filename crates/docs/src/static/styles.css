@@ -189,6 +189,24 @@ section {
   margin: 72px 0px;
 }
 
+section blockquote {
+  font-style: italic;
+  position: relative;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+section blockquote:before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2px;
+  height: 100%;
+  background-color: var(--gray);
+}
+
+
 section > *:last-child {
   margin-bottom: 0;
 }
