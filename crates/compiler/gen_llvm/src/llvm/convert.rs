@@ -5,6 +5,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_error_macros::internal_error;
 use roc_mono::layout::{
     round_up_to_alignment, Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner,
     UnionLayout,
@@ -401,7 +402,9 @@ impl<'ctx> RocUnion<'ctx> {
     pub fn as_struct_value<'a, 'env>(
         &self,
         env: &Env<'a, 'ctx, 'env>,
+        layout_interner: &STLayoutInterner<'a>,
         data: RocStruct<'ctx>,
+        data_layout: LayoutRepr<'a>,
         tag_id: Option<usize>,
     ) -> StructValue<'ctx> {
         debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
@@ -430,22 +433,32 @@ impl<'ctx> RocUnion<'ctx> {
                 );
                 env.builder.build_store(cast_pointer, value);
             }
-            RocStruct::ByReference(ptr) => {
-                let cast_pointer =
-                    env.builder
-                        .build_pointer_cast(data_buffer, ptr.get_type(), "to_data_ptr");
+            RocStruct::ByReference(payload_data_ptr) => {
+                let cast_tag_pointer = env.builder.build_pointer_cast(
+                    data_buffer,
+                    payload_data_ptr.get_type(),
+                    "to_data_ptr",
+                );
 
-                env.builder
+                let (payload_stack_size, payload_align) =
+                    data_layout.stack_size_and_alignment(layout_interner, env.target_info);
+
+                if payload_stack_size > 0 {
+                    let bytes_to_memcpy = env
+                        .context
+                        .i32_type()
+                        .const_int(payload_stack_size as _, false);
+
+                    env.builder
                     .build_memcpy(
-                        cast_pointer,
+                        cast_tag_pointer,
                         self.data_align,
-                        ptr,
-                        self.data_align,
-                        env.context
-                            .i32_type()
-                            .const_int(self.data_width as _, false),
+                        payload_data_ptr,
+                        payload_align,
+                        bytes_to_memcpy
                     )
-                    .expect("memcpy invariants must have been upheld");
+                    .unwrap_or_else(|e|internal_error!( "memcpy invariants must have been upheld: {e:?}. Union data align={}, source data align={}.", self.data_align, payload_align));
+                }
             }
         }
 

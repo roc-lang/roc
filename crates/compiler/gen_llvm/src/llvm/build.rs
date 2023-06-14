@@ -1659,10 +1659,24 @@ fn build_tag<'a, 'ctx>(
             // let data_layout_repr = LayoutRepr::Struct(tags[tag_id as usize]);
             // let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
             let data = legacy_build_struct_while_debugging(env, layout_interner, scope, arguments);
+            let data_alloca = create_entry_block_alloca(
+                env,
+                parent,
+                data.get_type().into(),
+                "non_recursive_data_alloca",
+            );
+            env.builder.build_store(data_alloca, data);
 
             let roc_union =
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
-            let value = roc_union.as_struct_value(env, RocStruct::ByValue(data), Some(tag_id as _));
+            let data_layout = LayoutRepr::Struct(tags[tag_id as usize]);
+            let value = roc_union.as_struct_value(
+                env,
+                layout_interner,
+                RocStruct::ByReference(data_alloca),
+                data_layout,
+                Some(tag_id as _),
+            );
 
             let alloca = create_entry_block_alloca(
                 env,
@@ -1795,8 +1809,15 @@ fn build_tag<'a, 'ctx>(
             // let data_layout_repr = LayoutRepr::Struct(other_fields);
             // let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
             let data = legacy_build_struct_while_debugging(env, layout_interner, scope, arguments);
+            let data_layout = LayoutRepr::Struct(other_fields);
 
-            let value = roc_union.as_struct_value(env, RocStruct::ByValue(data), None);
+            let value = roc_union.as_struct_value(
+                env,
+                layout_interner,
+                RocStruct::ByValue(data),
+                data_layout,
+                None,
+            );
 
             env.builder.build_store(data_ptr, value);
 
