@@ -444,17 +444,20 @@ impl<'ctx> RocUnion<'ctx> {
                     data_layout.stack_size_and_alignment(layout_interner, env.target_info);
 
                 if payload_stack_size > 0 {
-                    let bytes_to_memcpy = env
-                        .context
-                        .i32_type()
-                        .const_int(payload_stack_size as _, false);
+                    let bytes_to_memcpy = payload_data_ptr
+                        .get_type()
+                        .get_element_type()
+                        .size_of()
+                        .unwrap();
+                    let align_bytes =
+                        data_layout.alignment_bytes_for_llvm(layout_interner, env.target_info);
 
                     env.builder
                     .build_memcpy(
                         cast_tag_pointer,
                         self.data_align,
                         payload_data_ptr,
-                        payload_align,
+                        align_bytes,
                         bytes_to_memcpy
                     )
                     .unwrap_or_else(|e|internal_error!( "memcpy invariants must have been upheld: {e:?}. Union data align={}, source data align={}.", self.data_align, payload_align));

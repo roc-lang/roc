@@ -2734,6 +2734,65 @@ impl<'a> LayoutRepr<'a> {
         }
     }
 
+    pub fn alignment_bytes_for_llvm<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    where
+        I: LayoutInterner<'a>,
+    {
+        use LayoutRepr::*;
+        match self {
+            Struct(field_layouts) => field_layouts
+                .iter()
+                .map(|x| {
+                    interner
+                        .get_repr(*x)
+                        .alignment_bytes_for_llvm(interner, target_info)
+                })
+                .max()
+                .unwrap_or(0),
+
+            Union(variant) => {
+                use UnionLayout::*;
+
+                match variant {
+                    NonRecursive(tags) => {
+                        let max_alignment = tags
+                            .iter()
+                            .flat_map(|layouts| {
+                                layouts.iter().map(|layout| {
+                                    interner
+                                        .get_repr(*layout)
+                                        .alignment_bytes_for_llvm(interner, target_info)
+                                })
+                            })
+                            .max();
+
+                        let discriminant = variant.discriminant();
+                        match max_alignment {
+                            Some(align) => round_up_to_alignment(
+                                align.max(discriminant.alignment_bytes()),
+                                discriminant.alignment_bytes(),
+                            ),
+                            None => {
+                                // none of the tags had any payload, but the tag id still contains information
+                                discriminant.alignment_bytes()
+                            }
+                        }
+                    }
+                    Recursive(_)
+                    | NullableWrapped { .. }
+                    | NullableUnwrapped { .. }
+                    | NonNullableUnwrapped(_) => target_info.ptr_width() as u32,
+                }
+            }
+            LambdaSet(lambda_set) => interner
+                .get_repr(lambda_set.runtime_representation())
+                .alignment_bytes_for_llvm(interner, target_info),
+            Builtin(builtin) => builtin.alignment_bytes_for_llvm(target_info),
+            RecursivePointer(_) => target_info.ptr_width() as u32,
+            Boxed(_) => target_info.ptr_width() as u32,
+        }
+    }
+
     pub fn allocation_alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
         I: LayoutInterner<'a>,
@@ -2987,6 +3046,30 @@ impl<'a> Builtin<'a> {
             Float(float_width) => float_width.alignment_bytes(target_info),
             Bool => align_of::<bool>() as u32,
             Decimal => IntWidth::I128.alignment_bytes(target_info),
+            // we often treat these as i128 (64-bit systems)
+            // or i64 (32-bit systems).
+            //
+            // In webassembly, For that to be safe
+            // they must be aligned to allow such access
+            List(_) => ptr_width,
+            Str => ptr_width,
+        }
+    }
+
+    pub fn alignment_bytes_for_llvm(&self, target_info: TargetInfo) -> u32 {
+        use std::mem::align_of;
+        use Builtin::*;
+
+        let ptr_width = target_info.ptr_width() as u32;
+
+        // for our data structures, what counts is the alignment of the `( ptr, len )` tuple, and
+        // since both of those are one pointer size, the alignment of that structure is a pointer
+        // size
+        match self {
+            Int(int_width) => int_width.alignment_bytes_for_llvm(target_info),
+            Float(float_width) => float_width.alignment_bytes_for_llvm(target_info),
+            Bool => align_of::<bool>() as u32,
+            Decimal => IntWidth::I128.alignment_bytes_for_llvm(target_info),
             // we often treat these as i128 (64-bit systems)
             // or i64 (32-bit systems).
             //

@@ -2373,9 +2373,10 @@ pub fn store_roc_value<'a, 'ctx>(
         let align_bytes = layout_interner.alignment_bytes(layout);
 
         if align_bytes > 0 {
-            let size = env
-                .ptr_int()
-                .const_int(layout_interner.stack_size(layout) as u64, false);
+            let width = basic_type_from_layout(env, layout_interner, layout)
+                .size_of()
+                .unwrap();
+            let align_bytes = layout_interner.alignment_bytes_for_llvm(layout);
 
             env.builder
                 .build_memcpy(
@@ -2383,7 +2384,7 @@ pub fn store_roc_value<'a, 'ctx>(
                     align_bytes,
                     value.into_pointer_value(),
                     align_bytes,
-                    size,
+                    width,
                 )
                 .unwrap();
         }
@@ -2951,8 +2952,10 @@ fn build_return<'a, 'ctx>(
                     //
                     // Hence, we explicitly memcpy source to destination, and rely on
                     // LLVM optimizing away any inefficiencies.
-                    let width = layout_interner.stack_size(layout);
-                    let size = env.ptr_int().const_int(width as _, false);
+                    let width = basic_type_from_layout(env, layout_interner, layout)
+                        .size_of()
+                        .unwrap();
+                    let align_bytes = layout_interner.alignment_bytes_for_llvm(layout);
 
                     env.builder
                         .build_memcpy(
@@ -2960,7 +2963,7 @@ fn build_return<'a, 'ctx>(
                             align_bytes,
                             value.into_pointer_value(),
                             align_bytes,
-                            size,
+                            width,
                         )
                         .unwrap();
                 }
@@ -5153,9 +5156,10 @@ fn build_closure_caller<'a, 'ctx>(
             let align_bytes = layout_interner.alignment_bytes(return_layout);
 
             if align_bytes > 0 {
-                let size = env
-                    .ptr_int()
-                    .const_int(layout_interner.stack_size(return_layout) as u64, false);
+                let width = basic_type_from_layout(env, layout_interner, return_layout)
+                    .size_of()
+                    .unwrap();
+                let align_bytes = layout_interner.alignment_bytes_for_llvm(return_layout);
 
                 env.builder
                     .build_memcpy(
@@ -5163,7 +5167,7 @@ fn build_closure_caller<'a, 'ctx>(
                         align_bytes,
                         call_result.into_pointer_value(),
                         align_bytes,
-                        size,
+                        width,
                     )
                     .unwrap();
             }
