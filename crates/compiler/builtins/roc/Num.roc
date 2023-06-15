@@ -33,6 +33,9 @@ interface Num
         Decimal,
         Binary32,
         Binary64,
+        e,
+        pi,
+        tau,
         abs,
         absDiff,
         neg,
@@ -493,6 +496,18 @@ F32 : Num (FloatingPoint Binary32)
 ## subtraction, but 10-20 times longer to perform multiplication and division.
 ## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
 Dec : Num (FloatingPoint Decimal)
+
+## Euler's number (e)
+e : Frac *
+e = 2.71828182845904523536028747135266249775724709369995
+
+## Archimedes' constant (π)
+pi : Frac *
+pi = 3.14159265358979323846264338327950288419716939937510
+
+## Circle constant (τ)
+tau : Frac *
+tau = 2 * pi
 
 # ------- Functions
 ## Convert a number to a [Str].
