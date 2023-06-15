@@ -1,11 +1,11 @@
 use crate::llvm::build::{BuilderExt, Env};
+use crate::llvm::memcpy::build_memcpy;
 use bumpalo::collections::Vec as AVec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_error_macros::internal_error;
 use roc_mono::layout::{
     round_up_to_alignment, Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner,
     UnionLayout,
@@ -19,9 +19,17 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     layout_interner: &'env STLayoutInterner<'a>,
     layout: InLayout<'_>,
 ) -> BasicTypeEnum<'ctx> {
+    basic_type_from_layout_repr(env, layout_interner, layout_interner.get_repr(layout))
+}
+
+pub fn basic_type_from_layout_repr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &'env STLayoutInterner<'a>,
+    layout: LayoutRepr<'_>,
+) -> BasicTypeEnum<'ctx> {
     use LayoutRepr::*;
 
-    match layout_interner.get_repr(layout) {
+    match layout {
         Struct(sorted_fields, ..) => {
             basic_type_from_record(env, layout_interner, sorted_fields).into()
         }
@@ -440,28 +448,13 @@ impl<'ctx> RocUnion<'ctx> {
                     "to_data_ptr",
                 );
 
-                let (payload_stack_size, payload_align) =
-                    data_layout.stack_size_and_alignment(layout_interner, env.target_info);
-
-                if payload_stack_size > 0 {
-                    let bytes_to_memcpy = payload_data_ptr
-                        .get_type()
-                        .get_element_type()
-                        .size_of()
-                        .unwrap();
-                    let align_bytes =
-                        data_layout.alignment_bytes_for_llvm(layout_interner, env.target_info);
-
-                    env.builder
-                    .build_memcpy(
-                        cast_tag_pointer,
-                        self.data_align,
-                        payload_data_ptr,
-                        align_bytes,
-                        bytes_to_memcpy
-                    )
-                    .unwrap_or_else(|e|internal_error!( "memcpy invariants must have been upheld: {e:?}. Union data align={}, source data align={}.", self.data_align, payload_align));
-                }
+                build_memcpy(
+                    env,
+                    layout_interner,
+                    data_layout,
+                    cast_tag_pointer,
+                    payload_data_ptr,
+                );
             }
         }
 

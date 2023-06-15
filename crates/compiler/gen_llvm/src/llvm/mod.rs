@@ -10,5 +10,7 @@ mod intrinsics;
 mod lowlevel;
 pub mod refcounting;
 
+mod align;
+mod memcpy;
 mod scope;
 mod struct_;

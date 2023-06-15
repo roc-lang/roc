@@ -4,6 +4,7 @@ use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
 use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
+use crate::llvm::memcpy::build_memcpy;
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
@@ -2370,24 +2371,13 @@ pub fn store_roc_value<'a, 'ctx>(
     if layout_interner.is_passed_by_reference(layout) {
         debug_assert!(value.is_pointer_value());
 
-        let align_bytes = layout_interner.alignment_bytes(layout);
-
-        if align_bytes > 0 {
-            let width = basic_type_from_layout(env, layout_interner, layout)
-                .size_of()
-                .unwrap();
-            let align_bytes = layout_interner.alignment_bytes_for_llvm(layout);
-
-            env.builder
-                .build_memcpy(
-                    destination,
-                    align_bytes,
-                    value.into_pointer_value(),
-                    align_bytes,
-                    width,
-                )
-                .unwrap();
-        }
+        build_memcpy(
+            env,
+            layout_interner,
+            layout_interner.get_repr(layout),
+            destination,
+            value.into_pointer_value(),
+        );
     } else {
         let destination_type = destination
             .get_type()
@@ -2922,51 +2912,40 @@ fn build_return<'a, 'ctx>(
 
             let destination = out_parameter.into_pointer_value();
             if layout_interner.is_passed_by_reference(layout) {
-                let align_bytes = layout_interner.alignment_bytes(layout);
+                debug_assert!(
+                    value.is_pointer_value(),
+                    "{:?}: {:?}\n{:?}",
+                    parent.get_name(),
+                    value,
+                    layout
+                );
 
-                if align_bytes > 0 {
-                    debug_assert!(
-                        value.is_pointer_value(),
-                        "{:?}: {:?}\n{:?}",
-                        parent.get_name(),
-                        value,
-                        layout
-                    );
-
-                    // What we want to do here is
-                    //
-                    // let value_ptr = value.into_pointer_value();
-                    // if value_ptr.get_first_use().is_some() {
-                    //   value_ptr.replace_all_uses_with(destination);
-                    //
-                    // In other words, if the source pointer is used,
-                    // then we just subsitute the source for the input pointer, done.
-                    //
-                    // Only that does not work if the source is not written to.
-                    // A simple example is the identity function
-                    //
-                    // A slightly more complex case that will also make the above not
-                    // work is when the source pointer is only incremented, but not
-                    // written to. Then there is a first_use, but it's still invalid to
-                    // subsitute source with destination
-                    //
-                    // Hence, we explicitly memcpy source to destination, and rely on
-                    // LLVM optimizing away any inefficiencies.
-                    let width = basic_type_from_layout(env, layout_interner, layout)
-                        .size_of()
-                        .unwrap();
-                    let align_bytes = layout_interner.alignment_bytes_for_llvm(layout);
-
-                    env.builder
-                        .build_memcpy(
-                            destination,
-                            align_bytes,
-                            value.into_pointer_value(),
-                            align_bytes,
-                            width,
-                        )
-                        .unwrap();
-                }
+                // What we want to do here is
+                //
+                // let value_ptr = value.into_pointer_value();
+                // if value_ptr.get_first_use().is_some() {
+                //   value_ptr.replace_all_uses_with(destination);
+                //
+                // In other words, if the source pointer is used,
+                // then we just subsitute the source for the input pointer, done.
+                //
+                // Only that does not work if the source is not written to.
+                // A simple example is the identity function
+                //
+                // A slightly more complex case that will also make the above not
+                // work is when the source pointer is only incremented, but not
+                // written to. Then there is a first_use, but it's still invalid to
+                // subsitute source with destination
+                //
+                // Hence, we explicitly memcpy source to destination, and rely on
+                // LLVM optimizing away any inefficiencies.
+                build_memcpy(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(layout),
+                    destination,
+                    value.into_pointer_value(),
+                );
             } else {
                 env.builder.build_store(destination, value);
             }
@@ -5153,24 +5132,13 @@ fn build_closure_caller<'a, 'ctx>(
         );
 
         if layout_interner.is_passed_by_reference(return_layout) {
-            let align_bytes = layout_interner.alignment_bytes(return_layout);
-
-            if align_bytes > 0 {
-                let width = basic_type_from_layout(env, layout_interner, return_layout)
-                    .size_of()
-                    .unwrap();
-                let align_bytes = layout_interner.alignment_bytes_for_llvm(return_layout);
-
-                env.builder
-                    .build_memcpy(
-                        output,
-                        align_bytes,
-                        call_result.into_pointer_value(),
-                        align_bytes,
-                        width,
-                    )
-                    .unwrap();
-            }
+            build_memcpy(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+                output,
+                call_result.into_pointer_value(),
+            );
         } else {
             builder.build_store(output, call_result);
         }
