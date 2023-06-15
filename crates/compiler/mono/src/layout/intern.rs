@@ -207,11 +207,6 @@ pub trait LayoutInterner<'a>: Sized {
             .alignment_bytes(self, self.target_info())
     }
 
-    fn alignment_bytes_for_llvm(&self, layout: InLayout<'a>) -> u32 {
-        self.get_repr(layout)
-            .alignment_bytes_for_llvm(self, self.target_info())
-    }
-
     fn allocation_alignment_bytes(&self, layout: InLayout<'a>) -> u32 {
         self.get_repr(layout)
             .allocation_alignment_bytes(self, self.target_info())
