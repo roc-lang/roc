@@ -1,6 +1,4 @@
-## THIS MODULE IS DEPRECATED AND CURRENTLY IN THE PROCESS OF BEING REMOVED
-## FROM STD LIBRARY
-interface TotallyNotJson
+interface ExampleJson
     exposes [
         Json,
         json,

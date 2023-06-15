@@ -25,7 +25,6 @@ const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::ENCODE, "Encode.roc"),
     (ModuleId::DECODE, "Decode.roc"),
     (ModuleId::HASH, "Hash.roc"),
-    (ModuleId::JSON, "TotallyNotJson.roc"),
 ];
 
 fn main() {
