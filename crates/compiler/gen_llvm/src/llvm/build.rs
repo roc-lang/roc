@@ -1616,24 +1616,16 @@ fn build_tag<'a, 'ctx>(
 
             let roc_union =
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
-            let value = roc_union.as_struct_value(
-                env,
-                layout_interner,
-                data,
-                data_layout_repr,
-                Some(tag_id as _),
-            );
 
-            let alloca = create_entry_block_alloca(
-                env,
-                parent,
-                value.get_type().into(),
-                "non_recursive_tag_alloca",
-            );
-
-            env.builder.build_store(alloca, value);
-
-            alloca.into()
+            roc_union
+                .as_struct_alloca(
+                    env,
+                    layout_interner,
+                    data,
+                    data_layout_repr,
+                    Some(tag_id as _),
+                )
+                .into()
         }
         UnionLayout::Recursive(tags) => {
             debug_assert!(union_size > 1);
@@ -1755,7 +1747,7 @@ fn build_tag<'a, 'ctx>(
             let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
             let value =
-                roc_union.as_struct_value(env, layout_interner, data, data_layout_repr, None);
+                roc_union.as_struct_alloca(env, layout_interner, data, data_layout_repr, None);
 
             env.builder.build_store(data_ptr, value);
 
