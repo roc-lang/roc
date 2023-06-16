@@ -1060,23 +1060,27 @@ mod decode_immediate {
     #[cfg(all(test, any(feature = "gen-llvm")))]
     use roc_std::RocStr;
 
+    use crate::helpers::with_larger_debug_stack;
+
     #[test]
     #[cfg(any(feature = "gen-llvm"))]
     fn string() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
+                    app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-                main =
-                    when Str.toUtf8 "\"foo\"" |> Decode.fromBytes TotallyNotJson.json is
-                        Ok s -> s
-                        _ -> "<bad>"
-                "#
-            ),
-            RocStr::from("foo"),
-            RocStr
-        )
+                    main =
+                        when Str.toUtf8 "\"foo\"" |> Decode.fromBytes TotallyNotJson.json is
+                            Ok s -> s
+                            _ -> "<bad>"
+                    "#
+                ),
+                RocStr::from("foo"),
+                RocStr
+            )
+        });
     }
 
     #[test]
@@ -1183,59 +1187,65 @@ mod decode_immediate {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_list_of_strings() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-            main =
-                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes TotallyNotJson.json is
-                    Ok l -> Str.joinWith l ","
-                    _ -> "<bad>"
-            "#
-        ),
-        RocStr::from("a,b,c"),
-        RocStr
-    )
+                main =
+                    when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes TotallyNotJson.json is
+                        Ok l -> Str.joinWith l ","
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from("a,b,c"),
+            RocStr
+        )
+    });
 }
 
 #[test]
 #[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
 fn encode_then_decode_list_of_strings() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-            main =
-                when Encode.toBytes ["a", "b", "c"] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
-                    Ok l -> Str.joinWith l ","
-                    _ -> "something went wrong"
-            "#
-        ),
-        RocStr::from("a,b,c"),
-        RocStr
-    )
+                main =
+                    when Encode.toBytes ["a", "b", "c"] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
+                        Ok l -> Str.joinWith l ","
+                        _ -> "something went wrong"
+                "#
+            ),
+            RocStr::from("a,b,c"),
+            RocStr
+        )
+    });
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 #[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
 fn encode_then_decode_list_of_lists_of_strings() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-            main =
-                when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
-                    Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
-                    _ -> "something went wrong"
-            "#
-        ),
-        RocStr::from("a,b;c,d,e;f"),
-        RocStr
-    )
+                main =
+                    when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
+                        Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
+                        _ -> "something went wrong"
+                "#
+            ),
+            RocStr::from("a,b;c,d,e;f"),
+            RocStr
+        )
+    })
 }
 
 #[test]
@@ -2139,32 +2149,34 @@ mod eq {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_4772_weakened_monomorphic_destructure() {
-    assert_evals_to!(
-        indoc!(
-            r###"
-            app "test"
-                    imports [TotallyNotJson]
-                    provides [main] to "./platform"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r###"
+                app "test"
+                        imports [TotallyNotJson]
+                        provides [main] to "./platform"
 
-            getNumber =
-                { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") TotallyNotJson.json
-                        
-                when result is 
-                    Ok val -> 
-                        when Str.toI64 val is 
-                            Ok number ->
-                                Ok {val : number, input : rest}
-                            Err InvalidNumStr ->
-                                Err (ParsingFailure "not a number")
+                getNumber =
+                    { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") TotallyNotJson.json
+                            
+                    when result is 
+                        Ok val -> 
+                            when Str.toI64 val is 
+                                Ok number ->
+                                    Ok {val : number, input : rest}
+                                Err InvalidNumStr ->
+                                    Err (ParsingFailure "not a number")
 
-                    Err _ -> 
-                        Err (ParsingFailure "not a number")
+                        Err _ -> 
+                            Err (ParsingFailure "not a number")
 
-            main = 
-                getNumber |> Result.map .val |> Result.withDefault 0
-            "###
-        ),
-        1234i64,
-        i64
-    );
+                main = 
+                    getNumber |> Result.map .val |> Result.withDefault 0
+                "###
+            ),
+            1234i64,
+            i64
+        )
+    })
 }
