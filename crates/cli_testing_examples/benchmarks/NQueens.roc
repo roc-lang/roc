@@ -51,7 +51,6 @@ safe = \queen, diagonal, xs ->
 
 length : ConsList a -> I64
 length = \xs ->
-    dbg "length"
     lengthHelp xs 0
 
 lengthHelp : ConsList a, I64 -> I64

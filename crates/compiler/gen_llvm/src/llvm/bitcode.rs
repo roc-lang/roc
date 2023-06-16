@@ -1,8 +1,8 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
 use crate::llvm::build::{
-    complex_bitcast_check_size, load_roc_value, struct_from_fields, to_cc_return, CCReturn, Env,
-    C_CALL_CONV, FAST_CALL_CONV,
+    complex_bitcast_check_size, load_roc_value, to_cc_return, CCReturn, Env, C_CALL_CONV,
+    FAST_CALL_CONV,
 };
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
@@ -23,6 +23,7 @@ use roc_mono::layout::{
 
 use super::build::{create_entry_block_alloca, BuilderExt};
 use super::convert::zig_list_type;
+use super::struct_::struct_from_fields;
 
 pub fn call_bitcode_fn<'ctx>(
     env: &Env<'_, 'ctx, '_>,

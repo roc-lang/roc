@@ -1,50 +1,34 @@
 use crate::llvm::build::Env;
-use inkwell::values::{BasicValueEnum, PointerValue, StructValue};
-use inkwell::AddressSpace;
+use inkwell::values::{BasicValueEnum, PointerValue};
 use roc_builtins::bitcode;
-use roc_mono::layout::{InLayout, Layout};
-use roc_target::PtrWidth;
+use roc_mono::layout::{InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner};
 
 use super::bitcode::{call_str_bitcode_fn, BitcodeReturns};
-use super::build::BuilderExt;
+use super::build::load_roc_value;
 
 pub static CHAR_LAYOUT: InLayout = Layout::U8;
 
-pub(crate) fn decode_from_utf8_result<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
+pub(crate) fn decode_from_utf8_result<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
     pointer: PointerValue<'ctx>,
-) -> StructValue<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
+) -> BasicValueEnum<'ctx> {
+    let layout = LayoutRepr::Struct(env.arena.alloc([
+        Layout::usize(env.target_info),
+        Layout::STR,
+        Layout::BOOL,
+        Layout::U8,
+    ]));
+    // TODO: have load_roc_value use LayoutRepr
+    let layout = layout_interner.insert_direct_no_semantic(layout);
 
-    let fields = match env.target_info.ptr_width() {
-        PtrWidth::Bytes4 | PtrWidth::Bytes8 => [
-            env.ptr_int().into(),
-            super::convert::zig_str_type(env).into(),
-            env.context.bool_type().into(),
-            ctx.i8_type().into(),
-        ],
-    };
-
-    let record_type = env.context.struct_type(&fields, false);
-
-    match env.target_info.ptr_width() {
-        PtrWidth::Bytes4 | PtrWidth::Bytes8 => {
-            let result_ptr_cast = env.builder.build_pointer_cast(
-                pointer,
-                record_type.ptr_type(AddressSpace::default()),
-                "to_unnamed",
-            );
-
-            builder
-                .new_build_load(
-                    record_type,
-                    result_ptr_cast,
-                    "load_utf8_validate_bytes_result",
-                )
-                .into_struct_value()
-        }
-    }
+    load_roc_value(
+        env,
+        layout_interner,
+        layout,
+        pointer,
+        "load_decode_from_utf8_result",
+    )
 }
 
 /// Dec.toStr : Dec -> Str

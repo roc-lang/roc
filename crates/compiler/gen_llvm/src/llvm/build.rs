@@ -4,13 +4,14 @@ use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
 use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
+use crate::llvm::memcpy::build_memcpy;
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
+use crate::llvm::struct_::{struct_from_fields, RocStruct};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::attributes::{Attribute, AttributeLoc};
-use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::debug_info::{
@@ -22,10 +23,10 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{
     AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
 };
-use inkwell::values::BasicValueEnum::{self, *};
+use inkwell::values::BasicValueEnum::{self};
 use inkwell::values::{
-    BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PhiValue,
-    PointerValue, StructValue,
+    BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PointerValue,
+    StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -33,13 +34,13 @@ use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
-use roc_collections::all::{ImMap, MutMap, MutSet};
+use roc_collections::all::{MutMap, MutSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet, JoinPointId,
+    BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet,
     ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
@@ -58,6 +59,7 @@ use super::intrinsics::{
     LLVM_STACK_SAVE,
 };
 use super::lowlevel::run_higher_order_low_level;
+use super::scope::Scope;
 
 pub(crate) trait BuilderExt<'ctx> {
     fn new_build_struct_gep(
@@ -158,39 +160,6 @@ macro_rules! debug_info_init {
         );
         $env.builder.set_current_debug_location(loc);
     }};
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct Scope<'a, 'ctx> {
-    symbols: ImMap<Symbol, (InLayout<'a>, BasicValueEnum<'ctx>)>,
-    pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
-    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, std::vec::Vec<PhiValue<'ctx>>)>,
-}
-
-impl<'a, 'ctx> Scope<'a, 'ctx> {
-    pub(crate) fn get(&self, symbol: &Symbol) -> Option<&(InLayout<'a>, BasicValueEnum<'ctx>)> {
-        self.symbols.get(symbol)
-    }
-    pub(crate) fn insert(&mut self, symbol: Symbol, value: (InLayout<'a>, BasicValueEnum<'ctx>)) {
-        self.symbols.insert(symbol, value);
-    }
-    pub(crate) fn insert_top_level_thunk(
-        &mut self,
-        symbol: Symbol,
-        layout: ProcLayout<'a>,
-        function_value: FunctionValue<'ctx>,
-    ) {
-        self.top_level_thunks
-            .insert(symbol, (layout, function_value));
-    }
-    fn remove(&mut self, symbol: &Symbol) {
-        self.symbols.remove(symbol);
-    }
-
-    pub fn retain_top_level_thunks_for_module(&mut self, module_id: ModuleId) {
-        self.top_level_thunks
-            .retain(|s, _| s.module_id() == module_id);
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -918,7 +887,7 @@ fn small_str_ptr_width_4<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> St
     )
 }
 
-pub fn build_exp_call<'a, 'ctx>(
+pub(crate) fn build_exp_call<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
@@ -945,7 +914,7 @@ pub fn build_exp_call<'a, 'ctx>(
                 Vec::with_capacity_in(arguments.len(), env.arena);
 
             for symbol in arguments.iter() {
-                arg_tuples.push(load_symbol(scope, symbol));
+                arg_tuples.push(scope.load_symbol(symbol));
             }
 
             let bytes = specialization_id.to_bytes();
@@ -1013,29 +982,6 @@ pub fn build_exp_call<'a, 'ctx>(
     }
 }
 
-pub fn struct_from_fields<'a, 'ctx, 'env, I>(
-    env: &Env<'a, 'ctx, 'env>,
-    struct_type: StructType<'ctx>,
-    values: I,
-) -> StructValue<'ctx>
-where
-    I: Iterator<Item = (usize, BasicValueEnum<'ctx>)>,
-{
-    let mut struct_value = struct_type.const_zero().into();
-
-    // Insert field exprs into struct_val
-    for (index, field_val) in values {
-        let index: u32 = index as u32;
-
-        struct_value = env
-            .builder
-            .build_insert_value(struct_value, field_val, index, "insert_record_field")
-            .unwrap();
-    }
-
-    struct_value.into_struct_value()
-}
-
 fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -1065,7 +1011,7 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
     }
 }
 
-pub fn build_exp_expr<'a, 'ctx>(
+pub(crate) fn build_exp_expr<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1097,7 +1043,14 @@ pub fn build_exp_expr<'a, 'ctx>(
             call,
         ),
 
-        Struct(sorted_fields) => build_struct(env, layout_interner, scope, sorted_fields).into(),
+        Struct(sorted_fields) => RocStruct::build(
+            env,
+            layout_interner,
+            layout_interner.get_repr(layout),
+            scope,
+            sorted_fields,
+        )
+        .into(),
 
         Reuse {
             arguments,
@@ -1106,7 +1059,7 @@ pub fn build_exp_expr<'a, 'ctx>(
             symbol,
             ..
         } => {
-            let reset = load_symbol(scope, symbol).into_pointer_value();
+            let reset = scope.load_symbol(symbol).into_pointer_value();
             build_tag(
                 env,
                 layout_interner,
@@ -1136,7 +1089,7 @@ pub fn build_exp_expr<'a, 'ctx>(
         ),
 
         ExprBox { symbol } => {
-            let (value, layout) = load_symbol_and_layout(scope, symbol);
+            let (value, layout) = scope.load_symbol_and_layout(symbol);
             let basic_type = basic_type_from_layout(env, layout_interner, layout);
             let allocation = reserve_with_refcount_help(
                 env,
@@ -1151,7 +1104,7 @@ pub fn build_exp_expr<'a, 'ctx>(
         }
 
         ExprUnbox { symbol } => {
-            let value = load_symbol(scope, symbol);
+            let value = scope.load_symbol(symbol);
 
             debug_assert!(value.is_pointer_value());
 
@@ -1174,7 +1127,7 @@ pub fn build_exp_expr<'a, 'ctx>(
                 .update_mode(update_var)
                 .unwrap_or(UpdateMode::Immutable);
 
-            let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
+            let (tag_ptr, layout) = scope.load_symbol_and_layout(symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 
             // reset is only generated for union values
@@ -1261,7 +1214,7 @@ pub fn build_exp_expr<'a, 'ctx>(
                 .update_mode(update_var)
                 .unwrap_or(UpdateMode::Immutable);
 
-            let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
+            let (tag_ptr, layout) = scope.load_symbol_and_layout(symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 
             let ctx = env.context;
@@ -1321,47 +1274,10 @@ pub fn build_exp_expr<'a, 'ctx>(
         StructAtIndex {
             index, structure, ..
         } => {
-            let (value, layout) = load_symbol_and_layout(scope, structure);
+            let (value, layout) = scope.load_symbol_and_layout(structure);
+            let struct_val = RocStruct::from(value);
 
-            let layout = if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get_repr(layout)
-            {
-                lambda_set.runtime_representation()
-            } else {
-                layout
-            };
-
-            // extract field from a record
-            match (value, layout_interner.get_repr(layout)) {
-                (StructValue(argument), LayoutRepr::Struct(field_layouts)) => {
-                    debug_assert!(!field_layouts.is_empty());
-
-                    let field_value = env
-                        .builder
-                        .build_extract_value(
-                            argument,
-                            *index as u32,
-                            env.arena
-                                .alloc(format!("struct_field_access_record_{}", index)),
-                        )
-                        .unwrap();
-
-                    let field_layout = field_layouts[*index as usize];
-                    use_roc_value(
-                        env,
-                        layout_interner,
-                        field_layout,
-                        field_value,
-                        "struct_field_tag",
-                    )
-                }
-                (other, layout) => {
-                    // potential cause: indexing into an unwrapped 1-element record/tag?
-                    unreachable!(
-                        "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
-                        other, layout, index
-                    )
-                }
-            }
+            struct_val.load_at_index(env, layout_interner, layout, *index)
         }
 
         EmptyArray => empty_polymorphic_list(env),
@@ -1377,7 +1293,7 @@ pub fn build_exp_expr<'a, 'ctx>(
             union_layout,
         } => {
             // cast the argument bytes into the desired shape for this tag
-            let (argument, structure_layout) = load_symbol_and_layout(scope, structure);
+            let (argument, structure_layout) = scope.load_symbol_and_layout(structure);
 
             match union_layout {
                 UnionLayout::NonRecursive(tag_layouts) => {
@@ -1518,7 +1434,7 @@ pub fn build_exp_expr<'a, 'ctx>(
             union_layout,
         } => {
             // cast the argument bytes into the desired shape for this tag
-            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+            let (argument, _structure_layout) = scope.load_symbol_and_layout(structure);
 
             get_tag_id(env, layout_interner, parent, union_layout, argument).into()
         }
@@ -1670,58 +1586,13 @@ fn build_tag_fields<'a, 'r, 'ctx, 'env>(
         let field_type = basic_type_from_layout(env, layout_interner, *tag_field_layout);
         field_types.push(field_type);
 
-        let raw_value: BasicValueEnum<'ctx> = load_symbol(scope, field_symbol);
+        let raw_value: BasicValueEnum<'ctx> = scope.load_symbol(field_symbol);
         let field_value = build_tag_field_value(env, layout_interner, raw_value, *tag_field_layout);
 
         field_values.push((*tag_field_layout, field_value));
     }
 
     (field_types, field_values)
-}
-
-fn build_struct<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    scope: &Scope<'a, 'ctx>,
-    sorted_fields: &[Symbol],
-) -> StructValue<'ctx> {
-    let ctx = env.context;
-
-    // Determine types
-    let num_fields = sorted_fields.len();
-    let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-    let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-    for symbol in sorted_fields.iter() {
-        // Zero-sized fields have no runtime representation.
-        // The layout of the struct expects them to be dropped!
-        let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
-        if !layout_interner
-            .get_repr(field_layout)
-            .is_dropped_because_empty()
-        {
-            let field_type = basic_type_from_layout(env, layout_interner, field_layout);
-            field_types.push(field_type);
-
-            if layout_interner.is_passed_by_reference(field_layout) {
-                let field_value = env.builder.new_build_load(
-                    field_type,
-                    field_expr.into_pointer_value(),
-                    "load_tag_to_put_in_struct",
-                );
-
-                field_vals.push(field_value);
-            } else {
-                field_vals.push(field_expr);
-            }
-        }
-    }
-
-    // Create the struct_type
-    let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-
-    // Insert field exprs into struct_val
-    struct_from_fields(env, struct_type, field_vals.into_iter().enumerate())
 }
 
 fn build_tag<'a, 'ctx>(
@@ -1740,11 +1611,18 @@ fn build_tag<'a, 'ctx>(
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let data = build_struct(env, layout_interner, scope, arguments);
+            let data_layout_repr = LayoutRepr::Struct(tags[tag_id as usize]);
+            let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
             let roc_union =
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
-            let value = roc_union.as_struct_value(env, data, Some(tag_id as _));
+            let value = roc_union.as_struct_value(
+                env,
+                layout_interner,
+                data,
+                data_layout_repr,
+                Some(tag_id as _),
+            );
 
             let alloca = create_entry_block_alloca(
                 env,
@@ -1873,9 +1751,11 @@ fn build_tag<'a, 'ctx>(
                 &[other_fields],
             );
 
-            let data = build_struct(env, layout_interner, scope, arguments);
+            let data_layout_repr = LayoutRepr::Struct(other_fields);
+            let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
-            let value = roc_union.as_struct_value(env, data, None);
+            let value =
+                roc_union.as_struct_value(env, layout_interner, data, data_layout_repr, None);
 
             env.builder.build_store(data_ptr, value);
 
@@ -2320,7 +2200,7 @@ fn list_literal<'a, 'ctx>(
                         global_elements.push(val.into_int_value());
                     }
                     ListLiteralElement::Symbol(symbol) => {
-                        let val = load_symbol(scope, symbol);
+                        let val = scope.load_symbol(symbol);
 
                         // here we'd like to furthermore check for intval.is_const().
                         // if all elements are const for LLVM, we could make the array a constant.
@@ -2409,7 +2289,7 @@ fn list_literal<'a, 'ctx>(
                 ListLiteralElement::Literal(literal) => {
                     build_exp_literal(env, layout_interner, parent, element_layout, literal)
                 }
-                ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
+                ListLiteralElement::Symbol(symbol) => scope.load_symbol(symbol),
             };
             let index_val = ctx.i64_type().const_int(index as u64, false);
             let elem_ptr = unsafe {
@@ -2425,7 +2305,7 @@ fn list_literal<'a, 'ctx>(
 
 pub fn load_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     source: PointerValue<'ctx>,
     name: &str,
@@ -2445,7 +2325,7 @@ pub fn load_roc_value<'a, 'ctx>(
 
 pub fn use_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     source: BasicValueEnum<'ctx>,
     name: &str,
@@ -2467,7 +2347,7 @@ pub fn use_roc_value<'a, 'ctx>(
 
 pub fn store_roc_value_opaque<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     opaque_destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -2483,7 +2363,7 @@ pub fn store_roc_value_opaque<'a, 'ctx>(
 
 pub fn store_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -2491,23 +2371,13 @@ pub fn store_roc_value<'a, 'ctx>(
     if layout_interner.is_passed_by_reference(layout) {
         debug_assert!(value.is_pointer_value());
 
-        let align_bytes = layout_interner.alignment_bytes(layout);
-
-        if align_bytes > 0 {
-            let size = env
-                .ptr_int()
-                .const_int(layout_interner.stack_size(layout) as u64, false);
-
-            env.builder
-                .build_memcpy(
-                    destination,
-                    align_bytes,
-                    value.into_pointer_value(),
-                    align_bytes,
-                    size,
-                )
-                .unwrap();
-        }
+        build_memcpy(
+            env,
+            layout_interner,
+            layout_interner.get_repr(layout),
+            destination,
+            value.into_pointer_value(),
+        );
     } else {
         let destination_type = destination
             .get_type()
@@ -2522,7 +2392,7 @@ pub fn store_roc_value<'a, 'ctx>(
     }
 }
 
-pub fn build_exp_stmt<'a, 'ctx>(
+pub(crate) fn build_exp_stmt<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
@@ -2571,7 +2441,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
                 // access itself!
                 // scope = scope.clone();
 
-                scope.insert(*symbol, (*layout, val));
+                scope.insert(*symbol, *layout, val);
                 stack.push(*symbol);
             }
 
@@ -2592,90 +2462,11 @@ pub fn build_exp_stmt<'a, 'ctx>(
             result
         }
         Ret(symbol) => {
-            let (value, layout) = load_symbol_and_layout(scope, symbol);
+            let (value, layout) = scope.load_symbol_and_layout(symbol);
 
-            match RocReturn::from_layout(env, layout_interner, layout) {
-                RocReturn::Return => {
-                    if let Some(block) = env.builder.get_insert_block() {
-                        if block.get_terminator().is_none() {
-                            env.builder.build_return(Some(&value));
-                        }
-                    }
+            build_return(env, layout_interner, layout, value, parent);
 
-                    value
-                }
-                RocReturn::ByPointer => {
-                    // we need to write our value into the final argument of the current function
-                    let parameters = parent.get_params();
-                    let out_parameter = parameters.last().unwrap();
-                    debug_assert!(out_parameter.is_pointer_value());
-
-                    // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
-
-                    let destination = out_parameter.into_pointer_value();
-                    if layout_interner.is_passed_by_reference(layout) {
-                        let align_bytes = layout_interner.alignment_bytes(layout);
-
-                        if align_bytes > 0 {
-                            debug_assert!(
-                                value.is_pointer_value(),
-                                "{:?}: {:?}\n{:?}",
-                                parent.get_name(),
-                                value,
-                                layout
-                            );
-
-                            // What we want to do here is
-                            //
-                            // let value_ptr = value.into_pointer_value();
-                            // if value_ptr.get_first_use().is_some() {
-                            //   value_ptr.replace_all_uses_with(destination);
-                            //
-                            // In other words, if the source pointer is used,
-                            // then we just subsitute the source for the input pointer, done.
-                            //
-                            // Only that does not work if the source is not written to.
-                            // A simple example is the identity function
-                            //
-                            // A slightly more complex case that will also make the above not
-                            // work is when the source pointer is only incremented, but not
-                            // written to. Then there is a first_use, but it's still invalid to
-                            // subsitute source with destination
-                            //
-                            // Hence, we explicitly memcpy source to destination, and rely on
-                            // LLVM optimizing away any inefficiencies.
-                            let width = layout_interner.stack_size(layout);
-                            let size = env.ptr_int().const_int(width as _, false);
-
-                            env.builder
-                                .build_memcpy(
-                                    destination,
-                                    align_bytes,
-                                    value.into_pointer_value(),
-                                    align_bytes,
-                                    size,
-                                )
-                                .unwrap();
-                        }
-                    } else {
-                        env.builder.build_store(destination, value);
-                    }
-
-                    if let Some(block) = env.builder.get_insert_block() {
-                        match block.get_terminator() {
-                            None => {
-                                env.builder.build_return(None);
-                            }
-                            Some(terminator) => {
-                                terminator.remove_from_basic_block();
-                                env.builder.build_return(None);
-                            }
-                        }
-                    }
-
-                    env.context.i8_type().const_zero().into()
-                }
-            }
+            env.context.i8_type().const_zero().into()
         }
 
         Switch {
@@ -2739,7 +2530,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
             }
 
             // store this join point
-            scope.join_points.insert(*id, (cont_block, joinpoint_args));
+            scope.insert_join_point(*id, cont_block, joinpoint_args);
 
             // construct the blocks that may jump to this join point
             build_exp_stmt(
@@ -2758,11 +2549,9 @@ pub fn build_exp_stmt<'a, 'ctx>(
             builder.position_at_end(cont_block);
 
             // bind the values
-            let ref_join_points = &scope.join_points.get(id).unwrap().1;
-            for (phi_value, param) in ref_join_points.iter().zip(parameters.iter()) {
-                let value = phi_value.as_basic_value();
-                scope.symbols.insert(param.symbol, (param.layout, value));
-            }
+            scope
+                .bind_parameters_to_join_point(*id, parameters.iter())
+                .expect("join point not found, but it was inserted above");
 
             // put the continuation in
             let result = build_exp_stmt(
@@ -2776,7 +2565,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
             );
 
             // remove this join point again
-            scope.join_points.remove(id);
+            scope.remove_join_point(*id);
 
             cont_block.move_after(phi_block).unwrap();
 
@@ -2786,12 +2575,12 @@ pub fn build_exp_stmt<'a, 'ctx>(
         Jump(join_point, arguments) => {
             let builder = env.builder;
             let context = env.context;
-            let (cont_block, argument_phi_values) = scope.join_points.get(join_point).unwrap();
+            let (cont_block, argument_phi_values) = scope.get_join_point(*join_point).unwrap();
 
             let current_block = builder.get_insert_block().unwrap();
 
             for (phi_value, argument) in argument_phi_values.iter().zip(arguments.iter()) {
-                let (value, _) = load_symbol_and_layout(scope, argument);
+                let (value, _) = scope.load_symbol_and_layout(argument);
 
                 phi_value.add_incoming(&[(&value, current_block)]);
             }
@@ -2807,7 +2596,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
 
             match modify {
                 Inc(symbol, inc_amount) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+                    let (value, layout) = scope.load_symbol_and_layout(symbol);
                     if layout_interner.contains_refcounted(layout) {
                         increment_refcount_layout(
                             env,
@@ -2830,7 +2619,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
                     )
                 }
                 Dec(symbol) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+                    let (value, layout) = scope.load_symbol_and_layout(symbol);
 
                     if layout_interner.contains_refcounted(layout) {
                         decrement_refcount_layout(env, layout_interner, layout_ids, value, layout);
@@ -2847,7 +2636,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
                     )
                 }
                 DecRef(symbol) => {
-                    let (value, layout) = load_symbol_and_layout(scope, symbol);
+                    let (value, layout) = scope.load_symbol_and_layout(symbol);
 
                     let lay = layout_interner.get_repr(layout);
                     match lay {
@@ -2958,7 +2747,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
             let bd = env.builder;
             let context = env.context;
 
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
+            let (cond, _cond_layout) = scope.load_symbol_and_layout(cond_symbol);
 
             let condition = bd.build_int_compare(
                 IntPredicate::EQ,
@@ -3030,7 +2819,7 @@ pub fn build_exp_stmt<'a, 'ctx>(
             let bd = env.builder;
             let context = env.context;
 
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
+            let (cond, _cond_layout) = scope.load_symbol_and_layout(cond_symbol);
 
             let condition = bd.build_int_compare(
                 IntPredicate::EQ,
@@ -3098,24 +2887,81 @@ pub fn build_exp_stmt<'a, 'ctx>(
     }
 }
 
-pub fn load_symbol<'ctx>(scope: &Scope<'_, 'ctx>, symbol: &Symbol) -> BasicValueEnum<'ctx> {
-    match scope.get(symbol) {
-        Some((_, ptr)) => *ptr,
+fn build_return<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
+    value: BasicValueEnum<'ctx>,
+    parent: FunctionValue<'ctx>,
+) {
+    match RocReturn::from_layout(layout_interner, layout) {
+        RocReturn::Return => {
+            if let Some(block) = env.builder.get_insert_block() {
+                if block.get_terminator().is_none() {
+                    env.builder.build_return(Some(&value));
+                }
+            }
+        }
+        RocReturn::ByPointer => {
+            // we need to write our value into the final argument of the current function
+            let parameters = parent.get_params();
+            let out_parameter = parameters.last().unwrap();
+            debug_assert!(out_parameter.is_pointer_value());
 
-        None => panic!(
-            "There was no entry for {:?} {} in scope {:?}",
-            symbol, symbol, scope
-        ),
-    }
-}
+            // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
 
-pub(crate) fn load_symbol_and_layout<'a, 'ctx>(
-    scope: &Scope<'a, 'ctx>,
-    symbol: &Symbol,
-) -> (BasicValueEnum<'ctx>, InLayout<'a>) {
-    match scope.get(symbol) {
-        Some((layout, ptr)) => (*ptr, *layout),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+            let destination = out_parameter.into_pointer_value();
+            if layout_interner.is_passed_by_reference(layout) {
+                debug_assert!(
+                    value.is_pointer_value(),
+                    "{:?}: {:?}\n{:?}",
+                    parent.get_name(),
+                    value,
+                    layout
+                );
+
+                // What we want to do here is
+                //
+                // let value_ptr = value.into_pointer_value();
+                // if value_ptr.get_first_use().is_some() {
+                //   value_ptr.replace_all_uses_with(destination);
+                //
+                // In other words, if the source pointer is used,
+                // then we just subsitute the source for the input pointer, done.
+                //
+                // Only that does not work if the source is not written to.
+                // A simple example is the identity function
+                //
+                // A slightly more complex case that will also make the above not
+                // work is when the source pointer is only incremented, but not
+                // written to. Then there is a first_use, but it's still invalid to
+                // subsitute source with destination
+                //
+                // Hence, we explicitly memcpy source to destination, and rely on
+                // LLVM optimizing away any inefficiencies.
+                build_memcpy(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(layout),
+                    destination,
+                    value.into_pointer_value(),
+                );
+            } else {
+                env.builder.build_store(destination, value);
+            }
+
+            if let Some(block) = env.builder.get_insert_block() {
+                match block.get_terminator() {
+                    None => {
+                        env.builder.build_return(None);
+                    }
+                    Some(terminator) => {
+                        terminator.remove_from_basic_block();
+                        env.builder.build_return(None);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3427,7 +3273,7 @@ fn build_switch_ir<'a, 'ctx>(
     let scope = &mut copy;
 
     let cond_symbol = &cond_symbol;
-    let (cond_value, stored_layout) = load_symbol_and_layout(scope, cond_symbol);
+    let (cond_value, stored_layout) = scope.load_symbol_and_layout(cond_symbol);
 
     debug_assert_eq!(
         basic_type_from_layout(env, layout_interner, cond_layout),
@@ -3768,11 +3614,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
 
         builder.position_at_end(entry);
 
-        let wrapped_layout = layout_interner.insert_direct_no_semantic(roc_call_result_layout(
-            env.arena,
-            return_layout,
-            env.target_info,
-        ));
+        let wrapped_layout = layout_interner
+            .insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
         call_roc_function(
             env,
             layout_interner,
@@ -3901,7 +3744,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    let call_result = {
+    let (call_result, call_result_layout) = {
         let last_block = builder.get_insert_block().unwrap();
 
         let roc_wrapper_function =
@@ -3909,17 +3752,18 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
         builder.position_at_end(last_block);
 
-        let wrapper_result = layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(
-            env.arena.alloc([Layout::U64, return_layout]),
-        ));
+        let wrapper_result = layout_interner
+            .insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
 
-        call_roc_function(
+        let roc_value = call_roc_function(
             env,
             layout_interner,
             roc_wrapper_function,
             wrapper_result,
             arguments_for_call,
-        )
+        );
+
+        (roc_value, wrapper_result)
     };
 
     let output_arg_index = args_length - 1;
@@ -3929,7 +3773,13 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
         .unwrap()
         .into_pointer_value();
 
-    builder.build_store(output_arg, call_result);
+    store_roc_value(
+        env,
+        layout_interner,
+        call_result_layout,
+        output_arg,
+        call_result,
+    );
     builder.build_return(None);
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
@@ -3981,7 +3831,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
     let return_type = basic_type_from_layout(env, layout_interner, return_layout);
 
     let cc_return = to_cc_return(env, layout_interner, return_layout);
-    let roc_return = RocReturn::from_layout(env, layout_interner, return_layout);
+    let roc_return = RocReturn::from_layout(layout_interner, return_layout);
 
     let c_function_spec = FunctionSpec::cconv(env, cc_return, Some(return_type), &argument_types);
 
@@ -4420,14 +4270,20 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
+    // The roc function to call
     roc_function: FunctionValue<'ctx>,
-    arguments: &[BasicValueEnum<'ctx>],
-    return_layout: InLayout<'a>,
+    roc_arguments: &[BasicValueEnum<'ctx>],
+    roc_return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let context = env.context;
     let builder = env.builder;
 
-    let return_type = basic_type_from_layout(env, layout_interner, return_layout);
+    let return_type = basic_type_from_layout(env, layout_interner, roc_return_layout);
+    let call_result_return_conv = {
+        let layout = layout_interner
+            .insert_direct_no_semantic(roc_call_result_layout(env.arena, roc_return_layout));
+        RocReturn::from_layout(layout_interner, layout)
+    };
     let call_result_type = roc_call_result_type(env, return_type.as_basic_type_enum());
     let result_alloca = builder.build_alloca(call_result_type, "result");
 
@@ -4450,10 +4306,16 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     {
         builder.position_at_end(then_block);
 
-        let call_result =
-            call_roc_function(env, layout_interner, roc_function, return_layout, arguments);
+        let call_result = call_roc_function(
+            env,
+            layout_interner,
+            roc_function,
+            roc_return_layout,
+            roc_arguments,
+        );
 
-        let return_value = make_good_roc_result(env, layout_interner, return_layout, call_result);
+        let return_value =
+            make_good_roc_result(env, layout_interner, roc_return_layout, call_result);
 
         builder.build_store(result_alloca, return_value);
 
@@ -4491,11 +4353,14 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
 
     env.builder.position_at_end(cont_block);
 
-    builder.new_build_load(
-        call_result_type,
-        result_alloca,
-        "set_jump_and_catch_long_jump_load_result",
-    )
+    match call_result_return_conv {
+        RocReturn::Return => builder.new_build_load(
+            call_result_type,
+            result_alloca,
+            "set_jump_and_catch_long_jump_load_result",
+        ),
+        RocReturn::ByPointer => result_alloca.into(),
+    }
 }
 
 fn make_exception_catcher<'a, 'ctx>(
@@ -4519,16 +4384,13 @@ fn make_exception_catcher<'a, 'ctx>(
     function_value
 }
 
-fn roc_call_result_layout<'a>(
-    arena: &'a Bump,
-    return_layout: InLayout<'a>,
-    target_info: TargetInfo,
-) -> LayoutRepr<'a> {
-    let elements = [Layout::U64, Layout::usize(target_info), return_layout];
+fn roc_call_result_layout<'a>(arena: &'a Bump, return_layout: InLayout<'a>) -> LayoutRepr<'a> {
+    let elements = [Layout::U64, Layout::STR_PTR, return_layout];
 
     LayoutRepr::struct_(arena.alloc(elements))
 }
 
+// TODO: coalesce with `roc_call_result_layout`?
 fn roc_call_result_type<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     return_type: BasicTypeEnum<'ctx>,
@@ -4594,12 +4456,22 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     let context = env.context;
     let builder = env.builder;
 
+    // TODO: pass these, and the roc function, in directly?
+    let wrapper_return_layout =
+        layout_interner.insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
+
+    let wrapper_return_type = roc_call_result_type(
+        env,
+        basic_type_from_layout(env, layout_interner, return_layout),
+    );
+
     let roc_function_type = roc_function.get_type();
-    let argument_types = match RocReturn::from_layout(env, layout_interner, return_layout) {
+    let argument_types = match RocReturn::from_layout(layout_interner, return_layout) {
         RocReturn::Return => roc_function_type.get_param_types(),
         RocReturn::ByPointer => {
-            // Our fastcc passes the return pointer as the last parameter.
-            // Remove the return pointer since we now intend to return the result by value.
+            // Our fastcc passes the return pointer as the last parameter. Remove it from the
+            // argument types used for the wrapper, since the wrapper's return type will go here
+            // when we build the wrapper function spec below.
             let mut types = roc_function_type.get_param_types();
             types.pop();
 
@@ -4607,19 +4479,13 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
         }
     };
 
-    let wrapper_return_type = roc_call_result_type(
-        env,
-        basic_type_from_layout(env, layout_interner, return_layout),
-    );
+    let wrapper_return_conv = RocReturn::from_layout(layout_interner, wrapper_return_layout);
 
-    // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::default()).into());
-
-    // let wrapper_function_type = env.context.void_type().fn_type(&argument_types, false);
-    let wrapper_function_spec = FunctionSpec::cconv(
+    let wrapper_function_spec = FunctionSpec::fastcc(
         env,
-        CCReturn::Return,
-        Some(wrapper_return_type.as_basic_type_enum()),
-        &argument_types,
+        wrapper_return_conv,
+        wrapper_return_type.into(),
+        Vec::from_iter_in(argument_types, env.arena),
     );
 
     // Add main to the module.
@@ -4634,32 +4500,47 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     let subprogram = env.new_subprogram(wrapper_function_name);
     wrapper_function.set_subprogram(subprogram);
 
-    // our exposed main function adheres to the C calling convention
+    // The exposed main function must adhere to the C calling convention, but the wrapper can still be fastcc.
     wrapper_function.set_call_conventions(FAST_CALL_CONV);
 
     // invoke instead of call, so that we can catch any exceptions thrown in Roc code
-    let arguments = wrapper_function.get_params();
+    let roc_function_arguments = {
+        let mut params = wrapper_function.get_params();
+        match wrapper_return_conv {
+            RocReturn::Return => { /* passthrough */ }
+            RocReturn::ByPointer => {
+                params.pop();
+            }
+        }
+        params
+    };
 
     let basic_block = context.append_basic_block(wrapper_function, "entry");
     builder.position_at_end(basic_block);
 
     debug_info_init!(env, wrapper_function);
 
-    let result = set_jump_and_catch_long_jump(
+    let wrapper_return_result = set_jump_and_catch_long_jump(
         env,
         layout_interner,
         wrapper_function,
         roc_function,
-        &arguments,
+        &roc_function_arguments,
         return_layout,
     );
 
-    builder.build_return(Some(&result));
+    build_return(
+        env,
+        layout_interner,
+        wrapper_return_layout,
+        wrapper_return_result,
+        wrapper_function,
+    );
 
     wrapper_function
 }
 
-pub fn build_proc_headers<'a, 'r, 'ctx>(
+pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
     env: &'r Env<'a, 'ctx, '_>,
     layout_interner: &'r mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
@@ -5031,7 +4912,7 @@ fn build_proc_header<'a, 'ctx>(
         arg_basic_types.push(arg_type);
     }
 
-    let roc_return = RocReturn::from_layout(env, layout_interner, proc.ret_layout);
+    let roc_return = RocReturn::from_layout(layout_interner, proc.ret_layout);
     let fn_spec = FunctionSpec::fastcc(env, roc_return, ret_type, arg_basic_types);
 
     let fn_val = add_func(
@@ -5251,23 +5132,13 @@ fn build_closure_caller<'a, 'ctx>(
         );
 
         if layout_interner.is_passed_by_reference(return_layout) {
-            let align_bytes = layout_interner.alignment_bytes(return_layout);
-
-            if align_bytes > 0 {
-                let size = env
-                    .ptr_int()
-                    .const_int(layout_interner.stack_size(return_layout) as u64, false);
-
-                env.builder
-                    .build_memcpy(
-                        output,
-                        align_bytes,
-                        call_result.into_pointer_value(),
-                        align_bytes,
-                        size,
-                    )
-                    .unwrap();
-            }
+            build_memcpy(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+                output,
+                call_result.into_pointer_value(),
+            );
         } else {
             builder.build_store(output, call_result);
         }
@@ -5392,7 +5263,7 @@ fn build_proc<'a, 'ctx>(
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
         arg_val.set_name(arg_symbol.as_str(&env.interns));
-        scope.insert(*arg_symbol, (*layout, arg_val));
+        scope.insert(*arg_symbol, *layout, arg_val);
     }
 
     let body = build_exp_stmt(
@@ -5507,7 +5378,7 @@ pub fn call_roc_function<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let pass_by_pointer = roc_function.get_type().get_param_types().len() == arguments.len() + 1;
 
-    match RocReturn::from_layout(env, layout_interner, result_layout) {
+    match RocReturn::from_layout(layout_interner, result_layout) {
         RocReturn::ByPointer if !pass_by_pointer => {
             // WARNING this is a hack!!
             let it = arguments.iter().map(|x| (*x).into());
@@ -5725,40 +5596,15 @@ pub(crate) enum RocReturn {
 }
 
 impl RocReturn {
-    fn roc_return_by_pointer(
-        interner: &STLayoutInterner,
-        target_info: TargetInfo,
-        layout: InLayout,
-    ) -> bool {
-        match interner.get_repr(layout) {
-            LayoutRepr::Builtin(builtin) => {
-                use Builtin::*;
-
-                match target_info.ptr_width() {
-                    roc_target::PtrWidth::Bytes4 => false,
-
-                    roc_target::PtrWidth::Bytes8 => {
-                        //
-                        matches!(builtin, Str)
-                    }
-                }
-            }
-            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => true,
-            LayoutRepr::LambdaSet(lambda_set) => RocReturn::roc_return_by_pointer(
-                interner,
-                target_info,
-                lambda_set.runtime_representation(),
-            ),
-            _ => false,
-        }
+    fn roc_return_by_pointer(interner: &STLayoutInterner, layout: InLayout) -> bool {
+        interner.is_passed_by_reference(layout)
     }
 
     pub(crate) fn from_layout<'a>(
-        env: &Env<'a, '_, '_>,
         layout_interner: &mut STLayoutInterner<'a>,
         layout: InLayout<'a>,
     ) -> Self {
-        if Self::roc_return_by_pointer(layout_interner, env.target_info, layout) {
+        if Self::roc_return_by_pointer(layout_interner, layout) {
             RocReturn::ByPointer
         } else {
             RocReturn::Return
@@ -5944,7 +5790,7 @@ fn build_foreign_symbol<'a, 'ctx>(
             let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
 
             for symbol in argument_symbols {
-                let (value, _) = load_symbol_and_layout(scope, symbol);
+                let (value, _) = scope.load_symbol_and_layout(symbol);
 
                 arguments.push(value);
             }
@@ -5960,7 +5806,7 @@ fn build_foreign_symbol<'a, 'ctx>(
             // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
 
             let return_type = basic_type_from_layout(env, layout_interner, ret_layout);
-            let roc_return = RocReturn::from_layout(env, layout_interner, ret_layout);
+            let roc_return = RocReturn::from_layout(layout_interner, ret_layout);
             let cc_return = to_cc_return(env, layout_interner, ret_layout);
 
             let mut cc_argument_types =
@@ -5970,7 +5816,7 @@ fn build_foreign_symbol<'a, 'ctx>(
             let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
 
             for symbol in argument_symbols {
-                let (value, layout) = load_symbol_and_layout(scope, symbol);
+                let (value, layout) = scope.load_symbol_and_layout(symbol);
 
                 cc_argument_types.push(to_cc_type(env, layout_interner, layout));
 
@@ -6201,7 +6047,7 @@ pub(crate) fn throw_exception<'a, 'ctx>(
     message: &Symbol,
     tag: CrashTag,
 ) {
-    let msg_val = load_symbol(scope, message);
+    let msg_val = scope.load_symbol(message);
 
     env.call_panic(env, msg_val, tag);
 

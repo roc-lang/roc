@@ -18,11 +18,10 @@ use roc_mono::layout::{
 use roc_region::all::Region;
 
 use super::build::BuilderExt;
-use super::build::{
-    add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, LlvmBackendMode,
-    Scope,
-};
+use super::build::{add_func, load_roc_value, FunctionSpec, LlvmBackendMode};
 use super::convert::struct_type_from_union_layout;
+use super::scope::Scope;
+use super::struct_::RocStruct;
 
 pub(crate) struct SharedMemoryPointer<'ctx>(PointerValue<'ctx>);
 
@@ -209,7 +208,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
     for lookup in lookups.iter() {
         lookup_starts.push(offset);
 
-        let (value, layout) = load_symbol_and_layout(scope, lookup);
+        let (value, layout) = scope.load_symbol_and_layout(lookup);
 
         let stack_size = env
             .ptr_int()
@@ -314,6 +313,7 @@ fn build_clone<'a, 'ctx>(
             ptr,
             cursors,
             value,
+            layout,
             field_layouts,
         ),
 
@@ -424,24 +424,18 @@ fn build_clone_struct<'a, 'ctx>(
     ptr: PointerValue<'ctx>,
     cursors: Cursors<'ctx>,
     value: BasicValueEnum<'ctx>,
+    struct_layout: InLayout<'a>,
     field_layouts: &[InLayout<'a>],
 ) -> IntValue<'ctx> {
-    let layout = LayoutRepr::struct_(field_layouts);
-
-    if layout.safe_to_memcpy(layout_interner) {
+    if layout_interner.safe_to_memcpy(struct_layout) {
         build_copy(env, ptr, cursors.offset, value)
     } else {
         let mut cursors = cursors;
 
-        let structure = value.into_struct_value();
+        let structure = RocStruct::from(value);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
-            let field = env
-                .builder
-                .build_extract_value(structure, i as _, "extract")
-                .unwrap();
-
-            let field = use_roc_value(env, layout_interner, *field_layout, field, "field");
+            let field = structure.load_at_index(env, layout_interner, struct_layout, i as _);
 
             let new_extra = build_clone(
                 env,
