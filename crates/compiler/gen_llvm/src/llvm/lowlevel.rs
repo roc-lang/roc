@@ -39,7 +39,8 @@ use crate::llvm::{
     },
     compare::{generic_eq, generic_neq},
     convert::{
-        self, basic_type_from_layout, zig_num_parse_result_type, zig_to_int_checked_result_type,
+        self, argument_type_from_layout, basic_type_from_layout, zig_num_parse_result_type,
+        zig_to_int_checked_result_type,
     },
     intrinsics::{
         // These instrinsics do not generate calls to libc and are safe to keep.
@@ -53,8 +54,12 @@ use crate::llvm::{
     refcounting::PointerToRefcount,
 };
 
-use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec, scope::Scope};
 use super::{build::Env, convert::zig_dec_type};
+use super::{
+    build::{throw_internal_exception, use_roc_value},
+    convert::zig_with_overflow_roc_dec,
+    scope::Scope,
+};
 
 pub(crate) fn run_low_level<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
@@ -306,8 +311,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             };
 
-            // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
-            let expected_type = basic_type_from_layout(env, layout_interner, layout);
+            // zig passes the result as a packed integer sometimes, instead of a struct. So we cast if needed.
+            // We check the type as expected in an argument position, since that is how we actually will use it.
+            let expected_type = argument_type_from_layout(env, layout_interner, layout);
             let actual_type = result.get_type();
 
             if expected_type != actual_type {
@@ -1936,14 +1942,21 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
 /// Zig returns a nominal `WithOverflow(Dec)` struct (see [zig_with_overflow_roc_dec]),
 /// but the Roc side may flatten the overflow struct. LLVM does not admit comparisons
 /// between the two representations, so always cast to the Roc representation.
-fn cast_with_overflow_dec_to_roc_type<'a, 'ctx>(
+fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
-    val: BasicValueEnum<'ctx>,
+    val: StructValue<'ctx>,
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout);
-    cast_basic_basic(env.builder, val, return_type)
+    let casted = cast_basic_basic(env.builder, val.into(), return_type);
+    use_roc_value(
+        env,
+        layout_interner,
+        return_layout,
+        casted,
+        "use_dec_with_overflow",
+    )
 }
 
 fn build_dec_binop<'a, 'ctx>(
@@ -1960,15 +1973,15 @@ fn build_dec_binop<'a, 'ctx>(
     match op {
         NumAddChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_ADD_WITH_OVERFLOW, lhs, rhs);
-            cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
         }
         NumSubChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_SUB_WITH_OVERFLOW, lhs, rhs);
-            cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
         }
         NumMulChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_MUL_WITH_OVERFLOW, lhs, rhs);
-            cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
         }
         NumAdd => build_dec_binop_throw_on_overflow(
             env,
