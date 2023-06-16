@@ -69,6 +69,9 @@ impl TargetInfo {
 
     pub const fn max_by_value_size(&self) -> usize {
         // Pass values larger than 4 machine words by reference.
+        // This is a reasonable default for most architectures. We want to pass large values by
+        // reference because it's more efficient than copying them around on the stack, and puts
+        // less pressure on CPU registers.
         self.ptr_size() * 4
     }
 
