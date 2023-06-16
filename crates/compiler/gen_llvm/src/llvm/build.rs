@@ -1746,10 +1746,16 @@ fn build_tag<'a, 'ctx>(
             let data_layout_repr = LayoutRepr::Struct(other_fields);
             let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
-            let value =
+            let data_struct_alloca =
                 roc_union.as_struct_alloca(env, layout_interner, data, data_layout_repr, None);
 
-            env.builder.build_store(data_ptr, value);
+            build_memcpy(
+                env,
+                layout_interner,
+                data_layout_repr,
+                data_ptr,
+                data_struct_alloca,
+            );
 
             data_ptr.into()
         }
