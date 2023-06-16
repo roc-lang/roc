@@ -2113,8 +2113,13 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 || // Or if the two types are the same, they trivially fit.
                 arg_width == target_int_width;
 
-            let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout)
-                .into_struct_type();
+            // How the return type needs to be stored on the stack.
+            let return_type_stack_type =
+                convert::basic_type_from_layout(env, layout_interner, return_layout)
+                    .into_struct_type();
+            // How the return type is actually used, in the Roc calling convention.
+            let return_type_use_type =
+                convert::argument_type_from_layout(env, layout_interner, return_layout);
 
             if arg_always_fits_in_target {
                 // This is guaranteed to succeed so we can just make it an int cast and let LLVM
@@ -2130,7 +2135,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     )
                     .into();
 
-                let r = return_type.const_zero();
+                let r = return_type_stack_type.const_zero();
                 let r = bd
                     .build_insert_value(r, target_int_val, 0, "converted_int")
                     .unwrap();
@@ -2223,7 +2228,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     }
                 };
 
-                complex_bitcast_check_size(env, result, return_type.into(), "cast_bitpacked")
+                complex_bitcast_check_size(env, result, return_type_use_type, "cast_bitpacked")
             }
         }
         NumCountLeadingZeroBits => call_bitcode_fn(
