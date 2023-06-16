@@ -68,8 +68,8 @@ impl TargetInfo {
     }
 
     pub const fn max_by_value_size(&self) -> usize {
-        // Pass values larger than 1M machine words by reference.
-        self.ptr_size() * 1_000_000
+        // Pass values larger than 8 machine words by reference.
+        self.ptr_size() * 8
     }
 
     pub const fn ptr_alignment_bytes(&self) -> usize {
