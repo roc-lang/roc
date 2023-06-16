@@ -1973,15 +1973,15 @@ fn build_dec_binop<'a, 'ctx>(
     match op {
         NumAddChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_ADD_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumSubChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_SUB_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumMulChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_MUL_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumAdd => build_dec_binop_throw_on_overflow(
             env,
