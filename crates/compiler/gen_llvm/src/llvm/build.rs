@@ -2908,8 +2908,6 @@ fn build_return<'a, 'ctx>(
             let out_parameter = parameters.last().unwrap();
             debug_assert!(out_parameter.is_pointer_value());
 
-            // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
-
             let destination = out_parameter.into_pointer_value();
             if layout_interner.is_passed_by_reference(layout) {
                 debug_assert!(
