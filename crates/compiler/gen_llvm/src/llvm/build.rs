@@ -1617,15 +1617,20 @@ fn build_tag<'a, 'ctx>(
             let roc_union =
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
 
-            roc_union
-                .as_struct_alloca(
-                    env,
-                    layout_interner,
-                    data,
-                    data_layout_repr,
-                    Some(tag_id as _),
-                )
-                .into()
+            let tag_alloca = env
+                .builder
+                .build_alloca(roc_union.struct_type(), "tag_alloca");
+
+            roc_union.write_struct_data(
+                env,
+                layout_interner,
+                tag_alloca,
+                data,
+                data_layout_repr,
+                Some(tag_id as _),
+            );
+
+            tag_alloca.into()
         }
         UnionLayout::Recursive(tags) => {
             debug_assert!(union_size > 1);
@@ -1746,15 +1751,13 @@ fn build_tag<'a, 'ctx>(
             let data_layout_repr = LayoutRepr::Struct(other_fields);
             let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
-            let data_struct_alloca =
-                roc_union.as_struct_alloca(env, layout_interner, data, data_layout_repr, None);
-
-            build_memcpy(
+            roc_union.write_struct_data(
                 env,
                 layout_interner,
-                data_layout_repr,
                 data_ptr,
-                data_struct_alloca,
+                data,
+                data_layout_repr,
+                None,
             );
 
             data_ptr.into()
