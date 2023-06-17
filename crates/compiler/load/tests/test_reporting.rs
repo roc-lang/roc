@@ -14379,4 +14379,46 @@ In roc, functions are always written as a lambda, like{}
     make partial application explicit.
     "
     );
+
+    test_report!(
+        type_expansion_inference,
+        indoc!(
+            r#"
+            expandError = \e ->
+              dbg f e # e = [A]x
+              when e is
+                error -> # error_unexpanded = [A]x , error_expanded = [A]x
+                  dbg g e # [A]x ~ [B]y => error_unexpanded = [A, B]y, error_expanded = [A, B]y
+                  dbg h error # => type error
+                  error
+
+            f : [A]* -> {}
+            g : [B]* -> {}
+            h : [A] -> {}
+
+            expandError
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    
+    This 1st argument to `h` has an unexpected type:
+    
+    9│            dbg h error # => type error
+                        ^^^^^
+    
+    This `error` value is a:
+    
+        [B, …]
+    
+    But `h` needs its 1st argument to be:
+    
+        […]
+    
+    Tip: Looks like a closed tag union does not have the `B` tag.
+    
+    Tip: Closed tag unions can't grow, because that might change the size
+    in memory. Can you use an open tag union?
+        "###
+    );
 }

@@ -5140,4 +5140,41 @@ mod solve_expr {
             r"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }",
         )
     }
+
+    #[test]
+    fn type_expansion() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                expandError : [Io Str] -> [Io Str, Net Str]
+                expandError = \e -> when e is
+                    error -> error
+
+                expandError
+                "#
+            ),
+            r#"[Io Str] -> [Io Str, Net Str]"#
+        );
+
+        infer_eq(
+            indoc!(
+                r#"
+                expandError = \e ->
+                  unused1 = f e # e = [A]x
+                  when e is
+                    error -> # error_unexpanded = [A]x , error_expanded = [A]x
+                      unused2 = g e # [A]x ~ [B]y => error_unexpanded = [A, B]y, error_expanded = [A, B]y
+                      unused3 = h error # => type error
+                      error
+
+                f : [A]* -> {}
+                g : [B]* -> {}
+                h : [A] -> {}
+
+                expandError
+                "#
+            ),
+            r#"[A, B]#a -> <type mismatch>"#
+        );
+    }
 }
