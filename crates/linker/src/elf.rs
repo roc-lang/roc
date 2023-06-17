@@ -1364,15 +1364,6 @@ fn surgery_elf_help(
         println!("Found App Function Symbols: {:+x?}", app_func_vaddr_map);
     }
 
-    let (new_rodata_section_offset, new_rodata_section_vaddr) = rodata_sections
-        .iter()
-        .map(|sec| section_offset_map.get(&sec.index()).unwrap())
-        .min()
-        .unwrap();
-    let (new_rodata_section_offset, new_rodata_section_vaddr) = (
-        *new_rodata_section_offset as u64,
-        *new_rodata_section_vaddr as u64,
-    );
     let (new_text_section_offset, new_text_section_vaddr) = text_sections
         .iter()
         .map(|sec| section_offset_map.get(&sec.index()).unwrap())
@@ -1397,6 +1388,23 @@ fn surgery_elf_help(
     let (new_bss_section_offset, new_bss_section_vaddr) = (
         *new_bss_section_offset as u64,
         *new_bss_section_vaddr as u64,
+    );
+
+    // rodata section is not guaranteed to exist.
+    // If it doesn't exist, just use the bss section offset.
+    // This will make a rodata section of size 0.
+    let rodata_default = (
+        new_bss_section_offset as usize,
+        new_bss_section_vaddr as usize,
+    );
+    let (new_rodata_section_offset, new_rodata_section_vaddr) = rodata_sections
+        .iter()
+        .map(|sec| section_offset_map.get(&sec.index()).unwrap())
+        .min()
+        .unwrap_or(&rodata_default);
+    let (new_rodata_section_offset, new_rodata_section_vaddr) = (
+        *new_rodata_section_offset as u64,
+        *new_rodata_section_vaddr as u64,
     );
 
     // Move data and deal with relocations.

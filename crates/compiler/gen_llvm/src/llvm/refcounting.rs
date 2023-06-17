@@ -2,14 +2,14 @@ use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::BuilderExt;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
-    FAST_CALL_CONV,
+    add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{
     incrementing_elem_loop, list_capacity_or_ref_ptr, list_refcount_ptr, load_list,
 };
 use crate::llvm::build_str::str_refcount_ptr;
 use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
+use crate::llvm::struct_::RocStruct;
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
@@ -261,35 +261,35 @@ fn modify_refcount_struct<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    layouts: &'a [InLayout<'a>],
+    struct_layout: InLayout<'a>,
+    field_layouts: &'a [InLayout<'a>],
     mode: Mode,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(layouts));
 
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
         &env.interns,
         "increment_struct",
         "decrement_struct",
-        layout,
+        struct_layout,
         mode,
     );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, layout_interner, layout);
-            let function_value = build_header(env, basic_type, mode, &fn_name);
+            let arg_type = argument_type_from_layout(env, layout_interner, struct_layout);
+            let function_value = build_header(env, arg_type, mode, &fn_name);
 
             modify_refcount_struct_help(
                 env,
                 layout_interner,
                 layout_ids,
                 mode,
-                layouts,
+                struct_layout,
+                field_layouts,
                 function_value,
             );
 
@@ -309,7 +309,8 @@ fn modify_refcount_struct_help<'a, 'ctx>(
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
-    layouts: &[InLayout<'a>],
+    struct_layout: InLayout<'a>,
+    field_layouts: &[InLayout<'a>],
     fn_val: FunctionValue<'ctx>,
 ) {
     let builder = env.builder;
@@ -328,22 +329,12 @@ fn modify_refcount_struct_help<'a, 'ctx>(
 
     arg_val.set_name(arg_symbol.as_str(&env.interns));
 
-    let wrapper_struct = arg_val.into_struct_value();
+    let wrapper_struct = RocStruct::from(arg_val);
 
-    for (i, field_layout) in layouts.iter().enumerate() {
+    for (i, field_layout) in field_layouts.iter().enumerate() {
         if layout_interner.contains_refcounted(*field_layout) {
-            let raw_value = env
-                .builder
-                .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
-                .unwrap();
-
-            let field_value = use_roc_value(
-                env,
-                layout_interner,
-                *field_layout,
-                raw_value,
-                "load_struct_tag_field_for_decrement",
-            );
+            let field_value =
+                wrapper_struct.load_at_index(env, layout_interner, struct_layout, i as _);
 
             modify_refcount_layout_help(
                 env,
@@ -563,8 +554,14 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
         }
 
         Struct(field_layouts) => {
-            let function =
-                modify_refcount_struct(env, layout_interner, layout_ids, field_layouts, mode);
+            let function = modify_refcount_struct(
+                env,
+                layout_interner,
+                layout_ids,
+                layout,
+                field_layouts,
+                mode,
+            );
 
             Some(function)
         }

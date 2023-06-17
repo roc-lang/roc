@@ -926,6 +926,9 @@ first / second
 ```roc
 Num.div first second
 ```
+```roc
+first |> Num.div second
+```
 
 All operators in Roc are syntax sugar for normal function calls. See the [Operator Desugaring Table](https://www.roc-lang.org/tutorial#operator-desugaring-table) at the end of this tutorial for a complete list of them.
 

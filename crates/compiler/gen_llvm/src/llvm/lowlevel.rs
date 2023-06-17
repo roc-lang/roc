@@ -39,7 +39,8 @@ use crate::llvm::{
     },
     compare::{generic_eq, generic_neq},
     convert::{
-        self, basic_type_from_layout, zig_num_parse_result_type, zig_to_int_checked_result_type,
+        self, argument_type_from_layout, basic_type_from_layout, zig_num_parse_result_type,
+        zig_to_int_checked_result_type,
     },
     intrinsics::{
         // These instrinsics do not generate calls to libc and are safe to keep.
@@ -53,10 +54,11 @@ use crate::llvm::{
     refcounting::PointerToRefcount,
 };
 
-use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec};
+use super::{build::Env, convert::zig_dec_type};
 use super::{
-    build::{load_symbol, load_symbol_and_layout, Env, Scope},
-    convert::zig_dec_type,
+    build::{throw_internal_exception, use_roc_value},
+    convert::zig_with_overflow_roc_dec,
+    scope::Scope,
 };
 
 pub(crate) fn run_low_level<'a, 'ctx>(
@@ -80,7 +82,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // look at that, a usage for if let ... else
             let [$($x),+] = match &args {
                 [$($x),+] => {
-                    [ $(load_symbol(scope, $x)),+ ]
+                    [ $(scope.load_symbol($x)),+ ]
                 }
                 _ => {
                     // we could get fancier with reporting here, but this macro is used a bunch
@@ -97,7 +99,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // look at that, a usage for if let ... else
             let [$(($x, $y)),+] = match &args {
                 [$($x),+] => {
-                    [ $(load_symbol_and_layout(scope, $x)),+ ]
+                    [ $(scope.load_symbol_and_layout($x)),+ ]
                 }
                 _ => {
                     // we could get fancier with reporting here, but this macro is used a bunch
@@ -309,8 +311,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             };
 
-            // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
-            let expected_type = basic_type_from_layout(env, layout_interner, layout);
+            // zig passes the result as a packed integer sometimes, instead of a struct. So we cast if needed.
+            // We check the type as expected in an argument position, since that is how we actually will use it.
+            let expected_type = argument_type_from_layout(env, layout_interner, layout);
             let actual_type = result.get_type();
 
             if expected_type != actual_type {
@@ -323,7 +326,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // Str.fromInt : Int -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let (int, int_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (int, int_layout) = scope.load_symbol_and_layout(&args[0]);
             let int = int.into_int_value();
 
             let int_width = match layout_interner.get_repr(int_layout) {
@@ -343,7 +346,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // Str.fromFloat : Float * -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (float, float_layout) = scope.load_symbol_and_layout(&args[0]);
 
             let float_width = match layout_interner.get_repr(float_layout) {
                 LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width,
@@ -402,7 +405,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             }
 
-            crate::llvm::build_str::decode_from_utf8_result(env, result_ptr).into()
+            crate::llvm::build_str::decode_from_utf8_result(env, layout_interner, result_ptr)
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8
@@ -683,9 +686,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
 
-            let (first_list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (first_list, list_layout) = scope.load_symbol_and_layout(&args[0]);
 
-            let second_list = load_symbol(scope, &args[1]);
+            let second_list = scope.load_symbol(&args[1]);
 
             let element_layout = list_element_layout!(layout_interner, list_layout);
 
@@ -701,8 +704,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.appendUnsafe : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+            let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
+            let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
             list_append_unsafe(env, layout_interner, original_wrapper, elem, elem_layout)
         }
@@ -710,8 +713,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.prepend : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+            let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
+            let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
             list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
         }
@@ -719,9 +722,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.reserve : List elem, Nat -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let element_layout = list_element_layout!(layout_interner, list_layout);
-            let spare = load_symbol(scope, &args[1]);
+            let spare = scope.load_symbol(&args[1]);
 
             list_reserve(
                 env,
@@ -736,7 +739,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.releaseExcessCapacity: List elem -> List elem
             debug_assert_eq!(args.len(), 1);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let element_layout = list_element_layout!(layout_interner, list_layout);
 
             list_release_excess_capacity(env, layout_interner, list, element_layout, update_mode)
@@ -745,11 +748,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.swap : List elem, Nat, Nat -> List elem
             debug_assert_eq!(args.len(), 3);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let index_1 = load_symbol(scope, &args[1]);
-            let index_2 = load_symbol(scope, &args[2]);
+            let index_1 = scope.load_symbol(&args[1]);
+            let index_2 = scope.load_symbol(&args[2]);
 
             let element_layout = list_element_layout!(layout_interner, list_layout);
             list_swap(
@@ -765,11 +768,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         ListSublist => {
             debug_assert_eq!(args.len(), 3);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let start = load_symbol(scope, &args[1]);
-            let len = load_symbol(scope, &args[2]);
+            let start = scope.load_symbol(&args[1]);
+            let len = scope.load_symbol(&args[2]);
 
             let element_layout = list_element_layout!(layout_interner, list_layout);
             list_sublist(
@@ -786,10 +789,10 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.dropAt : List elem, Nat -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let count = load_symbol(scope, &args[1]);
+            let count = scope.load_symbol(&args[1]);
 
             let element_layout = list_element_layout!(layout_interner, list_layout);
             list_drop_at(
@@ -868,7 +871,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     )
                 }
                 LayoutRepr::Builtin(Builtin::Float(_float_width)) => {
-                    let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+                    let (float, float_layout) = scope.load_symbol_and_layout(&args[0]);
 
                     let float_width = match layout_interner.get_repr(float_layout) {
                         LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width,
@@ -1307,7 +1310,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             BasicValueEnum::IntValue(refcount_ptr.is_1(env))
         }
 
-        Unreachable => match RocReturn::from_layout(env, layout_interner, layout) {
+        Unreachable => match RocReturn::from_layout(layout_interner, layout) {
             RocReturn::Return => {
                 let basic_type = basic_type_from_layout(env, layout_interner, layout);
                 basic_type.const_zero()
@@ -1939,14 +1942,21 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
 /// Zig returns a nominal `WithOverflow(Dec)` struct (see [zig_with_overflow_roc_dec]),
 /// but the Roc side may flatten the overflow struct. LLVM does not admit comparisons
 /// between the two representations, so always cast to the Roc representation.
-fn cast_with_overflow_dec_to_roc_type<'a, 'ctx>(
+fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
-    val: BasicValueEnum<'ctx>,
+    val: StructValue<'ctx>,
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout);
-    cast_basic_basic(env.builder, val, return_type)
+    let casted = cast_basic_basic(env.builder, val.into(), return_type);
+    use_roc_value(
+        env,
+        layout_interner,
+        return_layout,
+        casted,
+        "use_dec_with_overflow",
+    )
 }
 
 fn build_dec_binop<'a, 'ctx>(
@@ -1963,15 +1973,15 @@ fn build_dec_binop<'a, 'ctx>(
     match op {
         NumAddChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_ADD_WITH_OVERFLOW, lhs, rhs);
-            cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumSubChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_SUB_WITH_OVERFLOW, lhs, rhs);
-            cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumMulChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_MUL_WITH_OVERFLOW, lhs, rhs);
-            cast_with_overflow_dec_to_roc_type(env, layout_interner, val.into(), return_layout)
+            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumAdd => build_dec_binop_throw_on_overflow(
             env,
@@ -2103,8 +2113,13 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 || // Or if the two types are the same, they trivially fit.
                 arg_width == target_int_width;
 
-            let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout)
-                .into_struct_type();
+            // How the return type needs to be stored on the stack.
+            let return_type_stack_type =
+                convert::basic_type_from_layout(env, layout_interner, return_layout)
+                    .into_struct_type();
+            // How the return type is actually used, in the Roc calling convention.
+            let return_type_use_type =
+                convert::argument_type_from_layout(env, layout_interner, return_layout);
 
             if arg_always_fits_in_target {
                 // This is guaranteed to succeed so we can just make it an int cast and let LLVM
@@ -2120,7 +2135,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     )
                     .into();
 
-                let r = return_type.const_zero();
+                let r = return_type_stack_type.const_zero();
                 let r = bd
                     .build_insert_value(r, target_int_val, 0, "converted_int")
                     .unwrap();
@@ -2213,7 +2228,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     }
                 };
 
-                complex_bitcast_check_size(env, result, return_type.into(), "cast_bitpacked")
+                complex_bitcast_check_size(env, result, return_type_use_type, "cast_bitpacked")
             }
         }
         NumCountLeadingZeroBits => call_bitcode_fn(
@@ -2491,7 +2506,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
     match op {
         ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
+            let (list, list_layout) = scope.load_symbol_and_layout(xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2530,8 +2545,8 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
             }
         }
         ListMap2 { xs, ys } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2575,9 +2590,9 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
             }
         }
         ListMap3 { xs, ys, zs } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
+            let (list3, list3_layout) = scope.load_symbol_and_layout(zs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2625,10 +2640,10 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
             }
         }
         ListMap4 { xs, ys, zs, ws } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
-            let (list4, list4_layout) = load_symbol_and_layout(scope, ws);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
+            let (list3, list3_layout) = scope.load_symbol_and_layout(zs);
+            let (list4, list4_layout) = scope.load_symbol_and_layout(ws);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2686,7 +2701,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
         }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
+            let (list, list_layout) = scope.load_symbol_and_layout(xs);
 
             let (function, closure, closure_layout) = function_details!();
 
@@ -2739,12 +2754,9 @@ fn load_symbol_and_lambda_set<'a, 'ctx>(
     scope: &Scope<'a, 'ctx>,
     symbol: &Symbol,
 ) -> (BasicValueEnum<'ctx>, LambdaSet<'a>) {
-    match scope
-        .get(symbol)
-        .map(|(l, v)| (layout_interner.get_repr(*l), v))
-    {
-        Some((LayoutRepr::LambdaSet(lambda_set), ptr)) => (*ptr, lambda_set),
-        Some((other, ptr)) => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    let (ptr, layout) = scope.load_symbol_and_layout(symbol);
+    match layout_interner.get_repr(layout) {
+        LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
+        other => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
     }
 }

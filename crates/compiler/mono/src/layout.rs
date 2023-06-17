@@ -2617,6 +2617,11 @@ impl<'a> LayoutRepr<'a> {
                 }
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => true,
+            LayoutRepr::Struct(_) => {
+                // TODO: write tests for this!
+                self.stack_size(interner, target_info) as usize > target_info.max_by_value_size()
+            }
+
             LayoutRepr::LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .is_passed_by_reference(interner, target_info),
