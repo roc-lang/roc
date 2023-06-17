@@ -374,7 +374,7 @@ fn build_rc_wrapper<'a, 'ctx>(
 
     let symbol = Symbol::GENERIC_RC_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, &layout_interner.get_repr(layout))
         .to_symbol_string(symbol, &env.interns);
 
     let fn_name = match rc_operation {
@@ -477,7 +477,7 @@ pub fn build_eq_wrapper<'a, 'ctx>(
 
     let symbol = Symbol::GENERIC_EQ_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, &layout_interner.get_repr(layout))
         .to_symbol_string(symbol, &env.interns);
 
     let function_value = match env.module.get_function(fn_name.as_str()) {

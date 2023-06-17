@@ -273,7 +273,7 @@ fn modify_refcount_struct<'a, 'ctx>(
         &env.interns,
         "increment_struct",
         "decrement_struct",
-        struct_layout,
+        layout_interner.get_repr(struct_layout),
         mode,
     );
 
@@ -613,7 +613,7 @@ fn modify_refcount_list<'a, 'ctx>(
         &env.interns,
         "increment_list",
         "decrement_list",
-        list_layout,
+        layout_interner.get_repr(list_layout),
         mode,
     );
 
@@ -757,7 +757,7 @@ fn modify_refcount_str<'a, 'ctx>(
         &env.interns,
         "increment_str",
         "decrement_str",
-        layout,
+        layout_interner.get_repr(layout),
         mode,
     );
 
@@ -865,7 +865,7 @@ fn modify_refcount_boxed<'a, 'ctx>(
         &env.interns,
         "increment_boxed",
         "decrement_boxed",
-        boxed_layout,
+        layout_interner.get_repr(boxed_layout),
         mode,
     );
 
@@ -1081,7 +1081,7 @@ fn build_rec_union<'a, 'ctx>(
         &env.interns,
         "increment_rec_union",
         "decrement_rec_union",
-        layout,
+        layout_interner.get_repr(layout),
         mode,
     );
 
@@ -1493,9 +1493,8 @@ pub fn build_reset<'a, 'ctx>(
 ) -> FunctionValue<'ctx> {
     let mode = Mode::Dec;
 
-    let union_layout_in =
-        layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
-    let layout_id = layout_ids.get(Symbol::DEC, &union_layout_in);
+    let union_layout_repr = LayoutRepr::Union(union_layout);
+    let layout_id = layout_ids.get(Symbol::DEC, &union_layout_repr);
     let fn_name = layout_id.to_symbol_string(Symbol::DEC, &env.interns);
     let fn_name = format!("{}_reset", fn_name);
 
@@ -1507,11 +1506,7 @@ pub fn build_reset<'a, 'ctx>(
             let block = env.builder.get_insert_block().expect("to be in a function");
             let di_location = env.builder.get_current_debug_location().unwrap();
 
-            let basic_type = basic_type_from_layout(
-                env,
-                layout_interner,
-                layout_interner.get_repr(union_layout_in),
-            );
+            let basic_type = basic_type_from_layout(env, layout_interner, union_layout_repr);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             build_reuse_rec_union_help(
@@ -1633,7 +1628,7 @@ fn function_name_from_mode<'a>(
     interns: &Interns,
     if_inc: &'static str,
     if_dec: &'static str,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     mode: Mode,
 ) -> (&'static str, String) {
     // NOTE this is not a typo, we always determine the layout ID
@@ -1656,7 +1651,7 @@ fn modify_refcount_nonrecursive<'a, 'ctx>(
     fields: &'a [&'a [InLayout<'a>]],
 ) -> FunctionValue<'ctx> {
     let union_layout = UnionLayout::NonRecursive(fields);
-    let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
+    let layout = LayoutRepr::Union(union_layout);
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();

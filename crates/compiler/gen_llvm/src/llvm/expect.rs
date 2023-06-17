@@ -483,7 +483,7 @@ fn build_clone_tag<'a, 'ctx>(
     union_layout: UnionLayout<'a>,
 ) -> IntValue<'ctx> {
     let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
-    let layout_id = layout_ids.get(Symbol::CLONE, &layout);
+    let layout_id = layout_ids.get(Symbol::CLONE, &layout_interner.get_repr(layout));
     let fn_name = layout_id.to_symbol_string(Symbol::CLONE, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {

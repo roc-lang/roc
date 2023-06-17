@@ -432,7 +432,7 @@ fn build_list_eq<'a, 'ctx>(
             element_layout
         };
     let fn_name = layout_ids
-        .get(symbol, &element_layout)
+        .get(symbol, &layout_interner.get_repr(element_layout))
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -659,7 +659,7 @@ fn build_struct_eq<'a, 'ctx>(
 
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
-        .get(symbol, &struct_layout)
+        .get(symbol, &layout_interner.get_repr(struct_layout))
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -852,7 +852,7 @@ fn build_tag_eq<'a, 'ctx>(
 
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
-        .get(symbol, &tag_layout)
+        .get(symbol, &layout_interner.get_repr(tag_layout))
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -1370,7 +1370,7 @@ fn build_box_eq<'a, 'ctx>(
 
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
-        .get(symbol, &box_layout)
+        .get(symbol, &layout_interner.get_repr(box_layout))
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
