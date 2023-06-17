@@ -805,9 +805,7 @@ fn modify_refcount_str_help<'a, 'ctx>(
     let parent = fn_val;
 
     let str_type = zig_str_type(env);
-    let str_wrapper = if LayoutRepr::Builtin(Builtin::Str)
-        .is_passed_by_reference(layout_interner, env.target_info)
-    {
+    let str_wrapper = if LayoutRepr::Builtin(Builtin::Str).is_passed_by_reference(layout_interner) {
         env.builder
             .new_build_load(str_type, arg_val.into_pointer_value(), "load_str_to_stack")
     } else {

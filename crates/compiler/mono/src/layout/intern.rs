@@ -203,27 +203,23 @@ pub trait LayoutInterner<'a>: Sized {
     fn target_info(&self) -> TargetInfo;
 
     fn alignment_bytes(&self, layout: InLayout<'a>) -> u32 {
-        self.get_repr(layout)
-            .alignment_bytes(self, self.target_info())
+        self.get_repr(layout).alignment_bytes(self)
     }
 
     fn allocation_alignment_bytes(&self, layout: InLayout<'a>) -> u32 {
-        self.get_repr(layout)
-            .allocation_alignment_bytes(self, self.target_info())
+        self.get_repr(layout).allocation_alignment_bytes(self)
     }
 
     fn stack_size(&self, layout: InLayout<'a>) -> u32 {
-        self.get_repr(layout).stack_size(self, self.target_info())
+        self.get_repr(layout).stack_size(self)
     }
 
     fn stack_size_and_alignment(&self, layout: InLayout<'a>) -> (u32, u32) {
-        self.get_repr(layout)
-            .stack_size_and_alignment(self, self.target_info())
+        self.get_repr(layout).stack_size_and_alignment(self)
     }
 
     fn stack_size_without_alignment(&self, layout: InLayout<'a>) -> u32 {
-        self.get_repr(layout)
-            .stack_size_without_alignment(self, self.target_info())
+        self.get_repr(layout).stack_size_without_alignment(self)
     }
 
     fn contains_refcounted(&self, layout: InLayout<'a>) -> bool {
@@ -235,8 +231,7 @@ pub trait LayoutInterner<'a>: Sized {
     }
 
     fn is_passed_by_reference(&self, layout: InLayout<'a>) -> bool {
-        self.get_repr(layout)
-            .is_passed_by_reference(self, self.target_info())
+        self.get_repr(layout).is_passed_by_reference(self)
     }
 
     fn runtime_representation(&self, layout: InLayout<'a>) -> LayoutRepr<'a> {

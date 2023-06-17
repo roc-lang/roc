@@ -296,7 +296,7 @@ fn tag_id_from_data<'a, M: ReplAppMemory>(
     data_addr: usize,
 ) -> i64 {
     let offset = union_layout
-        .data_size_without_tag_id(&env.layout_cache.interner, env.target_info)
+        .data_size_without_tag_id(&env.layout_cache.interner)
         .unwrap();
     let tag_id_addr = data_addr + offset as usize;
 
@@ -420,8 +420,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         LayoutRepr::Struct(field_layouts) => {
             let fields = [Layout::U64, layout];
 
-            let result_stack_size = LayoutRepr::struct_(env.arena.alloc(fields))
-                .stack_size(&env.layout_cache.interner, env.target_info);
+            let result_stack_size =
+                LayoutRepr::struct_(env.arena.alloc(fields)).stack_size(&env.layout_cache.interner);
 
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match env
                 .subs
@@ -1087,7 +1087,6 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
                 *layout1,
                 label2,
                 *layout2,
-                env.target_info,
             )
         });
 
@@ -1170,7 +1169,6 @@ fn struct_to_ast_tuple<'a, M: ReplAppMemory>(
             *layout1,
             label2,
             *layout2,
-            env.target_info,
         )
     });
 

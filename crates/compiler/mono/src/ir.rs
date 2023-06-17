@@ -3505,15 +3505,13 @@ fn specialize_proc_help<'a>(
                                 env.arena,
                             );
 
-                            let ptr_bytes = env.target_info;
-
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout_cache
                                     .get_repr(**layout1)
-                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                    .alignment_bytes(&layout_cache.interner);
                                 let size2 = layout_cache
                                     .get_repr(**layout2)
-                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                    .alignment_bytes(&layout_cache.interner);
 
                                 size2.cmp(&size1)
                             });
@@ -3553,15 +3551,13 @@ fn specialize_proc_help<'a>(
                                 env.arena,
                             );
 
-                            let ptr_bytes = env.target_info;
-
                             combined.sort_by(|(_, layout1), (_, layout2)| {
                                 let size1 = layout_cache
                                     .get_repr(**layout1)
-                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                    .alignment_bytes(&layout_cache.interner);
                                 let size2 = layout_cache
                                     .get_repr(**layout2)
-                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                    .alignment_bytes(&layout_cache.interner);
 
                                 size2.cmp(&size1)
                             });
@@ -5986,15 +5982,13 @@ where
                 combined.push((*symbol, layout))
             }
 
-            let ptr_bytes = env.target_info;
-
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout_cache
                     .get_repr(**layout1)
-                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                    .alignment_bytes(&layout_cache.interner);
                 let size2 = layout_cache
                     .get_repr(**layout2)
-                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                    .alignment_bytes(&layout_cache.interner);
 
                 size2.cmp(&size1)
             });
@@ -6020,15 +6014,13 @@ where
                 combined.push((*symbol, layout))
             }
 
-            let ptr_bytes = env.target_info;
-
             combined.sort_by(|(_, layout1), (_, layout2)| {
                 let size1 = layout_cache
                     .get_repr(**layout1)
-                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                    .alignment_bytes(&layout_cache.interner);
                 let size2 = layout_cache
                     .get_repr(**layout2)
-                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                    .alignment_bytes(&layout_cache.interner);
 
                 size2.cmp(&size1)
             });
@@ -6513,7 +6505,7 @@ fn sorted_field_symbols<'a>(
 
         let alignment = layout_cache
             .get_repr(layout)
-            .alignment_bytes(&layout_cache.interner, env.target_info);
+            .alignment_bytes(&layout_cache.interner);
 
         let symbol = possible_reuse_symbol_or_specialize(env, procs, layout_cache, &arg.value, var);
         field_symbols_temp.push((alignment, symbol, ((var, arg), &*env.arena.alloc(symbol))));

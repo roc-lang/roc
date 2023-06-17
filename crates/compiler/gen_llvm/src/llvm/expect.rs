@@ -679,12 +679,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let roc_union = RocUnion::tagged_from_slices(
-                    layout_interner,
-                    env.context,
-                    tags,
-                    env.target_info,
-                );
+                let roc_union = RocUnion::tagged_from_slices(layout_interner, env.context, tags);
 
                 // load the tag payload (if any)
                 let payload_layout = LayoutRepr::struct_(field_layouts);
@@ -760,8 +755,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                     basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
                 let data = load_tag_data(env, layout_interner, union_layout, tag_value, basic_type);
 
-                let (width, _) =
-                    union_layout.data_size_and_alignment(layout_interner, env.target_info);
+                let (width, _) = union_layout.data_size_and_alignment(layout_interner);
 
                 let cursors = Cursors {
                     offset: extra_offset,
@@ -801,7 +795,7 @@ fn build_clone_tag_help<'a, 'ctx>(
             let basic_type =
                 basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
-            let (width, _) = union_layout.data_size_and_alignment(layout_interner, env.target_info);
+            let (width, _) = union_layout.data_size_and_alignment(layout_interner);
 
             let cursors = Cursors {
                 offset: extra_offset,
@@ -862,8 +856,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                         layout_interner.get_repr(layout),
                     );
 
-                    let (width, _) =
-                        union_layout.data_size_and_alignment(layout_interner, env.target_info);
+                    let (width, _) = union_layout.data_size_and_alignment(layout_interner);
 
                     let cursors = Cursors {
                         offset: extra_offset,

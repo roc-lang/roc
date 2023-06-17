@@ -1636,7 +1636,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET_INFO);
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
         let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(self.layout_interner, TARGET_INFO);
+            union_layout.data_size_and_alignment(self.layout_interner);
 
         // We're going to use the pointer many times, so put it in a local variable
         let stored_with_local =
@@ -1688,10 +1688,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
-            let id_offset = data_offset
-                + union_layout
-                    .tag_id_offset(self.layout_interner, TARGET_INFO)
-                    .unwrap();
+            let id_offset = data_offset + union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
@@ -1774,9 +1771,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
-            let id_offset = union_layout
-                .tag_id_offset(self.layout_interner, TARGET_INFO)
-                .unwrap();
+            let id_offset = union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);

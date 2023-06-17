@@ -55,7 +55,7 @@ impl<'ctx> RocStruct<'ctx> {
             struct_val,
         } = build_struct_helper(env, layout_interner, scope, sorted_fields);
 
-        let passed_by_ref = layout_repr.is_passed_by_reference(layout_interner, env.target_info);
+        let passed_by_ref = layout_repr.is_passed_by_reference(layout_interner);
 
         if passed_by_ref {
             let alloca = env.builder.build_alloca(struct_type, "struct_alloca");

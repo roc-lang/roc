@@ -1656,8 +1656,7 @@ fn build_tag<'a, 'ctx>(
             let data_layout_repr = LayoutRepr::Struct(tags[tag_id as usize]);
             let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
-            let roc_union =
-                RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
+            let roc_union = RocUnion::tagged_from_slices(layout_interner, env.context, tags);
 
             let tag_alloca = env
                 .builder
@@ -1765,12 +1764,8 @@ fn build_tag<'a, 'ctx>(
             nullable_id,
             other_fields,
         } => {
-            let roc_union = RocUnion::untagged_from_slices(
-                layout_interner,
-                env.context,
-                &[other_fields],
-                env.target_info,
-            );
+            let roc_union =
+                RocUnion::untagged_from_slices(layout_interner, env.context, &[other_fields]);
 
             if tag_id == *nullable_id as _ {
                 let output_type = roc_union.struct_type().ptr_type(AddressSpace::default());
@@ -2127,9 +2122,9 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx>(
     let ptr_bytes = env.target_info;
 
     let roc_union = if union_layout.stores_tag_id_as_data(ptr_bytes) {
-        RocUnion::tagged_from_slices(layout_interner, env.context, fields, env.target_info)
+        RocUnion::tagged_from_slices(layout_interner, env.context, fields)
     } else {
-        RocUnion::untagged_from_slices(layout_interner, env.context, fields, env.target_info)
+        RocUnion::untagged_from_slices(layout_interner, env.context, fields)
     };
 
     reserve_with_refcount_help(
@@ -2709,8 +2704,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                         LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
                             let element_layout = layout_interner.get_repr(element_layout);
-                            let alignment =
-                                element_layout.alignment_bytes(layout_interner, env.target_info);
+                            let alignment = element_layout.alignment_bytes(layout_interner);
 
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
