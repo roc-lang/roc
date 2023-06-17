@@ -945,7 +945,13 @@ fn modify_refcount_box_help<'a, 'ctx>(
             {
                 env.builder.position_at_end(do_recurse_block);
 
-                let inner = load_roc_value(env, layout_interner, inner_layout, boxed, "inner");
+                let inner = load_roc_value(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(inner_layout),
+                    boxed,
+                    "inner",
+                );
 
                 modify_refcount_layout(
                     env,
@@ -1348,7 +1354,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
                 let field = load_roc_value(
                     env,
                     layout_interner,
-                    *field_layout,
+                    layout_interner.get_repr(*field_layout),
                     elem_pointer,
                     "decrement_struct_field",
                 );

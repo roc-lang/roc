@@ -579,14 +579,26 @@ fn build_list_eq_help<'a, 'ctx>(
                 let elem_ptr = unsafe {
                     builder.new_build_in_bounds_gep(element_type, ptr1, &[curr_index], "load_index")
                 };
-                load_roc_value(env, layout_interner, element_layout, elem_ptr, "get_elem")
+                load_roc_value(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(element_layout),
+                    elem_ptr,
+                    "get_elem",
+                )
             };
 
             let elem2 = {
                 let elem_ptr = unsafe {
                     builder.new_build_in_bounds_gep(element_type, ptr2, &[curr_index], "load_index")
                 };
-                load_roc_value(env, layout_interner, element_layout, elem_ptr, "get_elem")
+                load_roc_value(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(element_layout),
+                    elem_ptr,
+                    "get_elem",
+                )
             };
 
             let are_equal = build_eq(
@@ -1318,14 +1330,14 @@ fn eq_ptr_to_struct<'a, 'ctx>(
     let struct1 = load_roc_value(
         env,
         layout_interner,
-        struct_layout,
+        layout_interner.get_repr(struct_layout),
         struct1_ptr,
         "load_struct1",
     );
     let struct2 = load_roc_value(
         env,
         layout_interner,
-        struct_layout,
+        layout_interner.get_repr(struct_layout),
         struct2_ptr,
         "load_struct2",
     );
@@ -1466,8 +1478,20 @@ fn build_box_eq_help<'a, 'ctx>(
     let box1 = box1.into_pointer_value();
     let box2 = box2.into_pointer_value();
 
-    let value1 = load_roc_value(env, layout_interner, inner_layout, box1, "load_box1");
-    let value2 = load_roc_value(env, layout_interner, inner_layout, box2, "load_box2");
+    let value1 = load_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(inner_layout),
+        box1,
+        "load_box1",
+    );
+    let value2 = load_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(inner_layout),
+        box2,
+        "load_box2",
+    );
 
     let is_equal = build_eq(
         env,

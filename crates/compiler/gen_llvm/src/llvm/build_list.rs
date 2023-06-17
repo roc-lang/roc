@@ -161,7 +161,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx>(
     load_roc_value(
         env,
         layout_interner,
-        element_layout,
+        layout_interner.get_repr(element_layout),
         elem_ptr,
         "list_get_load_element",
     )
@@ -723,7 +723,7 @@ where
             let elem = load_roc_value(
                 env,
                 layout_interner,
-                element_layout,
+                layout_interner.get_repr(element_layout),
                 element_ptr,
                 "incrementing_element_loop_load",
             );

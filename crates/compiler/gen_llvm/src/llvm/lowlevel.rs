@@ -277,7 +277,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             load_roc_value(
                                 env,
                                 layout_interner,
-                                layout,
+                                layout_interner.get_repr(layout),
                                 roc_return_alloca,
                                 "str_to_num_result",
                             )
@@ -2235,7 +2235,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                 load_roc_value(
                                     env,
                                     layout_interner,
-                                    return_layout,
+                                    layout_interner.get_repr(return_layout),
                                     roc_return_alloca,
                                     "num_to_int",
                                 )

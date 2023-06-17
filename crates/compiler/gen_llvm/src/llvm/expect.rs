@@ -364,7 +364,13 @@ fn build_clone<'a, 'ctx>(
             build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
 
             let source = value.into_pointer_value();
-            let value = load_roc_value(env, layout_interner, inner_layout, source, "inner");
+            let value = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(inner_layout),
+                source,
+                "inner",
+            );
 
             let inner_width = env
                 .ptr_int()

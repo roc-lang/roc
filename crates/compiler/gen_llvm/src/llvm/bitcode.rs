@@ -261,7 +261,7 @@ fn build_transform_caller_help<'a, 'ctx>(
         let argument = load_roc_value(
             env,
             layout_interner,
-            *layout,
+            layout_interner.get_repr(*layout),
             cast_ptr,
             "zig_helper_load_opaque",
         );
@@ -287,8 +287,13 @@ fn build_transform_caller_help<'a, 'ctx>(
                 env.builder
                     .build_pointer_cast(closure_ptr, closure_type, "cast_opaque_closure");
 
-            let closure_data =
-                load_roc_value(env, layout_interner, layout, closure_cast, "load_closure");
+            let closure_data = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                closure_cast,
+                "load_closure",
+            );
 
             arguments_cast.push(closure_data);
         }
@@ -520,8 +525,20 @@ pub fn build_eq_wrapper<'a, 'ctx>(
                 .build_pointer_cast(value_ptr2, value_type, "load_opaque");
 
             // load_roc_value(env, *element_layout, elem_ptr, "get_elem")
-            let value1 = load_roc_value(env, layout_interner, layout, value_cast1, "load_opaque");
-            let value2 = load_roc_value(env, layout_interner, layout, value_cast2, "load_opaque");
+            let value1 = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value_cast1,
+                "load_opaque",
+            );
+            let value2 = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value_cast2,
+                "load_opaque",
+            );
 
             let result = crate::llvm::compare::generic_eq(
                 env,
@@ -610,8 +627,20 @@ pub fn build_compare_wrapper<'a, 'ctx>(
                 env.builder
                     .build_pointer_cast(value_ptr2, value_ptr_type, "load_opaque");
 
-            let value1 = load_roc_value(env, layout_interner, layout, value_cast1, "load_opaque");
-            let value2 = load_roc_value(env, layout_interner, layout, value_cast2, "load_opaque");
+            let value1 = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value_cast1,
+                "load_opaque",
+            );
+            let value2 = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value_cast2,
+                "load_opaque",
+            );
 
             increment_refcount_layout(env, layout_interner, layout_ids, 1, value1, layout);
             increment_refcount_layout(env, layout_interner, layout_ids, 1, value2, layout);

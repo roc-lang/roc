@@ -25,7 +25,7 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx>(
     load_roc_value(
         env,
         layout_interner,
-        layout,
+        layout_interner.get_repr(layout),
         pointer,
         "load_decode_from_utf8_result",
     )

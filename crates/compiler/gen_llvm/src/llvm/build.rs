@@ -1125,7 +1125,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             load_roc_value(
                 env,
                 layout_interner,
-                layout,
+                layout_interner.get_repr(layout),
                 value.into_pointer_value(),
                 "load_boxed_value",
             )
@@ -1357,7 +1357,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     load_roc_value(
                         env,
                         layout_interner,
-                        field_layouts[*index as usize],
+                        layout_interner.get_repr(field_layouts[*index as usize]),
                         element_ptr,
                         "load_element",
                     )
@@ -2054,7 +2054,7 @@ fn lookup_at_index_ptr<'a, 'ctx>(
     let result = load_roc_value(
         env,
         layout_interner,
-        field_layout,
+        layout_interner.get_repr(field_layout),
         elem_ptr,
         "load_at_index_ptr_old",
     );
@@ -2102,7 +2102,7 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
     let result = load_roc_value(
         env,
         layout_interner,
-        field_layout,
+        layout_interner.get_repr(field_layout),
         elem_ptr,
         "load_at_index_ptr",
     );
@@ -2378,22 +2378,16 @@ fn list_literal<'a, 'ctx>(
 pub fn load_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    let basic_type = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
+    let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
-    if layout_interner.is_passed_by_reference(layout) {
+    if layout.is_passed_by_reference(layout_interner) {
         let alloca = entry_block_alloca_zerofill(env, basic_type, name);
 
-        store_roc_value(
-            env,
-            layout_interner,
-            layout_interner.get_repr(layout),
-            alloca,
-            source.into(),
-        );
+        store_roc_value(env, layout_interner, layout, alloca, source.into());
 
         alloca.into()
     } else {
