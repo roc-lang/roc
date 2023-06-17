@@ -82,3 +82,6 @@ www/src/roc-tutorial
 # It also ensures the compiler can always pull in 1 version of things and doesn't get restricted by sub lockfiles.
 /**/Cargo.lock
 !/Cargo.lock
+
+# snapshot tests temp file
+*.pending-snap

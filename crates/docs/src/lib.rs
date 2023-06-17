@@ -934,10 +934,10 @@ fn markdown_to_html(
 
     for event in parser {
         match event {
-            Event::Code(cow_str) => {
-                let highlighted_html =
-                    roc_highlight::highlight_roc_code_inline(cow_str.to_string().as_str());
-                docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+            Event::Code(code_str) => {
+                let inline_code =
+                    pulldown_cmark::CowStr::from(format!("<code>{}</code>", code_str));
+                docs_parser.push(pulldown_cmark::Event::Html(inline_code));
             }
             Event::End(Link(LinkType::ShortcutUnknown, ref _url, ref _title)) => {
                 // Replace the preceding Text node with a Code node, so it
@@ -954,17 +954,17 @@ fn markdown_to_html(
 
                 docs_parser.push(event);
             }
-            Event::Start(CodeBlock(CodeBlockKind::Fenced(cow_str))) => {
-                in_code_block = Some(cow_str);
+            Event::Start(CodeBlock(CodeBlockKind::Fenced(code_str))) => {
+                in_code_block = Some(code_str);
             }
             Event::End(CodeBlock(_)) => {
                 match in_code_block {
-                    Some(cow_str) => {
-                        if cow_str.contains("unchecked") {
+                    Some(code_str) => {
+                        if code_str.contains("unchecked") {
                             // TODO HANDLE UNCHECKED
                         }
 
-                        if cow_str.contains("repl") {
+                        if code_str.contains("repl") {
                             // TODO HANDLE REPL
                         }
 

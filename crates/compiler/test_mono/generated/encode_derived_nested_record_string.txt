@@ -333,32 +333,32 @@ procedure List.93 (List.436, List.437, List.438):
     ret List.753;
 
 procedure Num.127 (#Attr.2):
-    let Num.311 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.311;
+    let Num.314 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.314;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.320 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.320;
-
-procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.324 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.324;
-
-procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.317 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.317;
-
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.323 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    let Num.323 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Num.323;
 
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.327 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.327;
+
+procedure Num.21 (#Attr.2, #Attr.3):
+    let Num.320 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.320;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.326 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.326;
+
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.325 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.325;
+    let Num.328 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.328;
 
 procedure Num.94 (#Attr.2, #Attr.3):
-    let Num.316 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
-    ret Num.316;
+    let Num.319 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
+    ret Num.319;
 
 procedure Str.12 (#Attr.2):
     let Str.324 : List U8 = lowlevel StrToUtf8 #Attr.2;
@@ -388,8 +388,8 @@ procedure Str.9 (Str.79):
     else
         let Str.300 : U8 = StructAtIndex 3 Str.80;
         let Str.301 : U64 = StructAtIndex 0 Str.80;
-        let #Derived_gen.28 : Str = StructAtIndex 1 Str.80;
-        dec #Derived_gen.28;
+        let #Derived_gen.29 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.29;
         let Str.299 : {U64, U8} = Struct {Str.301, Str.300};
         let Str.298 : [C {U64, U8}, C Str] = TagId(0) Str.299;
         ret Str.298;
@@ -1331,14 +1331,14 @@ procedure TotallyNotJson.82 (TotallyNotJson.802, TotallyNotJson.803):
 
 procedure TotallyNotJson.832 (TotallyNotJson.1493):
     let TotallyNotJson.1868 : List Str = StructAtIndex 1 TotallyNotJson.1493;
-    let #Derived_gen.29 : List Str = StructAtIndex 0 TotallyNotJson.1493;
-    dec #Derived_gen.29;
+    let #Derived_gen.30 : List Str = StructAtIndex 0 TotallyNotJson.1493;
+    dec #Derived_gen.30;
     ret TotallyNotJson.1868;
 
 procedure TotallyNotJson.840 (TotallyNotJson.1214):
     let TotallyNotJson.1589 : List Str = StructAtIndex 1 TotallyNotJson.1214;
-    let #Derived_gen.30 : List Str = StructAtIndex 0 TotallyNotJson.1214;
-    dec #Derived_gen.30;
+    let #Derived_gen.28 : List Str = StructAtIndex 0 TotallyNotJson.1214;
+    dec #Derived_gen.28;
     ret TotallyNotJson.1589;
 
 procedure TotallyNotJson.87 (TotallyNotJson.809):

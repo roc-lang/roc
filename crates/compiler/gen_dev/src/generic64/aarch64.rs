@@ -965,33 +965,32 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
-        debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("sign extending 4 byte values");
-        } else if size == 2 {
-            todo!("sign extending 2 byte values");
-        } else if size == 1 {
-            todo!("sign extending 1 byte values");
-        } else {
-            internal_error!("Invalid size for sign extension: {}", size);
+    fn movsx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        match register_width {
+            RegisterWidth::W8 => todo!("sign extend 1 byte values"),
+            RegisterWidth::W16 => todo!("sign extend 2 byte values"),
+            RegisterWidth::W32 => todo!("sign extend 4 byte values"),
+            RegisterWidth::W64 => Self::mov_reg64_base32(buf, dst, offset),
         }
     }
+
     #[inline(always)]
-    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
-        debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("zero extending 4 byte values");
-        } else if size == 2 {
-            todo!("zero extending 2 byte values");
-        } else if size == 1 {
-            todo!("zero extending 1 byte values");
-        } else {
-            internal_error!("Invalid size for zero extension: {}", size);
+    fn movzx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        match register_width {
+            RegisterWidth::W8 => todo!("zero extend 1 byte values"),
+            RegisterWidth::W16 => todo!("zero extend 2 byte values"),
+            RegisterWidth::W32 => todo!("zero extend 4 byte values"),
+            RegisterWidth::W64 => Self::mov_reg64_base32(buf, dst, offset),
         }
     }
 

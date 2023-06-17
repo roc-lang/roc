@@ -1,5 +1,8 @@
 //! Fix fixpoints of recursive types.
 
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
+use roc_debug_flags::ROC_PRINT_FIXPOINT_FIXING;
 use roc_error_macros::internal_error;
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
@@ -80,6 +83,19 @@ struct Update {
 /// to decide it.
 #[must_use]
 pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Variable> {
+    dbg_do!(ROC_PRINT_FIXPOINT_FIXING, {
+        eprintln!("🛠️🛠️🛠️🛠️🛠️🛠️🛠️🛠️ BEGIN FIXPOINT FIXING 🛠️🛠️🛠️🛠️🛠️🛠️🛠️🛠️");
+        eprintln!(
+            "🛠️🛠️ ({:?}-{:?}): {:?} {:?} 🛠️ {:?} {:?}",
+            subs.get_root_key_without_compacting(left),
+            subs.get_root_key_without_compacting(right),
+            left,
+            subs.dbg(left),
+            right,
+            subs.dbg(right),
+        );
+    });
+
     let updates = find_chain(subs, left, right);
     let mut new = vec![];
 
@@ -92,6 +108,10 @@ pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Var
         subs.union(source_of_truth, update_var, source_of_truth_desc);
         new.push(source_of_truth);
     }
+
+    dbg_do!(ROC_PRINT_FIXPOINT_FIXING, {
+        eprintln!("🛠️🛠️🛠️🛠️🛠️🛠️🛠️🛠️ END FIXPOINT FIXING 🛠️🛠️🛠️🛠️🛠️🛠️🛠️🛠️");
+    });
 
     new
 }
@@ -164,6 +184,16 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
         let left = subs.get_root_key_without_compacting(left);
         let right = subs.get_root_key_without_compacting(right);
 
+        dbg_do!(ROC_PRINT_FIXPOINT_FIXING, {
+            eprintln!(
+                "❓ ({:?}-{:?}): {:?} 🔗 {:?}",
+                left,
+                right,
+                subs.dbg(left),
+                subs.dbg(right),
+            );
+        });
+
         if (left, right) == needle {
             return Ok(vec![needle]);
         }
@@ -180,7 +210,19 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
             | (FlexAbleVar(..), FlexAbleVar(..))
             | (Error, Error)
             | (RangedNumber(..), RangedNumber(..)) => Err(()),
-            (RecursionVar { .. }, RecursionVar { .. }) => internal_error!("not expected"),
+            (RecursionVar { structure: left_rec, .. }, RecursionVar { structure: right_rec, .. }) => {
+                // This might be a case like fix-point fixing
+                //
+                // [ Bar [ Bar <a>, Foo ], Foo ] as <a>  🛠️  [ Bar <b>, Foo ] as <b>
+                //
+                // where we hit a comparison between <a> and <b>. In this case, follow each
+                // recursion point independently and see if we can find the chain to the needle
+                // we were searching for.
+                let search_deeper_left = |_| help(subs, needle, *left_rec, right);
+                let search_deeper_right = |_| help(subs, needle, left, *right_rec);
+                let chain = search_deeper_left(()).or_else(search_deeper_right)?;
+                Ok(chain)
+            }
             (RecursionVar { structure, .. }, _) => {
                 // By construction, the recursion variables will be adjusted to be equal after
                 // the transformation, so we can immediately look at the inner variable. We only

@@ -1304,9 +1304,17 @@ impl<'a> Niche<'a> {
     pub fn dbg_deep<'r, I: LayoutInterner<'a>>(
         &'r self,
         interner: &'r I,
-    ) -> crate::layout::intern::dbg::DbgFields<'a, 'r, I> {
+    ) -> crate::layout::intern::dbg_deep::DbgFields<'a, 'r, I> {
         let NichePriv::Captures(caps) = &self.0;
         interner.dbg_deep_iter(caps)
+    }
+
+    pub fn dbg_stable<'r, I: LayoutInterner<'a>>(
+        &'r self,
+        interner: &'r I,
+    ) -> crate::layout::intern::dbg_stable::DbgFields<'a, 'r, I> {
+        let NichePriv::Captures(caps) = &self.0;
+        interner.dbg_stable_iter(caps)
     }
 }
 
@@ -2609,6 +2617,11 @@ impl<'a> LayoutRepr<'a> {
                 }
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => true,
+            LayoutRepr::Struct(_) => {
+                // TODO: write tests for this!
+                self.stack_size(interner, target_info) as usize > target_info.max_by_value_size()
+            }
+
             LayoutRepr::LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .is_passed_by_reference(interner, target_info),

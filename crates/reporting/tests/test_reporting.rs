@@ -5643,7 +5643,7 @@ All branches in an `if` must have the same type!
         Num.sin
         Num.div
         Num.min
-        Num.abs
+        Num.e
     "###
     );
 
