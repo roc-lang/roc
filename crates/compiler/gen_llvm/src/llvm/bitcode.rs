@@ -303,7 +303,7 @@ fn build_transform_caller_help<'a, 'ctx>(
         env,
         layout_interner,
         roc_function,
-        result_layout,
+        layout_interner.get_repr(result_layout),
         arguments_cast.as_slice(),
     );
 
