@@ -201,7 +201,7 @@ fn build_eq<'a, 'ctx>(
         LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
-            let bt = basic_type_from_layout(env, layout_interner, layout);
+            let bt = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
             // cast the i64 pointer to a pointer to block of memory
             let field1_cast = env.builder.build_pointer_cast(
@@ -438,7 +438,8 @@ fn build_list_eq<'a, 'ctx>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout(env, layout_interner, list_layout);
+            let arg_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(list_layout));
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -534,7 +535,11 @@ fn build_list_eq_help<'a, 'ctx>(
         env.builder.position_at_end(then_block);
 
         let builder = env.builder;
-        let element_type = basic_type_from_layout(env, layout_interner, element_layout);
+        let element_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(element_layout),
+        );
         let ptr_type = element_type.ptr_type(AddressSpace::default());
         let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
         let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
@@ -757,7 +762,11 @@ fn build_struct_eq_help<'a, 'ctx>(
 
             let field_layout = rec_layout;
 
-            let bt = basic_type_from_layout(env, layout_interner, field_layout);
+            let bt = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(field_layout),
+            );
 
             // cast the i64 pointer to a pointer to block of memory
             let field1_cast = env.builder.build_pointer_cast(
@@ -1286,7 +1295,11 @@ fn eq_ptr_to_struct<'a, 'ctx>(
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let wrapper_type = basic_type_from_layout(env, layout_interner, struct_layout);
+    let wrapper_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(struct_layout),
+    );
     debug_assert!(wrapper_type.is_struct_type());
 
     // cast the opaque pointer to a pointer of the correct shape
@@ -1351,7 +1364,8 @@ fn build_box_eq<'a, 'ctx>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout(env, layout_interner, box_layout);
+            let arg_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(box_layout));
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,

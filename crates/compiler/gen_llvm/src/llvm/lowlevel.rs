@@ -261,9 +261,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                                 intrinsic,
                             );
 
-                            let roc_return_type =
-                                basic_type_from_layout(env, layout_interner, layout)
-                                    .ptr_type(AddressSpace::default());
+                            let roc_return_type = basic_type_from_layout(
+                                env,
+                                layout_interner,
+                                layout_interner.get_repr(layout),
+                            )
+                            .ptr_type(AddressSpace::default());
 
                             let roc_return_alloca = env.builder.build_pointer_cast(
                                 zig_return_alloca,
@@ -502,7 +505,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    let return_type = basic_type_from_layout(env, layout_interner, layout);
+                    let return_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
                     let cast_result = env.builder.build_pointer_cast(
                         result,
                         return_type.ptr_type(AddressSpace::default()),
@@ -525,7 +532,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     match env.target_info.ptr_width() {
                         PtrWidth::Bytes8 => result,
                         PtrWidth::Bytes4 => {
-                            let to = basic_type_from_layout(env, layout_interner, layout);
+                            let to = basic_type_from_layout(
+                                env,
+                                layout_interner,
+                                layout_interner.get_repr(layout),
+                            );
                             complex_bitcast_check_size(env, result, to, "to_roc_record")
                         }
                     }
@@ -1147,7 +1158,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumIntCast => {
             arguments!(arg);
 
-            let to = basic_type_from_layout(env, layout_interner, layout).into_int_type();
+            let to = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                .into_int_type();
             let to_signed = intwidth_from_layout(layout).is_signed();
 
             env.builder
@@ -1161,8 +1173,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 LayoutRepr::Builtin(Builtin::Int(width)) => {
                     // Converting from int to float
                     let int_val = arg.into_int_value();
-                    let dest =
-                        basic_type_from_layout(env, layout_interner, layout).into_float_type();
+                    let dest = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    )
+                    .into_float_type();
 
                     if width.is_signed() {
                         env.builder
@@ -1176,8 +1192,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
                 LayoutRepr::Builtin(Builtin::Float(_)) => {
                     // Converting from float to float - e.g. F64 to F32, or vice versa
-                    let dest =
-                        basic_type_from_layout(env, layout_interner, layout).into_float_type();
+                    let dest = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    )
+                    .into_float_type();
 
                     env.builder
                         .build_float_cast(arg.into_float_value(), dest, "cast_float_to_float")
@@ -1273,7 +1293,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             arguments!(data_ptr);
 
             let target_type =
-                basic_type_from_layout(env, layout_interner, layout).into_pointer_type();
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .into_pointer_type();
 
             debug_assert!(data_ptr.is_pointer_value());
 
@@ -1312,11 +1333,13 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
         Unreachable => match RocReturn::from_layout(layout_interner, layout) {
             RocReturn::Return => {
-                let basic_type = basic_type_from_layout(env, layout_interner, layout);
+                let basic_type =
+                    basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
                 basic_type.const_zero()
             }
             RocReturn::ByPointer => {
-                let basic_type = basic_type_from_layout(env, layout_interner, layout);
+                let basic_type =
+                    basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
                 let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
                 env.builder.build_store(ptr, basic_type.const_zero());
 
@@ -1948,7 +1971,11 @@ fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
     val: StructValue<'ctx>,
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout);
+    let return_type = convert::basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+    );
     let casted = cast_basic_basic(env.builder, val.into(), return_type);
     use_roc_value(
         env,
@@ -2114,9 +2141,12 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 arg_width == target_int_width;
 
             // How the return type needs to be stored on the stack.
-            let return_type_stack_type =
-                convert::basic_type_from_layout(env, layout_interner, return_layout)
-                    .into_struct_type();
+            let return_type_stack_type = convert::basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+            )
+            .into_struct_type();
             // How the return type is actually used, in the Roc calling convention.
             let return_type_use_type =
                 convert::argument_type_from_layout(env, layout_interner, return_layout);
@@ -2189,9 +2219,12 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                     intrinsic,
                                 );
 
-                                let roc_return_type =
-                                    basic_type_from_layout(env, layout_interner, return_layout)
-                                        .ptr_type(AddressSpace::default());
+                                let roc_return_type = basic_type_from_layout(
+                                    env,
+                                    layout_interner,
+                                    layout_interner.get_repr(return_layout),
+                                )
+                                .ptr_type(AddressSpace::default());
 
                                 let roc_return_alloca = env.builder.build_pointer_cast(
                                     zig_return_alloca,

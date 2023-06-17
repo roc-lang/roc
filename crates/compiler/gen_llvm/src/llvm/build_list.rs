@@ -65,7 +65,8 @@ fn pass_element_as_opaque<'a, 'ctx>(
     element: BasicValueEnum<'ctx>,
     layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let element_type = basic_type_from_layout(env, layout_interner, layout);
+    let element_type =
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
     let element_ptr = env
         .builder
         .build_alloca(element_type, "element_to_pass_as_opaque");
@@ -131,7 +132,11 @@ pub(crate) fn list_get_unsafe<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let elem_type = basic_type_from_layout(env, layout_interner, element_layout);
+    let elem_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(element_layout),
+    );
     let ptr_type = elem_type.ptr_type(AddressSpace::default());
     // Load the pointer to the array data
     let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
@@ -320,7 +325,11 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     element_layout: InLayout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    let element_type = basic_type_from_layout(env, layout_interner, element_layout);
+    let element_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(element_layout),
+    );
     let element_ptr = env
         .builder
         .build_alloca(element_type, "output_element_as_opaque");
@@ -371,8 +380,12 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     // TODO: have use_roc_value take LayoutRepr
     let result_layout =
         layout_interner.insert_direct_no_semantic(LayoutRepr::Struct(env.arena.alloc(fields)));
-    let result_struct_type =
-        basic_type_from_layout(env, layout_interner, result_layout).into_struct_type();
+    let result_struct_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(result_layout),
+    )
+    .into_struct_type();
 
     let result = result_struct_type.const_zero();
 
@@ -683,7 +696,11 @@ where
 {
     let builder = env.builder;
 
-    let element_type = basic_type_from_layout(env, layout_interner, element_layout);
+    let element_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(element_layout),
+    );
 
     incrementing_index_loop(
         env,
@@ -815,7 +832,8 @@ pub(crate) fn allocate_list<'a, 'ctx>(
     let number_of_data_bytes =
         builder.build_int_mul(bytes_per_element, number_of_elements, "data_length");
 
-    let basic_type = basic_type_from_layout(env, layout_interner, elem_layout);
+    let basic_type =
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(elem_layout));
     let alignment_bytes = layout_interner.alignment_bytes(elem_layout);
     allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes)
 }

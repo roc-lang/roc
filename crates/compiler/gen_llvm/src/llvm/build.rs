@@ -1026,7 +1026,8 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
     match expr {
         Literal(literal) => build_exp_literal(env, layout_interner, parent, layout, literal),
         NullPointer => {
-            let basic_type = basic_type_from_layout(env, layout_interner, layout);
+            let basic_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
             debug_assert!(basic_type.is_pointer_type());
             basic_type.into_pointer_type().const_zero().into()
@@ -1090,7 +1091,8 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
         ExprBox { symbol } => {
             let (value, layout) = scope.load_symbol_and_layout(symbol);
-            let basic_type = basic_type_from_layout(env, layout_interner, layout);
+            let basic_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let allocation = reserve_with_refcount_help(
                 env,
                 basic_type,
@@ -1303,13 +1305,21 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
                     let struct_layout = layout_interner
                         .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
-                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
+                    let struct_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(struct_layout),
+                    );
 
                     let opaque_data_ptr = env
                         .builder
                         .new_build_struct_gep(
-                            basic_type_from_layout(env, layout_interner, structure_layout)
-                                .into_struct_type(),
+                            basic_type_from_layout(
+                                env,
+                                layout_interner,
+                                layout_interner.get_repr(structure_layout),
+                            )
+                            .into_struct_type(),
                             argument.into_pointer_value(),
                             RocUnion::TAG_DATA_INDEX,
                             "get_opaque_data_ptr",
@@ -1346,7 +1356,11 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let field_layouts = tag_layouts[*tag_id as usize];
 
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+                    let target_loaded_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     lookup_at_index_ptr2(
                         env,
@@ -1361,8 +1375,16 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let struct_layout = layout_interner
                         .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
 
-                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+                    let struct_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(struct_layout),
+                    );
+                    let target_loaded_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     lookup_at_index_ptr(
                         env,
@@ -1390,7 +1412,11 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let field_layouts = other_tags[tag_index as usize];
 
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+                    let target_loaded_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     lookup_at_index_ptr2(
                         env,
@@ -1412,8 +1438,16 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let struct_layout = layout_interner
                         .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
 
-                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+                    let struct_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(struct_layout),
+                    );
+                    let target_loaded_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     lookup_at_index_ptr(
                         env,
@@ -1483,8 +1517,12 @@ fn build_wrapped_tag<'a, 'ctx>(
             )
             .unwrap();
 
-        let tag_id_type =
-            basic_type_from_layout(env, layout_interner, tag_id_layout).into_int_type();
+        let tag_id_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(tag_id_layout),
+        )
+        .into_int_type();
 
         env.builder
             .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
@@ -1583,7 +1621,11 @@ fn build_tag_fields<'a, 'r, 'ctx, 'env>(
     let mut field_values = std::vec::Vec::with_capacity(capacity);
 
     for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
-        let field_type = basic_type_from_layout(env, layout_interner, *tag_field_layout);
+        let field_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(*tag_field_layout),
+        );
         field_types.push(field_type);
 
         let raw_value: BasicValueEnum<'ctx> = scope.load_symbol(field_symbol);
@@ -1661,10 +1703,14 @@ fn build_tag<'a, 'ctx>(
                         let layout = layout_interner
                             .insert_direct_no_semantic(LayoutRepr::Union(*union_layout));
 
-                        return basic_type_from_layout(env, layout_interner, layout)
-                            .into_pointer_type()
-                            .const_null()
-                            .into();
+                        return basic_type_from_layout(
+                            env,
+                            layout_interner,
+                            layout_interner.get_repr(layout),
+                        )
+                        .into_pointer_type()
+                        .const_null()
+                        .into();
                     }
                     Less => &tags[tag_id as usize],
                     Greater => &tags[tag_id as usize - 1],
@@ -1899,8 +1945,12 @@ pub fn get_tag_id<'a, 'ctx>(
     let builder = env.builder;
 
     let tag_id_layout = union_layout.tag_id_layout();
-    let tag_id_int_type =
-        basic_type_from_layout(env, layout_interner, tag_id_layout).into_int_type();
+    let tag_id_int_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(tag_id_layout),
+    )
+    .into_int_type();
 
     match union_layout {
         UnionLayout::NonRecursive(_) => {
@@ -2019,8 +2069,12 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
 
     let struct_layout =
         layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
-    let struct_type =
-        basic_type_from_layout(env, layout_interner, struct_layout).into_struct_type();
+    let struct_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(struct_layout),
+    )
+    .into_struct_type();
 
     let data_ptr = env.builder.build_pointer_cast(
         value,
@@ -2059,7 +2113,7 @@ pub fn reserve_with_refcount<'a, 'ctx>(
     let stack_size = layout_interner.stack_size(layout);
     let alignment_bytes = layout_interner.alignment_bytes(layout);
 
-    let basic_type = basic_type_from_layout(env, layout_interner, layout);
+    let basic_type = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
     reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
 }
@@ -2146,7 +2200,11 @@ fn list_literal<'a, 'ctx>(
     let ctx = env.context;
     let builder = env.builder;
 
-    let element_type = basic_type_from_layout(env, layout_interner, element_layout);
+    let element_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(element_layout),
+    );
 
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
@@ -2311,7 +2369,7 @@ pub fn load_roc_value<'a, 'ctx>(
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    let basic_type = basic_type_from_layout(env, layout_interner, layout);
+    let basic_type = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
     if layout_interner.is_passed_by_reference(layout) {
         let alloca = entry_block_alloca_zerofill(env, basic_type, name);
@@ -2334,7 +2392,7 @@ pub fn use_roc_value<'a, 'ctx>(
     if layout_interner.is_passed_by_reference(layout) {
         let alloca = entry_block_alloca_zerofill(
             env,
-            basic_type_from_layout(env, layout_interner, layout),
+            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout)),
             name,
         );
 
@@ -2354,7 +2412,8 @@ pub fn store_roc_value_opaque<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
 ) {
     let target_type =
-        basic_type_from_layout(env, layout_interner, layout).ptr_type(AddressSpace::default());
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+            .ptr_type(AddressSpace::default());
     let destination =
         env.builder
             .build_pointer_cast(opaque_destination, target_type, "store_roc_value_opaque");
@@ -2477,7 +2536,8 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             cond_layout,
             cond_symbol,
         } => {
-            let ret_type = basic_type_from_layout(env, layout_interner, *ret_layout);
+            let ret_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*ret_layout));
 
             let switch_args = SwitchArgsIr {
                 cond_layout: *cond_layout,
@@ -2515,7 +2575,11 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 builder.position_at_end(cont_block);
 
                 for param in parameters.iter() {
-                    let basic_type = basic_type_from_layout(env, layout_interner, param.layout);
+                    let basic_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(param.layout),
+                    );
 
                     let phi_type = if layout_interner.is_passed_by_reference(param.layout) {
                         basic_type.ptr_type(AddressSpace::default()).into()
@@ -3186,7 +3250,11 @@ fn get_tag_id_wrapped<'a, 'ctx>(
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
     let union_struct_type = struct_type_from_union_layout(env, layout_interner, &union_layout);
-    let tag_id_type = basic_type_from_layout(env, layout_interner, union_layout.tag_id_layout());
+    let tag_id_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(union_layout.tag_id_layout()),
+    );
 
     let tag_id_ptr = env
         .builder
@@ -3275,8 +3343,12 @@ fn build_switch_ir<'a, 'ctx>(
     let (cond_value, stored_layout) = scope.load_symbol_and_layout(cond_symbol);
 
     debug_assert_eq!(
-        basic_type_from_layout(env, layout_interner, cond_layout),
-        basic_type_from_layout(env, layout_interner, stored_layout),
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(cond_layout)),
+        basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(stored_layout)
+        ),
         "This switch matches on {:?}, but the matched-on symbol {:?} has layout {:?}",
         cond_layout,
         cond_symbol,
@@ -3659,7 +3731,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     // does not seem to be a smarter solution
     let wrapper_return_type = roc_call_result_type(
         env,
-        basic_type_from_layout(env, layout_interner, return_layout),
+        basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(return_layout),
+        ),
     );
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -3827,7 +3903,11 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
         .map(|l| to_cc_type(env, layout_interner, *l));
     let argument_types = Vec::from_iter_in(it, env.arena);
 
-    let return_type = basic_type_from_layout(env, layout_interner, return_layout);
+    let return_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+    );
 
     let cc_return = to_cc_return(env, layout_interner, return_layout);
     let roc_return = RocReturn::from_layout(layout_interner, return_layout);
@@ -4128,7 +4208,11 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
         }
 
         LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {
-            basic_type_from_layout(env, layout_interner, return_layout)
+            basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+            )
         }
     };
 
@@ -4277,7 +4361,11 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     let context = env.context;
     let builder = env.builder;
 
-    let return_type = basic_type_from_layout(env, layout_interner, roc_return_layout);
+    let return_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(roc_return_layout),
+    );
     let call_result_return_conv = {
         let layout = layout_interner
             .insert_direct_no_semantic(roc_call_result_layout(env.arena, roc_return_layout));
@@ -4413,11 +4501,19 @@ fn make_good_roc_result<'a, 'ctx>(
     let context = env.context;
     let builder = env.builder;
 
-    let return_type = basic_type_from_layout(env, layout_interner, return_layout);
+    let return_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+    );
 
     let v1 = roc_call_result_type(
         env,
-        basic_type_from_layout(env, layout_interner, return_layout),
+        basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(return_layout),
+        ),
     )
     .const_zero();
 
@@ -4461,7 +4557,11 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
 
     let wrapper_return_type = roc_call_result_type(
         env,
-        basic_type_from_layout(env, layout_interner, return_layout),
+        basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(return_layout),
+        ),
     );
 
     let roc_function_type = roc_function.get_type();
@@ -4902,7 +5002,11 @@ fn build_proc_header<'a, 'ctx>(
 
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
 
-    let ret_type = basic_type_from_layout(env, layout_interner, proc.ret_layout);
+    let ret_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(proc.ret_layout),
+    );
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
@@ -5024,7 +5128,8 @@ fn expose_alias_to_host<'a>(
             //
             // * roc__mainForHost_1_Update_result_size() -> i64
 
-            let result_type = basic_type_from_layout(env, layout_interner, result);
+            let result_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(result));
 
             build_host_exposed_alias_size_help(
                 env,
@@ -5051,15 +5156,19 @@ fn build_closure_caller<'a, 'ctx>(
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {
-        let arg_type = basic_type_from_layout(env, layout_interner, *layout);
+        let arg_type =
+            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout));
         let arg_ptr_type = arg_type.ptr_type(AddressSpace::default());
 
         argument_types.push(arg_ptr_type.into());
     }
 
     let closure_argument_type = {
-        let basic_type =
-            basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation());
+        let basic_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(lambda_set.runtime_representation()),
+        );
 
         basic_type.ptr_type(AddressSpace::default())
     };
@@ -5068,7 +5177,8 @@ fn build_closure_caller<'a, 'ctx>(
     let context = &env.context;
     let builder = env.builder;
 
-    let result_type = basic_type_from_layout(env, layout_interner, result);
+    let result_type =
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(result));
 
     let output_type = { result_type.ptr_type(AddressSpace::default()) };
     argument_types.push(output_type.into());
@@ -5105,7 +5215,8 @@ fn build_closure_caller<'a, 'ctx>(
     let layouts_it = arguments.iter().chain(std::iter::once(&closure_layout));
     for (param, layout) in evaluator_arguments.iter_mut().zip(layouts_it) {
         if param.is_pointer_value() && !layout_interner.is_passed_by_reference(*layout) {
-            let basic_type = basic_type_from_layout(env, layout_interner, *layout);
+            let basic_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout));
             *param = builder.new_build_load(basic_type, param.into_pointer_value(), "load_param");
         }
     }
@@ -5170,7 +5281,7 @@ fn build_host_exposed_alias_size<'a, 'r>(
         def_name,
         alias_symbol,
         None,
-        basic_type_from_layout(env, layout_interner, layout),
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout)),
     )
 }
 
@@ -5384,7 +5495,11 @@ pub fn call_roc_function<'a, 'ctx>(
             let mut arguments = Vec::from_iter_in(it, env.arena);
             arguments.pop();
 
-            let result_type = basic_type_from_layout(env, layout_interner, result_layout);
+            let result_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(result_layout),
+            );
             let result_alloca = env.builder.build_alloca(result_type, "result_value");
 
             arguments.push(result_alloca.into());
@@ -5406,7 +5521,11 @@ pub fn call_roc_function<'a, 'ctx>(
             let it = arguments.iter().map(|x| (*x).into());
             let mut arguments = Vec::from_iter_in(it, env.arena);
 
-            let result_type = basic_type_from_layout(env, layout_interner, result_layout);
+            let result_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(result_layout),
+            );
             let result_alloca = entry_block_alloca_zerofill(env, result_type, "result_value");
 
             arguments.push(result_alloca.into());
@@ -5496,8 +5615,11 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
 ) -> RocFunctionCall<'ctx> {
     use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
 
-    let closure_data_type =
-        basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation());
+    let closure_data_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(lambda_set.runtime_representation()),
+    );
 
     let closure_data_ptr = env
         .builder
@@ -5557,7 +5679,7 @@ fn to_cc_type<'a, 'ctx>(
         LayoutRepr::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
         _ => {
             // TODO this is almost certainly incorrect for bigger structs
-            basic_type_from_layout(env, layout_interner, layout)
+            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
         }
     }
 }
@@ -5804,7 +5926,8 @@ fn build_foreign_symbol<'a, 'ctx>(
             //      and can use in the wrapper
             // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
 
-            let return_type = basic_type_from_layout(env, layout_interner, ret_layout);
+            let return_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(ret_layout));
             let roc_return = RocReturn::from_layout(layout_interner, ret_layout);
             let cc_return = to_cc_return(env, layout_interner, ret_layout);
 

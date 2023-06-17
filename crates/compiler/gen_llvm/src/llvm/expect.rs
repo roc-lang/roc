@@ -387,7 +387,7 @@ fn build_clone<'a, 'ctx>(
         LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
-            let bt = basic_type_from_layout(env, layout_interner, layout);
+            let bt = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
             // cast the i64 pointer to a pointer to block of memory
             let field1_cast = env.builder.build_pointer_cast(
@@ -578,7 +578,11 @@ fn clone_tag_payload_and_id<'a, 'ctx>(
     payload_in_layout: InLayout<'a>,
     opaque_payload_ptr: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let payload_type = basic_type_from_layout(env, layout_interner, payload_in_layout);
+    let payload_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(payload_in_layout),
+    );
 
     let payload_ptr = env.builder.build_pointer_cast(
         opaque_payload_ptr,
@@ -752,7 +756,8 @@ fn build_clone_tag_help<'a, 'ctx>(
                     ))
                 };
 
-                let basic_type = basic_type_from_layout(env, layout_interner, layout);
+                let basic_type =
+                    basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
                 let data = load_tag_data(env, layout_interner, union_layout, tag_value, basic_type);
 
                 let (width, _) =
@@ -793,7 +798,8 @@ fn build_clone_tag_help<'a, 'ctx>(
             build_copy(env, ptr, offset, extra_offset.into());
 
             let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(fields));
-            let basic_type = basic_type_from_layout(env, layout_interner, layout);
+            let basic_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
             let (width, _) = union_layout.data_size_and_alignment(layout_interner, env.target_info);
 
@@ -850,7 +856,11 @@ fn build_clone_tag_help<'a, 'ctx>(
 
                     let layout =
                         layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(fields));
-                    let basic_type = basic_type_from_layout(env, layout_interner, layout);
+                    let basic_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     let (width, _) =
                         union_layout.data_size_and_alignment(layout_interner, env.target_info);
@@ -926,7 +936,8 @@ fn build_clone_tag_help<'a, 'ctx>(
 
                 let layout =
                     layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(other_fields));
-                let basic_type = basic_type_from_layout(env, layout_interner, layout);
+                let basic_type =
+                    basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
                 let cursors = Cursors {
                     offset: extra_offset,
@@ -1077,7 +1088,8 @@ fn build_clone_builtin<'a, 'ctx>(
 
                 bd.build_int_add(elements_start_offset, elements_width, "new_offset")
             } else {
-                let element_type = basic_type_from_layout(env, layout_interner, elem);
+                let element_type =
+                    basic_type_from_layout(env, layout_interner, layout_interner.get_repr(elem));
                 let elements = bd.build_pointer_cast(
                     elements,
                     element_type.ptr_type(AddressSpace::default()),

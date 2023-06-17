@@ -17,14 +17,6 @@ use super::struct_::RocStruct;
 pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &'env STLayoutInterner<'a>,
-    layout: InLayout<'_>,
-) -> BasicTypeEnum<'ctx> {
-    basic_type_from_layout_repr(env, layout_interner, layout_interner.get_repr(layout))
-}
-
-pub fn basic_type_from_layout_repr<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &'env STLayoutInterner<'a>,
     layout: LayoutRepr<'_>,
 ) -> BasicTypeEnum<'ctx> {
     use LayoutRepr::*;
@@ -33,11 +25,17 @@ pub fn basic_type_from_layout_repr<'a, 'ctx, 'env>(
         Struct(sorted_fields, ..) => {
             basic_type_from_record(env, layout_interner, sorted_fields).into()
         }
-        LambdaSet(lambda_set) => {
-            basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation())
-        }
+        LambdaSet(lambda_set) => basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(lambda_set.runtime_representation()),
+        ),
         Boxed(inner_layout) => {
-            let inner_type = basic_type_from_layout(env, layout_interner, inner_layout);
+            let inner_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(inner_layout),
+            );
 
             inner_type.ptr_type(AddressSpace::default()).into()
         }
@@ -60,7 +58,11 @@ fn basic_type_from_record<'a, 'ctx>(
     let mut field_types = AVec::with_capacity_in(fields.len(), env.arena);
 
     for field_layout in fields.iter() {
-        let typ = basic_type_from_layout(env, layout_interner, *field_layout);
+        let typ = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(*field_layout),
+        );
 
         field_types.push(typ);
     }
@@ -169,7 +171,8 @@ pub fn argument_type_from_layout<'a, 'ctx>(
         }
         Union(union_layout) => argument_type_from_union_layout(env, layout_interner, &union_layout),
         Builtin(_) => {
-            let base = basic_type_from_layout(env, layout_interner, layout);
+            let base =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
             if layout_interner.is_passed_by_reference(layout) {
                 base.ptr_type(AddressSpace::default()).into()
@@ -178,7 +181,7 @@ pub fn argument_type_from_layout<'a, 'ctx>(
             }
         }
         Struct(_) => argument_type_from_struct_layout(env, layout_interner, layout),
-        _ => basic_type_from_layout(env, layout_interner, layout),
+        _ => basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout)),
     }
 }
 
@@ -192,7 +195,11 @@ fn argument_type_from_struct_layout<'a, 'ctx>(
         layout_interner.get_repr(struct_layout),
         LayoutRepr::Struct(_)
     ));
-    let stack_type = basic_type_from_layout(env, layout_interner, struct_layout);
+    let stack_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(struct_layout),
+    );
 
     if layout_interner.is_passed_by_reference(struct_layout) {
         stack_type.ptr_type(AddressSpace::default()).into()

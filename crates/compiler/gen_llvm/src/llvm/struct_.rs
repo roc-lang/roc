@@ -207,7 +207,11 @@ fn build_struct_helper<'a, 'ctx>(
             .get_repr(field_layout)
             .is_dropped_because_empty()
         {
-            let field_type = basic_type_from_layout(env, layout_interner, field_layout);
+            let field_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(field_layout),
+            );
             field_types.push(field_type);
 
             if layout_interner.is_passed_by_reference(field_layout) {

@@ -465,7 +465,7 @@ fn modify_refcount_layout_help<'a, 'ctx>(
         LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 
-            let bt = basic_type_from_layout(env, layout_interner, layout);
+            let bt = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
             // cast the i64 pointer to a pointer to block of memory
             let field_cast = env.builder.build_pointer_cast(
@@ -697,8 +697,12 @@ fn modify_refcount_list_help<'a, 'ctx>(
     builder.position_at_end(modification_list_block);
 
     if layout_interner.contains_refcounted(element_layout) {
-        let ptr_type = basic_type_from_layout(env, layout_interner, element_layout)
-            .ptr_type(AddressSpace::default());
+        let ptr_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(element_layout),
+        )
+        .ptr_type(AddressSpace::default());
 
         let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
 
@@ -870,7 +874,11 @@ fn modify_refcount_boxed<'a, 'ctx>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, layout_interner, boxed_layout);
+            let basic_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(boxed_layout),
+            );
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_box_help(
@@ -1079,7 +1087,8 @@ fn build_rec_union<'a, 'ctx>(
             let block = env.builder.get_insert_block().expect("to be in a function");
             let di_location = env.builder.get_current_debug_location().unwrap();
 
-            let basic_type = basic_type_from_layout(env, layout_interner, layout);
+            let basic_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             build_rec_union_help(
@@ -1249,8 +1258,12 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
-    let tag_id_int_type =
-        basic_type_from_layout(env, layout_interner, union_layout.tag_id_layout()).into_int_type();
+    let tag_id_int_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(union_layout.tag_id_layout()),
+    )
+    .into_int_type();
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         let tag_id = match nullable_id {
@@ -1273,7 +1286,11 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
 
         let fields_struct =
             layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
-        let wrapper_type = basic_type_from_layout(env, layout_interner, fields_struct);
+        let wrapper_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(fields_struct),
+        );
 
         // cast the opaque pointer to a pointer of the correct shape
         let struct_ptr = env.builder.build_pointer_cast(
@@ -1311,7 +1328,11 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
                 // therefore we must cast it to our desired type
                 let union_layout =
                     layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
-                let union_type = basic_type_from_layout(env, layout_interner, union_layout);
+                let union_type = basic_type_from_layout(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(union_layout),
+                );
                 let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
 
                 deferred_rec.push(recursive_field_ptr);
@@ -1482,7 +1503,11 @@ pub fn build_reset<'a, 'ctx>(
             let block = env.builder.get_insert_block().expect("to be in a function");
             let di_location = env.builder.get_current_debug_location().unwrap();
 
-            let basic_type = basic_type_from_layout(env, layout_interner, union_layout_in);
+            let basic_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(union_layout_in),
+            );
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             build_reuse_rec_union_help(
@@ -1698,7 +1723,9 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
 
     let union_layout = UnionLayout::NonRecursive(tags);
     let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
-    let union_struct_type = basic_type_from_layout(env, layout_interner, layout).into_struct_type();
+    let union_struct_type =
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+            .into_struct_type();
 
     // read the tag_id
     let tag_id_ptr = env
@@ -1714,7 +1741,11 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
     let tag_id = env
         .builder
         .new_build_load(
-            basic_type_from_layout(env, layout_interner, union_layout.tag_id_layout()),
+            basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(union_layout.tag_id_layout()),
+            ),
             tag_id_ptr,
             "load_tag_id",
         )
@@ -1745,7 +1776,11 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
 
         let fields_struct =
             layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
-        let data_struct_type = basic_type_from_layout(env, layout_interner, fields_struct);
+        let data_struct_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(fields_struct),
+        );
 
         debug_assert!(data_struct_type.is_struct_type());
         let data_struct_type = data_struct_type.into_struct_type();
@@ -1790,7 +1825,11 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
                 debug_assert!(field_value.is_pointer_value());
 
                 // therefore we must cast it to our desired type
-                let union_type = basic_type_from_layout(env, layout_interner, union_layout);
+                let union_type = basic_type_from_layout(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(union_layout),
+                );
                 let recursive_ptr_field_value =
                     cast_basic_basic(env.builder, field_value, union_type);
 
@@ -1817,7 +1856,11 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
                     field_ptr.into()
                 } else {
                     env.builder.new_build_load(
-                        basic_type_from_layout(env, layout_interner, *field_layout),
+                        basic_type_from_layout(
+                            env,
+                            layout_interner,
+                            layout_interner.get_repr(*field_layout),
+                        ),
                         field_ptr,
                         "field_value",
                     )

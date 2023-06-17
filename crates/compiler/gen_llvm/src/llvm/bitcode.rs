@@ -113,7 +113,11 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
         }
         CCReturn::ByPointer => {
             // We need to pass the return value by pointer.
-            let roc_return_type = basic_type_from_layout(env, layout_interner, return_layout);
+            let roc_return_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+            );
 
             let cc_return_type: BasicTypeEnum<'ctx> = bitcode_return_type.into();
 
@@ -245,7 +249,8 @@ fn build_transform_caller_help<'a, 'ctx>(
 
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
         let basic_type =
-            basic_type_from_layout(env, layout_interner, *layout).ptr_type(AddressSpace::default());
+            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout))
+                .ptr_type(AddressSpace::default());
 
         let cast_ptr = env.builder.build_pointer_cast(
             argument_ptr.into_pointer_value(),
@@ -274,8 +279,9 @@ fn build_transform_caller_help<'a, 'ctx>(
             // the function doesn't expect a closure argument, nothing to add
         }
         (true, layout) => {
-            let closure_type = basic_type_from_layout(env, layout_interner, layout)
-                .ptr_type(AddressSpace::default());
+            let closure_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .ptr_type(AddressSpace::default());
 
             let closure_cast =
                 env.builder
@@ -410,7 +416,8 @@ fn build_rc_wrapper<'a, 'ctx>(
 
             generic_value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout_interner, layout);
+            let value_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let value_ptr_type = value_type.ptr_type(AddressSpace::default());
             let value_ptr =
                 env.builder
@@ -500,8 +507,9 @@ pub fn build_eq_wrapper<'a, 'ctx>(
             value_ptr1.set_name(Symbol::ARG_1.as_str(&env.interns));
             value_ptr2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout_interner, layout)
-                .ptr_type(AddressSpace::default());
+            let value_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .ptr_type(AddressSpace::default());
 
             let value_cast1 = env
                 .builder
@@ -590,7 +598,8 @@ pub fn build_compare_wrapper<'a, 'ctx>(
             value_ptr1.set_name(Symbol::ARG_2.as_str(&env.interns));
             value_ptr2.set_name(Symbol::ARG_3.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout_interner, layout);
+            let value_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let value_ptr_type = value_type.ptr_type(AddressSpace::default());
 
             let value_cast1 =
@@ -617,8 +626,11 @@ pub fn build_compare_wrapper<'a, 'ctx>(
                     &default
                 }
                 _ => {
-                    let closure_type =
-                        basic_type_from_layout(env, layout_interner, closure_data_repr);
+                    let closure_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(closure_data_repr),
+                    );
                     let closure_ptr_type = closure_type.ptr_type(AddressSpace::default());
 
                     let closure_cast = env.builder.build_pointer_cast(
