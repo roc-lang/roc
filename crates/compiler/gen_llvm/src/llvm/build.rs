@@ -5034,7 +5034,8 @@ fn build_proc_header<'a, 'ctx>(
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = argument_type_from_layout(env, layout_interner, *layout);
+        let arg_type =
+            argument_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout));
 
         arg_basic_types.push(arg_type);
     }
@@ -5966,7 +5967,11 @@ fn build_foreign_symbol<'a, 'ctx>(
 
                 cc_argument_types.push(to_cc_type(env, layout_interner, layout));
 
-                let basic_type = argument_type_from_layout(env, layout_interner, layout);
+                let basic_type = argument_type_from_layout(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(layout),
+                );
                 fastcc_argument_types.push(basic_type);
 
                 arguments.push(value);

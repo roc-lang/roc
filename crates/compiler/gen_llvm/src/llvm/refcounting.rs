@@ -280,7 +280,11 @@ fn modify_refcount_struct<'a, 'ctx>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = argument_type_from_layout(env, layout_interner, struct_layout);
+            let arg_type = argument_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(struct_layout),
+            );
             let function_value = build_header(env, arg_type, mode, &fn_name);
 
             modify_refcount_struct_help(
@@ -620,7 +624,11 @@ fn modify_refcount_list<'a, 'ctx>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = argument_type_from_layout(env, layout_interner, list_layout);
+            let basic_type = argument_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(list_layout),
+            );
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_list_help(
@@ -764,7 +772,8 @@ fn modify_refcount_str<'a, 'ctx>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = argument_type_from_layout(env, layout_interner, layout);
+            let basic_type =
+                argument_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_str_help(env, layout_interner, mode, layout, function_value);

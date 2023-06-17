@@ -316,7 +316,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             // zig passes the result as a packed integer sometimes, instead of a struct. So we cast if needed.
             // We check the type as expected in an argument position, since that is how we actually will use it.
-            let expected_type = argument_type_from_layout(env, layout_interner, layout);
+            let expected_type =
+                argument_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let actual_type = result.get_type();
 
             if expected_type != actual_type {
@@ -2148,8 +2149,11 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             )
             .into_struct_type();
             // How the return type is actually used, in the Roc calling convention.
-            let return_type_use_type =
-                convert::argument_type_from_layout(env, layout_interner, return_layout);
+            let return_type_use_type = convert::argument_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+            );
 
             if arg_always_fits_in_target {
                 // This is guaranteed to succeed so we can just make it an int cast and let LLVM

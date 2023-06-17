@@ -153,28 +153,29 @@ pub fn basic_type_from_builtin<'ctx>(
 pub fn argument_type_from_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
 ) -> BasicTypeEnum<'ctx> {
     use LayoutRepr::*;
 
     // TODO: can this just be "basic_type_from_layout => ptr if passed_by_ref"?
-    match layout_interner.get_repr(layout) {
-        LambdaSet(lambda_set) => {
-            argument_type_from_layout(env, layout_interner, lambda_set.runtime_representation())
-        }
+    match layout {
+        LambdaSet(lambda_set) => argument_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(lambda_set.runtime_representation()),
+        ),
         Union(union_layout) => argument_type_from_union_layout(env, layout_interner, &union_layout),
         Builtin(_) => {
-            let base =
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
+            let base = basic_type_from_layout(env, layout_interner, layout);
 
-            if layout_interner.is_passed_by_reference(layout) {
+            if layout.is_passed_by_reference(layout_interner) {
                 base.ptr_type(AddressSpace::default()).into()
             } else {
                 base
             }
         }
         Struct(_) => argument_type_from_struct_layout(env, layout_interner, layout),
-        _ => basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout)),
+        _ => basic_type_from_layout(env, layout_interner, layout),
     }
 }
 
@@ -182,19 +183,12 @@ pub fn argument_type_from_layout<'a, 'ctx>(
 fn argument_type_from_struct_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    struct_layout: InLayout<'a>,
+    struct_layout: LayoutRepr<'a>,
 ) -> BasicTypeEnum<'ctx> {
-    debug_assert!(matches!(
-        layout_interner.get_repr(struct_layout),
-        LayoutRepr::Struct(_)
-    ));
-    let stack_type = basic_type_from_layout(
-        env,
-        layout_interner,
-        layout_interner.get_repr(struct_layout),
-    );
+    debug_assert!(matches!(struct_layout, LayoutRepr::Struct(_)));
+    let stack_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
-    if layout_interner.is_passed_by_reference(struct_layout) {
+    if struct_layout.is_passed_by_reference(layout_interner) {
         stack_type.ptr_type(AddressSpace::default()).into()
     } else {
         stack_type

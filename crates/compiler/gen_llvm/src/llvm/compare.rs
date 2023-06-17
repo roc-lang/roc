@@ -665,7 +665,11 @@ fn build_struct_eq<'a, 'ctx>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = argument_type_from_layout(env, layout_interner, struct_layout);
+            let arg_type = argument_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(struct_layout),
+            );
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
