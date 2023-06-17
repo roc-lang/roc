@@ -1201,7 +1201,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 // If reset is used on a shared, non-reusable reference, it behaves
                 // like dec and returns NULL, which instructs reuse to behave like ctor
                 env.builder.position_at_end(else_block);
-                refcount_ptr.decrement(env, layout_interner, layout);
+                refcount_ptr.decrement(env, layout_interner, layout_interner.get_repr(layout));
                 env.builder.build_unconditional_branch(cont_block);
             }
             {
@@ -1267,7 +1267,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 // If reset is used on a shared, non-reusable reference, it behaves
                 // like dec and returns NULL, which instructs reuse to behave like ctor
                 env.builder.position_at_end(not_unique_block);
-                refcount_ptr.decrement(env, layout_interner, layout);
+                refcount_ptr.decrement(env, layout_interner, layout_interner.get_repr(layout));
                 env.builder.build_unconditional_branch(cont_block);
             }
             {
@@ -2762,7 +2762,11 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                                     env.builder.position_at_end(then_block);
                                     let refcount_ptr =
                                         PointerToRefcount::from_ptr_to_data(env, value_ptr);
-                                    refcount_ptr.decrement(env, layout_interner, layout);
+                                    refcount_ptr.decrement(
+                                        env,
+                                        layout_interner,
+                                        layout_interner.get_repr(layout),
+                                    );
 
                                     env.builder.build_unconditional_branch(done_block);
                                 }
