@@ -1325,13 +1325,8 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
                     let field_layouts = tag_layouts[*tag_id as usize];
 
-                    let struct_layout = layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
-                    let struct_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(struct_layout),
-                    );
+                    let struct_layout = LayoutRepr::struct_(field_layouts);
+                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
                     let opaque_data_ptr = env
                         .builder
@@ -1394,14 +1389,9 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     )
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout = layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
+                    let struct_layout = LayoutRepr::struct_(field_layouts);
 
-                    let struct_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(struct_layout),
-                    );
+                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
                     let target_loaded_type = basic_type_from_layout(
                         env,
                         layout_interner,
@@ -1457,14 +1447,9 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     debug_assert_ne!(*tag_id != 0, *nullable_id);
 
                     let field_layouts = other_fields;
-                    let struct_layout = layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
+                    let struct_layout = LayoutRepr::struct_(field_layouts);
 
-                    let struct_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(struct_layout),
-                    );
+                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
                     let target_loaded_type = basic_type_from_layout(
                         env,
                         layout_interner,
@@ -1721,17 +1706,12 @@ fn build_tag<'a, 'ctx>(
                 use std::cmp::Ordering::*;
                 match tag_id.cmp(&(*nullable_id as _)) {
                     Equal => {
-                        let layout = layout_interner
-                            .insert_direct_no_semantic(LayoutRepr::Union(*union_layout));
+                        let layout = LayoutRepr::Union(*union_layout);
 
-                        return basic_type_from_layout(
-                            env,
-                            layout_interner,
-                            layout_interner.get_repr(layout),
-                        )
-                        .into_pointer_type()
-                        .const_null()
-                        .into();
+                        return basic_type_from_layout(env, layout_interner, layout)
+                            .into_pointer_type()
+                            .const_null()
+                            .into();
                     }
                     Less => &tags[tag_id as usize],
                     Greater => &tags[tag_id as usize - 1],
@@ -2084,14 +2064,9 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let struct_layout =
-        layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
-    let struct_type = basic_type_from_layout(
-        env,
-        layout_interner,
-        layout_interner.get_repr(struct_layout),
-    )
-    .into_struct_type();
+    let struct_layout = LayoutRepr::struct_(field_layouts);
+    let struct_type =
+        basic_type_from_layout(env, layout_interner, struct_layout).into_struct_type();
 
     let data_ptr = env.builder.build_pointer_cast(
         value,
@@ -2553,7 +2528,13 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         Ret(symbol) => {
             let (value, layout) = scope.load_symbol_and_layout(symbol);
 
-            build_return(env, layout_interner, layout, value, parent);
+            build_return(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value,
+                parent,
+            );
 
             env.context.i8_type().const_zero().into()
         }
@@ -2987,11 +2968,11 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 fn build_return<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     value: BasicValueEnum<'ctx>,
     parent: FunctionValue<'ctx>,
 ) {
-    match RocReturn::from_layout(layout_interner, layout_interner.get_repr(layout)) {
+    match RocReturn::from_layout(layout_interner, layout) {
         RocReturn::Return => {
             if let Some(block) = env.builder.get_insert_block() {
                 if block.get_terminator().is_none() {
@@ -3006,7 +2987,7 @@ fn build_return<'a, 'ctx>(
             debug_assert!(out_parameter.is_pointer_value());
 
             let destination = out_parameter.into_pointer_value();
-            if layout_interner.is_passed_by_reference(layout) {
+            if layout.is_passed_by_reference(layout_interner) {
                 debug_assert!(
                     value.is_pointer_value(),
                     "{:?}: {:?}\n{:?}",
@@ -3037,7 +3018,7 @@ fn build_return<'a, 'ctx>(
                 build_memcpy(
                     env,
                     layout_interner,
-                    layout_interner.get_repr(layout),
+                    layout,
                     destination,
                     value.into_pointer_value(),
                 );
@@ -3717,13 +3698,12 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
 
         builder.position_at_end(entry);
 
-        let wrapped_layout = layout_interner
-            .insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
+        let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
         call_roc_function(
             env,
             layout_interner,
             roc_function,
-            layout_interner.get_repr(wrapped_layout),
+            wrapped_layout,
             arguments_for_call,
         )
     } else {
@@ -3865,14 +3845,13 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
         builder.position_at_end(last_block);
 
-        let wrapper_result = layout_interner
-            .insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
+        let wrapper_result = roc_call_result_layout(env.arena, return_layout);
 
         let roc_value = call_roc_function(
             env,
             layout_interner,
             roc_wrapper_function,
-            layout_interner.get_repr(wrapper_result),
+            wrapper_result,
             arguments_for_call,
         );
 
@@ -3889,7 +3868,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     store_roc_value(
         env,
         layout_interner,
-        layout_interner.get_repr(call_result_layout),
+        call_result_layout,
         output_arg,
         call_result,
     );
@@ -4590,8 +4569,7 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     let builder = env.builder;
 
     // TODO: pass these, and the roc function, in directly?
-    let wrapper_return_layout =
-        layout_interner.insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
+    let wrapper_return_layout = roc_call_result_layout(env.arena, return_layout);
 
     let wrapper_return_type = roc_call_result_type(
         env,
@@ -4617,10 +4595,7 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
             }
         };
 
-    let wrapper_return_conv = RocReturn::from_layout(
-        layout_interner,
-        layout_interner.get_repr(wrapper_return_layout),
-    );
+    let wrapper_return_conv = RocReturn::from_layout(layout_interner, wrapper_return_layout);
 
     let wrapper_function_spec = FunctionSpec::fastcc(
         env,
