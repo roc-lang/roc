@@ -40,12 +40,12 @@ procedure List.93 (List.436, List.437, List.438):
     ret List.524;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.290 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.290;
+    let Num.292 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.291 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.293 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.293;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.300 : Str = lowlevel StrConcat #Attr.2 #Attr.3;

@@ -86,6 +86,7 @@ interface Num
         bitwiseAnd,
         bitwiseXor,
         bitwiseOr,
+        bitwiseNot,
         shiftLeftBy,
         shiftRightBy,
         shiftRightZfBy,
@@ -978,6 +979,10 @@ isMultipleOf : Int a, Int a -> Bool
 bitwiseAnd : Int a, Int a -> Int a
 bitwiseXor : Int a, Int a -> Int a
 bitwiseOr : Int a, Int a -> Int a
+
+bitwiseNot : Int a -> Int a
+bitwiseNot = \n ->
+    bitwiseXor n (subWrap 0 1)
 
 ## Bitwise left shift of a number by another
 ##
