@@ -5155,26 +5155,5 @@ mod solve_expr {
             ),
             r#"[Io Str] -> [Io Str, Net Str]"#
         );
-
-        infer_eq(
-            indoc!(
-                r#"
-                expandError = \e ->
-                  unused1 = f e # e = [A]x
-                  when e is
-                    error -> # error_unexpanded = [A]x , error_expanded = [A]x
-                      unused2 = g e # [A]x ~ [B]y => error_unexpanded = [A, B]y, error_expanded = [A, B]y
-                      unused3 = h error # => type error
-                      error
-
-                f : [A]* -> {}
-                g : [B]* -> {}
-                h : [A] -> {}
-
-                expandError
-                "#
-            ),
-            r#"[A, B]#a -> <type mismatch>"#
-        );
     }
 }
