@@ -3,7 +3,7 @@ use crate::llvm::memcpy::build_memcpy;
 use bumpalo::collections::Vec as AVec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
-use inkwell::values::StructValue;
+use inkwell::values::PointerValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{
@@ -407,17 +407,18 @@ impl<'ctx> RocUnion<'ctx> {
         width
     }
 
-    pub fn as_struct_value<'a, 'env>(
+    pub fn write_struct_data<'a, 'env>(
         &self,
         env: &Env<'a, 'ctx, 'env>,
         layout_interner: &STLayoutInterner<'a>,
+        // The allocation of the tag to write into.
+        tag_alloca: PointerValue<'ctx>,
+        // The data to write into the union.
         data: RocStruct<'ctx>,
         data_layout: LayoutRepr<'a>,
         tag_id: Option<usize>,
-    ) -> StructValue<'ctx> {
+    ) {
         debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
-
-        let tag_alloca = env.builder.build_alloca(self.struct_type(), "tag_alloca");
 
         let data_buffer = env
             .builder
@@ -482,10 +483,6 @@ impl<'ctx> RocUnion<'ctx> {
 
             env.builder.build_store(tag_id_ptr, tag_id);
         }
-
-        env.builder
-            .new_build_load(self.struct_type(), tag_alloca, "load_tag")
-            .into_struct_value()
     }
 }
 

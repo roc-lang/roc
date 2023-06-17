@@ -1616,24 +1616,21 @@ fn build_tag<'a, 'ctx>(
 
             let roc_union =
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
-            let value = roc_union.as_struct_value(
+
+            let tag_alloca = env
+                .builder
+                .build_alloca(roc_union.struct_type(), "tag_alloca");
+
+            roc_union.write_struct_data(
                 env,
                 layout_interner,
+                tag_alloca,
                 data,
                 data_layout_repr,
                 Some(tag_id as _),
             );
 
-            let alloca = create_entry_block_alloca(
-                env,
-                parent,
-                value.get_type().into(),
-                "non_recursive_tag_alloca",
-            );
-
-            env.builder.build_store(alloca, value);
-
-            alloca.into()
+            tag_alloca.into()
         }
         UnionLayout::Recursive(tags) => {
             debug_assert!(union_size > 1);
@@ -1754,10 +1751,14 @@ fn build_tag<'a, 'ctx>(
             let data_layout_repr = LayoutRepr::Struct(other_fields);
             let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
-            let value =
-                roc_union.as_struct_value(env, layout_interner, data, data_layout_repr, None);
-
-            env.builder.build_store(data_ptr, value);
+            roc_union.write_struct_data(
+                env,
+                layout_interner,
+                data_ptr,
+                data,
+                data_layout_repr,
+                None,
+            );
 
             data_ptr.into()
         }
@@ -2907,8 +2908,6 @@ fn build_return<'a, 'ctx>(
             let parameters = parent.get_params();
             let out_parameter = parameters.last().unwrap();
             debug_assert!(out_parameter.is_pointer_value());
-
-            // store_roc_value(env, *layout, out_parameter.into_pointer_value(), value);
 
             let destination = out_parameter.into_pointer_value();
             if layout_interner.is_passed_by_reference(layout) {
