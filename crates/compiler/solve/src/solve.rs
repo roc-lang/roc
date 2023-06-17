@@ -326,7 +326,8 @@ fn solve(
                                     UnificationMode::EQ,
                                     Polarity::Neg, // TODO: polarity
                                 );
-                                debug_assert!(env.subs
+                                debug_assert!(env
+                                    .subs
                                     .equivalent_without_compacting(unexpanded_var, unrefined_var));
                                 env.subs.set(refined_var, unexpanded_descriptor.clone());
                                 open_tag_union(env, refined_var);
@@ -482,7 +483,8 @@ fn solve(
                                     UnificationMode::EQ,
                                     Polarity::Neg, // TODO: polarity
                                 );
-                                debug_assert!(env.subs
+                                debug_assert!(env
+                                    .subs
                                     .equivalent_without_compacting(unexpanded_var, unrefined_var));
                                 env.subs.set(refined_var, unexpanded_descriptor.clone());
                                 open_tag_union(env, refined_var);

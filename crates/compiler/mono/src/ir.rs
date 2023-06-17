@@ -4,9 +4,9 @@ use crate::ir::erased::{build_erased_function, ResolvedErasedLambda};
 use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, ext_var_is_empty_tag_union, Builtin, ClosureCallOptions, ClosureDataKind,
-    ClosureRepresentation, EnumDispatch, InLayout, LambdaName, LambdaSet, Layout,
-    LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche, RawFunctionLayout,
-    TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    ClosureRepresentation, EnumDispatch, InLayout, LambdaName, LambdaSet, Layout, LayoutCache,
+    LayoutInterner, LayoutProblem, LayoutRepr, Niche, RawFunctionLayout, TLLayoutInterner,
+    TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
