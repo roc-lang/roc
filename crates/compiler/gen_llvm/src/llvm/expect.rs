@@ -447,7 +447,12 @@ fn build_clone_struct<'a, 'ctx>(
         let structure = RocStruct::from(value);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
-            let field = structure.load_at_index(env, layout_interner, struct_layout, i as _);
+            let field = structure.load_at_index(
+                env,
+                layout_interner,
+                layout_interner.get_repr(struct_layout),
+                i as _,
+            );
 
             let new_extra = build_clone(
                 env,

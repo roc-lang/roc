@@ -337,8 +337,12 @@ fn modify_refcount_struct_help<'a, 'ctx>(
 
     for (i, field_layout) in field_layouts.iter().enumerate() {
         if layout_interner.contains_refcounted(*field_layout) {
-            let field_value =
-                wrapper_struct.load_at_index(env, layout_interner, struct_layout, i as _);
+            let field_value = wrapper_struct.load_at_index(
+                env,
+                layout_interner,
+                layout_interner.get_repr(struct_layout),
+                i as _,
+            );
 
             modify_refcount_layout_help(
                 env,

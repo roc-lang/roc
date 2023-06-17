@@ -384,14 +384,9 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
         [Layout::LIST_U8 /* any list works */, element_layout]
     };
     // TODO: have use_roc_value take LayoutRepr
-    let result_layout =
-        layout_interner.insert_direct_no_semantic(LayoutRepr::Struct(env.arena.alloc(fields)));
-    let result_struct_type = basic_type_from_layout(
-        env,
-        layout_interner,
-        layout_interner.get_repr(result_layout),
-    )
-    .into_struct_type();
+    let result_layout = LayoutRepr::Struct(env.arena.alloc(fields));
+    let result_struct_type =
+        basic_type_from_layout(env, layout_interner, result_layout).into_struct_type();
 
     let result = result_struct_type.const_zero();
 
@@ -410,7 +405,7 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     use_roc_value(
         env,
         layout_interner,
-        layout_interner.get_repr(result_layout),
+        result_layout,
         result.into_struct_value().into(),
         "use_replace_result_record",
     )

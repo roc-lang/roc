@@ -1291,7 +1291,12 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let (value, layout) = scope.load_symbol_and_layout(structure);
             let struct_val = RocStruct::from(value);
 
-            struct_val.load_at_index(env, layout_interner, layout, *index)
+            struct_val.load_at_index(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                *index,
+            )
         }
 
         EmptyArray => empty_polymorphic_list(env),

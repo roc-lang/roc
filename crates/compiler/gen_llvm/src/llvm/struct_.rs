@@ -78,17 +78,16 @@ impl<'ctx> RocStruct<'ctx> {
         &self,
         env: &Env<'a, 'ctx, '_>,
         layout_interner: &STLayoutInterner<'a>,
-        struct_layout: InLayout<'a>,
+        struct_layout: LayoutRepr<'a>,
         index: u64,
     ) -> BasicValueEnum<'ctx> {
-        let layout =
-            if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get_repr(struct_layout) {
-                lambda_set.runtime_representation()
-            } else {
-                struct_layout
-            };
+        let layout = if let LayoutRepr::LambdaSet(lambda_set) = struct_layout {
+            layout_interner.get_repr(lambda_set.runtime_representation())
+        } else {
+            struct_layout
+        };
 
-        match (self, layout_interner.get_repr(layout)) {
+        match (self, layout) {
             (Self::ByValue(argument), LayoutRepr::Struct(field_layouts)) => {
                 index_struct_value(env, layout_interner, field_layouts, *argument, index)
             }
