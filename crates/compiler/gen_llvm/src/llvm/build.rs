@@ -2404,14 +2404,14 @@ pub fn load_roc_value<'a, 'ctx>(
 pub fn use_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     source: BasicValueEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout_interner.is_passed_by_reference(layout) {
+    if layout.is_passed_by_reference(layout_interner) {
         let alloca = entry_block_alloca_zerofill(
             env,
-            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout)),
+            basic_type_from_layout(env, layout_interner, layout),
             name,
         );
 

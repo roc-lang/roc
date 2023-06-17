@@ -1980,7 +1980,7 @@ fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
     use_roc_value(
         env,
         layout_interner,
-        return_layout,
+        layout_interner.get_repr(return_layout),
         casted,
         "use_dec_with_overflow",
     )

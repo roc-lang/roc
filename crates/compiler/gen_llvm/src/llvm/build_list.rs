@@ -410,7 +410,7 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     use_roc_value(
         env,
         layout_interner,
-        result_layout,
+        layout_interner.get_repr(result_layout),
         result.into_struct_value().into(),
         "use_replace_result_record",
     )

@@ -127,7 +127,7 @@ fn index_struct_value<'a, 'ctx>(
     use_roc_value(
         env,
         layout_interner,
-        field_layout,
+        layout_interner.get_repr(field_layout),
         field_value,
         "struct_field",
     )
