@@ -1107,6 +1107,18 @@ impl<'a> UnionLayout<'a> {
             | UnionLayout::NullableUnwrapped { .. } => interner.target_info().ptr_width() as u32,
         }
     }
+
+    pub fn is_recursive(&self) -> bool {
+        use UnionLayout::*;
+
+        match self {
+            NonRecursive(_) => false,
+            Recursive(_)
+            | NonNullableUnwrapped(_)
+            | NullableWrapped { .. }
+            | NullableUnwrapped { .. } => true,
+        }
+    }
 }
 
 pub enum Discriminant {

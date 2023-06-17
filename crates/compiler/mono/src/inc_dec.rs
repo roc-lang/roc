@@ -10,6 +10,7 @@ use std::{collections::HashMap, hash::BuildHasherDefault};
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
@@ -543,15 +544,16 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         .iter()
                         .filter(|(_, o)| o.is_owned())
                     {
-                        let error = "All symbols defined in the current environment should be in the environment of the branches.";
                         let consumed =
                             branch_envs
                                 .iter()
                                 .any(|branch_env: &&RefcountEnvironment<'v>| {
-                                    matches!(
-                                        branch_env.get_symbol_ownership(symbol).expect(error),
-                                        Ownership::Borrowed
-                                    )
+                                    match branch_env.get_symbol_ownership(symbol) {
+                                        None => internal_error!(
+                                            "symbol {symbol:?} in the current env should be in the branch's env"
+                                        ),
+                                        Some(ownership) => matches!(ownership, Ownership::Borrowed),
+                                    }
                                 });
                         if consumed {
                             // If the symbol is currently owned, and not in a some branches, it must be consumed in all branches

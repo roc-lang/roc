@@ -404,7 +404,10 @@ impl<'a> Proc<'a> {
         String::from_utf8(w).unwrap()
     }
 
-    fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
+    fn make_tail_recursive<I>(&mut self, interner: &mut I, env: &mut Env<'a, '_>)
+    where
+        I: LayoutInterner<'a>,
+    {
         let mut args = Vec::with_capacity_in(self.args.len(), env.arena);
         let mut proc_args = Vec::with_capacity_in(self.args.len(), env.arena);
 
@@ -416,18 +419,22 @@ impl<'a> Proc<'a> {
 
         use self::SelfRecursive::*;
         if let SelfRecursive(id) = self.is_self_recursive {
-            let transformed = crate::tail_recursion::make_tail_recursive(
-                env.arena,
-                id,
-                self.name,
-                self.body.clone(),
-                args.into_bump_slice(),
-                self.ret_layout,
-            );
+            if crate::tail_recursion::is_trmc_candidate(interner, self) {
+                *self = crate::tail_recursion::TrmcEnv::init(env, interner, self);
+            } else {
+                let transformed = crate::tail_recursion::make_tail_recursive(
+                    env.arena,
+                    id,
+                    self.name,
+                    self.body.clone(),
+                    args.into_bump_slice(),
+                    self.ret_layout,
+                );
 
-            if let Some(with_tco) = transformed {
-                self.body = with_tco;
-                self.args = proc_args.into_bump_slice();
+                if let Some(with_tco) = transformed {
+                    self.body = with_tco;
+                    self.args = proc_args.into_bump_slice();
+                }
             }
         }
     }
@@ -1018,13 +1025,14 @@ impl<'a> Procs<'a> {
 
     pub fn get_specialized_procs_without_rc(
         self,
+        layout_cache: &mut LayoutCache<'a>,
         env: &mut Env<'a, '_>,
     ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
         let mut specialized_procs =
             MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
-            proc.make_tail_recursive(env);
+            proc.make_tail_recursive(&mut layout_cache.interner, env);
 
             let key = (symbol, layout);
             specialized_procs.insert(key, proc);
@@ -1393,6 +1401,11 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
+        Symbol::new(self.home, ident_id)
+    }
+
+    pub fn named_unique_symbol(&mut self, name: &str) -> Symbol {
+        let ident_id = self.ident_ids.add_str(name);
         Symbol::new(self.home, ident_id)
     }
 

@@ -3146,3 +3146,23 @@ fn dbg_str_followed_by_number() {
         "#
     )
 }
+
+#[mono_test]
+fn linked_list_map() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        map : (a -> b), LinkedList a -> LinkedList b
+        map = \f, list ->
+            when list is
+                Nil -> Nil
+                Cons x xs -> Cons (f x) (map f xs)
+
+        main : LinkedList I64
+        main = map (\x -> x + 1i64) (Cons 42 Nil)
+        "#
+    )
+}
