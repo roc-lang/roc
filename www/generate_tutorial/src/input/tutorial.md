@@ -699,7 +699,7 @@ List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
 
 Every element in a Roc list has to share the same type. For example, we can have a list of strings like `["Sam", "Lee", "Ari"]`, or a list of numbers like `[1, 2, 3, 4, 5]` but we can't have a list which mixes strings and numbers like `["Sam", 1, "Lee", 2, 3]`, that would be a compile-time error.
 
-Ensuring that all elements in a list share a type eliminates entire categories of problems. For example, it means that whenever you use `List.append` to add elements to a list, as long as you don't have any compile-time errors, you won't get any runtime errors from calling `List.map` afterwards, no matter what you appended to the list! More generally, it's safe to assume that unless you run out of memory, `List.map` will run successfully unless you got a compile-time error about an incompatibility (like `Num.negate` on a list of strings).
+Ensuring that all elements in a list share a type eliminates entire categories of problems. For example, it means that whenever you use `List.append` to add elements to a list, as long as you don't have any compile-time errors, you won't get any runtime errors from calling `List.map` afterwards, no matter what you appended to the list! More generally, it's safe to assume that unless you run out of memory, `List.map` will run successfully unless you got a compile-time error about an incompatibility (like `Num.neg` on a list of strings).
 
 ### [Lists that hold elements of different types](#lists-that-hold-elements-of-different-types) {#lists-that-hold-elements-of-different-types}
 
@@ -1968,8 +1968,6 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a // b`                      | `Num.divTrunc a b` |
 | `a ^ b`                       |   `Num.pow a b`    |
 | `a % b`                       |   `Num.rem a b`    |
-| `a >> b`                      |   `Num.shr a b`    |
-| `a << b`                      |   `Num.shl a b`    |
 | `-a`                          |    `Num.neg a`     |
 | `-f x y`                      | `Num.neg (f x y)`  |
 | `a == b`                      |  `Bool.isEq a b`   |
