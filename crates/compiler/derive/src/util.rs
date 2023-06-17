@@ -1,6 +1,6 @@
 use roc_can::{
     abilities::SpecializationLambdaSets,
-    expr::{Expr, WhenBranch, WhenBranchPattern},
+    expr::{Expr, Refinements, WhenBranch, WhenBranchPattern},
     module::ExposedByModule,
     pattern::Pattern,
 };
@@ -236,6 +236,7 @@ pub(crate) fn ok_to_ok_branch(
         }),
         guard: None,
         redundant: RedundantMark::known_non_redundant(),
+        refinements: Refinements::default(),
     }
 }
 

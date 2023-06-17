@@ -16,6 +16,7 @@ use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::Refinements;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
@@ -34,6 +35,7 @@ use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Obligated, SpecializationLsetCollector,
     Unified::*,
 };
+use roc_unify::Env as UEnv;
 
 mod scope;
 pub use scope::Scope;
@@ -313,21 +315,21 @@ fn solve(
                     );
 
                     let unexpanded_var = loc_var.value;
-                    let unexpanded_descriptor = subs.get(unexpanded_var);
+                    let unexpanded_descriptor = env.subs.get(unexpanded_var);
                     let expanded_var = if let Some(refinements2) = &refinements {
                         if let Some(&(unrefined_var, refined_var)) = refinements2.get(*symbol) {
                             if matches!(unexpanded_descriptor.content, Content::Structure(..)) {
                                 unify(
-                                    &mut UEnv::new(subs),
+                                    &mut UEnv::new(env.subs, None),
                                     unexpanded_var,
                                     unrefined_var,
-                                    Mode::EQ,
+                                    UnificationMode::EQ,
                                     Polarity::Neg, // TODO: polarity
                                 );
-                                debug_assert!(subs
+                                debug_assert!(env.subs
                                     .equivalent_without_compacting(unexpanded_var, unrefined_var));
-                                subs.set(refined_var, unexpanded_descriptor.clone());
-                                open_tag_union(subs, pools, refined_var);
+                                env.subs.set(refined_var, unexpanded_descriptor.clone());
+                                open_tag_union(env, refined_var);
                                 refined_var
                             } else {
                                 unexpanded_var
@@ -469,21 +471,21 @@ fn solve(
                     );
 
                     let unexpanded_var = loc_var.value;
-                    let unexpanded_descriptor = subs.get(unexpanded_var);
+                    let unexpanded_descriptor = env.subs.get(unexpanded_var);
                     let expanded_var = if let Some(refinements2) = &refinements {
                         if let Some(&(unrefined_var, refined_var)) = refinements2.get(*symbol) {
                             if matches!(unexpanded_descriptor.content, Content::Structure(..)) {
                                 unify(
-                                    &mut UEnv::new(subs),
+                                    &mut UEnv::new(env.subs, None),
                                     unexpanded_var,
                                     unrefined_var,
-                                    Mode::EQ,
+                                    UnificationMode::EQ,
                                     Polarity::Neg, // TODO: polarity
                                 );
-                                debug_assert!(subs
+                                debug_assert!(env.subs
                                     .equivalent_without_compacting(unexpanded_var, unrefined_var));
-                                subs.set(refined_var, unexpanded_descriptor.clone());
-                                open_tag_union(subs, pools, refined_var);
+                                env.subs.set(refined_var, unexpanded_descriptor.clone());
+                                open_tag_union(env, refined_var);
                                 refined_var
                             } else {
                                 unexpanded_var

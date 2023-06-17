@@ -541,6 +541,7 @@ fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variabl
                 value: Loc::at_zero(branch_body),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),
+                refinements: Refinements::default(),
             };
 
             // when Decode.decodeWith bytes Decode.decoder fmt is
@@ -694,6 +695,7 @@ fn state_record_update(
                     value: Loc::at_zero(ok_branch_expr),
                     guard: None,
                     redundant: RedundantMark::known_non_redundant(),
+                    refinements: Refinements::default(),
                 },
                 // Err err -> Err err
                 WhenBranch {
@@ -720,6 +722,7 @@ fn state_record_update(
                     }),
                     guard: None,
                     redundant: RedundantMark::known_non_redundant(),
+                    refinements: Refinements::default(),
                 },
             ];
 
@@ -1069,6 +1072,7 @@ fn attempt_empty_decode_if_missing(
             }),
             guard: None,
             redundant: RedundantMark::known_non_redundant(),
+            refinements: Refinements::default(),
         };
 
         // when Decode.decodeWith bytes Decode.decoder fmt is
@@ -1127,6 +1131,7 @@ fn attempt_empty_decode_if_missing(
         value: Loc::at_zero(decode_when),
         guard: None,
         redundant: RedundantMark::known_non_redundant(),
+        refinements: Refinements::default(),
     };
 
     let expr = Expr::When {
