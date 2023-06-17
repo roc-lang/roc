@@ -170,40 +170,40 @@ procedure List.93 (List.436, List.437, List.438):
     ret List.592;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.290 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.290;
+    let Num.293 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.293;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.340 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.340;
+    let Num.343 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.343;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.302 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.302;
+    let Num.305 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.305;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.339 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.339;
+    let Num.342 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.342;
 
 procedure Num.23 (#Attr.2, #Attr.3):
-    let Num.308 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
-    ret Num.308;
+    let Num.311 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
+    ret Num.311;
 
 procedure Num.25 (#Attr.2, #Attr.3):
-    let Num.314 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
-    ret Num.314;
+    let Num.317 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
+    ret Num.317;
 
 procedure Num.71 (#Attr.2, #Attr.3):
-    let Num.287 : U8 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
-    ret Num.287;
+    let Num.290 : U8 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Num.72 (#Attr.2, #Attr.3):
-    let Num.288 : U8 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
-    ret Num.288;
+    let Num.291 : U8 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.336 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.336;
+    let Num.339 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.339;
 
 procedure Str.12 (#Attr.2):
     let Str.307 : List U8 = lowlevel StrToUtf8 #Attr.2;
