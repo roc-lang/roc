@@ -3,7 +3,7 @@
 use std::iter::once;
 
 use roc_can::expr::{
-    AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch, WhenBranchPattern,
+    AnnotatedMark, ClosureData, Expr, Field, Recursive, Refinements, WhenBranch, WhenBranchPattern,
 };
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
@@ -876,6 +876,7 @@ fn to_inspector_tag_union(
                 value: Loc::at_zero(inspect_tag_call),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),
+                refinements: Refinements::default(),
             }
         })
         .collect::<Vec<_>>();
