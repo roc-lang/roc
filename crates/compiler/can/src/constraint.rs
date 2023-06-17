@@ -484,6 +484,42 @@ impl Constraints {
         Constraint::Let(let_index, Slice::default())
     }
 
+    #[inline(always)]
+    pub fn let_and_expand_type_constraint<I1, I2, I3>(
+        &mut self,
+        rigid_vars: I1,
+        flex_vars: I2,
+        def_types: I3,
+        defs_constraint: Constraint,
+        ret_constraint: Constraint,
+        generalizable: Generalizable,
+    ) -> Constraint
+    where
+        I1: IntoIterator<Item = Variable>,
+        I2: IntoIterator<Item = Variable>,
+        I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
+        I3::IntoIter: ExactSizeIterator,
+    {
+        // defs and ret constraint are stored consequtively, so we only need to store one index
+        let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
+
+        self.constraints.push(defs_constraint);
+        self.constraints.push(ret_constraint);
+
+        let let_constraint = LetConstraint {
+            rigid_vars: self.variable_slice(rigid_vars),
+            flex_vars: self.variable_slice(flex_vars),
+            def_types: self.def_types_slice(def_types),
+            defs_and_ret_constraint,
+            generalizable,
+        };
+
+        let let_index = Index::new(self.let_constraints.len() as _);
+        self.let_constraints.push(let_constraint);
+
+        Constraint::LetAndExpandType(let_index, Slice::default())
+    }
+
     /// A variant of `Let` used specifically for imports. When importing types from another module,
     /// we use a StorageSubs to store the data, and copy over the relevant
     /// variables/content/flattype/tagname etc.
@@ -574,7 +610,8 @@ impl Constraints {
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::SaveTheEnvironment => true,
-            Constraint::Let(index, _) => {
+            Constraint::Let(index, _)
+            | Constraint::LetAndExpandType(index, _) => {
                 let let_constraint = &self.let_constraints[index.index()];
 
                 let offset = let_constraint.defs_and_ret_constraint.index();
@@ -766,6 +803,7 @@ pub enum Constraint {
     /// by copying from another module, but have to make sure that any variables we use to store
     /// these contents are added to `Pool` at the correct rank
     Let(Index<LetConstraint>, Slice<Variable>),
+    LetAndExpandType(Index<LetConstraint>, Slice<Variable>),
     And(Slice<Constraint>),
     /// Presence constraints
     IsOpenType(TypeOrVar), // Theory; always applied to a variable? if yes the use that
@@ -847,6 +885,7 @@ impl std::fmt::Debug for Constraint {
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
             Self::Let(arg0, arg1) => f.debug_tuple("Let").field(arg0).field(arg1).finish(),
+            Self::LetAndExpandType(arg0, arg1) => f.debug_tuple("LetAndExpandType").field(arg0).field(arg1).finish(),
             Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
             Self::IsOpenType(arg0) => f.debug_tuple("IsOpenType").field(arg0).finish(),
             Self::IncludesTag(arg0) => f.debug_tuple("IncludesTag").field(arg0).finish(),
