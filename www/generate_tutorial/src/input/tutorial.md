@@ -1969,13 +1969,11 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a ^ b`                       |   `Num.pow a b`    |
 | `a % b`                       |   `Num.rem a b`    |
 | `-a`                          |    `Num.neg a`     |
-| `-f x y`                      | `Num.neg (f x y)`  |
 | `a == b`                      |  `Bool.isEq a b`   |
 | `a != b`                      | `Bool.isNotEq a b` |
 | `a && b`                      |   `Bool.and a b`   |
 | <code>a \|\| b</code>         | `Bool.or a b`      |
 | `!a`                          |    `Bool.not a`    |
-| `!f x y`                      | `Bool.not (f x y)` |
 | <code>a \|> b</code>          |       `b a`        |
 | <code>a b c \|> f x y</code>  | `f (a b c) x y`    |
 
