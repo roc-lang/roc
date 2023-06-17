@@ -45,7 +45,7 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for RocStruct<'ctx> {
 impl<'ctx> RocStruct<'ctx> {
     pub fn build<'a>(
         env: &Env<'a, 'ctx, '_>,
-        layout_interner: &mut STLayoutInterner<'a>,
+        layout_interner: &STLayoutInterner<'a>,
         layout_repr: LayoutRepr<'a>,
         scope: &Scope<'a, 'ctx>,
         sorted_fields: &[Symbol],
@@ -187,7 +187,7 @@ struct BuildStruct<'ctx> {
 
 fn build_struct_helper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     sorted_fields: &[Symbol],
 ) -> BuildStruct<'ctx> {

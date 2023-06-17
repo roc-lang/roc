@@ -176,7 +176,7 @@ pub(crate) fn notify_parent_dbg(env: &Env, shared_memory: &SharedMemoryPointer) 
 //
 pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     shared_memory: &SharedMemoryPointer<'ctx>,
@@ -288,7 +288,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx>(
 
 fn build_clone<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
     cursors: Cursors<'ctx>,
@@ -425,7 +425,7 @@ fn build_clone<'a, 'ctx>(
 
 fn build_clone_struct<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
     cursors: Cursors<'ctx>,
@@ -469,7 +469,7 @@ fn build_clone_struct<'a, 'ctx>(
 
 fn build_clone_tag<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
     cursors: Cursors<'ctx>,
@@ -547,7 +547,7 @@ fn build_clone_tag<'a, 'ctx>(
 
 fn load_tag_data<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
     tag_value: PointerValue<'ctx>,
     tag_type: BasicTypeEnum<'ctx>,
@@ -575,7 +575,7 @@ fn load_tag_data<'a, 'ctx>(
 
 fn clone_tag_payload_and_id<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
     cursors: Cursors<'ctx>,
@@ -625,7 +625,7 @@ fn clone_tag_payload_and_id<'a, 'ctx>(
 
 fn build_clone_tag_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: UnionLayout<'a>,
     fn_val: FunctionValue<'ctx>,
@@ -1007,7 +1007,7 @@ fn build_copy<'ctx>(
 
 fn build_clone_builtin<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
     cursors: Cursors<'ctx>,
@@ -1094,7 +1094,7 @@ fn build_clone_builtin<'a, 'ctx>(
                 );
                 bd.build_store(rest_offset, rest_start_offset);
 
-                let body = |layout_interner: &mut STLayoutInterner<'a>, index, element| {
+                let body = |layout_interner: &STLayoutInterner<'a>, index, element| {
                     let current_offset =
                         bd.build_int_mul(element_stack_size, index, "current_offset");
                     let current_offset =

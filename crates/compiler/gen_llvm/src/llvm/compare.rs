@@ -21,7 +21,7 @@ use super::struct_;
 
 pub fn generic_eq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
@@ -41,7 +41,7 @@ pub fn generic_eq<'a, 'ctx>(
 
 pub fn generic_neq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
@@ -61,7 +61,7 @@ pub fn generic_neq<'a, 'ctx>(
 
 fn build_eq_builtin<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
@@ -139,7 +139,7 @@ fn build_eq_builtin<'a, 'ctx>(
 
 fn build_eq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
@@ -236,7 +236,7 @@ fn build_eq<'a, 'ctx>(
 
 fn build_neq_builtin<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
@@ -326,7 +326,7 @@ fn build_neq_builtin<'a, 'ctx>(
 
 fn build_neq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
@@ -411,7 +411,7 @@ fn build_neq<'a, 'ctx>(
 
 fn build_list_eq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     list_layout: LayoutRepr<'a>,
     element_layout: LayoutRepr<'a>,
@@ -468,7 +468,7 @@ fn build_list_eq<'a, 'ctx>(
 
 fn build_list_eq_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     element_layout: LayoutRepr<'a>,
@@ -626,7 +626,7 @@ fn build_list_eq_help<'a, 'ctx>(
 
 fn build_struct_eq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     struct_layout: LayoutRepr<'a>,
     field_layouts: &'a [InLayout<'a>],
@@ -679,7 +679,7 @@ fn build_struct_eq<'a, 'ctx>(
 
 fn build_struct_eq_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     struct_layout: LayoutRepr<'a>,
@@ -819,7 +819,7 @@ fn build_struct_eq_help<'a, 'ctx>(
 
 fn build_tag_eq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     tag_layout: LayoutRepr<'a>,
     union_layout: &UnionLayout<'a>,
@@ -871,7 +871,7 @@ fn build_tag_eq<'a, 'ctx>(
 
 fn build_tag_eq_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     union_layout: &UnionLayout<'a>,
@@ -1274,7 +1274,7 @@ fn build_tag_eq_help<'a, 'ctx>(
 
 fn eq_ptr_to_struct<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     struct_layout: LayoutRepr<'a>,
     field_layouts: &'a [InLayout<'a>],
@@ -1328,7 +1328,7 @@ fn eq_ptr_to_struct<'a, 'ctx>(
 
 fn build_box_eq<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     box_layout: LayoutRepr<'a>,
     inner_layout: InLayout<'a>,
@@ -1380,7 +1380,7 @@ fn build_box_eq<'a, 'ctx>(
 
 fn build_box_eq_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
     inner_layout: InLayout<'a>,

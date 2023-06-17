@@ -61,7 +61,7 @@ pub(crate) fn pass_update_mode<'ctx>(
 
 fn pass_element_as_opaque<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     element: BasicValueEnum<'ctx>,
     layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -89,7 +89,7 @@ fn pass_element_as_opaque<'a, 'ctx>(
 
 pub(crate) fn layout_width<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     env.ptr_int()
@@ -112,7 +112,7 @@ pub(crate) fn pass_as_opaque<'ctx>(
 
 pub(crate) fn list_with_capacity<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     capacity: IntValue<'ctx>,
     element_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -131,7 +131,7 @@ pub(crate) fn list_with_capacity<'a, 'ctx>(
 
 pub(crate) fn list_get_unsafe<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     element_layout: InLayout<'a>,
     elem_index: IntValue<'ctx>,
     wrapper_struct: StructValue<'ctx>,
@@ -170,7 +170,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx>(
 /// List.reserve : List elem, Nat -> List elem
 pub(crate) fn list_reserve<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     list: BasicValueEnum<'ctx>,
     spare: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
@@ -192,7 +192,7 @@ pub(crate) fn list_reserve<'a, 'ctx>(
 /// List.releaseExcessCapacity : List elem -> List elem
 pub(crate) fn list_release_excess_capacity<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     list: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
     update_mode: UpdateMode,
@@ -212,7 +212,7 @@ pub(crate) fn list_release_excess_capacity<'a, 'ctx>(
 /// List.appendUnsafe : List elem, elem -> List elem
 pub(crate) fn list_append_unsafe<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
@@ -231,7 +231,7 @@ pub(crate) fn list_append_unsafe<'a, 'ctx>(
 /// List.prepend : List elem, elem -> List elem
 pub(crate) fn list_prepend<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
@@ -251,7 +251,7 @@ pub(crate) fn list_prepend<'a, 'ctx>(
 /// List.swap : List elem, Nat, Nat -> List elem
 pub(crate) fn list_swap<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     original_wrapper: StructValue<'ctx>,
     index_1: IntValue<'ctx>,
     index_2: IntValue<'ctx>,
@@ -275,7 +275,7 @@ pub(crate) fn list_swap<'a, 'ctx>(
 /// List.sublist : List elem, { start : Nat, len : Nat } -> List elem
 pub(crate) fn list_sublist<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
     start: IntValue<'ctx>,
@@ -300,7 +300,7 @@ pub(crate) fn list_sublist<'a, 'ctx>(
 /// List.dropAt : List elem, Nat -> List elem
 pub(crate) fn list_drop_at<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
     count: IntValue<'ctx>,
@@ -323,7 +323,7 @@ pub(crate) fn list_drop_at<'a, 'ctx>(
 /// List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
 pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     _layout_ids: &mut LayoutIds<'a>,
     list: BasicValueEnum<'ctx>,
     index: IntValue<'ctx>,
@@ -490,7 +490,7 @@ pub(crate) fn destructure<'ctx>(
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
 pub(crate) fn list_sort_with<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
     compare_wrapper: PointerValue<'ctx>,
     list: BasicValueEnum<'ctx>,
@@ -514,7 +514,7 @@ pub(crate) fn list_sort_with<'a, 'ctx>(
 /// List.map : List before, (before -> after) -> List after
 pub(crate) fn list_map<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
     list: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
@@ -538,7 +538,7 @@ pub(crate) fn list_map<'a, 'ctx>(
 
 pub(crate) fn list_map2<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
     list1: BasicValueEnum<'ctx>,
@@ -572,7 +572,7 @@ pub(crate) fn list_map2<'a, 'ctx>(
 
 pub(crate) fn list_map3<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
     list1: BasicValueEnum<'ctx>,
@@ -615,7 +615,7 @@ pub(crate) fn list_map3<'a, 'ctx>(
 
 pub(crate) fn list_map4<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
     list1: BasicValueEnum<'ctx>,
@@ -665,7 +665,7 @@ pub(crate) fn list_map4<'a, 'ctx>(
 /// List.concat : List elem, List elem -> List elem
 pub(crate) fn list_concat<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     list1: BasicValueEnum<'ctx>,
     list2: BasicValueEnum<'ctx>,
     element_layout: InLayout<'a>,
@@ -684,7 +684,7 @@ pub(crate) fn list_concat<'a, 'ctx>(
 
 pub(crate) fn incrementing_elem_loop<'a, 'r, 'ctx, 'env, LoopFn>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &'r mut STLayoutInterner<'a>,
+    layout_interner: &'r STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     element_layout: InLayout<'a>,
     ptr: PointerValue<'ctx>,
@@ -693,7 +693,7 @@ pub(crate) fn incrementing_elem_loop<'a, 'r, 'ctx, 'env, LoopFn>(
     mut loop_fn: LoopFn,
 ) -> PointerValue<'ctx>
 where
-    LoopFn: FnMut(&'r mut STLayoutInterner<'a>, IntValue<'ctx>, BasicValueEnum<'ctx>),
+    LoopFn: FnMut(&'r STLayoutInterner<'a>, IntValue<'ctx>, BasicValueEnum<'ctx>),
 {
     let builder = env.builder;
 
@@ -732,14 +732,14 @@ where
 // and index increments up from 0 to some end value
 pub(crate) fn incrementing_index_loop<'a, 'r, 'ctx, 'env, LoopFn>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &'r mut STLayoutInterner<'a>,
+    layout_interner: &'r STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     end: IntValue<'ctx>,
     index_name: &str,
     mut loop_fn: LoopFn,
 ) -> PointerValue<'ctx>
 where
-    LoopFn: FnMut(&'r mut STLayoutInterner<'a>, IntValue<'ctx>),
+    LoopFn: FnMut(&'r STLayoutInterner<'a>, IntValue<'ctx>),
 {
     let ctx = env.context;
     let builder = env.builder;
@@ -821,7 +821,7 @@ pub(crate) fn load_list_ptr<'ctx>(
 
 pub(crate) fn allocate_list<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     elem_layout: InLayout<'a>,
     number_of_elements: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {

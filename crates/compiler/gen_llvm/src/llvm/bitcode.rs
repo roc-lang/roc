@@ -98,7 +98,7 @@ fn call_bitcode_fn_help<'ctx>(
 
 pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     bitcode_return_type: StructType<'ctx>,
     args: &[BasicValueEnum<'ctx>],
     return_layout: InLayout<'a>,
@@ -172,7 +172,7 @@ const ARGUMENT_SYMBOLS: [Symbol; 8] = [
 
 pub(crate) fn build_transform_caller<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
     argument_layouts: &[InLayout<'a>],
@@ -199,7 +199,7 @@ pub(crate) fn build_transform_caller<'a, 'ctx>(
 
 fn build_transform_caller_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
     argument_layouts: &[InLayout<'a>],
@@ -336,7 +336,7 @@ enum Mode {
 /// a function that accepts two arguments: the value to increment, and an amount to increment by
 pub fn build_inc_n_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
@@ -346,7 +346,7 @@ pub fn build_inc_n_wrapper<'a, 'ctx>(
 /// a function that accepts two arguments: the value to increment; increments by 1
 pub fn build_inc_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
@@ -355,7 +355,7 @@ pub fn build_inc_wrapper<'a, 'ctx>(
 
 pub fn build_dec_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
@@ -364,7 +364,7 @@ pub fn build_dec_wrapper<'a, 'ctx>(
 
 fn build_rc_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
     rc_operation: Mode,
@@ -468,7 +468,7 @@ fn build_rc_wrapper<'a, 'ctx>(
 
 pub fn build_eq_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
@@ -564,7 +564,7 @@ pub fn build_eq_wrapper<'a, 'ctx>(
 
 pub fn build_compare_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,

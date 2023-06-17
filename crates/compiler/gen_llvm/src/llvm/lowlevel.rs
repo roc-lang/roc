@@ -63,7 +63,7 @@ use super::{
 
 pub(crate) fn run_low_level<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
@@ -1590,7 +1590,7 @@ fn build_int_binop<'ctx>(
 
 pub fn build_num_binop<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     lhs_arg: BasicValueEnum<'ctx>,
     lhs_layout: InLayout<'a>,
@@ -1976,7 +1976,7 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
 /// between the two representations, so always cast to the Roc representation.
 fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     val: StructValue<'ctx>,
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -1997,7 +1997,7 @@ fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
 
 fn build_dec_binop<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
@@ -2084,7 +2084,7 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
 
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     arg: IntValue<'ctx>,
     arg_width: IntWidth,
@@ -2504,7 +2504,7 @@ fn build_float_unary_op<'a, 'ctx>(
 
 pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     return_layout: InLayout<'a>,
