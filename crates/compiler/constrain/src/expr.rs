@@ -1111,7 +1111,8 @@ pub fn constrain_expr(
             // need be before solving the bodies.
             let pattern_constraints = constraints.and_constraint(pattern_cons);
             let body_constraints = constraints.and_constraint(body_cons);
-            let when_body_con = constraints.let_constraint(
+            // let body_constraints = constraints.and_constraint([expansion_constraints, body_constraints]);
+            let when_body_con = constraints.let_and_expand_type_constraint(
                 [],
                 pattern_vars,
                 pattern_headers,

@@ -2742,6 +2742,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 unify_tag_ext(env, pool, UnifySides::Left(ext1, extra_tags_in_2), ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
+                // dbg!(&ext_outcome);
                 return ext_outcome;
             }
 
@@ -2756,6 +2757,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 close_uninhabited_extended_union(env, ctx.first);
             }
 
+            // dbg!(&shared_tags_outcome);
             shared_tags_outcome
         }
     } else if separate.only_in_2.is_empty() {
