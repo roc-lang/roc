@@ -626,9 +626,9 @@ countIf = \list, predicate ->
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
 ## ```
 ## expect List.keepOks ["1", "Two", "23", "Bird"] Str.toI32 == [1, 23]
-##                                                                        
+##
 ## expect List.keepOks [["a", "b"], [], ["c", "d", "e"], [] ] List.first == ["a", "c"]
-## 
+##
 ## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok str
 ## expect List.keepOks ["", "a", "bc", "", "d", "ef", ""] fn == ["a", "bc", "d", "ef"]
 ## ```
