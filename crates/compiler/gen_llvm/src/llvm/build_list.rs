@@ -70,7 +70,13 @@ fn pass_element_as_opaque<'a, 'ctx>(
     let element_ptr = env
         .builder
         .build_alloca(element_type, "element_to_pass_as_opaque");
-    store_roc_value(env, layout_interner, layout, element_ptr, element);
+    store_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(layout),
+        element_ptr,
+        element,
+    );
 
     env.builder
         .build_pointer_cast(

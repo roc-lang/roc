@@ -702,7 +702,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
         store_roc_value(
             env,
             layout_interner,
-            top_level.result,
+            layout_interner.get_repr(top_level.result),
             ptr,
             roc_main_fn_result,
         );
@@ -1007,7 +1007,13 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
             .new_build_struct_gep(struct_type, struct_ptr, index as u32, "field_struct_gep")
             .unwrap();
 
-        store_roc_value(env, layout_interner, field_layout, field_ptr, field_value);
+        store_roc_value(
+            env,
+            layout_interner,
+            layout_interner.get_repr(field_layout),
+            field_ptr,
+            field_value,
+        );
     }
 }
 
@@ -1100,7 +1106,13 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 layout_interner.alignment_bytes(layout),
             );
 
-            store_roc_value(env, layout_interner, layout, allocation, value);
+            store_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                allocation,
+                value,
+            );
 
             allocation.into()
         }
@@ -2350,7 +2362,13 @@ fn list_literal<'a, 'ctx>(
                 builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
             };
 
-            store_roc_value(env, layout_interner, element_layout, elem_ptr, val);
+            store_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(element_layout),
+                elem_ptr,
+                val,
+            );
         }
 
         super::build_list::store_list(env, ptr, list_length_intval).into()
@@ -2369,7 +2387,13 @@ pub fn load_roc_value<'a, 'ctx>(
     if layout_interner.is_passed_by_reference(layout) {
         let alloca = entry_block_alloca_zerofill(env, basic_type, name);
 
-        store_roc_value(env, layout_interner, layout, alloca, source.into());
+        store_roc_value(
+            env,
+            layout_interner,
+            layout_interner.get_repr(layout),
+            alloca,
+            source.into(),
+        );
 
         alloca.into()
     } else {
@@ -2413,23 +2437,29 @@ pub fn store_roc_value_opaque<'a, 'ctx>(
         env.builder
             .build_pointer_cast(opaque_destination, target_type, "store_roc_value_opaque");
 
-    store_roc_value(env, layout_interner, layout, destination, value)
+    store_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(layout),
+        destination,
+        value,
+    )
 }
 
 pub fn store_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) {
-    if layout_interner.is_passed_by_reference(layout) {
+    if layout.is_passed_by_reference(layout_interner) {
         debug_assert!(value.is_pointer_value());
 
         build_memcpy(
             env,
             layout_interner,
-            layout_interner.get_repr(layout),
+            layout,
             destination,
             value.into_pointer_value(),
         );
@@ -3705,7 +3735,13 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         .unwrap()
         .into_pointer_value();
 
-    store_roc_value(env, layout_interner, return_layout, output_arg, call_result);
+    store_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+        output_arg,
+        call_result,
+    );
     builder.build_return(None);
 
     c_function
@@ -3845,7 +3881,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     store_roc_value(
         env,
         layout_interner,
-        call_result_layout,
+        layout_interner.get_repr(call_result_layout),
         output_arg,
         call_result,
     );
@@ -5622,7 +5658,7 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
     store_roc_value(
         env,
         layout_interner,
-        lambda_set.runtime_representation(),
+        layout_interner.get_repr(lambda_set.runtime_representation()),
         closure_data_ptr,
         closure_data,
     );

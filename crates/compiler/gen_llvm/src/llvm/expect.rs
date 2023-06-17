@@ -337,7 +337,13 @@ fn build_clone<'a, 'ctx>(
                     .builder
                     .build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
 
-                store_roc_value(env, layout_interner, layout, ptr, value);
+                store_roc_value(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(layout),
+                    ptr,
+                    value,
+                );
 
                 cursors.extra_offset
             } else {
