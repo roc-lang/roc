@@ -1304,8 +1304,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 .into()
         }
 
-        PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
-        | RefCountDecDataPtr => {
+        PtrStore | PtrLoad | PtrToZeroed | RefCountIncRcPtr | RefCountDecRcPtr
+        | RefCountIncDataPtr | RefCountDecDataPtr => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
 

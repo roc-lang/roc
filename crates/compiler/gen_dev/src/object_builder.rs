@@ -485,7 +485,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
 
     let box_write = Call {
         call_type: roc_mono::ir::CallType::LowLevel {
-            op: roc_module::low_level::LowLevel::PtrWrite,
+            op: roc_module::low_level::LowLevel::PtrStore,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([arg_generic, s1]),

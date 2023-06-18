@@ -1960,7 +1960,9 @@ impl<'a> LowLevelCall<'a> {
                 backend.storage.load_symbols(code_builder, self.arguments);
             }
 
-            PtrWrite => todo!("{:?}", self.lowlevel),
+            PtrStore => todo!("{:?}", self.lowlevel),
+            PtrLoad => todo!("{:?}", self.lowlevel),
+            PtrToZeroed => todo!("{:?}", self.lowlevel),
 
             Hash => todo!("{:?}", self.lowlevel),
 

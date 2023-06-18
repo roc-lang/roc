@@ -726,7 +726,7 @@ impl<'a> CallerProc<'a> {
 
         let ptr_write = Expr::Call(Call {
             call_type: CallType::LowLevel {
-                op: LowLevel::PtrWrite,
+                op: LowLevel::PtrStore,
                 update_mode: UpdateModeId::BACKEND_DUMMY,
             },
             arguments: arena.alloc([Symbol::ARG_3, call_result]),
