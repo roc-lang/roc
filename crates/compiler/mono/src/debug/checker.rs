@@ -429,6 +429,15 @@ impl<'a, 'r> Ctx<'a, 'r> {
             } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
                 ctx.check_union_at_index(structure, layout, union_layout, tag_id, index)
             }),
+            &Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
+                // TODO: I suspect this will fail because the output layout has an extra Box layer?
+                ctx.check_union_at_index(structure, layout, union_layout, tag_id, index)
+            }),
             Expr::Array { elem_layout, elems } => {
                 for elem in elems.iter() {
                     match elem {

@@ -163,6 +163,9 @@ impl<'a> LastSeenMap<'a> {
                     Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
+                    Expr::UnionFieldPtrAtIndex { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
                     Expr::Array { elems, .. } => {
                         for elem in *elems {
                             if let ListLiteralElement::Symbol(sym) = elem {
@@ -793,6 +796,14 @@ trait Backend<'a> {
                 index,
             } => {
                 self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
+            }
+            Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => {
+                todo!();
             }
             Expr::GetTagId {
                 structure,
@@ -1581,13 +1592,17 @@ trait Backend<'a> {
 
                 self.build_ptr_cast(sym, &args[0])
             }
-            LowLevel::PtrWrite => {
+            LowLevel::PtrStore => {
                 let element_layout = match self.interner().get_repr(*ret_layout) {
                     LayoutRepr::Boxed(boxed) => boxed,
                     _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 
                 self.build_ptr_write(*sym, args[0], args[1], element_layout);
+            }
+            LowLevel::PtrLoad => {
+                //
+                todo!()
             }
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,

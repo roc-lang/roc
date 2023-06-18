@@ -1304,8 +1304,28 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 .into()
         }
 
-        PtrStore | PtrLoad | PtrToZeroed | RefCountIncRcPtr | RefCountDecRcPtr
-        | RefCountIncDataPtr | RefCountDecDataPtr => {
+        PtrStore => {
+            arguments!(ptr, value);
+
+            env.builder.build_store(ptr.into_pointer_value(), value);
+
+            // ptr
+            env.context.struct_type(&[], false).const_zero().into()
+        }
+
+        PtrLoad => {
+            arguments!(ptr);
+
+            let ret_repr = layout_interner.get_repr(layout);
+            let element_type = basic_type_from_layout(env, layout_interner, ret_repr);
+
+            env.builder
+                .new_build_load(element_type, ptr.into_pointer_value(), "ptr_load")
+        }
+
+        PtrToZeroed => todo!(),
+
+        RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr | RefCountDecDataPtr => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
 

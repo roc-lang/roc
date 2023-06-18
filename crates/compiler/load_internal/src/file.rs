@@ -16,7 +16,7 @@ use roc_can::module::{
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
-use roc_debug_flags::dbg_do;
+use roc_debug_flags::{dbg_do, ROC_PRINT_IR_AFTER_TRMC};
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
     ROC_CHECK_MONO_IR, ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION, ROC_PRINT_IR_AFTER_REFCOUNT,
@@ -3103,6 +3103,16 @@ fn update<'a>(
                     debug_check_ir!(state, arena, layout_interner, ROC_CHECK_MONO_IR);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
+
+                    roc_mono::tail_recursion::apply_trmc(
+                        arena,
+                        &mut layout_interner,
+                        module_id,
+                        ident_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_TRMC);
 
                     inc_dec::insert_inc_dec_operations(
                         arena,

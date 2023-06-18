@@ -1079,6 +1079,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
+            Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => todo!(),
+
             Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
 
             Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),

@@ -345,17 +345,16 @@ impl<'v> RefcountEnvironment<'v> {
         // A groupby or something similar would be nice here.
         let mut symbol_usage = MutMap::default();
         for symbol in symbols {
-            match {
-                self.symbols_rc_types
-                    .get(&symbol)
-                    .expect("Expected symbol to be in the map")
-            } {
+            match self.symbols_rc_types.get(&symbol) {
                 // If the symbol is reference counted, we need to increment the usage count.
-                VarRcType::ReferenceCounted => {
+                Some(VarRcType::ReferenceCounted) => {
                     *symbol_usage.entry(symbol).or_default() += 1;
                 }
                 // If the symbol is not reference counted, we don't need to do anything.
-                VarRcType::NotReferenceCounted => continue,
+                Some(VarRcType::NotReferenceCounted) => continue,
+                None => {
+                    internal_error!("symbol {symbol:?} does not have an rc type")
+                }
             }
         }
         symbol_usage
@@ -891,6 +890,7 @@ fn insert_refcount_operations_binding<'a>(
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
+        | Expr::UnionFieldPtrAtIndex { structure, .. }
         | Expr::ExprUnbox { symbol: structure } => {
             // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
             // But we do want to make sure to decrement this item if it is the last reference.
@@ -904,6 +904,7 @@ fn insert_refcount_operations_binding<'a>(
                 match expr {
                     Expr::StructAtIndex { .. }
                     | Expr::UnionAtIndex { .. }
+                    | Expr::UnionFieldPtrAtIndex { .. }
                     | Expr::ExprUnbox { .. } => insert_inc_stmt(arena, *binding, 1, new_stmt),
                     // No usage of an element of a reference counted symbol. No need to increment.
                     Expr::GetTagId { .. } => new_stmt,

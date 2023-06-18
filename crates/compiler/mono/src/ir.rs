@@ -403,41 +403,6 @@ impl<'a> Proc<'a> {
         w.push(b'\n');
         String::from_utf8(w).unwrap()
     }
-
-    fn make_tail_recursive<I>(&mut self, interner: &mut I, env: &mut Env<'a, '_>)
-    where
-        I: LayoutInterner<'a>,
-    {
-        let mut args = Vec::with_capacity_in(self.args.len(), env.arena);
-        let mut proc_args = Vec::with_capacity_in(self.args.len(), env.arena);
-
-        for (layout, symbol) in self.args {
-            let new = env.unique_symbol();
-            args.push((*layout, *symbol, new));
-            proc_args.push((*layout, new));
-        }
-
-        use self::SelfRecursive::*;
-        if let SelfRecursive(id) = self.is_self_recursive {
-            if crate::tail_recursion::is_trmc_candidate(interner, self) {
-                *self = crate::tail_recursion::TrmcEnv::init(env, interner, self);
-            } else {
-                let transformed = crate::tail_recursion::make_tail_recursive(
-                    env.arena,
-                    id,
-                    self.name,
-                    self.body.clone(),
-                    args.into_bump_slice(),
-                    self.ret_layout,
-                );
-
-                if let Some(with_tco) = transformed {
-                    self.body = with_tco;
-                    self.args = proc_args.into_bump_slice();
-                }
-            }
-        }
-    }
 }
 
 /// A host-exposed function must be specialized; it's a seed for subsequent specializations
@@ -1032,7 +997,7 @@ impl<'a> Procs<'a> {
             MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
-            proc.make_tail_recursive(&mut layout_cache.interner, env);
+            // proc.make_tail_recursive(&mut layout_cache.interner, env);
 
             let key = (symbol, layout);
             specialized_procs.insert(key, proc);
@@ -1888,6 +1853,12 @@ pub enum Expr<'a> {
         union_layout: UnionLayout<'a>,
         index: u64,
     },
+    UnionFieldPtrAtIndex {
+        structure: Symbol,
+        tag_id: TagIdIntType,
+        union_layout: UnionLayout<'a>,
+        index: u64,
+    },
 
     Array {
         elem_layout: InLayout<'a>,
@@ -2105,6 +2076,19 @@ impl<'a> Expr<'a> {
                 ..
             } => text!(alloc, "UnionAtIndex (Id {}) (Index {}) ", tag_id, index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
+
+            UnionFieldPtrAtIndex {
+                tag_id,
+                structure,
+                index,
+                ..
+            } => text!(
+                alloc,
+                "UnionFieldPtrAtIndex (Id {}) (Index {}) ",
+                tag_id,
+                index
+            )
+            .append(symbol_to_doc(alloc, *structure, pretty)),
         }
     }
 
@@ -7671,6 +7655,21 @@ fn substitute_in_expr<'a>(
             union_layout,
         } => match substitute(subs, *structure) {
             Some(structure) => Some(UnionAtIndex {
+                structure,
+                tag_id: *tag_id,
+                index: *index,
+                union_layout: *union_layout,
+            }),
+            None => None,
+        },
+
+        UnionFieldPtrAtIndex {
+            structure,
+            tag_id,
+            index,
+            union_layout,
+        } => match substitute(subs, *structure) {
+            Some(structure) => Some(UnionFieldPtrAtIndex {
                 structure,
                 tag_id: *tag_id,
                 index: *index,

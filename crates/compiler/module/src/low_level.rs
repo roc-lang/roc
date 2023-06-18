@@ -230,7 +230,9 @@ macro_rules! map_symbol_to_lowlevel {
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
-                LowLevel::PtrWrite => unimplemented!(),
+                LowLevel::PtrStore => unimplemented!(),
+                LowLevel::PtrLoad => unimplemented!(),
+                LowLevel::PtrToZeroed => unimplemented!(),
                 LowLevel::RefCountIncRcPtr => unimplemented!(),
                 LowLevel::RefCountDecRcPtr=> unimplemented!(),
                 LowLevel::RefCountIncDataPtr => unimplemented!(),
