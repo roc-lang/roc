@@ -2792,7 +2792,11 @@ impl<'a> LayoutRepr<'a> {
                 .contains_refcounted(interner),
             RecursivePointer(_) => true,
             Boxed(_) => true,
-            Ptr(inner) => interner.get_repr(*inner).contains_refcounted(interner),
+            Ptr(_) => {
+                // we never consider pointers for refcounting. Ptr is not user-facing. The compiler
+                // author must make sure that invariants are upheld
+                false
+            }
         }
     }
 

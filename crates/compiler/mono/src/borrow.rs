@@ -1043,9 +1043,9 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
             unreachable!("These lowlevel operations are turned into mono Expr's")
         }
 
-        PtrStore => arena.alloc_slice_copy(&[owned, borrowed]),
+        PtrStore => arena.alloc_slice_copy(&[owned, owned]),
         PtrLoad => arena.alloc_slice_copy(&[owned]),
-        PtrToZeroed => arena.alloc_slice_copy(&[owned]),
+        PtrToStackValue => arena.alloc_slice_copy(&[owned]),
 
         PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr | RefCountDecDataPtr
         | RefCountIsUnique => {

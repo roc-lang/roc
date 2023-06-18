@@ -87,7 +87,7 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::PtrCast => unimplemented!(),
                 LowLevel::PtrStore => unimplemented!(),
                 LowLevel::PtrLoad => unimplemented!(),
-                LowLevel::PtrToZeroed => unimplemented!(),
+                LowLevel::PtrToStackValue => unimplemented!(),
                 LowLevel::RefCountIncRcPtr => unimplemented!(),
                 LowLevel::RefCountDecRcPtr=> unimplemented!(),
                 LowLevel::RefCountIncDataPtr => unimplemented!(),

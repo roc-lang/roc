@@ -3148,6 +3148,29 @@ fn dbg_str_followed_by_number() {
 }
 
 #[mono_test]
+fn linked_list_reverse() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        reverse : LinkedList a -> LinkedList a
+        reverse = \list -> reverseHelp Nil list
+
+        reverseHelp : LinkedList a, LinkedList a -> LinkedList a
+        reverseHelp = \accum, list ->
+            when list is
+                Nil -> accum
+                Cons first rest -> reverseHelp (Cons first accum) rest
+
+        main : LinkedList I64
+        main = reverse (Cons 42 Nil)
+        "#
+    )
+}
+
+#[mono_test]
 fn linked_list_map() {
     indoc!(
         r#"

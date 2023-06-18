@@ -22,13 +22,13 @@ pub struct Env<'a, 'i> {
 }
 
 impl<'a, 'i> Env<'a, 'i> {
-    pub fn unique_symbol(&mut self) -> Symbol {
+    fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
         Symbol::new(self.home, ident_id)
     }
 
-    pub fn named_unique_symbol(&mut self, name: &str) -> Symbol {
+    fn named_unique_symbol(&mut self, name: &str) -> Symbol {
         let ident_id = self.ident_ids.add_str(name);
         Symbol::new(self.home, ident_id)
     }
@@ -107,7 +107,7 @@ pub fn apply_trmc<'a, 'i>(
 /// This will effectively compile into a loop in llvm, and
 /// won't grow the call stack for each iteration
 
-pub fn make_tail_recursive<'a>(
+fn make_tail_recursive<'a>(
     arena: &'a Bump,
     id: JoinPointId,
     needle: LambdaName,
@@ -483,11 +483,10 @@ fn has_cons_in_tail_position(initial_stmt: &Stmt<'_>, function_name: LambdaName)
 pub(crate) struct TrmcEnv<'a> {
     function_name: LambdaName<'a>,
     hole_symbol: Symbol,
-    null_symbol: Symbol,
-    initial_box_symbol: Symbol,
+    initial_ptr_symbol: Symbol,
     joinpoint_id: JoinPointId,
     return_layout: InLayout<'a>,
-    box_return_layout: InLayout<'a>,
+    ptr_return_layout: InLayout<'a>,
 
     // the call we are performing TRMC on
     recursive_call: Option<(Symbol, Call<'a>)>,
@@ -553,12 +552,11 @@ impl<'a> TrmcEnv<'a> {
 
     fn ptr_write(
         env: &mut Env<'a, '_>,
-        _return_layout: InLayout<'a>,
         ptr: Symbol,
         value: Symbol,
         next: &'a Stmt<'a>,
     ) -> Stmt<'a> {
-        let box_write = Call {
+        let ptr_write = Call {
             call_type: crate::ir::CallType::LowLevel {
                 op: LowLevel::PtrStore,
                 // update_mode: env.next_update_mode_id(),
@@ -569,8 +567,7 @@ impl<'a> TrmcEnv<'a> {
 
         Stmt::Let(
             env.named_unique_symbol("_ptr_write_unit"),
-            Expr::Call(box_write),
-            // interner.insert_direct_no_semantic(LayoutRepr::Boxed(return_layout)),
+            Expr::Call(ptr_write),
             Layout::UNIT,
             next,
         )
@@ -598,19 +595,26 @@ impl<'a> TrmcEnv<'a> {
         }
 
         // the root of the recursive structure that we'll be building
-        let initial_box_symbol = env.named_unique_symbol("initial");
-        jump_arguments.push(initial_box_symbol);
+        let initial_ptr_symbol = env.named_unique_symbol("initial");
+        jump_arguments.push(initial_ptr_symbol);
 
         let null_symbol = env.named_unique_symbol("null");
         let let_null = |next| Stmt::Let(null_symbol, Expr::NullPointer, return_layout, next);
 
-        let box_return_layout = env
+        let ptr_return_layout = env
             .interner
-            .insert_direct_no_semantic(LayoutRepr::Boxed(return_layout));
-        let box_null = Expr::ExprBox {
-            symbol: null_symbol,
+            .insert_direct_no_semantic(LayoutRepr::Ptr(return_layout));
+
+        let call = Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrToStackValue,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: arena.alloc([null_symbol]),
         };
-        let let_box = |next| Stmt::Let(initial_box_symbol, box_null, box_return_layout, next);
+
+        let ptr_null = Expr::Call(call);
+        let let_ptr = |next| Stmt::Let(initial_ptr_symbol, ptr_null, ptr_return_layout, next);
 
         let joinpoint_id = JoinPointId(env.named_unique_symbol("trmc"));
         let hole_symbol = env.named_unique_symbol("hole");
@@ -620,18 +624,17 @@ impl<'a> TrmcEnv<'a> {
         let mut this = Self {
             function_name: proc.name,
             hole_symbol,
-            null_symbol,
-            initial_box_symbol,
+            initial_ptr_symbol,
             joinpoint_id,
             return_layout,
-            box_return_layout,
+            ptr_return_layout,
             recursive_call: None,
         };
 
         let param = Param {
             symbol: hole_symbol,
             ownership: Ownership::Owned,
-            layout: box_return_layout,
+            layout: ptr_return_layout,
         };
         joinpoint_parameters.push(param);
 
@@ -644,7 +647,7 @@ impl<'a> TrmcEnv<'a> {
 
         let body = let_null(arena.alloc(
             //
-            let_box(arena.alloc(
+            let_ptr(arena.alloc(
                 //
                 joinpoint,
             )),
@@ -671,8 +674,10 @@ impl<'a> TrmcEnv<'a> {
             Stmt::Let(symbol, expr, layout, next) => {
                 if self.recursive_call.is_none() {
                     if let Some(call) = Self::is_recursive_expr(expr, self.function_name) {
-                        self.recursive_call = Some((*symbol, call));
-                        return self.walk_stmt(env, next);
+                        if has_cons_in_tail_position(next, self.function_name) {
+                            self.recursive_call = Some((*symbol, call));
+                            return self.walk_stmt(env, next);
+                        }
                     }
                 }
 
@@ -695,7 +700,6 @@ impl<'a> TrmcEnv<'a> {
                             // we did encounter a recursive call, and can perform TRMC in this
                             // branch.
 
-                            // TODO remove unwrap. also what if the symbol occurs more than once?
                             let opt_recursive_field_index =
                                 cons_info.arguments.iter().position(|s| *s == *call_symbol);
 
@@ -712,9 +716,19 @@ impl<'a> TrmcEnv<'a> {
                                 Some(v) => v,
                             };
 
+                            let tag_arg_null_symbol = env.named_unique_symbol("tag_arg_null");
+                            let let_tag_arg_null = |next| {
+                                Stmt::Let(
+                                    tag_arg_null_symbol,
+                                    Expr::NullPointer,
+                                    self.return_layout,
+                                    next,
+                                )
+                            };
+
                             let mut arguments =
                                 Vec::from_iter_in(cons_info.arguments.iter().copied(), env.arena);
-                            arguments[recursive_field_index] = self.null_symbol;
+                            arguments[recursive_field_index] = tag_arg_null_symbol;
 
                             let tag_expr = Expr::Tag {
                                 tag_layout: cons_info.tag_layout,
@@ -736,7 +750,7 @@ impl<'a> TrmcEnv<'a> {
                                 Stmt::Let(
                                     new_hole_symbol,
                                     get_reference_expr,
-                                    self.box_return_layout,
+                                    self.ptr_return_layout,
                                     next,
                                 )
                             };
@@ -748,17 +762,19 @@ impl<'a> TrmcEnv<'a> {
                             let jump =
                                 Stmt::Jump(self.joinpoint_id, jump_arguments.into_bump_slice());
 
-                            let output = let_tag(arena.alloc(
+                            let output = let_tag_arg_null(arena.alloc(
                                 //
-                                let_new_hole(arena.alloc(
+                                let_tag(arena.alloc(
                                     //
-                                    Self::ptr_write(
-                                        env,
-                                        *layout,
-                                        self.hole_symbol,
-                                        *symbol,
-                                        arena.alloc(jump),
-                                    ),
+                                    let_new_hole(arena.alloc(
+                                        //
+                                        Self::ptr_write(
+                                            env,
+                                            self.hole_symbol,
+                                            *symbol,
+                                            arena.alloc(jump),
+                                        ),
+                                    )),
                                 )),
                             ));
 
@@ -875,14 +891,13 @@ impl<'a> TrmcEnv<'a> {
                 op: LowLevel::PtrLoad,
                 update_mode: UpdateModeId::BACKEND_DUMMY,
             },
-            arguments: &*arena.alloc([self.initial_box_symbol]),
+            arguments: &*arena.alloc([self.initial_ptr_symbol]),
         };
 
         let ptr_load = |next| Stmt::Let(final_symbol, Expr::Call(call), layout, next);
 
         Self::ptr_write(
             env,
-            layout,
             self.hole_symbol,
             value_symbol,
             arena.alloc(

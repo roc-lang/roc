@@ -1962,7 +1962,7 @@ impl<'a> LowLevelCall<'a> {
 
             PtrStore => todo!("{:?}", self.lowlevel),
             PtrLoad => todo!("{:?}", self.lowlevel),
-            PtrToZeroed => todo!("{:?}", self.lowlevel),
+            PtrToStackValue => todo!("{:?}", self.lowlevel),
 
             Hash => todo!("{:?}", self.lowlevel),
 
