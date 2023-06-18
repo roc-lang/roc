@@ -1479,7 +1479,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             union_layout,
         } => {
             // cast the argument bytes into the desired shape for this tag
-            let (argument, structure_layout) = scope.load_symbol_and_layout(structure);
+            let argument = scope.load_symbol(structure);
             let ret_repr = layout_interner.get_repr(layout);
 
             let pointer_value = match union_layout {
@@ -1545,7 +1545,6 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         ptr,
                         target_loaded_type,
                     )
-                    .into()
                 }
                 UnionLayout::NullableUnwrapped {
                     nullable_id,
@@ -2134,8 +2133,6 @@ fn lookup_at_index_ptr<'a, 'ctx>(
     struct_type: Option<StructType<'ctx>>,
     target_loaded_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
     let elem_ptr = union_field_at_index_help(
         env,
         layout_interner,

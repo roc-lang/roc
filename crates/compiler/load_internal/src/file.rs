@@ -5827,8 +5827,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let (procedures, restored_procs_base) =
-        procs.get_specialized_procs_without_rc(&mut layout_cache, &mut mono_env);
+    let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc();
 
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);

@@ -50,7 +50,7 @@ pub fn apply_trmc<'a, 'i>(
 
     let env = &mut env;
 
-    for (_, proc) in procs {
+    for proc in procs.values_mut() {
         use self::SelfRecursive::*;
         if let SelfRecursive(id) = proc.is_self_recursive {
             if crate::tail_recursion::is_trmc_candidate(env.interner, proc) {
@@ -686,7 +686,6 @@ impl<'a> TrmcEnv<'a> {
                 }
 
                 if let Some(cons_info) = Self::is_terminal_constructor(stmt) {
-                    dbg!(&cons_info, &self.recursive_call);
                     match &self.recursive_call {
                         None => {
                             // this control flow path did not encounter a recursive call. Just
@@ -815,7 +814,7 @@ impl<'a> TrmcEnv<'a> {
                 Stmt::Switch {
                     cond_symbol: *cond_symbol,
                     cond_layout: *cond_layout,
-                    branches: &*arena.alloc(new_branches.into_bump_slice()),
+                    branches: arena.alloc(new_branches.into_bump_slice()),
                     default_branch: (default_branch.0.clone(), new_default_branch),
                     ret_layout: *ret_layout,
                 }

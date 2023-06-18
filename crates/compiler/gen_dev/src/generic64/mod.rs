@@ -2852,6 +2852,102 @@ impl<
         }
     }
 
+    fn load_union_field_ptr_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    ) {
+        let ptr_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, structure);
+
+        let sym_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+
+        match union_layout {
+            UnionLayout::NonRecursive(_) => {
+                unreachable!("operation not supported")
+            }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                let mut offset = 0;
+                for field in &field_layouts[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
+            }
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                debug_assert_ne!(tag_id, *nullable_id as TagIdIntType);
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
+            }
+
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                debug_assert_ne!(tag_id, *nullable_id as TagIdIntType);
+
+                let other_fields = if tag_id < *nullable_id {
+                    other_tags[tag_id as usize]
+                } else {
+                    other_tags[tag_id as usize - 1]
+                };
+
+                let mask_symbol = self.debug_symbol("tag_id_mask");
+                let mask_reg = self
+                    .storage_manager
+                    .claim_general_reg(&mut self.buf, &mask_symbol);
+                ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
+
+                // mask out the tag id bits
+                ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
+            }
+            UnionLayout::Recursive(tag_layouts) => {
+                let other_fields = tag_layouts[tag_id as usize];
+
+                let ptr_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                // mask out the tag id bits
+                if !union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    let mask_symbol = self.debug_symbol("tag_id_mask");
+                    let mask_reg = self
+                        .storage_manager
+                        .claim_general_reg(&mut self.buf, &mask_symbol);
+                    ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
+
+                    ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
+                }
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
+            }
+        }
+    }
+
     fn build_ptr_store(
         &mut self,
         sym: Symbol,

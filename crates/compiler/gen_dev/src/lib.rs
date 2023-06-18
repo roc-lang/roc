@@ -803,7 +803,7 @@ trait Backend<'a> {
                 union_layout,
                 index,
             } => {
-                todo!();
+                self.load_union_field_ptr_at_index(sym, structure, *tag_id, *index, union_layout);
             }
             Expr::GetTagId {
                 structure,
@@ -2323,6 +2323,16 @@ trait Backend<'a> {
 
     /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
     fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    );
+
+    /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
+    fn load_union_field_ptr_at_index(
         &mut self,
         sym: &Symbol,
         structure: &Symbol,

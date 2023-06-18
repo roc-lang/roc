@@ -1945,7 +1945,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         let from_offset = tag_offset + field_offset;
 
-        self.code_builder.i32_const(from_offset as i32)
+        self.code_builder.i32_const(from_offset as i32);
     }
 
     /*******************************************************************

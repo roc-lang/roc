@@ -990,15 +990,11 @@ impl<'a> Procs<'a> {
 
     pub fn get_specialized_procs_without_rc(
         self,
-        layout_cache: &mut LayoutCache<'a>,
-        env: &mut Env<'a, '_>,
     ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
         let mut specialized_procs =
             MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
-        for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
-            // proc.make_tail_recursive(&mut layout_cache.interner, env);
-
+        for (symbol, layout, proc) in self.specialized.into_iter_assert_done() {
             let key = (symbol, layout);
             specialized_procs.insert(key, proc);
         }

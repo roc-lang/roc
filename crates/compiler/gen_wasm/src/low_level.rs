@@ -11,7 +11,7 @@ use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
-use crate::storage::{AddressValue, StackMemoryLocation, StoredValue, StoredVarKind};
+use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
 use crate::PTR_TYPE;
 use roc_wasm_module::{Align, LocalId, ValueType};
 
@@ -1964,7 +1964,6 @@ impl<'a> LowLevelCall<'a> {
                 // PtrStore : Ptr a, a -> {}
                 let ptr_sym = self.arguments[0];
                 let value_sym = self.arguments[1];
-                let layout = self.ret_layout;
 
                 // create a local variable for the heap pointer
                 let ptr_local_id = match backend.storage.ensure_value_has_local(
