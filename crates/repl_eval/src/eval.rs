@@ -534,6 +534,9 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         LayoutRepr::RecursivePointer(_) => {
             unreachable!("RecursivePointers can only be inside structures")
         }
+        LayoutRepr::Ptr(_) => {
+            unreachable!("Ptr will never be visible to users")
+        }
         LayoutRepr::LambdaSet(_) => OPAQUE_FUNCTION,
         LayoutRepr::Boxed(_) => {
             let size = env.layout_cache.interner.stack_size(layout);
@@ -917,6 +920,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }
         (_, LayoutRepr::Boxed(_)) => {
             unreachable!("Box layouts can only be behind a `Box.Box` application")
+        }
+        (_, LayoutRepr::Ptr(_)) => {
+            unreachable!("Ptr layouts are never available in user code")
         }
     };
     apply_newtypes(env, newtype_containers.into_bump_slice(), expr)

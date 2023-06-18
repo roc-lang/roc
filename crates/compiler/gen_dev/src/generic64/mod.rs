@@ -4385,6 +4385,7 @@ macro_rules! single_register_layouts {
 macro_rules! pointer_layouts {
     () => {
         LayoutRepr::Boxed(_)
+            | LayoutRepr::Ptr(_)
             | LayoutRepr::RecursivePointer(_)
             | LayoutRepr::Union(
                 UnionLayout::Recursive(_)

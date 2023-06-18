@@ -9866,6 +9866,9 @@ where
             LayoutRepr::Boxed(boxed) => {
                 stack.push(layout_interner.get(boxed));
             }
+            LayoutRepr::Ptr(inner) => {
+                stack.push(layout_interner.get(inner));
+            }
             LayoutRepr::Union(union_layout) => match union_layout {
                 UnionLayout::NonRecursive(tags) => {
                     for in_layout in tags.iter().flat_map(|e| e.iter()) {

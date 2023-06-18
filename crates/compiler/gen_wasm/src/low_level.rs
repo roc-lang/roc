@@ -2030,7 +2030,8 @@ impl<'a> LowLevelCall<'a> {
             | LayoutRepr::Struct { .. }
             | LayoutRepr::Union(_)
             | LayoutRepr::LambdaSet(_)
-            | LayoutRepr::Boxed(_) => {
+            | LayoutRepr::Boxed(_)
+            | LayoutRepr::Ptr(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions
                 backend
                     .storage

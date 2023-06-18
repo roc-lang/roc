@@ -1589,13 +1589,14 @@ fn layout_spec_help<'a>(
             }
         }
 
-        Boxed(inner_layout) => {
+        Ptr(inner_layout) | Boxed(inner_layout) => {
             let inner_type =
                 layout_spec_help(env, builder, interner, interner.get_repr(inner_layout))?;
             let cell_type = builder.add_heap_cell_type();
 
             builder.add_tuple_type(&[cell_type, inner_type])
         }
+
         // TODO(recursive-layouts): update once we have recursive pointer loops
         RecursivePointer(union_layout) => match interner.get_repr(union_layout) {
             LayoutRepr::Union(union_layout) => {

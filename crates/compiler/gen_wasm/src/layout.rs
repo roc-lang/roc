@@ -98,6 +98,7 @@ impl WasmLayout {
                 | NullableUnwrapped { .. },
             )
             | LayoutRepr::Boxed(_)
+            | LayoutRepr::Ptr(_)
             | LayoutRepr::RecursivePointer(_) => Self::Primitive(PTR_TYPE, PTR_SIZE),
         }
     }

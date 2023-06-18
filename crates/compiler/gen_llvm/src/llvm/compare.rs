@@ -185,7 +185,7 @@ fn build_eq<'a, 'ctx>(
             rhs_val,
         ),
 
-        LayoutRepr::Boxed(inner_layout) => build_box_eq(
+        LayoutRepr::Ptr(inner_layout) | LayoutRepr::Boxed(inner_layout) => build_box_eq(
             env,
             layout_interner,
             layout_ids,
@@ -385,7 +385,7 @@ fn build_neq<'a, 'ctx>(
             result.into()
         }
 
-        LayoutRepr::Boxed(inner_layout) => {
+        LayoutRepr::Ptr(inner_layout) | LayoutRepr::Boxed(inner_layout) => {
             let is_equal = build_box_eq(
                 env,
                 layout_interner,
