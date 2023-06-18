@@ -67,6 +67,7 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
 
     let mut env = ReuseEnvironment {
         symbol_tags: MutMap::default(),
+        non_unique_symbols: MutSet::default(),
         reuse_tokens: MutMap::default(),
         symbol_layouts: symbol_layout,
         joinpoint_reuse_tokens: MutMap::default(),
@@ -236,13 +237,21 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 .iter()
                 .map(|(tag_id, info, branch)| {
                     let mut branch_env = environment.clone();
-                    if let BranchInfo::Constructor {
-                        scrutinee,
-                        tag_id: tag,
-                        ..
-                    } = info
-                    {
-                        branch_env.add_symbol_tag(*scrutinee, *tag);
+                    match info {
+                        BranchInfo::Constructor {
+                            scrutinee,
+                            tag_id: tag,
+                            ..
+                        } => {
+                            branch_env.add_symbol_tag(*scrutinee, *tag);
+                        }
+                        BranchInfo::Unique {
+                            scrutinee,
+                            unique: false,
+                        } => {
+                            branch_env.non_unique_symbols.insert(*scrutinee);
+                        }
+                        _ => {}
                     }
 
                     let new_branch = insert_reset_reuse_operations_stmt(
@@ -387,11 +396,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
         }
         Stmt::Refcounting(rc, continuation) => {
             let reuse_pair = match rc {
-                ModifyRc::Inc(_, _) => {
-                    // We don't need to do anything for an inc.
-                    None
-                }
-                ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol) => {
+                ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol)
+                    if !environment.non_unique_symbols.contains(symbol) =>
+                {
                     // Get the layout of the symbol from where it is defined.
                     let layout_option = environment.get_symbol_layout(*symbol);
 
@@ -429,6 +436,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         }
                         _ => None,
                     }
+                }
+                _ => {
+                    // We don't need to do anything for an inc or symbols known to be non-unique.
+                    None
                 }
             };
 
@@ -648,6 +659,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut first_pass_body_environment = ReuseEnvironment {
                     symbol_tags: environment.symbol_tags.clone(),
+                    non_unique_symbols: environment.non_unique_symbols.clone(),
                     reuse_tokens: max_reuse_token_symbols.clone(),
                     symbol_layouts: environment.symbol_layouts.clone(),
                     joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
@@ -822,6 +834,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut body_environment = ReuseEnvironment {
                     symbol_tags: environment.symbol_tags.clone(),
+                    non_unique_symbols: environment.non_unique_symbols.clone(),
                     reuse_tokens: used_reuse_tokens.clone(),
                     symbol_layouts: environment.symbol_layouts.clone(),
                     joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
@@ -1082,6 +1095,7 @@ enum JoinPointReuseTokens<'a> {
 #[derive(Default, Clone)]
 struct ReuseEnvironment<'a> {
     symbol_tags: MutMap<Symbol, Tag>,
+    non_unique_symbols: MutSet<Symbol>,
     reuse_tokens: ReuseTokens<'a>,
     symbol_layouts: SymbolLayout<'a>,
     // A map containing the amount of reuse tokens a join point expects for each layout.
