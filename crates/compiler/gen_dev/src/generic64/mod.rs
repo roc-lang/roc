@@ -2852,7 +2852,7 @@ impl<
         }
     }
 
-    fn build_ptr_write(
+    fn build_ptr_store(
         &mut self,
         sym: Symbol,
         ptr: Symbol,
@@ -2888,6 +2888,46 @@ impl<
         ASM::mov_base32_reg64(&mut self.buf, base_offset, ptr_reg);
     }
 
+    fn build_ptr_load(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>) {
+        let ptr_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &ptr);
+
+        let offset = 0;
+
+        Self::ptr_read(
+            &mut self.buf,
+            &mut self.storage_manager,
+            self.layout_interner,
+            ptr_reg,
+            offset,
+            element_layout,
+            sym,
+        );
+    }
+
+    fn build_ptr_to_stack_value(
+        &mut self,
+        sym: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+    ) {
+        // 1. aquire some stack space
+        let element_width = self.interner().stack_size(element_layout);
+        let allocation = self.debug_symbol("stack_allocation");
+        let ptr = self.debug_symbol("ptr");
+        let base_offset = self
+            .storage_manager
+            .claim_stack_area(&allocation, element_width);
+
+        let ptr_reg = self.storage_manager.claim_general_reg(&mut self.buf, &ptr);
+
+        ASM::mov_reg64_reg64(&mut self.buf, ptr_reg, CC::STACK_PTR_REG);
+        ASM::sub_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, base_offset);
+
+        self.build_ptr_store(sym, ptr, value, element_layout);
+    }
+
     fn expr_box(
         &mut self,
         sym: Symbol,
@@ -2920,27 +2960,13 @@ impl<
         self.free_symbol(&element_width_symbol);
         self.free_symbol(&element_alignment_symbol);
 
-        self.build_ptr_write(sym, allocation, value, element_layout);
+        self.build_ptr_store(sym, allocation, value, element_layout);
 
         self.free_symbol(&allocation);
     }
 
     fn expr_unbox(&mut self, dst: Symbol, ptr: Symbol, element_layout: InLayout<'a>) {
-        let ptr_reg = self
-            .storage_manager
-            .load_to_general_reg(&mut self.buf, &ptr);
-
-        let offset = 0;
-
-        Self::ptr_read(
-            &mut self.buf,
-            &mut self.storage_manager,
-            self.layout_interner,
-            ptr_reg,
-            offset,
-            element_layout,
-            dst,
-        );
+        self.build_ptr_load(dst, ptr, element_layout)
     }
 
     fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {

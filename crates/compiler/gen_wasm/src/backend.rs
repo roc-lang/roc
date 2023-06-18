@@ -1084,7 +1084,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 tag_id,
                 union_layout,
                 index,
-            } => todo!(),
+            } => self.expr_union_field_ptr_at_index(*structure, *tag_id, union_layout, *index, sym),
 
             Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
 
@@ -1878,11 +1878,81 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         );
     }
 
+    fn expr_union_field_ptr_at_index(
+        &mut self,
+        structure: Symbol,
+        tag_id: TagIdIntType,
+        union_layout: &UnionLayout<'a>,
+        index: u64,
+        symbol: Symbol,
+    ) {
+        use UnionLayout::*;
+
+        debug_assert!(!union_layout.tag_is_null(tag_id));
+
+        let tag_index = tag_id as usize;
+        let field_layouts = match union_layout {
+            NonRecursive(tags) => tags[tag_index],
+            Recursive(tags) => tags[tag_index],
+            NonNullableUnwrapped(layouts) => *layouts,
+            NullableWrapped {
+                other_tags,
+                nullable_id,
+            } => {
+                let index = if tag_index > *nullable_id as usize {
+                    tag_index - 1
+                } else {
+                    tag_index
+                };
+                other_tags[index]
+            }
+            NullableUnwrapped { other_fields, .. } => *other_fields,
+        };
+
+        let field_offset: u32 = field_layouts
+            .iter()
+            .take(index as usize)
+            .map(|field_layout| self.layout_interner.stack_size(*field_layout))
+            .sum();
+
+        // Get pointer and offset to the tag's data
+        let structure_storage = self.storage.get(&structure).to_owned();
+        let stored_with_local = self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            structure,
+            structure_storage,
+        );
+        let (tag_local_id, tag_offset) = match stored_with_local {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
+            }
+            StoredValue::Local { local_id, .. } => (local_id, 0),
+            StoredValue::VirtualMachineStack { .. } => {
+                internal_error!("{:?} should have a local variable", structure)
+            }
+        };
+
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
+
+        let from_addr_val = if stores_tag_id_in_pointer {
+            self.code_builder.get_local(tag_local_id);
+            self.code_builder.i32_const(-4); // 11111111...1100
+            self.code_builder.i32_and();
+            AddressValue::Loaded
+        } else {
+            AddressValue::NotLoaded(tag_local_id)
+        };
+
+        let from_offset = tag_offset + field_offset;
+
+        self.code_builder.i32_const(from_offset as i32)
+    }
+
     /*******************************************************************
      * Box
      *******************************************************************/
 
-    fn expr_box(
+    pub(crate) fn expr_box(
         &mut self,
         ret_sym: Symbol,
         arg_sym: Symbol,
@@ -1915,7 +1985,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .copy_value_to_memory(&mut self.code_builder, ptr_local_id, 0, arg_sym);
     }
 
-    fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
+    pub(crate) fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
         let (from_addr_val, from_offset) = match self.storage.get(&arg_sym) {
             StoredValue::VirtualMachineStack { .. } => {
                 self.storage

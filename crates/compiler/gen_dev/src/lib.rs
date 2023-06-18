@@ -1593,17 +1593,22 @@ trait Backend<'a> {
                 self.build_ptr_cast(sym, &args[0])
             }
             LowLevel::PtrStore => {
-                let element_layout = match self.interner().get_repr(*ret_layout) {
-                    LayoutRepr::Boxed(boxed) => boxed,
+                let element_layout = match self.interner().get_repr(arg_layouts[0]) {
+                    LayoutRepr::Ptr(inner) => inner,
+                    LayoutRepr::Boxed(inner) => inner,
                     _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 
-                self.build_ptr_write(*sym, args[0], args[1], element_layout);
+                self.build_ptr_store(*sym, args[0], args[1], element_layout);
             }
             LowLevel::PtrLoad => {
-                //
-                todo!()
+                self.build_ptr_load(*sym, args[0], *ret_layout);
             }
+
+            LowLevel::PtrToStackValue => {
+                self.build_ptr_to_stack_value(*sym, args[0], arg_layouts[0]);
+            }
+
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DECREF_RC_PTR.to_string(),
@@ -2232,10 +2237,19 @@ trait Backend<'a> {
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
-    fn build_ptr_write(
+    fn build_ptr_store(
         &mut self,
         sym: Symbol,
         ptr: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+    );
+
+    fn build_ptr_load(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>);
+
+    fn build_ptr_to_stack_value(
+        &mut self,
+        sym: Symbol,
         value: Symbol,
         element_layout: InLayout<'a>,
     );

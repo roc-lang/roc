@@ -4499,3 +4499,43 @@ fn pass_lambda_set_to_function() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn linked_list_trmc() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            LinkedList a : [Nil, Cons a (LinkedList a)]
+
+            # map : LinkedList a, (a -> b) -> LinkedList b
+            # map = \list, f ->
+            #     when list is
+            #         Nil -> Nil
+            #         Cons x xs -> Cons (f x) (map xs f)
+
+            unfold : a, Nat -> LinkedList a
+            unfold = \value, n ->
+                when n is
+                    0 -> Nil
+                    _ -> Cons value (unfold value (n - 1))
+
+            length : LinkedList a -> I64
+            length = \list ->
+                when list is
+                    Nil -> 0
+                    Cons _ rest -> 1 + length rest
+
+            main : I64 
+            main = 
+                unfold 32 1
+                    # |> map (\x -> x + 1i64) 
+                    |> length
+            "#
+        ),
+        5,
+        i64
+    );
+}

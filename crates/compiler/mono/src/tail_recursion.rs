@@ -420,16 +420,20 @@ where
         return false;
     }
 
-    has_cons_in_tail_position(&proc.body, proc.name)
+    has_cons_in_tail_position(&proc.body, proc.name, None)
 }
 
-fn has_cons_in_tail_position(initial_stmt: &Stmt<'_>, function_name: LambdaName) -> bool {
+fn has_cons_in_tail_position(
+    initial_stmt: &Stmt<'_>,
+    function_name: LambdaName,
+    initial_recursive_call: Option<Symbol>,
+) -> bool {
     // we are looking for code of the form
     //
     // let x = Tag a b c
     // ret x
 
-    let mut stack = vec![(None, initial_stmt)];
+    let mut stack = vec![(initial_recursive_call, initial_stmt)];
 
     while let Some((recursive_call, stmt)) = stack.pop() {
         match stmt {
@@ -674,7 +678,7 @@ impl<'a> TrmcEnv<'a> {
             Stmt::Let(symbol, expr, layout, next) => {
                 if self.recursive_call.is_none() {
                     if let Some(call) = Self::is_recursive_expr(expr, self.function_name) {
-                        if has_cons_in_tail_position(next, self.function_name) {
+                        if has_cons_in_tail_position(next, self.function_name, Some(*symbol)) {
                             self.recursive_call = Some((*symbol, call));
                             return self.walk_stmt(env, next);
                         }
@@ -682,6 +686,7 @@ impl<'a> TrmcEnv<'a> {
                 }
 
                 if let Some(cons_info) = Self::is_terminal_constructor(stmt) {
+                    dbg!(&cons_info, &self.recursive_call);
                     match &self.recursive_call {
                         None => {
                             // this control flow path did not encounter a recursive call. Just
