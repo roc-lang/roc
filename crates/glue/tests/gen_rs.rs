@@ -1,14 +1,10 @@
-#[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
-extern crate indoc;
-
 mod helpers;
 
 #[cfg(test)]
 mod test_gen_rs {
     use crate::helpers::generate_bindings;
+    use indoc::indoc;
+    use pretty_assertions::assert_eq;
     use roc_glue::rust_glue::HEADER;
     use roc_glue::types::File;
 

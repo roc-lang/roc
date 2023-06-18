@@ -1,7 +1,7 @@
 use crate::llvm::build::Env;
 use inkwell::values::{BasicValueEnum, PointerValue};
 use roc_builtins::bitcode;
-use roc_mono::layout::{InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner};
+use roc_mono::layout::{InLayout, Layout, LayoutRepr, STLayoutInterner};
 
 use super::bitcode::{call_str_bitcode_fn, BitcodeReturns};
 use super::build::load_roc_value;
@@ -10,7 +10,7 @@ pub static CHAR_LAYOUT: InLayout = Layout::U8;
 
 pub(crate) fn decode_from_utf8_result<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     pointer: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let layout = LayoutRepr::Struct(env.arena.alloc([
@@ -19,8 +19,6 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx>(
         Layout::BOOL,
         Layout::U8,
     ]));
-    // TODO: have load_roc_value use LayoutRepr
-    let layout = layout_interner.insert_direct_no_semantic(layout);
 
     load_roc_value(
         env,

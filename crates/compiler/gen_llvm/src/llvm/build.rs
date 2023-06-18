@@ -306,7 +306,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
     pub fn alignment_intvalue(
         &self,
-        layout_interner: &mut STLayoutInterner<'a>,
+        layout_interner: &STLayoutInterner<'a>,
         element_layout: InLayout<'a>,
     ) -> BasicValueEnum<'ctx> {
         let alignment = layout_interner.alignment_bytes(element_layout);
@@ -585,7 +585,7 @@ pub fn construct_optimization_passes<'a>(
 
 fn promote_to_main_function<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     symbol: Symbol,
     top_level: ProcLayout<'a>,
@@ -624,7 +624,7 @@ fn promote_to_main_function<'a, 'ctx>(
 
 fn promote_to_wasm_test_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     symbol: Symbol,
     top_level: ProcLayout<'a>,
@@ -689,8 +689,13 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
         let entry = context.append_basic_block(c_function, "entry");
         builder.position_at_end(entry);
 
-        let roc_main_fn_result =
-            call_roc_function(env, layout_interner, roc_main_fn, top_level.result, &[]);
+        let roc_main_fn_result = call_roc_function(
+            env,
+            layout_interner,
+            roc_main_fn,
+            layout_interner.get_repr(top_level.result),
+            &[],
+        );
 
         // For consistency, we always return with a heap-allocated value
         let (size, alignment) = layout_interner.stack_size_and_alignment(top_level.result);
@@ -702,7 +707,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
         store_roc_value(
             env,
             layout_interner,
-            top_level.result,
+            layout_interner.get_repr(top_level.result),
             ptr,
             roc_main_fn_result,
         );
@@ -889,7 +894,7 @@ fn small_str_ptr_width_4<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> St
 
 pub(crate) fn build_exp_call<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
@@ -984,7 +989,7 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
 
 fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     struct_type: StructType<'ctx>,
     input_pointer: PointerValue<'ctx>,
     values: I,
@@ -1007,13 +1012,19 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
             .new_build_struct_gep(struct_type, struct_ptr, index as u32, "field_struct_gep")
             .unwrap();
 
-        store_roc_value(env, layout_interner, field_layout, field_ptr, field_value);
+        store_roc_value(
+            env,
+            layout_interner,
+            layout_interner.get_repr(field_layout),
+            field_ptr,
+            field_value,
+        );
     }
 }
 
 pub(crate) fn build_exp_expr<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
@@ -1026,7 +1037,8 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
     match expr {
         Literal(literal) => build_exp_literal(env, layout_interner, parent, layout, literal),
         NullPointer => {
-            let basic_type = basic_type_from_layout(env, layout_interner, layout);
+            let basic_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
             debug_assert!(basic_type.is_pointer_type());
             basic_type.into_pointer_type().const_zero().into()
@@ -1090,7 +1102,8 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
         ExprBox { symbol } => {
             let (value, layout) = scope.load_symbol_and_layout(symbol);
-            let basic_type = basic_type_from_layout(env, layout_interner, layout);
+            let basic_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let allocation = reserve_with_refcount_help(
                 env,
                 basic_type,
@@ -1098,7 +1111,13 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 layout_interner.alignment_bytes(layout),
             );
 
-            store_roc_value(env, layout_interner, layout, allocation, value);
+            store_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                allocation,
+                value,
+            );
 
             allocation.into()
         }
@@ -1111,7 +1130,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             load_roc_value(
                 env,
                 layout_interner,
-                layout,
+                layout_interner.get_repr(layout),
                 value.into_pointer_value(),
                 "load_boxed_value",
             )
@@ -1187,7 +1206,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 // If reset is used on a shared, non-reusable reference, it behaves
                 // like dec and returns NULL, which instructs reuse to behave like ctor
                 env.builder.position_at_end(else_block);
-                refcount_ptr.decrement(env, layout_interner, layout);
+                refcount_ptr.decrement(env, layout_interner, layout_interner.get_repr(layout));
                 env.builder.build_unconditional_branch(cont_block);
             }
             {
@@ -1253,7 +1272,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 // If reset is used on a shared, non-reusable reference, it behaves
                 // like dec and returns NULL, which instructs reuse to behave like ctor
                 env.builder.position_at_end(not_unique_block);
-                refcount_ptr.decrement(env, layout_interner, layout);
+                refcount_ptr.decrement(env, layout_interner, layout_interner.get_repr(layout));
                 env.builder.build_unconditional_branch(cont_block);
             }
             {
@@ -1277,7 +1296,12 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let (value, layout) = scope.load_symbol_and_layout(structure);
             let struct_val = RocStruct::from(value);
 
-            struct_val.load_at_index(env, layout_interner, layout, *index)
+            struct_val.load_at_index(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                *index,
+            )
         }
 
         EmptyArray => empty_polymorphic_list(env),
@@ -1301,15 +1325,18 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
                     let field_layouts = tag_layouts[*tag_id as usize];
 
-                    let struct_layout = layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
+                    let struct_layout = LayoutRepr::struct_(field_layouts);
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
                     let opaque_data_ptr = env
                         .builder
                         .new_build_struct_gep(
-                            basic_type_from_layout(env, layout_interner, structure_layout)
-                                .into_struct_type(),
+                            basic_type_from_layout(
+                                env,
+                                layout_interner,
+                                layout_interner.get_repr(structure_layout),
+                            )
+                            .into_struct_type(),
                             argument.into_pointer_value(),
                             RocUnion::TAG_DATA_INDEX,
                             "get_opaque_data_ptr",
@@ -1335,7 +1362,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     load_roc_value(
                         env,
                         layout_interner,
-                        field_layouts[*index as usize],
+                        layout_interner.get_repr(field_layouts[*index as usize]),
                         element_ptr,
                         "load_element",
                     )
@@ -1346,7 +1373,11 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let field_layouts = tag_layouts[*tag_id as usize];
 
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+                    let target_loaded_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     lookup_at_index_ptr2(
                         env,
@@ -1358,11 +1389,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     )
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout = layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
+                    let struct_layout = LayoutRepr::struct_(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+                    let target_loaded_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     lookup_at_index_ptr(
                         env,
@@ -1390,7 +1424,11 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let field_layouts = other_tags[tag_index as usize];
 
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+                    let target_loaded_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     lookup_at_index_ptr2(
                         env,
@@ -1409,11 +1447,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     debug_assert_ne!(*tag_id != 0, *nullable_id);
 
                     let field_layouts = other_fields;
-                    let struct_layout = layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
+                    let struct_layout = LayoutRepr::struct_(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, layout);
+                    let target_loaded_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
 
                     lookup_at_index_ptr(
                         env,
@@ -1443,7 +1484,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
 fn build_wrapped_tag<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     union_layout: &UnionLayout<'a>,
     tag_id: u8,
@@ -1483,8 +1524,12 @@ fn build_wrapped_tag<'a, 'ctx>(
             )
             .unwrap();
 
-        let tag_id_type =
-            basic_type_from_layout(env, layout_interner, tag_id_layout).into_int_type();
+        let tag_id_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(tag_id_layout),
+        )
+        .into_int_type();
 
         env.builder
             .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
@@ -1537,7 +1582,7 @@ pub fn entry_block_alloca_zerofill<'ctx>(
 
 fn build_tag_field_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     value: BasicValueEnum<'ctx>,
     tag_field_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -1568,7 +1613,7 @@ fn build_tag_field_value<'a, 'ctx>(
 
 fn build_tag_fields<'a, 'r, 'ctx, 'env>(
     env: &'r Env<'a, 'ctx, 'env>,
-    layout_interner: &'r mut STLayoutInterner<'a>,
+    layout_interner: &'r STLayoutInterner<'a>,
     scope: &'r Scope<'a, 'ctx>,
     fields: &[InLayout<'a>],
     arguments: &[Symbol],
@@ -1583,7 +1628,11 @@ fn build_tag_fields<'a, 'r, 'ctx, 'env>(
     let mut field_values = std::vec::Vec::with_capacity(capacity);
 
     for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
-        let field_type = basic_type_from_layout(env, layout_interner, *tag_field_layout);
+        let field_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(*tag_field_layout),
+        );
         field_types.push(field_type);
 
         let raw_value: BasicValueEnum<'ctx> = scope.load_symbol(field_symbol);
@@ -1597,7 +1646,7 @@ fn build_tag_fields<'a, 'r, 'ctx, 'env>(
 
 fn build_tag<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     union_layout: &UnionLayout<'a>,
     tag_id: TagIdIntType,
@@ -1614,8 +1663,7 @@ fn build_tag<'a, 'ctx>(
             let data_layout_repr = LayoutRepr::Struct(tags[tag_id as usize]);
             let data = RocStruct::build(env, layout_interner, data_layout_repr, scope, arguments);
 
-            let roc_union =
-                RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info);
+            let roc_union = RocUnion::tagged_from_slices(layout_interner, env.context, tags);
 
             let tag_alloca = env
                 .builder
@@ -1658,8 +1706,7 @@ fn build_tag<'a, 'ctx>(
                 use std::cmp::Ordering::*;
                 match tag_id.cmp(&(*nullable_id as _)) {
                     Equal => {
-                        let layout = layout_interner
-                            .insert_direct_no_semantic(LayoutRepr::Union(*union_layout));
+                        let layout = LayoutRepr::Union(*union_layout);
 
                         return basic_type_from_layout(env, layout_interner, layout)
                             .into_pointer_type()
@@ -1719,12 +1766,8 @@ fn build_tag<'a, 'ctx>(
             nullable_id,
             other_fields,
         } => {
-            let roc_union = RocUnion::untagged_from_slices(
-                layout_interner,
-                env.context,
-                &[other_fields],
-                env.target_info,
-            );
+            let roc_union =
+                RocUnion::untagged_from_slices(layout_interner, env.context, &[other_fields]);
 
             if tag_id == *nullable_id as _ {
                 let output_type = roc_union.struct_type().ptr_type(AddressSpace::default());
@@ -1831,7 +1874,7 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
 
 fn allocate_tag<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     reuse_allocation: Option<PointerValue<'ctx>>,
     union_layout: &UnionLayout<'a>,
@@ -1891,7 +1934,7 @@ fn allocate_tag<'a, 'ctx>(
 
 pub fn get_tag_id<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     union_layout: &UnionLayout<'a>,
     argument: BasicValueEnum<'ctx>,
@@ -1899,8 +1942,12 @@ pub fn get_tag_id<'a, 'ctx>(
     let builder = env.builder;
 
     let tag_id_layout = union_layout.tag_id_layout();
-    let tag_id_int_type =
-        basic_type_from_layout(env, layout_interner, tag_id_layout).into_int_type();
+    let tag_id_int_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(tag_id_layout),
+    )
+    .into_int_type();
 
     match union_layout {
         UnionLayout::NonRecursive(_) => {
@@ -1974,7 +2021,7 @@ pub fn get_tag_id<'a, 'ctx>(
 
 fn lookup_at_index_ptr<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     field_layouts: &[InLayout<'a>],
     index: usize,
     value: PointerValue<'ctx>,
@@ -1997,7 +2044,7 @@ fn lookup_at_index_ptr<'a, 'ctx>(
     let result = load_roc_value(
         env,
         layout_interner,
-        field_layout,
+        layout_interner.get_repr(field_layout),
         elem_ptr,
         "load_at_index_ptr_old",
     );
@@ -2009,7 +2056,7 @@ fn lookup_at_index_ptr<'a, 'ctx>(
 
 fn lookup_at_index_ptr2<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     field_layouts: &'a [InLayout<'a>],
     index: usize,
     value: PointerValue<'ctx>,
@@ -2017,8 +2064,7 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let struct_layout =
-        layout_interner.insert_direct_no_semantic(LayoutRepr::struct_(field_layouts));
+    let struct_layout = LayoutRepr::struct_(field_layouts);
     let struct_type =
         basic_type_from_layout(env, layout_interner, struct_layout).into_struct_type();
 
@@ -2041,7 +2087,7 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
     let result = load_roc_value(
         env,
         layout_interner,
-        field_layout,
+        layout_interner.get_repr(field_layout),
         elem_ptr,
         "load_at_index_ptr",
     );
@@ -2053,29 +2099,29 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
 
 pub fn reserve_with_refcount<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> PointerValue<'ctx> {
     let stack_size = layout_interner.stack_size(layout);
     let alignment_bytes = layout_interner.alignment_bytes(layout);
 
-    let basic_type = basic_type_from_layout(env, layout_interner, layout);
+    let basic_type = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
     reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
 }
 
 fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
     fields: &[&[InLayout<'a>]],
 ) -> PointerValue<'ctx> {
     let ptr_bytes = env.target_info;
 
     let roc_union = if union_layout.stores_tag_id_as_data(ptr_bytes) {
-        RocUnion::tagged_from_slices(layout_interner, env.context, fields, env.target_info)
+        RocUnion::tagged_from_slices(layout_interner, env.context, fields)
     } else {
-        RocUnion::untagged_from_slices(layout_interner, env.context, fields, env.target_info)
+        RocUnion::untagged_from_slices(layout_interner, env.context, fields)
     };
 
     reserve_with_refcount_help(
@@ -2101,7 +2147,7 @@ fn reserve_with_refcount_help<'a, 'ctx, 'env>(
 
 pub fn allocate_with_refcount<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
     value: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
@@ -2137,7 +2183,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 
 fn list_literal<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     scope: &Scope<'a, 'ctx>,
     element_layout: InLayout<'a>,
@@ -2146,7 +2192,11 @@ fn list_literal<'a, 'ctx>(
     let ctx = env.context;
     let builder = env.builder;
 
-    let element_type = basic_type_from_layout(env, layout_interner, element_layout);
+    let element_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(element_layout),
+    );
 
     let list_length = elems.len();
     let list_length_intval = env.ptr_int().const_int(list_length as _, false);
@@ -2297,7 +2347,13 @@ fn list_literal<'a, 'ctx>(
                 builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
             };
 
-            store_roc_value(env, layout_interner, element_layout, elem_ptr, val);
+            store_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(element_layout),
+                elem_ptr,
+                val,
+            );
         }
 
         super::build_list::store_list(env, ptr, list_length_intval).into()
@@ -2307,13 +2363,13 @@ fn list_literal<'a, 'ctx>(
 pub fn load_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
     let basic_type = basic_type_from_layout(env, layout_interner, layout);
 
-    if layout_interner.is_passed_by_reference(layout) {
+    if layout.is_passed_by_reference(layout_interner) {
         let alloca = entry_block_alloca_zerofill(env, basic_type, name);
 
         store_roc_value(env, layout_interner, layout, alloca, source.into());
@@ -2327,11 +2383,11 @@ pub fn load_roc_value<'a, 'ctx>(
 pub fn use_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     source: BasicValueEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    if layout_interner.is_passed_by_reference(layout) {
+    if layout.is_passed_by_reference(layout_interner) {
         let alloca = entry_block_alloca_zerofill(
             env,
             basic_type_from_layout(env, layout_interner, layout),
@@ -2354,28 +2410,35 @@ pub fn store_roc_value_opaque<'a, 'ctx>(
     value: BasicValueEnum<'ctx>,
 ) {
     let target_type =
-        basic_type_from_layout(env, layout_interner, layout).ptr_type(AddressSpace::default());
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+            .ptr_type(AddressSpace::default());
     let destination =
         env.builder
             .build_pointer_cast(opaque_destination, target_type, "store_roc_value_opaque");
 
-    store_roc_value(env, layout_interner, layout, destination, value)
+    store_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(layout),
+        destination,
+        value,
+    )
 }
 
 pub fn store_roc_value<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout: LayoutRepr<'a>,
     destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) {
-    if layout_interner.is_passed_by_reference(layout) {
+    if layout.is_passed_by_reference(layout_interner) {
         debug_assert!(value.is_pointer_value());
 
         build_memcpy(
             env,
             layout_interner,
-            layout_interner.get_repr(layout),
+            layout,
             destination,
             value.into_pointer_value(),
         );
@@ -2395,7 +2458,7 @@ pub fn store_roc_value<'a, 'ctx>(
 
 pub(crate) fn build_exp_stmt<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
@@ -2465,7 +2528,13 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         Ret(symbol) => {
             let (value, layout) = scope.load_symbol_and_layout(symbol);
 
-            build_return(env, layout_interner, layout, value, parent);
+            build_return(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value,
+                parent,
+            );
 
             env.context.i8_type().const_zero().into()
         }
@@ -2477,7 +2546,8 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             cond_layout,
             cond_symbol,
         } => {
-            let ret_type = basic_type_from_layout(env, layout_interner, *ret_layout);
+            let ret_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*ret_layout));
 
             let switch_args = SwitchArgsIr {
                 cond_layout: *cond_layout,
@@ -2515,7 +2585,11 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 builder.position_at_end(cont_block);
 
                 for param in parameters.iter() {
-                    let basic_type = basic_type_from_layout(env, layout_interner, param.layout);
+                    let basic_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(param.layout),
+                    );
 
                     let phi_type = if layout_interner.is_passed_by_reference(param.layout) {
                         basic_type.ptr_type(AddressSpace::default()).into()
@@ -2645,8 +2719,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                         LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
                             let element_layout = layout_interner.get_repr(element_layout);
-                            let alignment =
-                                element_layout.alignment_bytes(layout_interner, env.target_info);
+                            let alignment = element_layout.alignment_bytes(layout_interner);
 
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
@@ -2675,7 +2748,11 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                                     env.builder.position_at_end(then_block);
                                     let refcount_ptr =
                                         PointerToRefcount::from_ptr_to_data(env, value_ptr);
-                                    refcount_ptr.decrement(env, layout_interner, layout);
+                                    refcount_ptr.decrement(
+                                        env,
+                                        layout_interner,
+                                        layout_interner.get_repr(layout),
+                                    );
 
                                     env.builder.build_unconditional_branch(done_block);
                                 }
@@ -2890,8 +2967,8 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 
 fn build_return<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout<'a>,
+    layout_interner: &STLayoutInterner<'a>,
+    layout: LayoutRepr<'a>,
     value: BasicValueEnum<'ctx>,
     parent: FunctionValue<'ctx>,
 ) {
@@ -2910,7 +2987,7 @@ fn build_return<'a, 'ctx>(
             debug_assert!(out_parameter.is_pointer_value());
 
             let destination = out_parameter.into_pointer_value();
-            if layout_interner.is_passed_by_reference(layout) {
+            if layout.is_passed_by_reference(layout_interner) {
                 debug_assert!(
                     value.is_pointer_value(),
                     "{:?}: {:?}\n{:?}",
@@ -2941,7 +3018,7 @@ fn build_return<'a, 'ctx>(
                 build_memcpy(
                     env,
                     layout_interner,
-                    layout_interner.get_repr(layout),
+                    layout,
                     destination,
                     value.into_pointer_value(),
                 );
@@ -3181,12 +3258,16 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
 /// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
 fn get_tag_id_wrapped<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
     let union_struct_type = struct_type_from_union_layout(env, layout_interner, &union_layout);
-    let tag_id_type = basic_type_from_layout(env, layout_interner, union_layout.tag_id_layout());
+    let tag_id_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(union_layout.tag_id_layout()),
+    );
 
     let tag_id_ptr = env
         .builder
@@ -3249,7 +3330,7 @@ fn const_u128<'ctx>(env: &Env<'_, 'ctx, '_>, value: u128) -> IntValue<'ctx> {
 
 fn build_switch_ir<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     func_spec_solutions: &FuncSpecSolutions,
     scope: &Scope<'a, 'ctx>,
@@ -3275,8 +3356,12 @@ fn build_switch_ir<'a, 'ctx>(
     let (cond_value, stored_layout) = scope.load_symbol_and_layout(cond_symbol);
 
     debug_assert_eq!(
-        basic_type_from_layout(env, layout_interner, cond_layout),
-        basic_type_from_layout(env, layout_interner, stored_layout),
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(cond_layout)),
+        basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(stored_layout)
+        ),
         "This switch matches on {:?}, but the matched-on symbol {:?} has layout {:?}",
         cond_layout,
         cond_symbol,
@@ -3471,7 +3556,7 @@ pub fn create_entry_block_alloca<'ctx>(
 
 fn expose_function_to_host<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
     arguments: &'a [InLayout<'a>],
@@ -3504,7 +3589,7 @@ fn expose_function_to_host<'a, 'ctx>(
 
 fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     arguments: &[InLayout<'a>],
     return_layout: InLayout<'a>,
@@ -3613,8 +3698,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
 
         builder.position_at_end(entry);
 
-        let wrapped_layout = layout_interner
-            .insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
+        let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
         call_roc_function(
             env,
             layout_interner,
@@ -3627,7 +3711,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
             env,
             layout_interner,
             roc_function,
-            return_layout,
+            layout_interner.get_repr(return_layout),
             arguments_for_call,
         )
     };
@@ -3639,7 +3723,13 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         .unwrap()
         .into_pointer_value();
 
-    store_roc_value(env, layout_interner, return_layout, output_arg, call_result);
+    store_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+        output_arg,
+        call_result,
+    );
     builder.build_return(None);
 
     c_function
@@ -3647,7 +3737,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
 
 fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     ident_string: &str,
     roc_function: FunctionValue<'ctx>,
     arguments: &[InLayout<'a>],
@@ -3659,7 +3749,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     // does not seem to be a smarter solution
     let wrapper_return_type = roc_call_result_type(
         env,
-        basic_type_from_layout(env, layout_interner, return_layout),
+        basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(return_layout),
+        ),
     );
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -3751,8 +3845,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
         builder.position_at_end(last_block);
 
-        let wrapper_result = layout_interner
-            .insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
+        let wrapper_result = roc_call_result_layout(env.arena, return_layout);
 
         let roc_value = call_roc_function(
             env,
@@ -3816,7 +3909,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
 fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     arguments: &[InLayout<'a>],
     return_layout: InLayout<'a>,
@@ -3827,10 +3920,15 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
         .map(|l| to_cc_type(env, layout_interner, *l));
     let argument_types = Vec::from_iter_in(it, env.arena);
 
-    let return_type = basic_type_from_layout(env, layout_interner, return_layout);
+    let return_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+    );
 
     let cc_return = to_cc_return(env, layout_interner, return_layout);
-    let roc_return = RocReturn::from_layout(layout_interner, return_layout);
+    let roc_return =
+        RocReturn::from_layout(layout_interner, layout_interner.get_repr(return_layout));
 
     let c_function_spec = FunctionSpec::cconv(env, cc_return, Some(return_type), &argument_types);
 
@@ -4006,7 +4104,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
         env,
         layout_interner,
         roc_function,
-        return_layout,
+        layout_interner.get_repr(return_layout),
         arguments.as_slice(),
     );
 
@@ -4054,7 +4152,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
 
 fn expose_function_to_host_help_c_abi<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     ident_string: &str,
     roc_function: FunctionValue<'ctx>,
     arguments: &[InLayout<'a>],
@@ -4128,7 +4226,11 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
         }
 
         LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {
-            basic_type_from_layout(env, layout_interner, return_layout)
+            basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+            )
         }
     };
 
@@ -4267,7 +4369,7 @@ pub fn get_panic_tag_ptr<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
 
 fn set_jump_and_catch_long_jump<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     // The roc function to call
     roc_function: FunctionValue<'ctx>,
@@ -4277,10 +4379,13 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     let context = env.context;
     let builder = env.builder;
 
-    let return_type = basic_type_from_layout(env, layout_interner, roc_return_layout);
+    let return_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(roc_return_layout),
+    );
     let call_result_return_conv = {
-        let layout = layout_interner
-            .insert_direct_no_semantic(roc_call_result_layout(env.arena, roc_return_layout));
+        let layout = roc_call_result_layout(env.arena, roc_return_layout);
         RocReturn::from_layout(layout_interner, layout)
     };
     let call_result_type = roc_call_result_type(env, return_type.as_basic_type_enum());
@@ -4309,7 +4414,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
             env,
             layout_interner,
             roc_function,
-            roc_return_layout,
+            layout_interner.get_repr(roc_return_layout),
             roc_arguments,
         );
 
@@ -4364,7 +4469,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
 
 fn make_exception_catcher<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     return_layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
@@ -4406,18 +4511,26 @@ fn roc_call_result_type<'ctx>(
 
 fn make_good_roc_result<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     return_layout: InLayout<'a>,
     return_value: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let context = env.context;
     let builder = env.builder;
 
-    let return_type = basic_type_from_layout(env, layout_interner, return_layout);
+    let return_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+    );
 
     let v1 = roc_call_result_type(
         env,
-        basic_type_from_layout(env, layout_interner, return_layout),
+        basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(return_layout),
+        ),
     )
     .const_zero();
 
@@ -4445,7 +4558,7 @@ fn make_good_roc_result<'a, 'ctx>(
 
 fn make_exception_catching_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     return_layout: InLayout<'a>,
     wrapper_function_name: &str,
@@ -4456,27 +4569,31 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
     let builder = env.builder;
 
     // TODO: pass these, and the roc function, in directly?
-    let wrapper_return_layout =
-        layout_interner.insert_direct_no_semantic(roc_call_result_layout(env.arena, return_layout));
+    let wrapper_return_layout = roc_call_result_layout(env.arena, return_layout);
 
     let wrapper_return_type = roc_call_result_type(
         env,
-        basic_type_from_layout(env, layout_interner, return_layout),
+        basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(return_layout),
+        ),
     );
 
     let roc_function_type = roc_function.get_type();
-    let argument_types = match RocReturn::from_layout(layout_interner, return_layout) {
-        RocReturn::Return => roc_function_type.get_param_types(),
-        RocReturn::ByPointer => {
-            // Our fastcc passes the return pointer as the last parameter. Remove it from the
-            // argument types used for the wrapper, since the wrapper's return type will go here
-            // when we build the wrapper function spec below.
-            let mut types = roc_function_type.get_param_types();
-            types.pop();
+    let argument_types =
+        match RocReturn::from_layout(layout_interner, layout_interner.get_repr(return_layout)) {
+            RocReturn::Return => roc_function_type.get_param_types(),
+            RocReturn::ByPointer => {
+                // Our fastcc passes the return pointer as the last parameter. Remove it from the
+                // argument types used for the wrapper, since the wrapper's return type will go here
+                // when we build the wrapper function spec below.
+                let mut types = roc_function_type.get_param_types();
+                types.pop();
 
-            types
-        }
-    };
+                types
+            }
+        };
 
     let wrapper_return_conv = RocReturn::from_layout(layout_interner, wrapper_return_layout);
 
@@ -4541,7 +4658,7 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
 
 pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
     env: &'r Env<'a, 'ctx, '_>,
-    layout_interner: &'r mut STLayoutInterner<'a>,
+    layout_interner: &'r STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
@@ -4589,7 +4706,7 @@ pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
 
 pub fn build_procedures<'a>(
     env: &Env<'a, '_, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
@@ -4645,7 +4762,7 @@ pub fn build_procedures<'a>(
 
 pub fn build_wasm_test_wrapper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: SingleEntryPoint<'a>,
@@ -4670,7 +4787,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx>(
 
 pub fn build_procedures_return_main<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: SingleEntryPoint<'a>,
@@ -4695,7 +4812,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
 
 pub fn build_procedures_expose_expects<'a>(
     env: &Env<'a, '_, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     expects: &'a [Symbol],
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
@@ -4766,7 +4883,7 @@ pub fn build_procedures_expose_expects<'a>(
 
 fn build_procedures_help<'a>(
     env: &Env<'a, '_, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
@@ -4891,7 +5008,7 @@ fn func_spec_name<'a>(
 
 fn build_proc_header<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     func_spec: FuncSpec,
     symbol: Symbol,
     proc: &roc_mono::ir::Proc<'a>,
@@ -4902,16 +5019,22 @@ fn build_proc_header<'a, 'ctx>(
 
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
 
-    let ret_type = basic_type_from_layout(env, layout_interner, proc.ret_layout);
+    let ret_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(proc.ret_layout),
+    );
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = argument_type_from_layout(env, layout_interner, *layout);
+        let arg_type =
+            argument_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout));
 
         arg_basic_types.push(arg_type);
     }
 
-    let roc_return = RocReturn::from_layout(layout_interner, proc.ret_layout);
+    let roc_return =
+        RocReturn::from_layout(layout_interner, layout_interner.get_repr(proc.ret_layout));
     let fn_spec = FunctionSpec::fastcc(env, roc_return, ret_type, arg_basic_types);
 
     let fn_val = add_func(
@@ -4958,7 +5081,7 @@ fn build_proc_header<'a, 'ctx>(
 
 fn expose_alias_to_host<'a>(
     env: &Env<'a, '_, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     fn_name: &str,
     alias_symbol: Symbol,
@@ -5024,7 +5147,8 @@ fn expose_alias_to_host<'a>(
             //
             // * roc__mainForHost_1_Update_result_size() -> i64
 
-            let result_type = basic_type_from_layout(env, layout_interner, result);
+            let result_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(result));
 
             build_host_exposed_alias_size_help(
                 env,
@@ -5039,7 +5163,7 @@ fn expose_alias_to_host<'a>(
 
 fn build_closure_caller<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     def_name: &str,
     evaluator: FunctionValue<'ctx>,
     alias_symbol: Symbol,
@@ -5051,15 +5175,19 @@ fn build_closure_caller<'a, 'ctx>(
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {
-        let arg_type = basic_type_from_layout(env, layout_interner, *layout);
+        let arg_type =
+            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout));
         let arg_ptr_type = arg_type.ptr_type(AddressSpace::default());
 
         argument_types.push(arg_ptr_type.into());
     }
 
     let closure_argument_type = {
-        let basic_type =
-            basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation());
+        let basic_type = basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(lambda_set.runtime_representation()),
+        );
 
         basic_type.ptr_type(AddressSpace::default())
     };
@@ -5068,7 +5196,8 @@ fn build_closure_caller<'a, 'ctx>(
     let context = &env.context;
     let builder = env.builder;
 
-    let result_type = basic_type_from_layout(env, layout_interner, result);
+    let result_type =
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(result));
 
     let output_type = { result_type.ptr_type(AddressSpace::default()) };
     argument_types.push(output_type.into());
@@ -5105,7 +5234,8 @@ fn build_closure_caller<'a, 'ctx>(
     let layouts_it = arguments.iter().chain(std::iter::once(&closure_layout));
     for (param, layout) in evaluator_arguments.iter_mut().zip(layouts_it) {
         if param.is_pointer_value() && !layout_interner.is_passed_by_reference(*layout) {
-            let basic_type = basic_type_from_layout(env, layout_interner, *layout);
+            let basic_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout));
             *param = builder.new_build_load(basic_type, param.into_pointer_value(), "load_param");
         }
     }
@@ -5126,7 +5256,7 @@ fn build_closure_caller<'a, 'ctx>(
             env,
             layout_interner,
             evaluator,
-            return_layout,
+            layout_interner.get_repr(return_layout),
             &evaluator_arguments,
         );
 
@@ -5160,7 +5290,7 @@ fn build_closure_caller<'a, 'ctx>(
 
 fn build_host_exposed_alias_size<'a, 'r>(
     env: &'r Env<'a, '_, '_>,
-    layout_interner: &'r mut STLayoutInterner<'a>,
+    layout_interner: &'r STLayoutInterner<'a>,
     def_name: &str,
     alias_symbol: Symbol,
     layout: InLayout<'a>,
@@ -5170,7 +5300,7 @@ fn build_host_exposed_alias_size<'a, 'r>(
         def_name,
         alias_symbol,
         None,
-        basic_type_from_layout(env, layout_interner, layout),
+        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout)),
     )
 }
 
@@ -5210,7 +5340,7 @@ fn build_host_exposed_alias_size_help<'a, 'ctx>(
 
 fn build_proc<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     layout_ids: &mut LayoutIds<'a>,
     func_spec_solutions: &FuncSpecSolutions,
@@ -5349,7 +5479,7 @@ fn function_value_by_name_help<'a, 'ctx>(
 #[inline(always)]
 fn roc_call_with_args<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     argument_layouts: &[InLayout<'a>],
     result_layout: InLayout<'a>,
     name: LambdaName<'a>,
@@ -5365,14 +5495,20 @@ fn roc_call_with_args<'a, 'ctx>(
         result_layout,
     );
 
-    call_roc_function(env, layout_interner, fn_val, result_layout, arguments)
+    call_roc_function(
+        env,
+        layout_interner,
+        fn_val,
+        layout_interner.get_repr(result_layout),
+        arguments,
+    )
 }
 
 pub fn call_roc_function<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
-    result_layout: InLayout<'a>,
+    result_layout: LayoutRepr<'a>,
     arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
     let pass_by_pointer = roc_function.get_type().get_param_types().len() == arguments.len() + 1;
@@ -5421,7 +5557,7 @@ pub fn call_roc_function<'a, 'ctx>(
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            if layout_interner.is_passed_by_reference(result_layout) {
+            if result_layout.is_passed_by_reference(layout_interner) {
                 result_alloca.into()
             } else {
                 env.builder.new_build_load(
@@ -5485,7 +5621,7 @@ pub struct RocFunctionCall<'ctx> {
 
 pub(crate) fn roc_function_call<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
     closure_data: BasicValueEnum<'ctx>,
@@ -5496,8 +5632,11 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
 ) -> RocFunctionCall<'ctx> {
     use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
 
-    let closure_data_type =
-        basic_type_from_layout(env, layout_interner, lambda_set.runtime_representation());
+    let closure_data_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(lambda_set.runtime_representation()),
+    );
 
     let closure_data_ptr = env
         .builder
@@ -5506,7 +5645,7 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
     store_roc_value(
         env,
         layout_interner,
-        lambda_set.runtime_representation(),
+        layout_interner.get_repr(lambda_set.runtime_representation()),
         closure_data_ptr,
         closure_data,
     );
@@ -5550,14 +5689,14 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
 /// (this does not currently happen here) be coerced to that integer type.
 fn to_cc_type<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> BasicTypeEnum<'ctx> {
     match layout_interner.runtime_representation(layout) {
         LayoutRepr::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
         _ => {
             // TODO this is almost certainly incorrect for bigger structs
-            basic_type_from_layout(env, layout_interner, layout)
+            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
         }
     }
 }
@@ -5595,13 +5734,13 @@ pub(crate) enum RocReturn {
 }
 
 impl RocReturn {
-    fn roc_return_by_pointer(interner: &STLayoutInterner, layout: InLayout) -> bool {
-        interner.is_passed_by_reference(layout)
+    fn roc_return_by_pointer(interner: &STLayoutInterner, layout: LayoutRepr) -> bool {
+        layout.is_passed_by_reference(interner)
     }
 
     pub(crate) fn from_layout<'a>(
-        layout_interner: &mut STLayoutInterner<'a>,
-        layout: InLayout<'a>,
+        layout_interner: &STLayoutInterner<'a>,
+        layout: LayoutRepr<'a>,
     ) -> Self {
         if Self::roc_return_by_pointer(layout_interner, layout) {
             RocReturn::ByPointer
@@ -5741,7 +5880,7 @@ impl<'ctx> FunctionSpec<'ctx> {
 /// According to the C ABI, how should we return a value with the given layout?
 pub fn to_cc_return<'a>(
     env: &Env<'a, '_, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> CCReturn {
     let return_size = layout_interner.stack_size(layout);
@@ -5772,7 +5911,7 @@ fn function_arguments<'a, 'ctx>(
 
 fn build_foreign_symbol<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     scope: &mut Scope<'a, 'ctx>,
     foreign: &roc_module::ident::ForeignSymbol,
     argument_symbols: &[Symbol],
@@ -5804,8 +5943,10 @@ fn build_foreign_symbol<'a, 'ctx>(
             //      and can use in the wrapper
             // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
 
-            let return_type = basic_type_from_layout(env, layout_interner, ret_layout);
-            let roc_return = RocReturn::from_layout(layout_interner, ret_layout);
+            let return_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(ret_layout));
+            let roc_return =
+                RocReturn::from_layout(layout_interner, layout_interner.get_repr(ret_layout));
             let cc_return = to_cc_return(env, layout_interner, ret_layout);
 
             let mut cc_argument_types =
@@ -5819,7 +5960,11 @@ fn build_foreign_symbol<'a, 'ctx>(
 
                 cc_argument_types.push(to_cc_type(env, layout_interner, layout));
 
-                let basic_type = argument_type_from_layout(env, layout_interner, layout);
+                let basic_type = argument_type_from_layout(
+                    env,
+                    layout_interner,
+                    layout_interner.get_repr(layout),
+                );
                 fastcc_argument_types.push(basic_type);
 
                 arguments.push(value);
@@ -5940,7 +6085,7 @@ fn build_foreign_symbol<'a, 'ctx>(
         env,
         layout_interner,
         fastcc_function,
-        ret_layout,
+        layout_interner.get_repr(ret_layout),
         &arguments,
     )
 }

@@ -12,7 +12,7 @@ use roc_mono::low_level::HigherOrder;
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
 use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
-use crate::{PTR_TYPE, TARGET_INFO};
+use crate::PTR_TYPE;
 use roc_wasm_module::{Align, LocalId, ValueType};
 
 /// Number types used for Wasm code gen
@@ -398,14 +398,13 @@ impl<'a> LowLevelCall<'a> {
                             {
                                 let list_offset = 0;
                                 let elem_offset = LayoutRepr::Builtin(Builtin::List(list_elem))
-                                    .stack_size(backend.layout_interner, TARGET_INFO);
+                                    .stack_size(backend.layout_interner);
                                 (list_offset, elem_offset, f2)
                             }
                             (_, LayoutRepr::Builtin(Builtin::List(list_elem)))
                                 if l1 == backend.layout_interner.get_repr(list_elem) =>
                             {
-                                let list_offset =
-                                    l1.stack_size(backend.layout_interner, TARGET_INFO);
+                                let list_offset = l1.stack_size(backend.layout_interner);
                                 let elem_offset = 0;
                                 (list_offset, elem_offset, f1)
                             }
@@ -468,7 +467,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let elem_layout = backend.layout_interner.get_repr(elem_layout);
                 let (elem_width, elem_align) =
-                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -507,7 +506,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let elem_layout = backend.layout_interner.get_repr(elem_layout);
                 let (elem_width, elem_align) =
-                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
@@ -523,7 +522,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let elem_layout = backend.layout_interner.get_repr(elem_layout);
                 let (elem_width, elem_align) =
-                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -564,7 +563,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let elem_layout = backend.layout_interner.get_repr(elem_layout);
                 let (elem_width, elem_align) =
-                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -1692,10 +1691,8 @@ impl<'a> LowLevelCall<'a> {
                         // In most languages this operation is for signed numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to signed before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
-                        let bit_width = 8 * self
-                            .ret_layout_raw
-                            .stack_size(backend.layout_interner, TARGET_INFO)
-                            as i32;
+                        let bit_width =
+                            8 * self.ret_layout_raw.stack_size(backend.layout_interner) as i32;
                         if bit_width < 32 && !symbol_is_signed_int(backend, num) {
                             // Sign-extend the number by shifting left and right again
                             backend
@@ -1741,9 +1738,7 @@ impl<'a> LowLevelCall<'a> {
                         // In most languages this operation is for unsigned numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to unsigned before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
-                        let bit_width = 8 * self
-                            .ret_layout_raw
-                            .stack_size(backend.layout_interner, TARGET_INFO);
+                        let bit_width = 8 * self.ret_layout_raw.stack_size(backend.layout_interner);
                         if bit_width < 32 && symbol_is_signed_int(backend, num) {
                             let mask = (1 << bit_width) - 1;
 
@@ -2561,7 +2556,7 @@ pub fn call_higher_order_lowlevel<'a>(
             );
             let elem_layout = backend.layout_interner.get_repr(elem_layout);
             let (element_width, alignment) =
-                elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                elem_layout.stack_size_and_alignment(backend.layout_interner);
 
             let cb = &mut backend.code_builder;
 
@@ -2630,7 +2625,7 @@ fn list_map_n<'a>(
     let elem_ret = unwrap_list_elem_layout(backend.layout_interner.get_repr(return_layout));
     let elem_ret = backend.layout_interner.get_repr(elem_ret);
     let (elem_ret_size, elem_ret_align) =
-        elem_ret.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+        elem_ret.stack_size_and_alignment(backend.layout_interner);
 
     let cb = &mut backend.code_builder;
 

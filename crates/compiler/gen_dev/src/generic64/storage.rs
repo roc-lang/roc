@@ -633,8 +633,7 @@ impl<
 
         let (union_offset, _) = self.stack_offset_and_size(structure);
 
-        let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(layout_interner, self.target_info);
+        let (data_size, data_alignment) = union_layout.data_size_and_alignment(layout_interner);
         let id_offset = data_size - data_alignment;
         let discriminant = union_layout.discriminant();
 

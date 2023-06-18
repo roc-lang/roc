@@ -3065,9 +3065,7 @@ impl<
 
                 let target_info = self.storage_manager.target_info;
                 if union_layout.stores_tag_id_as_data(target_info) {
-                    let offset = union_layout
-                        .tag_id_offset(self.interner(), target_info)
-                        .unwrap() as i32;
+                    let offset = union_layout.tag_id_offset(self.interner()).unwrap() as i32;
 
                     let ptr_reg = self
                         .storage_manager
@@ -3111,13 +3109,10 @@ impl<
         tag_id: TagIdIntType,
         reuse: Option<Symbol>,
     ) {
-        let target_info = self.storage_manager.target_info;
-
         let layout_interner: &mut STLayoutInterner<'a> = self.layout_interner;
         let buf: &mut Vec<'a, u8> = &mut self.buf;
 
-        let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(layout_interner, target_info);
+        let (data_size, data_alignment) = union_layout.data_size_and_alignment(layout_interner);
 
         match union_layout {
             UnionLayout::NonRecursive(field_layouts) => {

@@ -391,14 +391,13 @@ pub fn load_types(
     let architectures = Architecture::iter();
     let mut arch_types = Vec::with_capacity(architectures.len());
 
-    let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
-
     for architecture in architectures {
         let mut interns = interns.clone(); // TODO there may be a way to avoid this.
         let target_info = TargetInfo {
             architecture,
             operating_system,
         };
+        let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
         let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
         let mut glue_procs_by_layout = MutMap::default();
 

@@ -45,7 +45,7 @@ impl<'ctx> From<BasicValueEnum<'ctx>> for RocStruct<'ctx> {
 impl<'ctx> RocStruct<'ctx> {
     pub fn build<'a>(
         env: &Env<'a, 'ctx, '_>,
-        layout_interner: &mut STLayoutInterner<'a>,
+        layout_interner: &STLayoutInterner<'a>,
         layout_repr: LayoutRepr<'a>,
         scope: &Scope<'a, 'ctx>,
         sorted_fields: &[Symbol],
@@ -55,7 +55,7 @@ impl<'ctx> RocStruct<'ctx> {
             struct_val,
         } = build_struct_helper(env, layout_interner, scope, sorted_fields);
 
-        let passed_by_ref = layout_repr.is_passed_by_reference(layout_interner, env.target_info);
+        let passed_by_ref = layout_repr.is_passed_by_reference(layout_interner);
 
         if passed_by_ref {
             let alloca = env.builder.build_alloca(struct_type, "struct_alloca");
@@ -78,17 +78,16 @@ impl<'ctx> RocStruct<'ctx> {
         &self,
         env: &Env<'a, 'ctx, '_>,
         layout_interner: &STLayoutInterner<'a>,
-        struct_layout: InLayout<'a>,
+        struct_layout: LayoutRepr<'a>,
         index: u64,
     ) -> BasicValueEnum<'ctx> {
-        let layout =
-            if let LayoutRepr::LambdaSet(lambda_set) = layout_interner.get_repr(struct_layout) {
-                lambda_set.runtime_representation()
-            } else {
-                struct_layout
-            };
+        let layout = if let LayoutRepr::LambdaSet(lambda_set) = struct_layout {
+            layout_interner.get_repr(lambda_set.runtime_representation())
+        } else {
+            struct_layout
+        };
 
-        match (self, layout_interner.get_repr(layout)) {
+        match (self, layout) {
             (Self::ByValue(argument), LayoutRepr::Struct(field_layouts)) => {
                 index_struct_value(env, layout_interner, field_layouts, *argument, index)
             }
@@ -127,7 +126,7 @@ fn index_struct_value<'a, 'ctx>(
     use_roc_value(
         env,
         layout_interner,
-        field_layout,
+        layout_interner.get_repr(field_layout),
         field_value,
         "struct_field",
     )
@@ -155,7 +154,7 @@ fn index_struct_ptr<'a, 'ctx>(
     load_roc_value(
         env,
         layout_interner,
-        field_layout,
+        layout_interner.get_repr(field_layout),
         field_value,
         "struct_field",
     )
@@ -188,7 +187,7 @@ struct BuildStruct<'ctx> {
 
 fn build_struct_helper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     sorted_fields: &[Symbol],
 ) -> BuildStruct<'ctx> {
@@ -207,7 +206,11 @@ fn build_struct_helper<'a, 'ctx>(
             .get_repr(field_layout)
             .is_dropped_because_empty()
         {
-            let field_type = basic_type_from_layout(env, layout_interner, field_layout);
+            let field_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(field_layout),
+            );
             field_types.push(field_type);
 
             if layout_interner.is_passed_by_reference(field_layout) {

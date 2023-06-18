@@ -1171,7 +1171,6 @@ struct Env<'a> {
     enum_names: Enums,
     pending_recursive_types: VecMap<TypeId, Variable>,
     known_recursive_types: VecMap<Variable, TypeId>,
-    target: TargetInfo,
 }
 
 impl<'a> Env<'a> {
@@ -1194,7 +1193,6 @@ impl<'a> Env<'a> {
             glue_procs_by_layout,
             lambda_set_ids: Default::default(),
             layout_cache: LayoutCache::new(layout_interner, target),
-            target,
         }
     }
 
@@ -1831,7 +1829,6 @@ where
             *layout1,
             label2,
             *layout2,
-            env.layout_cache.target_info,
         )
     });
 
@@ -1946,7 +1943,7 @@ fn tag_union_type_from_layout<'a>(
                         .stack_size()
                         .max(1);
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     RocTagUnion::NonRecursive {
@@ -1964,7 +1961,7 @@ fn tag_union_type_from_layout<'a>(
                     let discriminant_size =
                         Discriminant::from_number_of_tags(tags.len()).stack_size();
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     RocTagUnion::Recursive {
@@ -2002,7 +1999,7 @@ fn tag_union_type_from_layout<'a>(
                     let discriminant_size =
                         Discriminant::from_number_of_tags(other_tags.len()).stack_size();
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     // nullable_id refers to the index of the tag that is represented at runtime as NULL.

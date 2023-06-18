@@ -193,7 +193,7 @@ fn mono_module_to_dylib<'a>(
         entry_point,
         interns,
         subs,
-        mut layout_interner,
+        layout_interner,
         ..
     } = loaded;
 
@@ -246,7 +246,7 @@ fn mono_module_to_dylib<'a>(
 
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
-        &mut layout_interner,
+        &layout_interner,
         opt_level,
         procedures,
         entry_point,

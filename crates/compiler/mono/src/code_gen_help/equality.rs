@@ -710,7 +710,7 @@ fn eq_list<'a>(
     let size_expr = Expr::Literal(Literal::Int(
         (layout_interner
             .get_repr(elem_layout)
-            .stack_size(layout_interner, root.target_info) as i128)
+            .stack_size(layout_interner) as i128)
             .to_ne_bytes(),
     ));
     let size_stmt = |next| Stmt::Let(size, size_expr, layout_isize, next);
