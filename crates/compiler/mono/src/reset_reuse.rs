@@ -922,12 +922,18 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 },
                             }
                         })
-                        .rev();
+                        // Collect to prevent revs from cancelling out.
+                        .collect_in::<Vec<_>>(arena);
 
                     // Add the void tokens to the jump arguments to match the expected arguments of the join point.
-                    let extended_arguments =
-                        Vec::from_iter_in(arguments.iter().copied().chain(tokens), arena)
-                            .into_bump_slice();
+                    let extended_arguments = Vec::from_iter_in(
+                        arguments
+                            .iter()
+                            .copied()
+                            .chain(tokens.iter().copied().rev()),
+                        arena,
+                    )
+                    .into_bump_slice();
 
                     let casted_tokens = reuse_tokens_to_cast.into_iter().fold(
                         arena.alloc(Stmt::Jump(*id, extended_arguments)),
