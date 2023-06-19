@@ -67,12 +67,12 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                 if #Derived_gen.31 then
                                     let #Derived_gen.172 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.198, id: UpdateModeId { id: 86 } };
                                     let #Derived_gen.173 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 87 } };
-                                    jump #Derived_gen.30 #Derived_gen.173 #Derived_gen.172 #Derived_gen.166;
+                                    jump #Derived_gen.30 #Derived_gen.166 #Derived_gen.172 #Derived_gen.173;
                                 else
                                     inc Test.26;
                                     decref Test.180;
                                     let #Derived_gen.174 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                    jump #Derived_gen.30 #Derived_gen.166 #Derived_gen.174 #Derived_gen.174;
+                                    jump #Derived_gen.30 #Derived_gen.174 #Derived_gen.174 #Derived_gen.166;
                             in
                             let Test.228 : U8 = 1i64;
                             let Test.229 : U8 = GetTagId Test.180;
@@ -94,13 +94,13 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                         let #Derived_gen.25 : Int1 = lowlevel RefCountIsUnique Test.180;
                                         if #Derived_gen.25 then
                                             let #Derived_gen.189 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 101 } };
-                                            jump #Derived_gen.24 #Derived_gen.189 #Derived_gen.185;
+                                            jump #Derived_gen.24 #Derived_gen.185 #Derived_gen.189;
                                         else
                                             inc Test.46;
                                             inc Test.49;
                                             decref Test.180;
                                             let #Derived_gen.190 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                            jump #Derived_gen.24 #Derived_gen.185 #Derived_gen.190;
+                                            jump #Derived_gen.24 #Derived_gen.190 #Derived_gen.185;
                                     in
                                     let Test.213 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                     let Test.214 : U8 = 1i64;
@@ -152,12 +152,12 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                             if #Derived_gen.29 then
                                                 let #Derived_gen.197 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.200, id: UpdateModeId { id: 108 } };
                                                 let #Derived_gen.198 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.180, id: UpdateModeId { id: 109 } };
-                                                jump #Derived_gen.28 #Derived_gen.198 #Derived_gen.197 #Derived_gen.191;
+                                                jump #Derived_gen.28 #Derived_gen.191 #Derived_gen.197 #Derived_gen.198;
                                             else
                                                 inc Test.33;
                                                 decref Test.180;
                                                 let #Derived_gen.199 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                                jump #Derived_gen.28 #Derived_gen.191 #Derived_gen.199 #Derived_gen.199;
+                                                jump #Derived_gen.28 #Derived_gen.199 #Derived_gen.199 #Derived_gen.191;
                                         in
                                         let Test.204 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                         let Test.205 : U8 = 1i64;
@@ -232,12 +232,12 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                         decref #Derived_gen.332;
                                         let #Derived_gen.340 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.136, id: UpdateModeId { id: 243 } };
                                         let #Derived_gen.341 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 244 } };
-                                        jump #Derived_gen.70 #Derived_gen.341 #Derived_gen.340 #Derived_gen.333;
+                                        jump #Derived_gen.70 #Derived_gen.333 #Derived_gen.340 #Derived_gen.341;
                                     else
                                         inc Test.63;
                                         decref Test.118;
                                         let #Derived_gen.342 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                        jump #Derived_gen.70 #Derived_gen.333 #Derived_gen.332 #Derived_gen.342;
+                                        jump #Derived_gen.70 #Derived_gen.342 #Derived_gen.332 #Derived_gen.333;
                                 in
                                 let Test.166 : U8 = 1i64;
                                 let Test.167 : U8 = GetTagId Test.118;
@@ -260,12 +260,12 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                             if #Derived_gen.61 then
                                                 decref #Derived_gen.356;
                                                 let #Derived_gen.362 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 263 } };
-                                                jump #Derived_gen.60 #Derived_gen.362 #Derived_gen.357;
+                                                jump #Derived_gen.60 #Derived_gen.357 #Derived_gen.362;
                                             else
                                                 inc Test.83;
                                                 inc Test.86;
                                                 decref Test.118;
-                                                jump #Derived_gen.60 #Derived_gen.357 #Derived_gen.356;
+                                                jump #Derived_gen.60 #Derived_gen.356 #Derived_gen.357;
                                         in
                                         let Test.151 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                         let Test.152 : U8 = 1i64;
@@ -277,11 +277,11 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                             let Test.150 : Int1 = true;
                                             let Test.155 : Int1 = lowlevel Eq Test.150 Test.149;
                                             if Test.155 then
-                                                jump Test.137 #Derived_gen.355 #Derived_gen.354;
+                                                jump Test.137 #Derived_gen.354 #Derived_gen.355;
                                             else
-                                                jump Test.154 #Derived_gen.355 #Derived_gen.354;
+                                                jump Test.154 #Derived_gen.354 #Derived_gen.355;
                                         else
-                                            jump Test.154 #Derived_gen.355 #Derived_gen.354;
+                                            jump Test.154 #Derived_gen.354 #Derived_gen.355;
                                     in
                                     let Test.160 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
                                     let Test.161 : U8 = 1i64;
@@ -318,12 +318,12 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                                     decref #Derived_gen.363;
                                                     let #Derived_gen.371 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.138, id: UpdateModeId { id: 272 } };
                                                     let #Derived_gen.372 : [<rnu>C *self I64 *self I32 Int1, <null>] = ResetRef { symbol: Test.118, id: UpdateModeId { id: 273 } };
-                                                    jump #Derived_gen.64 #Derived_gen.372 #Derived_gen.371 #Derived_gen.364;
+                                                    jump #Derived_gen.64 #Derived_gen.364 #Derived_gen.371 #Derived_gen.372;
                                                 else
                                                     inc Test.70;
                                                     decref Test.118;
                                                     let #Derived_gen.373 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                                    jump #Derived_gen.64 #Derived_gen.364 #Derived_gen.363 #Derived_gen.373;
+                                                    jump #Derived_gen.64 #Derived_gen.373 #Derived_gen.363 #Derived_gen.364;
                                             in
                                             let Test.142 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                             let Test.143 : U8 = 1i64;
@@ -335,15 +335,15 @@ procedure Test.3 (Test.9, Test.10, Test.11):
                                                 let Test.141 : Int1 = true;
                                                 let Test.146 : Int1 = lowlevel Eq Test.141 Test.140;
                                                 if Test.146 then
-                                                    jump Test.137 #Derived_gen.292 #Derived_gen.77;
+                                                    jump Test.137 #Derived_gen.77 #Derived_gen.292;
                                                 else
-                                                    jump Test.145 #Derived_gen.292 #Derived_gen.77;
+                                                    jump Test.145 #Derived_gen.77 #Derived_gen.292;
                                             else
-                                                jump Test.145 #Derived_gen.292 #Derived_gen.77;
+                                                jump Test.145 #Derived_gen.77 #Derived_gen.292;
                                         else
-                                            jump Test.163 #Derived_gen.292 #Derived_gen.77;
+                                            jump Test.163 #Derived_gen.77 #Derived_gen.292;
                                     else
-                                        jump Test.163 #Derived_gen.292 #Derived_gen.77;
+                                        jump Test.163 #Derived_gen.77 #Derived_gen.292;
                                 else
                                     decref #Derived_gen.292;
                                     decref #Derived_gen.77;
