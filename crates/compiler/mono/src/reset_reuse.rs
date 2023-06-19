@@ -1156,7 +1156,7 @@ impl<'a> ReuseEnvironment<'a> {
         self.reuse_tokens
             .entry(token_layout)
             .and_modify(|reuse_tokens| reuse_tokens.push(with_info))
-            .or_insert(Vec::from_iter_in([with_info], arena));
+            .or_insert_with(|| Vec::from_iter_in([with_info], arena));
     }
 
     /**
