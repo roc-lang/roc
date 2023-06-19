@@ -1607,6 +1607,10 @@ pub enum BranchInfo<'a> {
         scrutinee: Symbol,
         len: u64,
     },
+    Unique {
+        scrutinee: Symbol,
+        unique: bool,
+    },
 }
 
 impl<'a> BranchInfo<'a> {

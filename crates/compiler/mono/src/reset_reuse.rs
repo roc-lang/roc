@@ -67,6 +67,7 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
 
     let mut env = ReuseEnvironment {
         symbol_tags: MutMap::default(),
+        non_unique_symbols: MutSet::default(),
         reuse_tokens: MutMap::default(),
         symbol_layouts: symbol_layout,
         joinpoint_reuse_tokens: MutMap::default(),
@@ -232,18 +233,35 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             default_branch,
             ret_layout,
         } => {
+            macro_rules! update_env_with_constructor {
+                ($branch_env:expr, $info:expr) => {{
+                    match $info {
+                        BranchInfo::Constructor {
+                            scrutinee,
+                            tag_id: tag,
+                            ..
+                        } => {
+                            $branch_env.add_symbol_tag(*scrutinee, *tag);
+                        }
+                        BranchInfo::Unique {
+                            scrutinee,
+                            unique: false,
+                        } => {
+                            $branch_env.non_unique_symbols.insert(*scrutinee);
+                        }
+                        BranchInfo::None
+                        | BranchInfo::List { .. }
+                        | BranchInfo::Unique { unique: true, .. } => {}
+                    }
+                }};
+            }
+
             let new_branches = branches
                 .iter()
                 .map(|(tag_id, info, branch)| {
                     let mut branch_env = environment.clone();
-                    if let BranchInfo::Constructor {
-                        scrutinee,
-                        tag_id: tag,
-                        ..
-                    } = info
-                    {
-                        branch_env.add_symbol_tag(*scrutinee, *tag);
-                    }
+
+                    update_env_with_constructor!(branch_env, info);
 
                     let new_branch = insert_reset_reuse_operations_stmt(
                         arena,
@@ -263,14 +281,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 let (info, branch) = default_branch;
 
                 let mut branch_env = environment.clone();
-                if let BranchInfo::Constructor {
-                    scrutinee,
-                    tag_id: tag,
-                    ..
-                } = info
-                {
-                    branch_env.add_symbol_tag(*scrutinee, *tag);
-                }
+
+                update_env_with_constructor!(branch_env, info);
 
                 let new_branch = insert_reset_reuse_operations_stmt(
                     arena,
@@ -387,11 +399,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
         }
         Stmt::Refcounting(rc, continuation) => {
             let reuse_pair = match rc {
-                ModifyRc::Inc(_, _) => {
-                    // We don't need to do anything for an inc.
-                    None
-                }
-                ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol) => {
+                ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol)
+                    if !environment.non_unique_symbols.contains(symbol) =>
+                {
                     // Get the layout of the symbol from where it is defined.
                     let layout_option = environment.get_symbol_layout(*symbol);
 
@@ -429,6 +439,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         }
                         _ => None,
                     }
+                }
+                _ => {
+                    // We don't need to do anything for an inc or symbols known to be non-unique.
+                    None
                 }
             };
 
@@ -648,6 +662,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut first_pass_body_environment = ReuseEnvironment {
                     symbol_tags: environment.symbol_tags.clone(),
+                    non_unique_symbols: environment.non_unique_symbols.clone(),
                     reuse_tokens: max_reuse_token_symbols.clone(),
                     symbol_layouts: environment.symbol_layouts.clone(),
                     joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
@@ -734,18 +749,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 });
             }
 
-            let layouts_for_reuse = {
-                let mut layouts = Vec::from_iter_in(
-                    used_reuse_tokens.iter().flat_map(|(layout, tokens)| {
-                        tokens.iter().map(|token| (token.inlayout, *layout))
-                    }),
-                    arena,
-                );
-                // Make sure the layouts are sorted, so that we can provide them from the jump.
-                // In the same order as we consume them from the join point.
-                layouts.sort();
-                layouts
-            };
+            let layouts_for_reuse = Vec::from_iter_in(
+                used_reuse_tokens.iter().flat_map(|(layout, tokens)| {
+                    tokens.iter().map(|token| (token.inlayout, *layout))
+                }),
+                arena,
+            );
 
             let second_pass_remainder = {
                 environment.add_joinpoint_reuse_tokens(
@@ -769,18 +778,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             };
 
             let extended_parameters = {
-                let layouts_for_reuse_with_token = {
-                    let mut layout_with_tokens = Vec::from_iter_in(
-                        used_reuse_tokens.iter().flat_map(|(layout, tokens)| {
-                            tokens.iter().map(|token| (*layout, *token))
-                        }),
-                        arena,
-                    );
-                    // Make sure the layouts are sorted, so that we can provide them from the jump.
-                    // In the same order as we consume them from the join point.
-                    layout_with_tokens.sort_by_key(|(layout, _)| *layout);
-                    layout_with_tokens
-                };
+                let layouts_for_reuse_with_token = Vec::from_iter_in(
+                    used_reuse_tokens
+                        .iter()
+                        .flat_map(|(layout, tokens)| tokens.iter().map(|token| (*layout, *token))),
+                    arena,
+                );
 
                 let token_params =
                     layouts_for_reuse_with_token
@@ -791,7 +794,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                             layout: *token.inlayout,
                         });
 
-                // Add the void tokens to the jump arguments to match the expected arguments of the join point.
+                // Add the reuse tokens to the join arguments to match the expected arguments of the jump.
                 let extended_parameters =
                     Vec::from_iter_in(parameters.iter().copied().chain(token_params), arena)
                         .into_bump_slice();
@@ -822,6 +825,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut body_environment = ReuseEnvironment {
                     symbol_tags: environment.symbol_tags.clone(),
+                    non_unique_symbols: environment.non_unique_symbols.clone(),
                     reuse_tokens: used_reuse_tokens.clone(),
                     symbol_layouts: environment.symbol_layouts.clone(),
                     joinpoint_reuse_tokens: environment.joinpoint_reuse_tokens.clone(),
@@ -885,8 +889,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     let mut void_pointer_layout_symbols = Vec::new_in(arena);
 
                     // See what tokens we can get from the env, if none are available, use a void pointer.
+                    // We process the tokens in reverse order, so that when we consume the tokens we last added, we consume the tokens that are most likely not to be null.
                     let tokens = token_layouts_clone
                         .iter()
+                        .rev()
                         .map(|(param_layout, token_layout)| {
                             match environment.pop_reuse_token(token_layout) {
                                 Some(reuse_token) => {
@@ -915,12 +921,19 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                     }
                                 },
                             }
-                        });
+                        })
+                        // Collect to prevent revs from cancelling out.
+                        .collect_in::<Vec<_>>(arena);
 
                     // Add the void tokens to the jump arguments to match the expected arguments of the join point.
-                    let extended_arguments =
-                        Vec::from_iter_in(arguments.iter().copied().chain(tokens), arena)
-                            .into_bump_slice();
+                    let extended_arguments = Vec::from_iter_in(
+                        arguments
+                            .iter()
+                            .copied()
+                            .chain(tokens.iter().copied().rev()),
+                        arena,
+                    )
+                    .into_bump_slice();
 
                     let casted_tokens = reuse_tokens_to_cast.into_iter().fold(
                         arena.alloc(Stmt::Jump(*id, extended_arguments)),
@@ -1082,6 +1095,7 @@ enum JoinPointReuseTokens<'a> {
 #[derive(Default, Clone)]
 struct ReuseEnvironment<'a> {
     symbol_tags: MutMap<Symbol, Tag>,
+    non_unique_symbols: MutSet<Symbol>,
     reuse_tokens: ReuseTokens<'a>,
     symbol_layouts: SymbolLayout<'a>,
     // A map containing the amount of reuse tokens a join point expects for each layout.
@@ -1145,17 +1159,10 @@ impl<'a> ReuseEnvironment<'a> {
             token: reuse_token,
             inlayout: layout,
         };
-        match self.reuse_tokens.get_mut(&token_layout) {
-            Some(reuse_tokens) => {
-                // If the layout is already in the map, push the token on the stack.
-                reuse_tokens.push(with_info);
-            }
-            None => {
-                // If the layout is not in the map, create a new stack with the token.
-                self.reuse_tokens
-                    .insert(token_layout, Vec::from_iter_in([with_info], arena));
-            }
-        };
+        self.reuse_tokens
+            .entry(token_layout)
+            .and_modify(|reuse_tokens| reuse_tokens.push(with_info))
+            .or_insert_with(|| Vec::from_iter_in([with_info], arena));
     }
 
     /**
