@@ -314,7 +314,9 @@ fn solve(
 
                     let unexpanded_var = loc_var.value;
                     let unexpanded_descriptor = subs.get(unexpanded_var);
-                    let expanded_var = if expand && matches!(unexpanded_descriptor.content, Content::Structure(..)) {
+                    let expanded_var = if expand
+                        && matches!(unexpanded_descriptor.content, Content::Structure(..))
+                    {
                         let ret = subs.fresh(unexpanded_descriptor.clone());
                         open_tag_union(subs, pools, ret);
                         ret
@@ -453,7 +455,9 @@ fn solve(
 
                     let unexpanded_var = loc_var.value;
                     let unexpanded_descriptor = subs.get(unexpanded_var);
-                    let expanded_var = if expand && matches!(unexpanded_descriptor.content, Content::Structure(..)) {
+                    let expanded_var = if expand
+                        && matches!(unexpanded_descriptor.content, Content::Structure(..))
+                    {
                         let ret = subs.fresh(unexpanded_descriptor.clone());
                         open_tag_union(subs, pools, ret);
                         ret
@@ -790,8 +794,7 @@ fn solve(
                     }
                 }
             }
-            Let(index, pool_slice) |
-            LetAndExpandType(index, pool_slice) => {
+            Let(index, pool_slice) | LetAndExpandType(index, pool_slice) => {
                 // dbg!(constraint);
                 let let_con = &env.constraints.let_constraints[index.index()];
                 // dbg!(let_con);
@@ -1475,7 +1478,7 @@ fn open_tag_union(env: &mut InferenceEnv, var: Variable) {
 
         let desc = env.subs.get(var);
         match desc.content {
-            // TODO: handle TagUnion, EmptyTagUnion, 
+            // TODO: handle TagUnion, EmptyTagUnion,
             Structure(TagUnion(tags, ext)) => {
                 if let Structure(EmptyTagUnion) = env.subs.get_content_without_compacting(ext.var())
                 {
