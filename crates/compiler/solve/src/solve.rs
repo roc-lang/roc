@@ -312,18 +312,20 @@ fn solve(
                         *loc_var,
                     );
 
-                    if expand {
-                        // dbg!("yes expanding");
-                        let unexpanded_var = loc_var.value;
-                        let unexpanded_descriptor = subs.get(unexpanded_var);
-                        // let expanded_var = if let Content::Structure(FlatType::TagUnion(..)) = unexpanded_descriptor.content {
-                        let expanded_var = subs.fresh(unexpanded_descriptor.clone());
-                        open_tag_union(subs, pools, expanded_var);
-                        new_scope.insert_symbol_var_if_vacant(*symbol, expanded_var);
+                    let unexpanded_var = loc_var.value;
+                    let unexpanded_descriptor = subs.get(unexpanded_var);
+                    let is_tag_union = matches!(
+                        unexpanded_descriptor.content,
+                        Content::Structure(FlatType::TagUnion(..) | FlatType::RecursiveTagUnion(..) | FlatType::EmptyTagUnion)
+                    );
+                    let expanded_var = if expand && is_tag_union {
+                        let ret = subs.fresh(unexpanded_descriptor.clone());
+                        open_tag_union(subs, pools, ret);
+                        ret
                     } else {
-                        // dbg!("not expanding");
-                        new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
-                    }
+                        unexpanded_var
+                    };
+                    new_scope.insert_symbol_var_if_vacant(*symbol, expanded_var);
                 }
 
                 stack.push(Work::Constraint {
@@ -341,7 +343,7 @@ fn solve(
                 rank,
                 let_con,
                 pool_variables,
-                expand: _,
+                expand,
             } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
@@ -453,8 +455,20 @@ fn solve(
                         *loc_var,
                     );
 
-                    // TODO maybe
-                    new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                    let unexpanded_var = loc_var.value;
+                    let unexpanded_descriptor = subs.get(unexpanded_var);
+                    let is_tag_union = matches!(
+                        unexpanded_descriptor.content,
+                        Content::Structure(FlatType::TagUnion(..) | FlatType::RecursiveTagUnion(..) | FlatType::EmptyTagUnion)
+                    );
+                    let expanded_var = if expand && is_tag_union {
+                        let ret = subs.fresh(unexpanded_descriptor.clone());
+                        open_tag_union(subs, pools, ret);
+                        ret
+                    } else {
+                        unexpanded_var
+                    };
+                    new_scope.insert_symbol_var_if_vacant(*symbol, expanded_var);
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
