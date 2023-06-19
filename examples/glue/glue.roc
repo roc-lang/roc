@@ -3,7 +3,10 @@ app "rocLovesRust"
     imports []
     provides [main] to pf
 
+
+main : {} -> [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done] as Op
 main =
-    StdoutWrite "Roc <3 Rust!\n" \{} ->
+    \{} -> 
         StdoutWrite "Roc <3 Rust!\n" \{} ->
-            Done
+            StderrWrite "Roc <3 Rust, also from stderr!\n" \{} ->
+                Done

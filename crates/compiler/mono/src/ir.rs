@@ -3047,29 +3047,66 @@ fn specialize_external_help<'a>(
 
                 // Computer the getter procs for every host-exposed layout.
                 for in_layout in host_exposed_layouts {
-                    let layout = layout_cache.interner.get(in_layout);
+                    let all_glue_procs = {
+                        let mut layout_env = layout::Env::from_components(
+                            layout_cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
 
-                    let all_glue_procs = generate_glue_procs(
-                        env.home,
-                        env.ident_ids,
-                        env.arena,
-                        &mut layout_cache.interner,
-                        env.arena.alloc(layout),
-                    );
+                        find_lambda_sets(&mut layout_env, variable)
+                    };
 
+                    // for now, getters are not processed here
                     let GlueProcs {
                         getters,
                         legacy_layout_based_extern_names: _,
                     } = all_glue_procs;
 
-                    for (_layout, glue_procs) in getters {
-                        for glue_proc in glue_procs {
-                            procs.specialized.insert_specialized(
-                                glue_proc.proc.name.name(),
-                                glue_proc.proc_layout,
-                                glue_proc.proc,
-                            );
-                        }
+                    for GlueGetter { name, offset } in getters {
+                        dbg!(&name, offset);
+                        panic!();
+                        // Turn unique_id into a Symbol without doing a heap allocation.
+                        use std::fmt::Write;
+                        let mut string =
+                            bumpalo::collections::String::with_capacity_in(32, env.arena);
+
+                        let _result = write!(&mut string, "roc__getter_{}_{}", "", name);
+                        debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
+
+                        let bump_string = string.into_bump_str();
+                        let ident_id = env.ident_ids.get_or_insert(bump_string);
+
+                        let symbol = Symbol::new(env.home, ident_id);
+                        let lambda_name = LambdaName::no_niche(symbol);
+
+                        // let raw_function_layout = RawFunctionLayout::ZeroArgumentThunk(Layout::U32);
+
+                        let offset_symbol = env.unique_symbol();
+                        let body = Stmt::Let(
+                            offset_symbol,
+                            Expr::Literal(Literal::Int((offset as u128).to_be_bytes())),
+                            Layout::U32,
+                            env.arena.alloc(Stmt::Ret(offset_symbol)),
+                        );
+
+                        let proc = Proc {
+                            name: lambda_name,
+                            args: &[],
+                            body,
+                            closure_data_layout: None,
+                            ret_layout: Layout::U32,
+                            is_self_recursive: SelfRecursive::NotSelfRecursive,
+                            host_exposed_layouts: HostExposedLayouts::HostExposed {
+                                rigids: Default::default(),
+                                aliases: Default::default(),
+                            },
+                        };
+
+                        procs
+                            .specialized
+                            .insert_specialized(symbol, top_level, proc);
                     }
                 }
 
@@ -3089,7 +3126,7 @@ fn specialize_external_help<'a>(
 
                     let mut aliases = BumpMap::default();
 
-                    for (id, raw_function_layout) in extern_names {
+                    for (id, raw_function_layout) in extern_names.legacy_layout_based_extern_names {
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
 
@@ -9631,8 +9668,6 @@ pub struct GlueLayouts<'a> {
     pub getters: std::vec::Vec<(Symbol, ProcLayout<'a>)>,
 }
 
-type GlueProcId = u16;
-
 #[derive(Debug)]
 pub struct GlueProc<'a> {
     pub name: Symbol,
@@ -9640,8 +9675,14 @@ pub struct GlueProc<'a> {
     pub proc: Proc<'a>,
 }
 
+pub struct GlueGetter {
+    pub name: String,
+    pub offset: u32,
+}
+
 pub struct GlueProcs<'a> {
-    pub getters: Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)>,
+    // pub getters: Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)>,
+    pub getters: Vec<'a, GlueGetter>,
     /// Lambda set IDs computed from the layout of the lambda set. Should be replaced by
     /// computation from type variable eventually.
     pub legacy_layout_based_extern_names: Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)>,
@@ -9658,10 +9699,10 @@ impl LambdaSetId {
     }
 }
 
-fn find_lambda_sets<'a>(
+pub fn find_lambda_sets<'a>(
     env: &mut crate::layout::Env<'a, '_>,
     initial: Variable,
-) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
+) -> GlueProcs<'a> {
     let mut stack = bumpalo::collections::Vec::new_in(env.arena);
 
     // ignore the lambda set of top-level functions
@@ -9691,12 +9732,22 @@ fn find_lambda_sets<'a>(
         answer.push(key);
     }
 
-    answer
+    let mut getters = bumpalo::collections::Vec::new_in(env.arena);
+
+    getters.push(GlueGetter {
+        name: String::from("foobar"),
+        offset: 42,
+    });
+
+    GlueProcs {
+        getters,
+        legacy_layout_based_extern_names: answer,
+    }
 }
 
-pub fn find_lambda_sets_help(
+pub fn find_lambda_sets_help<'a>(
     subs: &Subs,
-    mut stack: Vec<'_, Variable>,
+    mut stack: Vec<'a, Variable>,
 ) -> MutMap<Variable, LambdaSetId> {
     use roc_types::subs::GetSubsSlice;
 
@@ -9778,226 +9829,7 @@ pub fn find_lambda_sets_help(
     result
 }
 
-pub fn generate_glue_procs<'a, 'i, I>(
-    home: ModuleId,
-    ident_ids: &mut IdentIds,
-    arena: &'a Bump,
-    layout_interner: &'i mut I,
-    layout: &'a Layout<'a>,
-) -> GlueProcs<'a>
-where
-    I: LayoutInterner<'a>,
-{
-    let mut answer = GlueProcs {
-        getters: Vec::new_in(arena),
-        legacy_layout_based_extern_names: Vec::new_in(arena),
-    };
-
-    let mut lambda_set_id = LambdaSetId(0);
-
-    let mut stack: Vec<'a, Layout<'a>> = Vec::from_iter_in([*layout], arena);
-    let mut next_unique_id = 0;
-
-    macro_rules! handle_tag_field_layouts {
-        ($tag_id:expr, $layout:expr, $union_layout:expr, $field_layouts: expr) => {{
-            if $field_layouts.iter().any(|l| {
-                layout_interner
-                    .get_repr(*l)
-                    .has_varying_stack_size(layout_interner, arena)
-            }) {
-                let procs = generate_glue_procs_for_tag_fields(
-                    layout_interner,
-                    home,
-                    &mut next_unique_id,
-                    ident_ids,
-                    arena,
-                    $tag_id,
-                    &$layout,
-                    $union_layout,
-                    $field_layouts,
-                );
-
-                answer.getters.push(($layout, procs));
-            }
-
-            for in_layout in $field_layouts.iter().rev() {
-                stack.push(layout_interner.get(*in_layout));
-            }
-        }};
-    }
-
-    while let Some(layout) = stack.pop() {
-        match layout.repr(layout_interner) {
-            LayoutRepr::Builtin(builtin) => match builtin {
-                Builtin::Int(_)
-                | Builtin::Float(_)
-                | Builtin::Bool
-                | Builtin::Decimal
-                | Builtin::Str => { /* do nothing */ }
-                Builtin::List(element) => stack.push(layout_interner.get(element)),
-            },
-            LayoutRepr::Struct(field_layouts) => {
-                if field_layouts.iter().any(|l| {
-                    layout_interner
-                        .get_repr(*l)
-                        .has_varying_stack_size(layout_interner, arena)
-                }) {
-                    let procs = generate_glue_procs_for_struct_fields(
-                        layout_interner,
-                        home,
-                        &mut next_unique_id,
-                        ident_ids,
-                        arena,
-                        &layout,
-                        field_layouts,
-                    );
-
-                    answer.getters.push((layout, procs));
-                }
-
-                for in_layout in field_layouts.iter().rev() {
-                    stack.push(layout_interner.get(*in_layout));
-                }
-            }
-            LayoutRepr::Boxed(boxed) => {
-                stack.push(layout_interner.get(boxed));
-            }
-            LayoutRepr::Union(union_layout) => match union_layout {
-                UnionLayout::NonRecursive(tags) => {
-                    for in_layout in tags.iter().flat_map(|e| e.iter()) {
-                        stack.push(layout_interner.get(*in_layout));
-                    }
-                }
-                UnionLayout::Recursive(tags) => {
-                    for in_layout in tags.iter().flat_map(|e| e.iter()) {
-                        stack.push(layout_interner.get(*in_layout));
-                    }
-                }
-                UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    handle_tag_field_layouts!(0, layout, union_layout, field_layouts);
-                }
-                UnionLayout::NullableWrapped {
-                    other_tags,
-                    nullable_id,
-                } => {
-                    let tag_ids =
-                        (0..nullable_id).chain(nullable_id + 1..other_tags.len() as u16 + 1);
-                    for (i, field_layouts) in tag_ids.zip(other_tags) {
-                        handle_tag_field_layouts!(i, layout, union_layout, *field_layouts);
-                    }
-                }
-                UnionLayout::NullableUnwrapped { other_fields, .. } => {
-                    for in_layout in other_fields.iter().rev() {
-                        stack.push(layout_interner.get(*in_layout));
-                    }
-                }
-            },
-            LayoutRepr::LambdaSet(lambda_set) => {
-                let raw_function_layout =
-                    RawFunctionLayout::Function(lambda_set.args, lambda_set, lambda_set.ret);
-
-                let key = (lambda_set_id, raw_function_layout);
-                answer.legacy_layout_based_extern_names.push(key);
-
-                // this id is used, increment for the next one
-                lambda_set_id = lambda_set_id.next();
-
-                stack.push(layout_interner.get(lambda_set.runtime_representation()));
-
-                // TODO: figure out if we need to look at the other layouts
-                // stack.push(layout_interner.get(lambda_set.ret));
-            }
-            LayoutRepr::RecursivePointer(_) => {
-                /* do nothing, we've already generated for this type through the Union(_) */
-            }
-        }
-    }
-
-    answer
-}
-
-fn generate_glue_procs_for_struct_fields<'a, 'i, I>(
-    layout_interner: &'i mut I,
-    home: ModuleId,
-    next_unique_id: &mut GlueProcId,
-    ident_ids: &mut IdentIds,
-    arena: &'a Bump,
-    unboxed_struct_layout: &Layout<'a>,
-    field_layouts: &[InLayout<'a>],
-) -> Vec<'a, GlueProc<'a>>
-where
-    I: LayoutInterner<'a>,
-{
-    let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout =
-        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout).direct());
-    let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
-    let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
-
-    let field_layouts = match layout_interner.get_repr(interned_unboxed_struct_layout) {
-        LayoutRepr::Struct(field_layouts) => field_layouts,
-        other => {
-            unreachable!(
-                "{:?} {:?}",
-                layout_interner.dbg(interned_unboxed_struct_layout),
-                other
-            )
-        }
-    };
-
-    for (index, field) in field_layouts.iter().enumerate() {
-        let proc_layout = ProcLayout {
-            arguments: arena.alloc([boxed_struct_layout]),
-            result: *field,
-            niche: Niche::NONE,
-        };
-
-        let symbol = unique_glue_symbol(arena, next_unique_id, home, ident_ids);
-
-        let argument = Symbol::new(home, ident_ids.gen_unique());
-        let unboxed = Symbol::new(home, ident_ids.gen_unique());
-        let result = Symbol::new(home, ident_ids.gen_unique());
-
-        home.register_debug_idents(ident_ids);
-
-        let ret_stmt = arena.alloc(Stmt::Ret(result));
-
-        let field_get_expr = Expr::StructAtIndex {
-            index: index as u64,
-            field_layouts,
-            structure: unboxed,
-        };
-
-        let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
-
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
-
-        let unbox_stmt = Stmt::Let(
-            unboxed,
-            unbox_expr,
-            interned_unboxed_struct_layout,
-            arena.alloc(field_get_stmt),
-        );
-
-        let proc = Proc {
-            name: LambdaName::no_niche(symbol),
-            args: arena.alloc([(boxed_struct_layout, argument)]),
-            body: unbox_stmt,
-            closure_data_layout: None,
-            ret_layout: *field,
-            is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-        };
-
-        answer.push(GlueProc {
-            name: symbol,
-            proc_layout,
-            proc,
-        });
-    }
-
-    answer
-}
+type GlueProcId = u16;
 
 fn unique_glue_symbol(
     arena: &Bump,

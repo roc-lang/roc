@@ -1304,14 +1304,14 @@ fn add_function_type<'a>(
     };
 
     let fn_type_id = add_function(env, name, types, layout, |name| {
-        RocType::Function(RocFn {
+        dbg!(RocType::Function(RocFn {
             function_name: name,
             extern_name,
             args: arg_type_ids.clone(),
             lambda_set: lambda_set_type_id,
             ret: ret_type_id,
             is_toplevel,
-        })
+        }))
     });
 
     types.depends(fn_type_id, ret_type_id);

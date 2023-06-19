@@ -89,21 +89,19 @@ pub extern "C" fn rust_main() -> i32 {
     loop {
         match dbg!(op.discriminant()) {
             StdoutWrite => {
-                let stdout_write = unsafe { op.get_StdoutWrite() };
-                let output: RocStr = stdout_write.f0;
-                op = unsafe { stdout_write.f1.force_thunk(()) };
+                let output: RocStr = op.get_StdoutWrite_f0();
+                op = unsafe { op.get_StdoutWrite_f1().force_thunk(()) };
 
                 if let Err(e) = std::io::stdout().write_all(output.as_bytes()) {
                     panic!("Writing to stdout failed! {:?}", e);
                 }
             }
             StderrWrite => {
-                let stderr_write = unsafe { op.get_StderrWrite() };
-                let output: RocStr = stderr_write.f0;
-                op = unsafe { stderr_write.f1.force_thunk(()) };
+                let output: RocStr = op.get_StderrWrite_f0();
+                op = unsafe { op.get_StderrWrite_f1().force_thunk(()) };
 
                 if let Err(e) = std::io::stderr().write_all(output.as_bytes()) {
-                    panic!("Writing to stdout failed! {:?}", e);
+                    panic!("Writing to stderr failed! {:?}", e);
                 }
             }
             Done => {

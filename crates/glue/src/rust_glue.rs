@@ -2008,7 +2008,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocSet(elem_id) => format!("roc_std::RocSet<{}>", type_name(*elem_id, types)),
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
-        RocType::Unsized => "roc_std::RocList<u8>".to_string(),
+        RocType::Unsized => "*mut u8".to_string(),
         RocType::RocResult(ok_id, err_id) => {
             format!(
                 "roc_std::RocResult<{}, {}>",

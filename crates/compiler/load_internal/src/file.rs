@@ -3112,19 +3112,19 @@ fn update<'a>(
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
 
-                    drop_specialization::specialize_drops(
-                        arena,
-                        &mut layout_interner,
-                        module_id,
-                        ident_ids,
-                        &mut state.procedures,
-                    );
-
-                    debug_print_ir!(
-                        state,
-                        &layout_interner,
-                        ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION
-                    );
+                    //                    drop_specialization::specialize_drops(
+                    //                        arena,
+                    //                        &mut layout_interner,
+                    //                        module_id,
+                    //                        ident_ids,
+                    //                        &mut state.procedures,
+                    //                    );
+                    //
+                    //                    debug_print_ir!(
+                    //                        state,
+                    //                        &layout_interner,
+                    //                        ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION
+                    //                    );
 
                     reset_reuse::insert_reset_reuse_operations(
                         arena,
@@ -3429,6 +3429,7 @@ fn finish_specialization<'a>(
             for in_layout in proc_layout.arguments.iter().chain([ret]) {
                 let layout = layout_interner.get(*in_layout);
                 let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+                /*
                 let all_glue_procs = roc_mono::ir::generate_glue_procs(
                     module_id,
                     ident_ids,
@@ -3442,7 +3443,9 @@ fn finish_specialization<'a>(
                     .iter()
                     .map(|(lambda_set_id, _)| (*_name, *lambda_set_id));
                 exposed_to_host.lambda_sets.extend(lambda_set_names);
+                */
 
+                /*
                 let getter_names = all_glue_procs
                     .getters
                     .iter()
@@ -3454,6 +3457,7 @@ fn finish_specialization<'a>(
                         .iter()
                         .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
                 }));
+                */
             }
         }
     }

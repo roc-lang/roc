@@ -52,8 +52,10 @@ convertTypesToFile = \types ->
                         buf
 
                 TagUnion (NullableWrapped { name, indexOfNullTag, tags, discriminantSize, discriminantOffset }) ->
-                    # TODO: generate this as `TypeName(*mut u8)` if the payload contains functions / unsized types
-                    generateRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset (Some indexOfNullTag)
+                    if isSized types id then
+                        generateRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset (Some indexOfNullTag)
+                    else
+                        generateUnsizedRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset (Some indexOfNullTag)
 
                 TagUnion (NullableUnwrapped { name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull }) ->
                     generateNullableUnwrapped buf types id name nullTag nonNullTag nonNullPayload whichTagIsNull
@@ -218,7 +220,7 @@ generateFunction = \buf, types, rocFn ->
             }
 
             let mut output = std::mem::MaybeUninit::uninit();
-            let ptr = &mut self.closure_data as *mut _ as *mut u8;
+            let ptr = self.closure_data;
 
             unsafe { \(externName)(\(externCallArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
 
@@ -744,6 +746,174 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
         }
     }
     """
+
+generateUnsizedRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSize, _discriminantOffset, nullTagIndex ->
+    escapedName = escapeKW tagUnionName
+    discriminantName = "discriminant_\(escapedName)"
+    tagNames = List.map tags \{ name: n } -> n
+
+    discriminants =
+        tagNames
+        |> Str.joinWith ", "
+        |> \b -> "[ \(b) ]"
+
+    nullTagId =
+        when nullTagIndex is
+            Some index ->
+                n = Num.toStr index
+                "discriminants[\(n)]"
+
+            None ->
+                """
+                unreachable!("this pointer cannot be NULL")
+                """
+
+    constructors =
+        tags
+        |> List.mapWithIndex isFunction
+        |> Str.joinWith "\n\n"
+
+    isFunction = \{ name: tagName, payload: optPayload }, index ->
+        payloadFields =
+            when optPayload is
+                Some payload ->
+                    when Types.shape types payload is
+                        TagUnionPayload { fields } ->
+                            when fields is
+                                HasNoClosure xs -> List.map xs .id
+                                HasClosure xs -> List.map xs .id
+
+                        _ ->
+                            []
+
+                None ->
+                    []
+
+        payloadFieldNames =
+            commaSeparated "" payloadFields \_, i ->
+                n = Num.toStr i
+                "f\(n)"
+
+        constructorArguments =
+            commaSeparated "" payloadFields \payloadId, i ->
+                n = Num.toStr i
+                type = typeName types payloadId
+                "f\(n): \(type)"
+
+        fixManuallyDrop =
+            when optPayload is
+                Some payload ->
+                    shape = Types.shape types payload
+
+                    if canDeriveCopy types shape then
+                        "payload"
+                    else
+                        "core::mem::ManuallyDrop::new(payload)"
+
+                None ->
+                    "payload"
+
+        if Some (Num.intCast index) == nullTagIndex then
+            """
+                pub fn is_\(tagName)(&self) -> bool {
+                    matches!(self.discriminant(), discriminant_\(escapedName)::\(tagName))
+                }
+            """
+        else
+            getters = 
+                payloadFields
+                |> List.mapWithIndex \field, i ->
+                    tagIndex = Num.toStr index
+                    fieldIndex = Num.toStr i
+                    fieldTypeName = typeName types field
+
+                    externName = "offset_t\(tagIndex)_f\(fieldIndex)"
+
+                    if isSized types field then
+                        """
+                            pub fn get_\(tagName)_f\(fieldIndex)(self) -> \(fieldTypeName) {
+                                debug_assert!(self.is_\(tagName)());
+
+                                extern "C" { 
+                                    fn \(externName)() -> usize;
+                                }
+
+                                let ptr = unsafe { self.ptr_read_union().add(\(externName)()) } as *const \(fieldTypeName);
+
+                                let value = unsafe { std::ptr::read(ptr) };
+
+                                std::mem::forget(value.clone());
+
+                                value
+                            }
+
+                        """
+                    else
+                        """
+                            pub fn get_\(tagName)_f\(fieldIndex)(&self) -> \(fieldTypeName) {
+                                debug_assert!(self.is_\(tagName)());
+
+                                extern "C" { 
+                                    fn \(externName)() -> usize;
+                                }
+
+                                let ptr = unsafe { self.ptr_read_union().add(\(externName)()) };
+
+                                \(fieldTypeName) { closure_data: ptr }
+                            }
+
+                        """
+
+            """
+                pub fn is_\(tagName)(&self) -> bool {
+                    matches!(self.discriminant(), discriminant_\(escapedName)::\(tagName))
+                }
+            """
+            |> Str.concat (Str.joinWith getters "")
+
+    buf
+    |> generateDiscriminant types discriminantName tagNames discriminantSize
+    |> \t -> 
+        """
+        \(t)
+
+        pub struct \(escapedName)(*mut u8);
+
+        impl \(escapedName) {
+            pub fn discriminant(&self) -> discriminant_\(escapedName) {
+                let discriminants = {
+                    use \(discriminantName)::*;
+
+                    \(discriminants)
+                };
+
+                if self.0.is_null() {
+                    \(nullTagId)
+                } else  {
+                    match std::mem::size_of::<usize>() {
+                        4 => discriminants[self.0 as usize & 0b011],
+                        8 => discriminants[self.0 as usize & 0b111],
+                        _ => unreachable!(),
+                    }
+                }
+            }
+
+            unsafe fn ptr_read_union(&self) -> *mut u8 {
+                debug_assert!(!self.0.is_null());
+
+                let mask = match std::mem::size_of::<usize>() {
+                    4 => !0b011usize,
+                    8 => !0b111usize,
+                    _ => unreachable!(),
+                };
+
+                ((self.0 as usize) & mask) as *mut u8 
+            }
+
+            \(constructors)
+        }
+
+        """
 
 generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSize, _discriminantOffset, nullTagIndex ->
     escapedName = escapeKW tagUnionName
@@ -1724,6 +1894,7 @@ cannotDeriveDefault = \types, type ->
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (Types.shape types id)
 
+hasFloat : Types, Shape -> Bool
 hasFloat = \types, type ->
     hasFloatHelp types type (Set.empty {})
 
@@ -1799,10 +1970,64 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
                 hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
 
+isSized : Types, TypeId -> Bool
+isSized = \types, rootId ->
+    when Types.shape types rootId is
+        Num _ | Bool | TagUnion (Enumeration _) -> Bool.true
+        Unsized -> Bool.false
+
+        Unit | EmptyTagUnion -> Bool.true
+        RocStr -> Bool.true
+        Function rocFn -> rocFn.isToplevel
+
+        RocList id | RocSet id | RocBox id ->
+            isSized types id
+
+        RocDict id0 id1 | RocResult id0 id1 -> isSized types id0 && isSized types id1
+
+        Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
+            List.all fields \{ id } -> isSized types id
+
+        Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
+            List.all fields \{ id } -> isSized types id
+
+        TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
+            List.all fields \{ id } -> isSized types id
+
+        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
+            List.all fields \{ id } -> isSized types id
+
+        TagUnion (Recursive { tags }) ->
+            List.all tags \{ payload } ->
+                when payload is
+                    Some id -> isSized types id
+                    None -> Bool.true
+
+        TagUnion (NonRecursive { tags }) ->
+            List.all tags \{ payload } ->
+                when payload is
+                    Some id -> isSized types id 
+                    None -> Bool.true
+
+        TagUnion (NullableWrapped { tags }) ->
+            List.all tags \{ payload } ->
+                when payload is
+                    Some id -> isSized types id 
+                    None -> Bool.true
+
+        TagUnion (NonNullableUnwrapped { payload }) ->
+            isSized types payload
+
+        TagUnion (NullableUnwrapped { nonNullPayload }) ->
+            isSized types nonNullPayload
+
+        RecursivePointer payload ->
+            isSized types payload
+
 typeName = \types, id ->
     when Types.shape types id is
         Unit -> "()"
-        Unsized -> "roc_std::RocList<u8>"
+        Unsized -> "*mut u8"
         EmptyTagUnion -> "std::convert::Infallible"
         RocStr -> "roc_std::RocStr"
         Bool -> "bool"

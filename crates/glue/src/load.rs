@@ -11,7 +11,7 @@ use roc_build::{
 };
 use roc_collections::MutMap;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
-use roc_mono::ir::{generate_glue_procs, GlueProc, OptLevel};
+use roc_mono::ir::{GlueGetter, GlueProc, OptLevel};
 use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
@@ -420,18 +420,30 @@ pub fn load_types(
                 .has_varying_stack_size(in_layout, arena)
             {
                 let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
-                let answer = generate_glue_procs(
-                    home,
-                    ident_ids,
+
+                let mut layout_env = roc_mono::layout::Env::from_components(
+                    &mut layout_cache,
+                    subs,
                     arena,
-                    &mut layout_interner.fork(),
-                    arena.alloc(layout),
+                    target_info,
                 );
+
+                let answer = roc_mono::ir::find_lambda_sets(&mut layout_env, var);
+
+                //                let answer = generate_glue_procs(
+                //                    home,
+                //                    ident_ids,
+                //                    arena,
+                //                    &mut layout_interner.fork(),
+                //                    arena.alloc(layout),
+                //                );
 
                 // Even though generate_glue_procs does more work than we need it to,
                 // it's important that we use it in order to make sure we get exactly
                 // the same names that mono::ir did for code gen!
-                for (layout, glue_procs) in answer.getters {
+                for GlueGetter { name, offset } in answer.getters {
+
+                    /*
                     let mut names =
                         bumpalo::collections::Vec::with_capacity_in(glue_procs.len(), arena);
 
@@ -449,6 +461,7 @@ pub fn load_types(
                     }
 
                     glue_procs_by_layout.insert(layout, names.into_bump_slice());
+                    */
                 }
             }
         }
