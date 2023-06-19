@@ -749,18 +749,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 });
             }
 
-            let layouts_for_reuse = {
-                let mut layouts = Vec::from_iter_in(
-                    used_reuse_tokens.iter().flat_map(|(layout, tokens)| {
-                        tokens.iter().map(|token| (token.inlayout, *layout))
-                    }),
-                    arena,
-                );
-                // Make sure the layouts are sorted, so that we can provide them from the jump.
-                // In the same order as we consume them from the join point.
-                layouts.sort();
-                layouts
-            };
+            let layouts_for_reuse = Vec::from_iter_in(
+                used_reuse_tokens.iter().flat_map(|(layout, tokens)| {
+                    tokens.iter().map(|token| (token.inlayout, *layout))
+                }),
+                arena,
+            );
 
             let second_pass_remainder = {
                 environment.add_joinpoint_reuse_tokens(
@@ -784,18 +778,12 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             };
 
             let extended_parameters = {
-                let layouts_for_reuse_with_token = {
-                    let mut layout_with_tokens = Vec::from_iter_in(
-                        used_reuse_tokens.iter().flat_map(|(layout, tokens)| {
-                            tokens.iter().map(|token| (*layout, *token))
-                        }),
-                        arena,
-                    );
-                    // Make sure the layouts are sorted, so that we can provide them from the jump.
-                    // In the same order as we consume them from the join point.
-                    layout_with_tokens.sort_by_key(|(layout, _)| *layout);
-                    layout_with_tokens
-                };
+                let layouts_for_reuse_with_token = Vec::from_iter_in(
+                    used_reuse_tokens
+                        .iter()
+                        .flat_map(|(layout, tokens)| tokens.iter().map(|token| (*layout, *token))),
+                    arena,
+                );
 
                 let token_params =
                     layouts_for_reuse_with_token
@@ -806,7 +794,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                             layout: *token.inlayout,
                         });
 
-                // Add the void tokens to the jump arguments to match the expected arguments of the join point.
+                // Add the reuse tokens to the join arguments to match the expected arguments of the jump.
                 let extended_parameters =
                     Vec::from_iter_in(parameters.iter().copied().chain(token_params), arena)
                         .into_bump_slice();
@@ -901,8 +889,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     let mut void_pointer_layout_symbols = Vec::new_in(arena);
 
                     // See what tokens we can get from the env, if none are available, use a void pointer.
+                    // We process the tokens in reverse order, so that when we consume the tokens we last added, we consume the tokens that are most likely not to be null.
                     let tokens = token_layouts_clone
                         .iter()
+                        .rev()
                         .map(|(param_layout, token_layout)| {
                             match environment.pop_reuse_token(token_layout) {
                                 Some(reuse_token) => {
@@ -931,7 +921,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                     }
                                 },
                             }
-                        });
+                        })
+                        .rev();
 
                     // Add the void tokens to the jump arguments to match the expected arguments of the join point.
                     let extended_arguments =
@@ -1162,17 +1153,10 @@ impl<'a> ReuseEnvironment<'a> {
             token: reuse_token,
             inlayout: layout,
         };
-        match self.reuse_tokens.get_mut(&token_layout) {
-            Some(reuse_tokens) => {
-                // If the layout is already in the map, push the token on the stack.
-                reuse_tokens.push(with_info);
-            }
-            None => {
-                // If the layout is not in the map, create a new stack with the token.
-                self.reuse_tokens
-                    .insert(token_layout, Vec::from_iter_in([with_info], arena));
-            }
-        };
+        self.reuse_tokens
+            .entry(token_layout)
+            .and_modify(|reuse_tokens| reuse_tokens.push(with_info))
+            .or_insert(Vec::from_iter_in([with_info], arena));
     }
 
     /**
