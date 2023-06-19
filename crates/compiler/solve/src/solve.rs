@@ -750,11 +750,7 @@ fn solve(
 
                     let unexpanded_var = loc_var.value;
                     let unexpanded_descriptor = subs.get(unexpanded_var);
-                    let is_tag_union = matches!(
-                        unexpanded_descriptor.content,
-                        Content::Structure(FlatType::TagUnion(..) | FlatType::RecursiveTagUnion(..) | FlatType::EmptyTagUnion)
-                    );
-                    let expanded_var = if expand && is_tag_union {
+                    let expanded_var = if expand && can_open_tag_union(subs, unexpanded_var) {
                         let ret = subs.fresh(unexpanded_descriptor.clone());
                         open_tag_union(subs, pools, ret);
                         ret
@@ -896,11 +892,7 @@ fn solve(
 
                     let unexpanded_var = loc_var.value;
                     let unexpanded_descriptor = subs.get(unexpanded_var);
-                    let is_tag_union = matches!(
-                        unexpanded_descriptor.content,
-                        Content::Structure(FlatType::TagUnion(..) | FlatType::RecursiveTagUnion(..) | FlatType::EmptyTagUnion)
-                    );
-                    let expanded_var = if expand && is_tag_union {
+                    let expanded_var = if expand && can_open_tag_union(subs, unexpanded_var) {
                         let ret = subs.fresh(unexpanded_descriptor.clone());
                         open_tag_union(subs, pools, ret);
                         ret
@@ -1943,6 +1935,20 @@ fn compact_lambdas_and_check_obligations(
     awaiting_specialization.union(new_awaiting);
 }
 
+fn can_open_tag_union(subs: &mut Subs, var: Variable) -> bool {
+    use {Content::*, FlatType::*};
+
+    matches!(
+        subs.get(var).content,
+        Structure(TagUnion(..)) |
+            Structure(EmptyTagUnion) |
+            Structure(FunctionOrTagUnion(..)) |
+            Structure(Record(..)) |
+            Structure(Tuple(..)) |
+            Structure(Apply(Symbol::LIST_LIST, _))
+    )
+}
+
 fn open_tag_union(subs: &mut Subs, pools: &mut Pools, var: Variable) {
     let mut stack = vec![var];
     while let Some(var) = stack.pop() {
@@ -1950,6 +1956,7 @@ fn open_tag_union(subs: &mut Subs, pools: &mut Pools, var: Variable) {
 
         let desc = subs.get(var);
         match desc.content {
+            // TODO: handle TagUnion, EmptyTagUnion, 
             Structure(TagUnion(tags, ext)) => {
                 if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext.var()) {
                     let new_ext_var = register(subs, desc.rank, pools, Content::FlexVar(None));

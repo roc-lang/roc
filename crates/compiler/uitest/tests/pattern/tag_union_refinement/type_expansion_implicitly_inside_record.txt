@@ -1,0 +1,10 @@
+app "test" provides [expandError] to "./platform"
+
+expandError : { type: [Io], message: Str } -> { type: [Io, Net], message: Str }
+expandError = \e ->
+#^^^^^^^^^^^{-1} { message : Str, type : [Io, Net]a } -[[expandError(0)]]-> { message : Str, type : [Io, Net]a }
+    when e is
+    #    ^ { message : Str, type : [Io, Net]* }
+        error -> error
+    #            ^^^^^ { message : Str, type : [Io, Net]* }
+# TODO: add recursive test along with failing test
