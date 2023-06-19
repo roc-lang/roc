@@ -233,26 +233,35 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             default_branch,
             ret_layout,
         } => {
-            let new_branches = branches
-                .iter()
-                .map(|(tag_id, info, branch)| {
-                    let mut branch_env = environment.clone();
-                    match info {
+            macro_rules! update_env_with_constructor {
+                ($branch_env:expr, $info:expr) => {{
+                    match $info {
                         BranchInfo::Constructor {
                             scrutinee,
                             tag_id: tag,
                             ..
                         } => {
-                            branch_env.add_symbol_tag(*scrutinee, *tag);
+                            $branch_env.add_symbol_tag(*scrutinee, *tag);
                         }
                         BranchInfo::Unique {
                             scrutinee,
                             unique: false,
                         } => {
-                            branch_env.non_unique_symbols.insert(*scrutinee);
+                            $branch_env.non_unique_symbols.insert(*scrutinee);
                         }
-                        _ => {}
+                        BranchInfo::None
+                        | BranchInfo::List { .. }
+                        | BranchInfo::Unique { unique: true, .. } => {}
                     }
+                }};
+            }
+
+            let new_branches = branches
+                .iter()
+                .map(|(tag_id, info, branch)| {
+                    let mut branch_env = environment.clone();
+
+                    update_env_with_constructor!(branch_env, info);
 
                     let new_branch = insert_reset_reuse_operations_stmt(
                         arena,
@@ -272,14 +281,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 let (info, branch) = default_branch;
 
                 let mut branch_env = environment.clone();
-                if let BranchInfo::Constructor {
-                    scrutinee,
-                    tag_id: tag,
-                    ..
-                } = info
-                {
-                    branch_env.add_symbol_tag(*scrutinee, *tag);
-                }
+
+                update_env_with_constructor!(branch_env, info);
 
                 let new_branch = insert_reset_reuse_operations_stmt(
                     arena,

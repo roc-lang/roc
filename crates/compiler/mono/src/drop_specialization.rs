@@ -1358,14 +1358,14 @@ where
                     branches: &*arena.alloc([(
                         1,
                         BranchInfo::Unique {
-                            scrutinee: unique_symbol,
+                            scrutinee: symbol,
                             unique: true,
                         },
                         u.clone(),
                     )]),
                     default_branch: (
                         BranchInfo::Unique {
-                            scrutinee: unique_symbol,
+                            scrutinee: symbol,
                             unique: false,
                         },
                         n,
