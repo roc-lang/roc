@@ -610,8 +610,7 @@ impl Constraints {
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::SaveTheEnvironment => true,
-            Constraint::Let(index, _)
-            | Constraint::LetAndExpandType(index, _) => {
+            Constraint::Let(index, _) | Constraint::LetAndExpandType(index, _) => {
                 let let_constraint = &self.let_constraints[index.index()];
 
                 let offset = let_constraint.defs_and_ret_constraint.index();
@@ -885,7 +884,11 @@ impl std::fmt::Debug for Constraint {
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
             Self::Let(arg0, arg1) => f.debug_tuple("Let").field(arg0).field(arg1).finish(),
-            Self::LetAndExpandType(arg0, arg1) => f.debug_tuple("LetAndExpandType").field(arg0).field(arg1).finish(),
+            Self::LetAndExpandType(arg0, arg1) => f
+                .debug_tuple("LetAndExpandType")
+                .field(arg0)
+                .field(arg1)
+                .finish(),
             Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
             Self::IsOpenType(arg0) => f.debug_tuple("IsOpenType").field(arg0).finish(),
             Self::IncludesTag(arg0) => f.debug_tuple("IncludesTag").field(arg0).finish(),
