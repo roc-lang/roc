@@ -750,7 +750,7 @@ fn solve(
 
                     let unexpanded_var = loc_var.value;
                     let unexpanded_descriptor = subs.get(unexpanded_var);
-                    let expanded_var = if expand && can_open_tag_union(subs, unexpanded_var) {
+                    let expanded_var = if expand && matches!(unexpanded_descriptor.content, Content::Structure(..)) {
                         let ret = subs.fresh(unexpanded_descriptor.clone());
                         open_tag_union(subs, pools, ret);
                         ret
@@ -892,7 +892,7 @@ fn solve(
 
                     let unexpanded_var = loc_var.value;
                     let unexpanded_descriptor = subs.get(unexpanded_var);
-                    let expanded_var = if expand && can_open_tag_union(subs, unexpanded_var) {
+                    let expanded_var = if expand && matches!(unexpanded_descriptor.content, Content::Structure(..)) {
                         let ret = subs.fresh(unexpanded_descriptor.clone());
                         open_tag_union(subs, pools, ret);
                         ret
@@ -1933,20 +1933,6 @@ fn compact_lambdas_and_check_obligations(
         AbilityImplError::DoesNotImplement,
     ));
     awaiting_specialization.union(new_awaiting);
-}
-
-fn can_open_tag_union(subs: &mut Subs, var: Variable) -> bool {
-    use {Content::*, FlatType::*};
-
-    matches!(
-        subs.get(var).content,
-        Structure(TagUnion(..)) |
-            Structure(EmptyTagUnion) |
-            Structure(FunctionOrTagUnion(..)) |
-            Structure(Record(..)) |
-            Structure(Tuple(..)) |
-            Structure(Apply(Symbol::LIST_LIST, _))
-    )
 }
 
 fn open_tag_union(subs: &mut Subs, pools: &mut Pools, var: Variable) {
