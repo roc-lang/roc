@@ -89,7 +89,7 @@ pub extern "C" fn rust_main() -> i32 {
     loop {
         match dbg!(op.discriminant()) {
             StdoutWrite => {
-                let stdout_write = unsafe { op.get_StdoutWrite() };
+                let stdout_write = op.get_StdoutWrite();
                 let output: RocStr = stdout_write.f0;
                 op = unsafe { stdout_write.f1.force_thunk(()) };
 
@@ -98,7 +98,7 @@ pub extern "C" fn rust_main() -> i32 {
                 }
             }
             StderrWrite => {
-                let stderr_write = unsafe { op.get_StderrWrite() };
+                let stderr_write = op.get_StderrWrite();
                 let output: RocStr = stderr_write.f0;
                 op = unsafe { stderr_write.f1.force_thunk(()) };
 
