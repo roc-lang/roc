@@ -464,7 +464,7 @@ impl Constraints {
         I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I3::IntoIter: ExactSizeIterator,
     {
-        // defs and ret constraint are stored consequtively, so we only need to store one index
+        // defs and ret constraint are stored consecutively, so we only need to store one index
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(defs_constraint);
@@ -549,7 +549,7 @@ impl Constraints {
         I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I3::IntoIter: ExactSizeIterator,
     {
-        // defs and ret constraint are stored consequtively, so we only need to store one index
+        // defs and ret constraint are stored consecutively, so we only need to store one index
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
 
         self.constraints.push(Constraint::True);
