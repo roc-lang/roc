@@ -2759,6 +2759,22 @@ impl<'a> LayoutRepr<'a> {
         }
     }
 
+    pub fn is_nullable(&self) -> bool {
+        use LayoutRepr::*;
+
+        match self {
+            Union(union_layout) => match union_layout {
+                UnionLayout::NonRecursive(_) => false,
+                UnionLayout::Recursive(_) => false,
+                UnionLayout::NonNullableUnwrapped(_) => false,
+                UnionLayout::NullableWrapped { .. } => true,
+                UnionLayout::NullableUnwrapped { .. } => true,
+            },
+
+            _ => false,
+        }
+    }
+
     /// Even if a value (say, a record) is not itself reference counted,
     /// it may contains values/fields that are. Therefore when this record
     /// goes out of scope, the refcount on those values/fields must  be decremented.

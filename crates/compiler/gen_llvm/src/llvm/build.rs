@@ -1165,7 +1165,12 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             env.builder.position_at_end(check_if_null);
 
             env.builder.build_conditional_branch(
-                env.builder.build_is_null(tag_ptr, "is_tag_null"),
+                // have llvm optimizations clean this up
+                if layout_interner.is_nullable(layout) {
+                    env.builder.build_is_null(tag_ptr, "is_tag_null")
+                } else {
+                    env.context.bool_type().const_int(false as _, false)
+                },
                 cont_block,
                 check_if_unique,
             );
@@ -1246,7 +1251,12 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             env.builder.position_at_end(check_if_null);
 
             env.builder.build_conditional_branch(
-                env.builder.build_is_null(tag_ptr, "is_tag_null"),
+                // have llvm optimizations clean this up
+                if layout_interner.is_nullable(layout) {
+                    env.builder.build_is_null(tag_ptr, "is_tag_null")
+                } else {
+                    env.context.bool_type().const_int(false as _, false)
+                },
                 cont_block,
                 check_if_unique,
             );

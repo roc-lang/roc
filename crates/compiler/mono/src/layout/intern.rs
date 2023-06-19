@@ -230,6 +230,10 @@ pub trait LayoutInterner<'a>: Sized {
         self.get_repr(layout).is_refcounted()
     }
 
+    fn is_nullable(&self, layout: InLayout<'a>) -> bool {
+        self.get_repr(layout).is_nullable()
+    }
+
     fn is_passed_by_reference(&self, layout: InLayout<'a>) -> bool {
         self.get_repr(layout).is_passed_by_reference(self)
     }
