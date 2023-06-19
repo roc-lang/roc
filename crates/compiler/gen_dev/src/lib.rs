@@ -1491,16 +1491,16 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrTrimLeft => self.build_fn_call(
+            LowLevel::StrTrimStart => self.build_fn_call(
                 sym,
-                bitcode::STR_TRIM_LEFT.to_string(),
+                bitcode::STR_TRIM_START.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrTrimRight => self.build_fn_call(
+            LowLevel::StrTrimEnd => self.build_fn_call(
                 sym,
-                bitcode::STR_TRIM_RIGHT.to_string(),
+                bitcode::STR_TRIM_END.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,

@@ -3797,11 +3797,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn str_trim_left() {
+    fn str_trim_start() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Str.trimLeft
+                Str.trimStart
                 "#
             ),
             "Str -> Str",

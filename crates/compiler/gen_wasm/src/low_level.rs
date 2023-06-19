@@ -281,8 +281,8 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
                 backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 6, false);
             }
-            StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
-            StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
+            StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
+            StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
             StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
             StrReleaseExcessCapacity => {

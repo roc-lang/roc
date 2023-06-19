@@ -171,8 +171,8 @@ comptime {
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
     exportStrFn(str.strTrim, "trim");
-    exportStrFn(str.strTrimLeft, "trim_left");
-    exportStrFn(str.strTrimRight, "trim_right");
+    exportStrFn(str.strTrimStart, "trim_start");
+    exportStrFn(str.strTrimEnd, "trim_end");
     exportStrFn(str.strCloneTo, "clone_to");
     exportStrFn(str.withCapacity, "with_capacity");
     exportStrFn(str.strGraphemes, "graphemes");
