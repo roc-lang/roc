@@ -1,4 +1,6 @@
 use inkwell::{
+    attributes::{Attribute, AttributeLoc},
+    module::Linkage,
     types::{BasicType, IntType},
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
@@ -54,11 +56,14 @@ use crate::llvm::{
     refcounting::PointerToRefcount,
 };
 
-use super::{build::Env, convert::zig_dec_type};
 use super::{
-    build::{throw_internal_exception, use_roc_value},
+    build::{throw_internal_exception, use_roc_value, FAST_CALL_CONV},
     convert::zig_with_overflow_roc_dec,
     scope::Scope,
+};
+use super::{
+    build::{Env, FunctionSpec},
+    convert::zig_dec_type,
 };
 
 pub(crate) fn run_low_level<'a, 'ctx>(
@@ -1816,12 +1821,70 @@ fn throw_on_overflow<'ctx>(
 
     bd.position_at_end(throw_block);
 
-    throw_internal_exception(env, parent, message);
+    throw_on_overflow_help(env, result, message);
 
     bd.position_at_end(then_block);
 
     bd.build_extract_value(result, 0, "operation_result")
         .unwrap()
+}
+
+fn throw_on_overflow_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    result: StructValue<'ctx>, // of the form { value: T, has_overflowed: bool }
+    message: &str,
+) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let function_name = "throw_on_overflow";
+    let function = match env.module.get_function(function_name) {
+        Some(function_value) => function_value,
+        None => {
+            let function_type = env.context.void_type().fn_type(&[], false);
+            let function_value =
+                env.module
+                    .add_function(function_name, function_type, Some(Linkage::Internal));
+
+            function_value.set_call_conventions(FAST_CALL_CONV);
+
+            // prevent inlining of this function
+            let kind_id = Attribute::get_named_enum_kind_id("noinline");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // calling this function is unlikely
+            let kind_id = Attribute::get_named_enum_kind_id("cold");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // this function never returns
+            let kind_id = Attribute::get_named_enum_kind_id("noreturn");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // Add a basic block for the entry point
+            let entry = env.context.append_basic_block(function_value, "entry");
+
+            env.builder.position_at_end(entry);
+
+            // ends in unreachable, so no return is needed
+            throw_internal_exception(env, function_value, message);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder.set_current_debug_location(di_location);
+
+    let call = env.builder.build_call(function, &[], "overflow");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    env.builder.build_unreachable();
 }
 
 fn dec_split_into_words<'ctx>(
