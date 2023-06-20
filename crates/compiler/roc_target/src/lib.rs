@@ -181,7 +181,7 @@ pub enum Target {
     WinX64,
     #[strum(serialize = "windows-arm-64")]
     WinArm64,
-    #[strum(serialize = "wasm-32")]
+    #[strum(serialize = "wasm32")]
     Wasm32,
 }
 

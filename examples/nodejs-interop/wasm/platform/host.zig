@@ -4,7 +4,7 @@ const RocStr = str.RocStr;
 
 comptime {
     if (builtin.target.cpu.arch != .wasm32) {
-        @compileError("This platform is for WebAssembly only. You need to pass `--target wasm-32` to the Roc compiler.");
+        @compileError("This platform is for WebAssembly only. You need to pass `--target wasm32` to the Roc compiler.");
     }
 }
 
