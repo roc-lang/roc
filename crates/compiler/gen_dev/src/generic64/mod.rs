@@ -3008,7 +3008,7 @@ impl<
         value: Symbol,
         element_layout: InLayout<'a>,
     ) {
-        // 1. aquire some stack space
+        // 1. acquire some stack space
         let element_width = self.interner().stack_size(element_layout);
         let allocation = self.debug_symbol("stack_allocation");
         let ptr = self.debug_symbol("ptr");
