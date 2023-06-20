@@ -26,6 +26,7 @@ mod test_reporting {
         DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
+    use roc_solve::FunctionKind;
     use roc_solve_problem::TypeError;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
@@ -127,6 +128,7 @@ mod test_reporting {
                 palette: DEFAULT_PALETTE,
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
+                function_kind: FunctionKind::LambdaSet,
             };
             let result = roc_load::load_and_typecheck(
                 arena,

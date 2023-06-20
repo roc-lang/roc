@@ -63,6 +63,7 @@ use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::to_https_problem_report_string;
 use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, SolveConfig, Solved, SolvedModule};
+use roc_solve::FunctionKind;
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
@@ -113,6 +114,7 @@ pub struct LoadConfig {
     pub palette: Palette,
     pub threading: Threading,
     pub exec_mode: ExecutionMode,
+    pub function_kind: FunctionKind,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -679,6 +681,8 @@ struct State<'a> {
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
     pub target_info: TargetInfo,
+    #[allow(unused)] // for now
+    pub(self) function_kind: FunctionKind,
 
     /// Note: only packages and platforms actually expose any modules;
     /// for all others, this will be empty.
@@ -740,6 +744,7 @@ impl<'a> State<'a> {
         root_id: ModuleId,
         opt_platform_shorthand: Option<&'a str>,
         target_info: TargetInfo,
+        function_kind: FunctionKind,
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
@@ -759,6 +764,7 @@ impl<'a> State<'a> {
             opt_platform_shorthand,
             cache_dir,
             target_info,
+            function_kind,
             platform_data: None,
             output_path: None,
             platform_path: PlatformPath::NotSpecified,
@@ -969,6 +975,7 @@ pub fn load_and_typecheck_str<'a>(
     src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
     render: RenderTarget,
     palette: Palette,
     roc_cache_dir: RocCacheDir<'_>,
@@ -988,6 +995,7 @@ pub fn load_and_typecheck_str<'a>(
         palette,
         threading,
         exec_mode: ExecutionMode::Check,
+        function_kind,
     };
 
     match load(
@@ -1243,6 +1251,7 @@ pub fn load<'a>(
             load_start,
             exposed_types,
             load_config.target_info,
+            load_config.function_kind,
             cached_types,
             load_config.render,
             load_config.palette,
@@ -1254,6 +1263,7 @@ pub fn load<'a>(
             load_start,
             exposed_types,
             load_config.target_info,
+            load_config.function_kind,
             cached_types,
             load_config.render,
             load_config.palette,
@@ -1270,6 +1280,7 @@ pub fn load_single_threaded<'a>(
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
     cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
     palette: Palette,
@@ -1297,6 +1308,7 @@ pub fn load_single_threaded<'a>(
         root_id,
         opt_platform_shorthand,
         target_info,
+        function_kind,
         exposed_types,
         arc_modules,
         ident_ids_by_module,
@@ -1584,6 +1596,7 @@ fn load_multi_threaded<'a>(
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
     cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
     palette: Palette,
@@ -1627,6 +1640,7 @@ fn load_multi_threaded<'a>(
         root_id,
         opt_platform_shorthand,
         target_info,
+        function_kind,
         exposed_types,
         arc_modules,
         ident_ids_by_module,

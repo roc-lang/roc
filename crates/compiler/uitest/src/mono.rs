@@ -8,6 +8,7 @@ use roc_mono::{
     ir::{Proc, ProcLayout},
     layout::STLayoutInterner,
 };
+use roc_solve::FunctionKind;
 use tempfile::tempdir;
 use test_solve_helpers::format_problems;
 
@@ -41,6 +42,8 @@ pub fn write_compiled_ir<'a>(
 
     let load_config = LoadConfig {
         target_info: roc_target::TargetInfo::default_x86_64(),
+        // TODO parameterize
+        function_kind: FunctionKind::LambdaSet,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,

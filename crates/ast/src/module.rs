@@ -12,6 +12,7 @@ pub fn load_module(
 ) -> LoadedModule {
     let load_config = LoadConfig {
         target_info: TargetInfo::default_x86_64(), // editor only needs type info, so this is unused
+        function_kind: roc_solve::FunctionKind::LambdaSet, // TODO the editor may need to dynamically change this
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading,

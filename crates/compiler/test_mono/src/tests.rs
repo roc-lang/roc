@@ -16,6 +16,7 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
+use roc_load::FunctionKind;
 use roc_load::LoadConfig;
 use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
@@ -104,6 +105,8 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
 
     let load_config = LoadConfig {
         target_info: TARGET_INFO,
+        // TODO parameterize
+        function_kind: FunctionKind::LambdaSet,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,

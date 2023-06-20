@@ -8,7 +8,9 @@ use roc_collections::all::MutSet;
 use roc_command_utils::zig;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
-use roc_load::{EntryPoint, ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
+use roc_load::{
+    EntryPoint, ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError, Threading,
+};
 use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
@@ -52,6 +54,8 @@ fn create_llvm_module<'a>(
     target: &Triple,
 ) -> (&'static str, String, &'a Module<'a>) {
     let target_info = roc_target::TargetInfo::from(target);
+    // TODO parameterize
+    let function_kind = FunctionKind::LambdaSet;
 
     let filename = PathBuf::from("Test.roc");
     let src_dir = PathBuf::from("fake/test/path");
@@ -69,6 +73,7 @@ fn create_llvm_module<'a>(
 
     let load_config = LoadConfig {
         target_info,
+        function_kind,
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading: Threading::Single,

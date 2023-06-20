@@ -79,6 +79,8 @@ pub fn run_load_and_infer<'a>(
             module_src,
             dir.path().to_path_buf(),
             roc_target::TargetInfo::default_x86_64(),
+            // TODO parameterize me!
+            roc_solve::FunctionKind::LambdaSet,
             roc_reporting::report::RenderTarget::Generic,
             RocCacheDir::Disallowed,
             roc_reporting::report::DEFAULT_PALETTE,

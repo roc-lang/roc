@@ -11,6 +11,7 @@ use roc_load::{LoadingProblem, MonomorphizedModule};
 use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
+use roc_solve::FunctionKind;
 use roc_target::TargetInfo;
 
 #[derive(Debug)]
@@ -49,6 +50,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
     defs: I,
     expr: &str,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
     palette: Palette,
 ) -> (Option<MonomorphizedModule<'a>>, Problems) {
     let filename = PathBuf::from("");
@@ -62,6 +64,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target_info,
+            function_kind,
             render: roc_reporting::report::RenderTarget::ColorTerminal,
             palette,
             threading: Threading::Single,

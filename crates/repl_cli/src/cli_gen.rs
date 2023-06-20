@@ -7,7 +7,7 @@ use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_load::{EntryPoint, MonomorphizedModule};
+use roc_load::{EntryPoint, FunctionKind, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_mono::layout::STLayoutInterner;
 use roc_parse::ast::Expr;
@@ -29,11 +29,19 @@ pub fn gen_and_eval_llvm<'a, I: Iterator<Item = &'a str>>(
 ) -> (Option<ReplOutput>, Problems) {
     let arena = Bump::new();
     let target_info = TargetInfo::from(&target);
+    let function_kind = FunctionKind::LambdaSet;
 
     let mut loaded;
     let problems;
 
-    match compile_to_mono(&arena, defs, src, target_info, DEFAULT_PALETTE) {
+    match compile_to_mono(
+        &arena,
+        defs,
+        src,
+        target_info,
+        function_kind,
+        DEFAULT_PALETTE,
+    ) {
         (Some(mono), probs) => {
             loaded = mono;
             problems = probs;

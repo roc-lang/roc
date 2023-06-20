@@ -385,7 +385,7 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
-    use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError};
+    use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
     use roc_target::TargetInfo;
 
@@ -427,10 +427,13 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let target = &triple;
     let opt_level = opt_level;
     let target_info = TargetInfo::from(target);
+    // TODO may need to determine this dynamically based on dev builds.
+    let function_kind = FunctionKind::LambdaSet;
 
     // Step 1: compile the app and generate the .o file
     let load_config = LoadConfig {
         target_info,
+        function_kind,
         // TODO: expose this from CLI?
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
