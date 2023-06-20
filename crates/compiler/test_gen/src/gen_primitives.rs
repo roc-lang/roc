@@ -4510,17 +4510,11 @@ fn linked_list_trmc() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            # map : LinkedList a, (a -> b) -> LinkedList b
-            # map = \list, f ->
-            #     when list is
-            #         Nil -> Nil
-            #         Cons x xs -> Cons (f x) (map xs f)
-
-            unfold : a, Nat -> LinkedList a
-            unfold = \value, n ->
+            repeat : a, Nat -> LinkedList a
+            repeat = \value, n ->
                 when n is
                     0 -> Nil
-                    _ -> Cons value (unfold value (n - 1))
+                    _ -> Cons value (repeat value (n - 1))
 
             length : LinkedList a -> I64
             length = \list ->
@@ -4530,8 +4524,7 @@ fn linked_list_trmc() {
 
             main : I64 
             main = 
-                unfold 32 1
-                    # |> map (\x -> x + 1i64) 
+                repeat "foo" 5
                     |> length
             "#
         ),
