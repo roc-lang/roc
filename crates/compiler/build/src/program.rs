@@ -807,7 +807,7 @@ fn build_loaded_file<'a>(
     };
 
     // the preprocessed host is stored beside the platform's main.roc
-    let mut preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
+    let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
         if let roc_target::OperatingSystem::Wasi = operating_system {
             // when compiling a wasm application, we implicitly assume here that the host is in zig
             // and has a file called "host.zig"
@@ -835,36 +835,9 @@ fn build_loaded_file<'a>(
         None
     } else if is_platform_prebuilt {
         if !preprocessed_host_path.exists() {
-            // Check for .rh and .o files using the old "x86_64" instead of the new "x64", for
-            // backwards compatibility with prebuilt platforms created before
-            // https://github.com/roc-lang/roc/pull/557 landed.
-            //
-            // Eventually (e.g. certainly after the end of 2023) this fixup can be removed.
-            let file_name = preprocessed_host_path
-                .file_name()
-                .unwrap_or_default()
-                .to_str()
-                .unwrap_or_default();
+            invalid_prebuilt_platform(prebuilt_requested, preprocessed_host_path);
 
-            if file_name.ends_with("-x64.rh") || file_name.ends_with("-x64.o") {
-                let original_preprocessed_host_path = preprocessed_host_path.clone();
-
-                // Fixup the filename to the new format.
-                preprocessed_host_path =
-                    preprocessed_host_path.with_file_name(file_name.replace("-x64.", "-x86_64."));
-
-                // Try again now that we've fixed the filename.
-                if !preprocessed_host_path.exists() {
-                    // Report the error with the original path, not the attempted fixup.
-                    invalid_prebuilt_platform(prebuilt_requested, original_preprocessed_host_path);
-
-                    std::process::exit(1);
-                }
-            } else {
-                invalid_prebuilt_platform(prebuilt_requested, preprocessed_host_path);
-
-                std::process::exit(1);
-            }
+            std::process::exit(1);
         }
 
         if linking_strategy == LinkingStrategy::Surgical {
