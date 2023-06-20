@@ -56,14 +56,11 @@ use crate::llvm::{
     refcounting::PointerToRefcount,
 };
 
+use super::{build::Env, convert::zig_dec_type};
 use super::{
     build::{throw_internal_exception, use_roc_value, FAST_CALL_CONV},
     convert::zig_with_overflow_roc_dec,
     scope::Scope,
-};
-use super::{
-    build::{Env, FunctionSpec},
-    convert::zig_dec_type,
 };
 
 pub(crate) fn run_low_level<'a, 'ctx>(
@@ -1821,7 +1818,7 @@ fn throw_on_overflow<'ctx>(
 
     bd.position_at_end(throw_block);
 
-    throw_on_overflow_help(env, result, message);
+    throw_because_overflow(env, message);
 
     bd.position_at_end(then_block);
 
@@ -1829,11 +1826,7 @@ fn throw_on_overflow<'ctx>(
         .unwrap()
 }
 
-fn throw_on_overflow_help<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    result: StructValue<'ctx>, // of the form { value: T, has_overflowed: bool }
-    message: &str,
-) {
+fn throw_because_overflow<'ctx>(env: &Env<'_, 'ctx, '_>, message: &str) {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
