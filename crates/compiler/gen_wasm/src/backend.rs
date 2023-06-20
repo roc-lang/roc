@@ -1084,7 +1084,14 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 tag_id,
                 union_layout,
                 index,
-            } => self.expr_union_field_ptr_at_index(*structure, *tag_id, union_layout, *index, sym),
+            } => self.expr_union_field_ptr_at_index(
+                *structure,
+                *tag_id,
+                union_layout,
+                *index,
+                sym,
+                storage,
+            ),
 
             Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
 
@@ -1885,6 +1892,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         union_layout: &UnionLayout<'a>,
         index: u64,
         symbol: Symbol,
+        storage: &StoredValue,
     ) {
         use UnionLayout::*;
 
@@ -1934,18 +1942,28 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
 
-        let from_addr_val = if stores_tag_id_in_pointer {
-            self.code_builder.get_local(tag_local_id);
-            self.code_builder.i32_const(-4); // 11111111...1100
-            self.code_builder.i32_and();
-            AddressValue::Loaded
-        } else {
-            AddressValue::NotLoaded(tag_local_id)
-        };
-
         let from_offset = tag_offset + field_offset;
 
-        self.code_builder.i32_const(from_offset as i32);
+        self.code_builder.get_local(tag_local_id);
+
+        if stores_tag_id_in_pointer {
+            self.code_builder.i32_const(-4); // 11111111...1100
+            self.code_builder.i32_and();
+        }
+
+        self.code_builder.i32_const(from_offset as _);
+        self.code_builder.i32_add();
+
+        let symbol_local = match self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            symbol,
+            storage.clone(),
+        ) {
+            StoredValue::Local { local_id, .. } => local_id,
+            _ => internal_error!("A heap pointer will always be an i32"),
+        };
+
+        self.code_builder.set_local(symbol_local);
     }
 
     /*******************************************************************

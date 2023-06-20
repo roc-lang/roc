@@ -1962,42 +1962,25 @@ impl<'a> LowLevelCall<'a> {
 
             PtrStore => {
                 // PtrStore : Ptr a, a -> {}
-                let ptr_sym = self.arguments[0];
-                let value_sym = self.arguments[1];
+                let ptr = self.arguments[0];
+                let value = self.arguments[1];
 
-                // create a local variable for the heap pointer
-                let ptr_local_id = match backend.storage.ensure_value_has_local(
-                    &mut backend.code_builder,
-                    ptr_sym,
-                    self.ret_storage.clone(),
-                ) {
-                    StoredValue::Local { local_id, .. } => local_id,
-                    StoredValue::StackMemory { location, .. } => {
-                        location
-                            .local_and_offset(backend.storage.stack_frame_pointer)
-                            .0
-                    }
-                    other => internal_error!(
-                        "Struct should be allocated in stack memory, but it's in {:?}",
-                        other
-                    ),
+                let (ptr_local_id, offset) = match backend.storage.get(&ptr) {
+                    StoredValue::Local { local_id, .. } => (*local_id, 0),
+                    _ => internal_error!("A pointer will always be an i32"),
                 };
-
-                dbg!(ptr_local_id);
-
-                // store the pointer value from the value stack into the local variable
-                backend.code_builder.set_local(ptr_local_id);
 
                 // copy the argument to the pointer address
                 backend.storage.copy_value_to_memory(
                     &mut backend.code_builder,
                     ptr_local_id,
-                    0,
-                    value_sym,
+                    offset,
+                    value,
                 );
             }
             PtrLoad => backend.expr_unbox(self.ret_symbol, self.arguments[0]),
             PtrToStackValue => {
+                // PtrToStackValue : a -> Ptr a
                 let arg = self.arguments[0];
                 let arg_layout = backend.storage.symbol_layouts.get(&arg).unwrap();
 
@@ -2009,6 +1992,7 @@ impl<'a> LowLevelCall<'a> {
                     .storage
                     .allocate_anonymous_stack_memory(size, alignment_bytes);
 
+                // write the default value into the stack memory
                 backend.storage.copy_value_to_memory(
                     &mut backend.code_builder,
                     frame_ptr,
@@ -2025,9 +2009,6 @@ impl<'a> LowLevelCall<'a> {
                     StoredValue::Local { local_id, .. } => local_id,
                     _ => internal_error!("A pointer will always be an i32"),
                 };
-
-                // store the pointer value from the value stack into the local variable
-                dbg!(offset, size, alignment_bytes);
 
                 backend.code_builder.get_local(frame_ptr);
                 backend.code_builder.i32_const(offset as i32);
