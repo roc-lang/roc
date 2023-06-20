@@ -44,7 +44,6 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-#[allow(clippy::too_many_arguments)]
 fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
