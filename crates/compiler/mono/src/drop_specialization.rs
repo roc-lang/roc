@@ -219,10 +219,8 @@ fn specialize_drops_stmt<'a, 'i>(
                     structure,
                     tag_id,
                     union_layout: _,
-                    index,
+                    index: _,
                 } => {
-                    // TODO perhaps we need the union_layout later as well? if so, create a new function/map to store it.
-                    environment.add_union_child(*structure, *binding, *tag_id, *index);
                     // Generated code might know the tag of the union without switching on it.
                     // So if we UnionFieldPtrAtIndex, we must know the tag and we can use it to specialize the drop.
                     environment.symbol_tag.insert(*structure, *tag_id);
