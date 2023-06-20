@@ -272,9 +272,10 @@ impl<'v> RefcountEnvironment<'v> {
     */
     fn consume_rc_symbol(&mut self, symbol: Symbol) -> Ownership {
         // Consume the symbol by setting it to borrowed (if it was owned before), and return the previous ownership.
-        self.symbols_ownership
-            .insert(symbol, Ownership::Borrowed)
-            .expect("Expected symbol to be in environment")
+        match self.symbols_ownership.insert(symbol, Ownership::Borrowed) {
+            Some(ownership) => ownership,
+            None => internal_error!("Expected symbol {symbol:?} to be in environment"),
+        }
     }
 
     /**
