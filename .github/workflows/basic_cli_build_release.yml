@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -9,7 +9,7 @@ concurrency:
   
 # use .tar.gz for quick testing
 env:
-  ARCHIVE_FORMAT: .tar.br
+  ARCHIVE_FORMAT: .tar.gz
 
 jobs:
   fetch-releases:
@@ -17,16 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
-      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-testing.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-testing.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-testing.tar.gz
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v3
         with:
           path:  roc_nightly-*
 
-  build-linux-x86_64-files:
+  build-linux-x64-files:
     runs-on: [ubuntu-20.04]
     needs: [fetch-releases]
     steps:
@@ -37,19 +37,19 @@ jobs:
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
-          CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
+          CARGO_BUILD_TARGET: x64-unknown-linux-musl
         run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
       - name: Save .rh, .rm and .o file 
         uses: actions/upload-artifact@v3
         with:
-          name: linux-x86_64-files
+          name: linux-x64-files
           path: |
-            basic-cli/src/metadata_linux-x86_64.rm
-            basic-cli/src/linux-x86_64.rh
-            basic-cli/src/linux-x86_64.o
+            basic-cli/src/metadata_linux-x64.rm
+            basic-cli/src/linux-x64.rh
+            basic-cli/src/linux-x64.o
 
-  build-macos-x86_64-files:
+  build-macos-x64-files:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12
     needs: [fetch-releases]
     steps:
@@ -63,9 +63,9 @@ jobs:
       - name: Save .o files
         uses: actions/upload-artifact@v3
         with:
-          name: macos-x86_64-files
+          name: macos-x64-files
           path: |
-            basic-cli/src/macos-x86_64.o
+            basic-cli/src/macos-x64.o
 
   build-macos-apple-silicon-files:
     name: build apple silicon .o file
@@ -87,7 +87,7 @@ jobs:
             basic-cli/src/macos-arm64.o
 
   create-release-archive:
-    needs: [build-linux-x86_64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
+    needs: [build-linux-x64-files, build-macos-x64-files, build-macos-apple-silicon-files]
     name: create release archive
     runs-on: [ubuntu-20.04]
     steps:
@@ -115,9 +115,9 @@ jobs:
 
       - run: cp macos-apple-silicon-files/* ./basic-cli/src
       
-      - run: cp linux-x86_64-files/* ./basic-cli/src
+      - run: cp linux-x64-files/* ./basic-cli/src
 
-      - run: cp macos-x86_64-files/* ./basic-cli/src
+      - run: cp macos-x64-files/* ./basic-cli/src
 
       - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
 
