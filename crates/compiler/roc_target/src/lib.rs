@@ -3,7 +3,7 @@
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 
-use strum_macros::{EnumCount, EnumIter, IntoStaticStr};
+use strum_macros::{EnumCount, EnumIter, EnumString, IntoStaticStr};
 use target_lexicon::Triple;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -160,7 +160,7 @@ impl From<target_lexicon::Architecture> for Architecture {
     }
 }
 
-#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, EnumIter, EnumString, IntoStaticStr, PartialEq, Eq, Default)]
 pub enum Target {
     #[strum(serialize = "system")]
     #[default]
@@ -273,24 +273,6 @@ impl From<&Target> for Triple {
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", Into::<&'static str>::into(self))
-    }
-}
-
-impl std::str::FromStr for Target {
-    type Err = String;
-
-    fn from_str(string: &str) -> Result<Self, Self::Err> {
-        match string {
-            "system" => Ok(Target::System),
-            "linux-x86-32" => Ok(Target::LinuxX32),
-            "linux-x86-64" => Ok(Target::LinuxX64),
-            "linux-arm-64" => Ok(Target::LinuxArm64),
-            "macos-x86-64" => Ok(Target::MacX64),
-            "macos-arm-64" => Ok(Target::MacArm64),
-            "windows-x86-64" => Ok(Target::WinX64),
-            "wasm-32" => Ok(Target::Wasm32),
-            _ => Err(format!("Roc does not know how to compile to {}", string)),
-        }
     }
 }
 
