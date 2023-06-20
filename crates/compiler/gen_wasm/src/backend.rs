@@ -1970,7 +1970,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
      * Box
      *******************************************************************/
 
-    pub(crate) fn expr_box(
+    pub fn expr_box(
         &mut self,
         ret_sym: Symbol,
         arg_sym: Symbol,
