@@ -165,21 +165,21 @@ pub enum Target {
     #[strum(serialize = "system")]
     #[default]
     System,
-    #[strum(serialize = "linux-x86-32")]
+    #[strum(serialize = "linux-x32")]
     LinuxX32,
-    #[strum(serialize = "linux-x86-64")]
+    #[strum(serialize = "linux-x64")]
     LinuxX64,
-    #[strum(serialize = "linux-arm-64")]
+    #[strum(serialize = "linux-arm64")]
     LinuxArm64,
-    #[strum(serialize = "macos-x86-64")]
+    #[strum(serialize = "macos-x64")]
     MacX64,
-    #[strum(serialize = "macos-arm-64")]
+    #[strum(serialize = "macos-arm64")]
     MacArm64,
-    #[strum(serialize = "windows-x86-32")]
+    #[strum(serialize = "windows-x32")]
     WinX32,
-    #[strum(serialize = "windows-x86-64")]
+    #[strum(serialize = "windows-x64")]
     WinX64,
-    #[strum(serialize = "windows-arm-64")]
+    #[strum(serialize = "windows-arm64")]
     WinArm64,
     #[strum(serialize = "wasm32")]
     Wasm32,
