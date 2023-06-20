@@ -1098,7 +1098,7 @@ mod cli_run {
             use super::{concatcp, run_roc, CMD_BUILD, TARGET_FLAG};
 
             let mut flags = flags.to_vec();
-            flags.push(concatcp!(TARGET_FLAG, "=wasm32"));
+            flags.push(concatcp!(TARGET_FLAG, "=wasm-32"));
 
             let compile_out = run_roc(
                 [CMD_BUILD, file.to_str().unwrap()]

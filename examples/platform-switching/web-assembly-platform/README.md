@@ -4,13 +4,13 @@ To run this website, we first compile the app that uses the Wasm platform:
 
 - If you use the nightly roc release:
 ```bash
-./roc build --target=wasm32 examples/platform-switching/rocLovesWebAssembly.roc
+./roc build --target=wasm-32 examples/platform-switching/rocLovesWebAssembly.roc
 ```
 - If you start from the compiler source code:
 ```bash
 # Build roc compiler if you have not done so already
 cargo build
-target/debug/roc build --target=wasm32 examples/platform-switching/rocLovesWebAssembly.roc
+target/debug/roc build --target=wasm-32 examples/platform-switching/rocLovesWebAssembly.roc
 ```
 We then move the file:
 ```bash
