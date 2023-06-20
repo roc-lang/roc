@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 use strum::{EnumIter, IntoEnumIterator, IntoStaticStr};
-use target_lexicon::BinaryFormat;
+use target_lexicon::{Aarch64Architecture, BinaryFormat};
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
 };
@@ -1281,44 +1281,75 @@ pub enum Target {
     #[strum(serialize = "system")]
     #[default]
     System,
-    #[strum(serialize = "linux32")]
-    Linux32,
-    #[strum(serialize = "linux64")]
-    Linux64,
-    #[strum(serialize = "windows64")]
-    Windows64,
-    #[strum(serialize = "wasm32")]
+    #[strum(serialize = "linux-x86-32")]
+    LinuxX32,
+    #[strum(serialize = "linux-x86-64")]
+    LinuxX64,
+    #[strum(serialize = "linux-arm-64")]
+    LinuxArm64,
+    #[strum(serialize = "macos-x86-64")]
+    MacX64,
+    #[strum(serialize = "macos-arm-64")]
+    MacArm64,
+    #[strum(serialize = "windows-x86-64")]
+    WinX64,
+    #[strum(serialize = "wasm-32")]
     Wasm32,
 }
 
+const MACOS: OperatingSystem = OperatingSystem::MacOSX {
+    major: 12,
+    minor: 0,
+    patch: 0,
+};
+
 impl Target {
     pub fn to_triple(self) -> Triple {
-        use Target::*;
-
         match self {
-            System => Triple::host(),
-            Linux32 => Triple {
+            Target::System => Triple::host(),
+            Target::LinuxX32 => Triple {
                 architecture: Architecture::X86_32(X86_32Architecture::I386),
                 vendor: Vendor::Unknown,
                 operating_system: OperatingSystem::Linux,
-                environment: Environment::Musl,
+                environment: Environment::Unknown,
                 binary_format: BinaryFormat::Elf,
             },
-            Linux64 => Triple {
+            Target::LinuxX64 => Triple {
                 architecture: Architecture::X86_64,
                 vendor: Vendor::Unknown,
                 operating_system: OperatingSystem::Linux,
-                environment: Environment::Musl,
+                environment: Environment::Unknown,
                 binary_format: BinaryFormat::Elf,
             },
-            Windows64 => Triple {
+            Target::LinuxArm64 => Triple {
+                architecture: Architecture::Aarch64(Aarch64Architecture::Aarch64),
+                vendor: Vendor::Unknown,
+                operating_system: OperatingSystem::Linux,
+                environment: Environment::Unknown,
+                binary_format: BinaryFormat::Elf,
+            },
+            Target::WinX64 => Triple {
                 architecture: Architecture::X86_64,
                 vendor: Vendor::Unknown,
                 operating_system: OperatingSystem::Windows,
                 environment: Environment::Gnu,
                 binary_format: BinaryFormat::Coff,
             },
-            Wasm32 => Triple {
+            Target::MacX64 => Triple {
+                architecture: Architecture::X86_64,
+                vendor: Vendor::Apple,
+                operating_system: MACOS,
+                environment: Environment::Unknown,
+                binary_format: BinaryFormat::Macho,
+            },
+            Target::MacArm64 => Triple {
+                architecture: Architecture::Aarch64(Aarch64Architecture::Aarch64),
+                vendor: Vendor::Apple,
+                operating_system: MACOS,
+                environment: Environment::Unknown,
+                binary_format: BinaryFormat::Macho,
+            },
+            Target::Wasm32 => Triple {
                 architecture: Architecture::Wasm32,
                 vendor: Vendor::Unknown,
                 operating_system: OperatingSystem::Wasi,
@@ -1347,10 +1378,13 @@ impl std::str::FromStr for Target {
     fn from_str(string: &str) -> Result<Self, Self::Err> {
         match string {
             "system" => Ok(Target::System),
-            "linux32" => Ok(Target::Linux32),
-            "linux64" => Ok(Target::Linux64),
-            "windows64" => Ok(Target::Windows64),
-            "wasm32" => Ok(Target::Wasm32),
+            "linux-x86-32" => Ok(Target::LinuxX32),
+            "linux-x86-64" => Ok(Target::LinuxX64),
+            "linux-arm-64" => Ok(Target::LinuxArm64),
+            "macos-x86-64" => Ok(Target::MacX64),
+            "macos-arm-64" => Ok(Target::MacArm64),
+            "windows-x86-64" => Ok(Target::WinX64),
+            "wasm-32" => Ok(Target::Wasm32),
             _ => Err(format!("Roc does not know how to compile to {}", string)),
         }
     }
