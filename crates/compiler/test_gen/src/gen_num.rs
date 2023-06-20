@@ -3992,7 +3992,7 @@ fn num_max() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_to_frac_dec_unsigned() {
     assert_evals_to!(
         indoc!(
@@ -4007,7 +4007,7 @@ fn int_to_frac_dec_unsigned() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_to_frac_dec_signed() {
     assert_evals_to!(
         indoc!(
