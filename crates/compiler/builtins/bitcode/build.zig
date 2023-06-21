@@ -25,7 +25,6 @@ pub fn build(b: *Builder) void {
     const host_target = b.standardTargetOptions(.{
         .default_target = CrossTarget{
             .cpu_model = .baseline,
-            // TODO allow for native target for maximum speed
         },
     });
     const linux32_target = makeLinux32Target();
