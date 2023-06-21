@@ -3,15 +3,15 @@
 use crate::ir::erased::{build_erased_function, ResolvedErasedLambda};
 use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
-    self, Builtin, ClosureCallOptions, ClosureDataKind, ClosureRepresentation, EnumDispatch,
-    InLayout, LambdaName, LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem,
-    LayoutRepr, Niche, RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout,
-    WrappedVariant,
+    self, ext_var_is_empty_tag_union, Builtin, ClosureCallOptions, ClosureDataKind,
+    ClosureRepresentation, EnumDispatch, InLayout, LambdaName, LambdaSet, Layout,
+    LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche, RawFunctionLayout,
+    TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_can::abilities::SpecializationId;
-use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup};
+use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup, WhenBranch, WhenBranchPattern};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
@@ -25,7 +25,7 @@ use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities, todo_lambda_erasure};
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
-use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
+use roc_module::ident::{self, ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
@@ -6904,6 +6904,119 @@ fn register_capturing_closure<'a>(
 
         procs.partial_procs.insert(closure_name, partial_proc);
     }
+}
+
+fn get_sorted_tags<'a>(
+    subs: &'a Subs,
+    var: Variable,
+) -> Option<(
+    (impl Iterator<Item = (TagName, &'a [Variable])> + 'a),
+    roc_types::subs::TagExt,
+)> {
+    let content = subs.get_content_without_compacting(var);
+    match content {
+        Content::Structure(FlatType::TagUnion(tags, ext)) => {
+            let (tags, ext) = tags.sorted_iterator_and_ext(&subs, *ext);
+            debug_assert!(ext_var_is_empty_tag_union(subs, ext));
+            Some((tags.map(|(tag_name, variables)| (tag_name, variables)), ext))
+        }
+        Content::Structure(FlatType::RecursiveTagUnion(_var, _tags, _ext)) => {
+            todo!("refine_tag_union: recursive tag union")
+        }
+        _ => None,
+    }
+}
+
+fn unique_symbol(ident_ids: &mut IdentIds, home: ModuleId) -> Symbol {
+    let ident_id = ident_ids.gen_unique();
+
+    Symbol::new(home, ident_id)
+}
+
+fn refine_tag_union(
+    env: &mut Env,
+    from_var: Variable,
+    to_var: Variable,
+) -> Option<std::vec::Vec<WhenBranch>> {
+    use roc_can::expr::Expr::*;
+
+    if env.subs.equivalent(from_var, to_var) {
+        return None;
+    }
+
+    let (from_tags, from_ext) = get_sorted_tags(&env.subs, from_var)?;
+    let (mut to_tags, to_ext) = get_sorted_tags(&env.subs, to_var)?;
+
+    let ret: std::vec::Vec<WhenBranch> = from_tags
+        .map(|(from_tag, from_args)| {
+            let arg_symbols: std::vec::Vec<Symbol> = (0..from_args.len())
+                .map(|_| unique_symbol(&mut env.ident_ids, env.home))
+                .collect();
+            let arguments: std::vec::Vec<(Variable, Loc<roc_can::pattern::Pattern>)> = from_args
+                .iter()
+                .zip(arg_symbols.iter())
+                .map(|(&var, &sym)| {
+                    (
+                        var,
+                        Loc::at_zero(roc_can::pattern::Pattern::Identifier(sym)),
+                    )
+                })
+                .collect();
+            while let Some((to_tag, to_args)) = to_tags.next() {
+                if to_tag > from_tag {
+                    break;
+                } else if to_tag == from_tag {
+                    // this tag is in both tag unions
+                    debug_assert!(from_args.len() == to_args.len());
+                    let patterns = vec![WhenBranchPattern {
+                        pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
+                            whole_var: from_var,
+                            ext_var: from_ext.var(),
+                            tag_name: from_tag,
+                            arguments,
+                        }),
+                        degenerate: false,
+                    }];
+                    return WhenBranch {
+                        patterns,
+                        value: Loc::at_zero(Tag {
+                            tag_union_var: to_var,
+                            ext_var: to_ext.var(),
+                            name: to_tag,
+                            arguments: to_args
+                                .iter()
+                                .zip(arg_symbols.iter())
+                                .map(|(&var, &sym)| (var, Loc::at_zero(Var(sym, var))))
+                                .collect(),
+                        }),
+                        guard: None,
+                        redundant: RedundantMark::known_non_redundant(),
+                    };
+                }
+            }
+            // this tag is only in from
+            let patterns = vec![WhenBranchPattern {
+                pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
+                    whole_var: from_var,
+                    ext_var: from_ext.var(),
+                    tag_name: from_tag,
+                    arguments,
+                }),
+                degenerate: false,
+            }];
+            WhenBranch {
+                patterns,
+                value: Loc::at_zero(Crash {
+                    msg: Box::new(Loc::at_zero(Str("TODO".into()))),
+                    ret_var: to_var,
+                }),
+                guard: None,
+                redundant: RedundantMark::known_non_redundant(),
+            }
+        })
+        .collect();
+
+    Some(ret)
 }
 
 pub fn from_can<'a>(
