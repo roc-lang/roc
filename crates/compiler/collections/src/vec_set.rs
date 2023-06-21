@@ -34,6 +34,12 @@ impl<T: PartialEq> VecSet<T> {
         self.elements.is_empty()
     }
 
+    pub fn singleton(value: T) -> Self {
+        Self {
+            elements: vec![value],
+        }
+    }
+
     pub fn swap_remove(&mut self, index: usize) -> T {
         self.elements.swap_remove(index)
     }
@@ -95,6 +101,16 @@ impl<T: PartialEq> VecSet<T> {
         F: FnMut(&T) -> bool,
     {
         self.elements.retain(f)
+    }
+
+    pub fn keep_if_in_both(&mut self, other: &Self) {
+        self.elements.retain(|e| other.contains(e));
+    }
+
+    pub fn keep_if_in_either(&mut self, other: Self) {
+        for e in other.elements {
+            self.insert(e);
+        }
     }
 }
 

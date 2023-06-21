@@ -21,7 +21,7 @@ main =
             |> Task.putLine
 
         Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."      
+            Task.putLine "Error: Failed to get Integer from stdin."
 
 Expr : [
     Add Expr Expr,
