@@ -1,19 +1,22 @@
 //! The `roc` binary that brings together all functionality in the Roc toolset.
 use roc_build::link::LinkType;
-use roc_cli::build::check_file;
+use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
     CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME,
-    GLUE_FILE, ROC_FILE,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET,
+    FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
+use roc_gen_dev::AssemblyBackendMode;
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use target_lexicon::Triple;
 
 #[macro_use]
@@ -29,13 +32,19 @@ use roc_cli::build;
 fn main() -> io::Result<()> {
     let _tracing_guards = roc_tracing::setup_tracing!();
 
-    let matches = build_app().get_matches();
+    let app = build_app();
+    let subcommands: Vec<String> = app
+        .get_subcommands()
+        .map(|c| c.get_name().to_owned())
+        .collect();
+    let matches = app.get_matches();
 
     let exit_code = match matches.subcommand() {
         None => {
-            if matches.is_present(ROC_FILE) {
+            if matches.contains_id(ROC_FILE) {
                 build(
                     &matches,
+                    &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -48,9 +57,10 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_RUN, matches)) => {
-            if matches.is_present(ROC_FILE) {
+            if matches.contains_id(ROC_FILE) {
                 build(
                     matches,
+                    &subcommands,
                     BuildConfig::BuildAndRun,
                     Triple::host(),
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -63,7 +73,7 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_TEST, matches)) => {
-            if matches.is_present(ROC_FILE) {
+            if matches.contains_id(ROC_FILE) {
                 test(matches, Triple::host())
             } else {
                 eprintln!("What .roc file do you want to test? Specify it at the end of the `roc test` command.");
@@ -72,9 +82,10 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_DEV, matches)) => {
-            if matches.is_present(ROC_FILE) {
+            if matches.contains_id(ROC_FILE) {
                 build(
                     matches,
+                    &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -87,20 +98,30 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_GLUE, matches)) => {
-            let input_path = Path::new(matches.value_of_os(ROC_FILE).unwrap());
-            let output_path = Path::new(matches.value_of_os(GLUE_FILE).unwrap());
+            let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+            let output_path = matches.get_one::<PathBuf>(GLUE_DIR).unwrap();
+            let spec_path = matches.get_one::<PathBuf>(GLUE_SPEC).unwrap();
 
-            if Some("rs") == output_path.extension().and_then(OsStr::to_str) {
-                roc_glue::generate(input_path, output_path)
+            // have the backend supply `roc_alloc` and friends
+            let backend = match matches.get_flag(FLAG_DEV) {
+                true => CodeGenBackend::Assembly(AssemblyBackendMode::Test),
+                false => CodeGenBackend::Llvm(LlvmBackendMode::BinaryGlue),
+            };
+
+            if !output_path.exists() || output_path.is_dir() {
+                roc_glue::generate(input_path, output_path, spec_path, backend)
             } else {
-                eprintln!("Currently, `roc glue` only supports generating Rust glue files (with the .rs extension). In the future, the plan is to decouple `roc glue` from any particular output format, by having it accept a second .roc file which gets executed as a plugin to generate glue code for any desired language. However, this has not yet been implemented, and for now only .rs is supported.");
+                eprintln!("`roc glue` must be given a directory to output into, because the glue might generate multiple files.");
 
                 Ok(1)
             }
         }
         Some((CMD_GEN_STUB_LIB, matches)) => {
-            let input_path = Path::new(matches.value_of_os(ROC_FILE).unwrap());
-            let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
+            let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+            let target = matches
+                .get_one::<String>(FLAG_TARGET)
+                .and_then(|s| Target::from_str(s).ok())
+                .unwrap_or_default();
             roc_linker::generate_stub_lib(
                 input_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -108,11 +129,11 @@ fn main() -> io::Result<()> {
             )
         }
         Some((CMD_BUILD, matches)) => {
-            let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
-            let link_type = match (
-                matches.is_present(FLAG_LIB),
-                matches.is_present(FLAG_NO_LINK),
-            ) {
+            let target = matches
+                .get_one::<String>(FLAG_TARGET)
+                .and_then(|s| Target::from_str(s).ok())
+                .unwrap_or_default();
+            let link_type = match (matches.get_flag(FLAG_LIB), matches.get_flag(FLAG_NO_LINK)) {
                 (true, false) => LinkType::Dylib,
                 (true, true) => user_error!("build can only be one of `--lib` or `--no-link`"),
                 (false, true) => LinkType::None,
@@ -121,6 +142,7 @@ fn main() -> io::Result<()> {
 
             Ok(build(
                 matches,
+                &subcommands,
                 BuildConfig::BuildOnly,
                 target.to_triple(),
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -130,22 +152,18 @@ fn main() -> io::Result<()> {
         Some((CMD_CHECK, matches)) => {
             let arena = bumpalo::Bump::new();
 
-            let emit_timings = matches.is_present(FLAG_TIME);
-            let filename = matches.value_of_os(ROC_FILE).unwrap();
-            let roc_file_path = PathBuf::from(filename);
-            let threading = match matches
-                .value_of(roc_cli::FLAG_MAX_THREADS)
-                .and_then(|s| s.parse::<usize>().ok())
-            {
+            let emit_timings = matches.get_flag(FLAG_TIME);
+            let roc_file_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+            let threading = match matches.get_one::<usize>(roc_cli::FLAG_MAX_THREADS) {
                 None => Threading::AllAvailable,
                 Some(0) => user_error!("cannot build with at most 0 threads"),
                 Some(1) => Threading::Single,
-                Some(n) => Threading::AtMost(n),
+                Some(n) => Threading::AtMost(*n),
             };
 
             match check_file(
                 &arena,
-                roc_file_path,
+                roc_file_path.to_owned(),
                 emit_timings,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 threading,
@@ -194,11 +212,11 @@ fn main() -> io::Result<()> {
         Some((CMD_REPL, _)) => Ok(roc_repl_cli::main()),
         Some((CMD_EDIT, matches)) => {
             match matches
-                .values_of_os(DIRECTORY_OR_FILES)
+                .get_many::<OsString>(DIRECTORY_OR_FILES)
                 .map(|mut values| values.next())
             {
-                Some(Some(os_str)) => {
-                    launch_editor(Some(Path::new(os_str)))?;
+                Some(Some(os_string)) => {
+                    launch_editor(Some(Path::new(os_string)))?;
                 }
                 _ => {
                     launch_editor(None)?;
@@ -209,14 +227,14 @@ fn main() -> io::Result<()> {
             Ok(0)
         }
         Some((CMD_DOCS, matches)) => {
-            let root_filename = matches.value_of_os(ROC_FILE).unwrap();
+            let root_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
 
-            generate_docs_html(PathBuf::from(root_filename));
+            generate_docs_html(root_path.to_owned());
 
             Ok(0)
         }
         Some((CMD_FORMAT, matches)) => {
-            let maybe_values = matches.values_of_os(DIRECTORY_OR_FILES);
+            let maybe_values = matches.get_many::<OsString>(DIRECTORY_OR_FILES);
 
             let mut values: Vec<OsString> = Vec::new();
 
@@ -232,8 +250,8 @@ fn main() -> io::Result<()> {
                     }
                 }
                 Some(os_values) => {
-                    for os_str in os_values {
-                        values.push(os_str.to_os_string());
+                    for os_string in os_values {
+                        values.push(os_string.to_owned());
                     }
                 }
             }
@@ -246,7 +264,7 @@ fn main() -> io::Result<()> {
                 roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
             }
 
-            let format_mode = match matches.is_present(FLAG_CHECK) {
+            let format_mode = match matches.get_flag(FLAG_CHECK) {
                 true => FormatMode::CheckOnly,
                 false => FormatMode::Format,
             };

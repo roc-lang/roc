@@ -9,10 +9,9 @@ use core::mem::MaybeUninit;
 use glue::Metadata;
 use roc_std::{RocDict, RocList, RocResult, RocStr};
 use std::borrow::{Borrow, Cow};
-use std::ffi::{CStr, OsStr};
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
-use std::os::raw::c_char;
 use std::path::Path;
 use std::time::Duration;
 
@@ -23,17 +22,17 @@ extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
     fn roc_main(output: *mut u8);
 
-    #[link_name = "roc__mainForHost_size"]
+    #[link_name = "roc__mainForHost_1_exposed_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1__Fx_caller"]
+    #[link_name = "roc__mainForHost_0_caller"]
     fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
 
     #[allow(dead_code)]
-    #[link_name = "roc__mainForHost_1__Fx_size"]
+    #[link_name = "roc__mainForHost_0_size"]
     fn size_Fx() -> i64;
 
-    #[link_name = "roc__mainForHost_1__Fx_result_size"]
+    #[link_name = "roc__mainForHost_0_result_size"]
     fn size_Fx_result() -> i64;
 }
 
@@ -198,11 +197,6 @@ fn display_roc_fn(module_name: &str, fn_name: &str) -> String {
     };
 
     format!("\u{001B}[36m{module_name}\u{001B}[39m.{fn_name}")
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
 }
 
 #[no_mangle]

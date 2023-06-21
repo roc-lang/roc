@@ -9,7 +9,7 @@ use crate::pattern::{Pattern, RecordDestruct, TupleDestruct};
 
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
-use ven_pretty::{Arena, DocAllocator, DocBuilder};
+use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
 pub struct Ctx<'a> {
     pub home: ModuleId,
@@ -19,37 +19,59 @@ pub struct Ctx<'a> {
 
 pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String {
     let f = Arena::new();
+    print_declarations_help(c, &f, declarations)
+        .1
+        .pretty(80)
+        .to_string()
+}
+
+pub fn pretty_write_declarations(
+    writer: &mut impl std::io::Write,
+    c: &Ctx,
+    declarations: &Declarations,
+) -> std::io::Result<()> {
+    let f = Arena::new();
+    print_declarations_help(c, &f, declarations)
+        .1
+        .render(80, writer)
+}
+
+pub fn pretty_print_def(c: &Ctx, d: &Def) -> String {
+    let f = Arena::new();
+    def(c, &f, d).append(f.hardline()).1.pretty(80).to_string()
+}
+
+fn print_declarations_help<'a>(
+    c: &Ctx,
+    f: &'a Arena<'a>,
+    declarations: &'a Declarations,
+) -> DocBuilder<'a, Arena<'a>> {
     let mut defs = Vec::with_capacity(declarations.len());
     for (index, tag) in declarations.iter_bottom_up() {
         let symbol = declarations.symbols[index].value;
         let body = &declarations.expressions[index];
 
         let def = match tag {
-            DeclarationTag::Value => def_symbol_help(c, &f, symbol, &body.value),
+            DeclarationTag::Value => def_symbol_help(c, f, symbol, &body.value),
             DeclarationTag::Function(f_index)
             | DeclarationTag::Recursive(f_index)
             | DeclarationTag::TailRecursive(f_index) => {
                 let function_def = &declarations.function_bodies[f_index.index()].value;
-                toplevel_function(c, &f, symbol, function_def, &body.value)
+                toplevel_function(c, f, symbol, function_def, &body.value)
             }
             DeclarationTag::Expectation => todo!(),
             DeclarationTag::ExpectationFx => todo!(),
             DeclarationTag::Destructure(_) => todo!(),
-            DeclarationTag::MutualRecursion { .. } => todo!(),
+            DeclarationTag::MutualRecursion { .. } => {
+                // the defs will be printed next
+                continue;
+            }
         };
 
         defs.push(def);
     }
 
     f.intersperse(defs, f.hardline().append(f.hardline()))
-        .1
-        .pretty(80)
-        .to_string()
-}
-
-pub fn pretty_print_def(c: &Ctx, d: &Def) -> String {
-    let f = Arena::new();
-    def(c, &f, d).append(f.hardline()).1.pretty(80).to_string()
 }
 
 macro_rules! maybe_paren {
@@ -123,9 +145,10 @@ fn toplevel_function<'a>(
         .append(f.line())
         .append(f.text("\\"))
         .append(f.intersperse(args, f.text(", ")))
-        .append(f.text("->"))
+        .append(f.text(" ->"))
+        .group()
         .append(f.line())
-        .append(expr(c, EPrec::Free, f, body))
+        .append(expr(c, EPrec::Free, f, body).group())
         .nest(2)
         .group()
 }
@@ -140,8 +163,11 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
     use EPrec::*;
     match e {
         Num(_, n, _, _) | Int(_, _, n, _, _) | Float(_, _, n, _, _) => f.text(&**n),
-        Str(s) => f.text(format!(r#""{}""#, s)),
-        SingleQuote(_, _, c, _) => f.text(format!("'{}'", c)),
+        Str(s) => text!(f, r#""{}""#, s),
+        SingleQuote(_, _, c, _) => text!(f, "'{}'", c),
+        IngestedFile(file_path, bytes, _) => {
+            text!(f, "<ingested {:?}, {} bytes>", file_path, bytes.len())
+        }
         List {
             elem_var: _,
             loc_elems,
@@ -328,11 +354,15 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         RecordAccess {
             loc_expr, field, ..
         } => expr(c, AppArg, f, &loc_expr.value)
-            .append(f.text(format!(".{}", field.as_str())))
+            .append(text!(f, ".{}", field.as_str()))
             .group(),
-        TupleAccess { .. } => todo!(),
+        TupleAccess {
+            loc_expr, index, ..
+        } => expr(c, AppArg, f, &loc_expr.value)
+            .append(text!(f, ".{index}"))
+            .group(),
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
-            f.text(format!("@{}", opaque_name.as_str(c.interns)))
+            text!(f, "@{}", opaque_name.as_str(c.interns))
         }
         RecordAccessor(_) => todo!(),
         RecordUpdate {
@@ -406,11 +436,12 @@ fn pp_sym<'a>(c: &Ctx, f: &'a Arena<'a>, sym: Symbol) -> DocBuilder<'a, Arena<'a
     if sym.module_id() == c.home {
         f.text(sym.as_str(c.interns).to_owned())
     } else {
-        f.text(format!(
+        text!(
+            f,
             "{}.{}",
             sym.module_string(c.interns),
             sym.as_str(c.interns),
-        ))
+        )
     }
 }
 
@@ -486,8 +517,7 @@ fn pattern<'a>(
         ),
         UnwrappedOpaque {
             opaque, argument, ..
-        } => f
-            .text(format!("@{} ", opaque.module_string(c.interns)))
+        } => text!(f, "@{} ", opaque.module_string(c.interns))
             .append(pattern(c, Free, f, &argument.1.value))
             .group(),
         RecordDestructure { destructs, .. } => f
@@ -529,8 +559,8 @@ fn pattern<'a>(
         NumLiteral(_, n, _, _) | IntLiteral(_, _, n, _, _) | FloatLiteral(_, _, n, _, _) => {
             f.text(&**n)
         }
-        StrLiteral(s) => f.text(format!(r#""{}""#, s)),
-        SingleQuote(_, _, c, _) => f.text(format!("'{}'", c)),
+        StrLiteral(s) => text!(f, r#""{}""#, s),
+        SingleQuote(_, _, c, _) => text!(f, "'{}'", c),
         Underscore => f.text("_"),
 
         Shadowed(_, _, _) => todo!(),

@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::path::Path;
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
 use crate::ident::Accessor;
@@ -263,6 +264,12 @@ pub enum Expr<'a> {
 
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
+    // Record Builders
+    RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
+
+    // The name of a file to be ingested directly into a variable.
+    IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
+
     // Lookups
     Var {
         module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
@@ -320,6 +327,8 @@ pub enum Expr<'a> {
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
+    MultipleRecordBuilders(&'a Loc<Expr<'a>>),
+    UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -675,6 +684,30 @@ pub enum AssignedField<'a, Val> {
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
+
+    /// A malformed assigned field, which will code gen to a runtime error
+    Malformed(&'a str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RecordBuilderField<'a> {
+    // A field with a value, e.g. `{ name: "blah" }`
+    Value(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+
+    // A field with a function we can apply to build part of the record, e.g. `{ name: <- apply getName }`
+    ApplyValue(
+        Loc<&'a str>,
+        &'a [CommentOrNewline<'a>],
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<Expr<'a>>,
+    ),
+
+    // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
+    LabelOnly(Loc<&'a str>),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
 
     /// A malformed assigned field, which will code gen to a runtime error
     Malformed(&'a str),
@@ -1194,6 +1227,15 @@ impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
     }
 }
 
+impl<'a> Spaceable<'a> for RecordBuilderField<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordBuilderField::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordBuilderField::SpaceAfter(self, spaces)
+    }
+}
+
 impl<'a> Spaceable<'a> for Tag<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Tag::SpaceBefore(self, spaces)
@@ -1465,6 +1507,7 @@ impl<'a> Malformed for Expr<'a> {
             Tag(_) |
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
+            IngestedFile(_, _) |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),
@@ -1477,6 +1520,8 @@ impl<'a> Malformed for Expr<'a> {
             RecordUpdate { update, fields } => update.is_malformed() || fields.is_malformed(),
             Record(items) => items.is_malformed(),
             Tuple(items) => items.is_malformed(),
+
+            RecordBuilder(items) => items.is_malformed(),
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
@@ -1495,7 +1540,9 @@ impl<'a> Malformed for Expr<'a> {
 
             MalformedIdent(_, _) |
             MalformedClosure |
-            PrecedenceConflict(_) => true,
+            PrecedenceConflict(_) |
+            MultipleRecordBuilders(_) |
+            UnappliedRecordBuilder(_) => true,
         }
     }
 }
@@ -1566,6 +1613,19 @@ impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
                 field.is_malformed()
             }
             AssignedField::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for RecordBuilderField<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            RecordBuilderField::Value(_, _, expr)
+            | RecordBuilderField::ApplyValue(_, _, _, expr) => expr.is_malformed(),
+            RecordBuilderField::LabelOnly(_) => false,
+            RecordBuilderField::SpaceBefore(field, _)
+            | RecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),
+            RecordBuilderField::Malformed(_) => true,
         }
     }
 }

@@ -4,8 +4,9 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Header, Module, Pattern, Spaced, Spaces, StrLiteral,
-        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        HasAbility, HasClause, HasImpls, Header, Module, Pattern, RecordBuilderField, Spaced,
+        Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+        WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -21,22 +22,14 @@ use crate::{Ast, Buf};
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
 
-pub fn fmt_default_spaces<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    indent: u16,
-) {
+pub fn fmt_default_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u16) {
     if spaces.is_empty() {
         buf.spaces(1);
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
 }
-pub fn fmt_default_newline<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    indent: u16,
-) {
+pub fn fmt_default_newline(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u16) {
     if spaces.is_empty() {
         buf.newline();
     } else {
@@ -153,7 +146,7 @@ pub fn fmt_comments_only<'a, 'buf, I>(
     }
 }
 
-fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
+fn fmt_comment(buf: &mut Buf, comment: &str) {
     // The '#' in a comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
@@ -192,7 +185,7 @@ where
     count
 }
 
-fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
+fn fmt_docs(buf: &mut Buf, docs: &str) {
     // The "##" in a doc comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
@@ -420,6 +413,9 @@ impl<'a> RemoveSpaces<'a> for ImportsEntry<'a> {
         match *self {
             ImportsEntry::Module(a, b) => ImportsEntry::Module(a, b.remove_spaces(arena)),
             ImportsEntry::Package(a, b, c) => ImportsEntry::Package(a, b, c.remove_spaces(arena)),
+            ImportsEntry::IngestedFile(a, b) => {
+                ImportsEntry::IngestedFile(a, b.remove_spaces(arena))
+            }
         }
     }
 }
@@ -619,6 +615,30 @@ impl<'a, T: RemoveSpaces<'a> + Copy + std::fmt::Debug> RemoveSpaces<'a> for Assi
     }
 }
 
+impl<'a> RemoveSpaces<'a> for RecordBuilderField<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            RecordBuilderField::Value(a, _, c) => RecordBuilderField::Value(
+                a.remove_spaces(arena),
+                &[],
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            RecordBuilderField::ApplyValue(a, _, _, c) => RecordBuilderField::ApplyValue(
+                a.remove_spaces(arena),
+                &[],
+                &[],
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            RecordBuilderField::LabelOnly(a) => {
+                RecordBuilderField::LabelOnly(a.remove_spaces(arena))
+            }
+            RecordBuilderField::Malformed(a) => RecordBuilderField::Malformed(a),
+            RecordBuilderField::SpaceBefore(a, _) => a.remove_spaces(arena),
+            RecordBuilderField::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for StrLiteral<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -655,6 +675,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 is_negative,
             },
             Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
+            Expr::IngestedFile(a, b) => Expr::IngestedFile(a, b),
             Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.remove_spaces(arena)), b),
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.remove_spaces(arena)), b),
@@ -664,6 +685,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 fields: fields.remove_spaces(arena),
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
+            Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
@@ -726,6 +748,8 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
+            Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
+            Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
@@ -737,7 +761,15 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
     match ident {
         BadIdent::Start(_) => BadIdent::Start(Position::zero()),
         BadIdent::Space(e, _) => BadIdent::Space(e, Position::zero()),
-        BadIdent::Underscore(_) => BadIdent::Underscore(Position::zero()),
+        BadIdent::UnderscoreAlone(_) => BadIdent::UnderscoreAlone(Position::zero()),
+        BadIdent::UnderscoreInMiddle(_) => BadIdent::UnderscoreInMiddle(Position::zero()),
+        BadIdent::UnderscoreAtStart {
+            position: _,
+            declaration_region,
+        } => BadIdent::UnderscoreAtStart {
+            position: Position::zero(),
+            declaration_region,
+        },
         BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
         BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
         BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),

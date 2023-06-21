@@ -1,8 +1,8 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
 use crate::llvm::build::{
-    complex_bitcast_check_size, load_roc_value, struct_from_fields, to_cc_return, CCReturn, Env,
-    C_CALL_CONV, FAST_CALL_CONV,
+    complex_bitcast_check_size, load_roc_value, to_cc_return, CCReturn, Env, C_CALL_CONV,
+    FAST_CALL_CONV,
 };
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
@@ -18,14 +18,15 @@ use inkwell::AddressSpace;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, LambdaSet, Layout, LayoutIds, LayoutInterner, STLayoutInterner,
+    Builtin, InLayout, LambdaSet, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
 };
 
 use super::build::{create_entry_block_alloca, BuilderExt};
 use super::convert::zig_list_type;
+use super::struct_::struct_from_fields;
 
-pub fn call_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn call_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
@@ -40,8 +41,8 @@ pub fn call_bitcode_fn<'a, 'ctx, 'env>(
         })
 }
 
-pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn call_void_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> InstructionValue<'ctx> {
@@ -51,8 +52,8 @@ pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
         .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
 }
 
-fn call_bitcode_fn_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn call_bitcode_fn_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> CallSiteValue<'ctx> {
@@ -97,7 +98,7 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
 pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     bitcode_return_type: StructType<'ctx>,
     args: &[BasicValueEnum<'ctx>],
     return_layout: InLayout<'a>,
@@ -112,7 +113,11 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
         }
         CCReturn::ByPointer => {
             // We need to pass the return value by pointer.
-            let roc_return_type = basic_type_from_layout(env, layout_interner, return_layout);
+            let roc_return_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+            );
 
             let cc_return_type: BasicTypeEnum<'ctx> = bitcode_return_type.into();
 
@@ -165,9 +170,9 @@ const ARGUMENT_SYMBOLS: [Symbol; 8] = [
     Symbol::ARG_8,
 ];
 
-pub(crate) fn build_transform_caller<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub(crate) fn build_transform_caller<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
     argument_layouts: &[InLayout<'a>],
@@ -192,9 +197,9 @@ pub(crate) fn build_transform_caller<'a, 'ctx, 'env>(
     }
 }
 
-fn build_transform_caller_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_transform_caller_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
     argument_layouts: &[InLayout<'a>],
@@ -244,7 +249,8 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
         let basic_type =
-            basic_type_from_layout(env, layout_interner, *layout).ptr_type(AddressSpace::default());
+            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout))
+                .ptr_type(AddressSpace::default());
 
         let cast_ptr = env.builder.build_pointer_cast(
             argument_ptr.into_pointer_value(),
@@ -255,7 +261,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         let argument = load_roc_value(
             env,
             layout_interner,
-            *layout,
+            layout_interner.get_repr(*layout),
             cast_ptr,
             "zig_helper_load_opaque",
         );
@@ -273,15 +279,21 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
             // the function doesn't expect a closure argument, nothing to add
         }
         (true, layout) => {
-            let closure_type = basic_type_from_layout(env, layout_interner, layout)
-                .ptr_type(AddressSpace::default());
+            let closure_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .ptr_type(AddressSpace::default());
 
             let closure_cast =
                 env.builder
                     .build_pointer_cast(closure_ptr, closure_type, "cast_opaque_closure");
 
-            let closure_data =
-                load_roc_value(env, layout_interner, layout, closure_cast, "load_closure");
+            let closure_data = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                closure_cast,
+                "load_closure",
+            );
 
             arguments_cast.push(closure_data);
         }
@@ -291,7 +303,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         env,
         layout_interner,
         roc_function,
-        result_layout,
+        layout_interner.get_repr(result_layout),
         arguments_cast.as_slice(),
     );
 
@@ -322,9 +334,9 @@ enum Mode {
 }
 
 /// a function that accepts two arguments: the value to increment, and an amount to increment by
-pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub fn build_inc_n_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
@@ -332,27 +344,27 @@ pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
 }
 
 /// a function that accepts two arguments: the value to increment; increments by 1
-pub fn build_inc_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub fn build_inc_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     build_rc_wrapper(env, layout_interner, layout_ids, layout, Mode::Inc)
 }
 
-pub fn build_dec_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub fn build_dec_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     build_rc_wrapper(env, layout_interner, layout_ids, layout, Mode::Dec)
 }
 
-fn build_rc_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_rc_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
     rc_operation: Mode,
@@ -362,7 +374,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_RC_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, &layout_interner.get_repr(layout))
         .to_symbol_string(symbol, &env.interns);
 
     let fn_name = match rc_operation {
@@ -409,7 +421,8 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             generic_value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout_interner, layout);
+            let value_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let value_ptr_type = value_type.ptr_type(AddressSpace::default());
             let value_ptr =
                 env.builder
@@ -453,9 +466,9 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
     function_value
 }
 
-pub fn build_eq_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub fn build_eq_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
@@ -464,7 +477,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_EQ_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, &layout_interner.get_repr(layout))
         .to_symbol_string(symbol, &env.interns);
 
     let function_value = match env.module.get_function(fn_name.as_str()) {
@@ -499,8 +512,9 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
             value_ptr1.set_name(Symbol::ARG_1.as_str(&env.interns));
             value_ptr2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout_interner, layout)
-                .ptr_type(AddressSpace::default());
+            let value_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .ptr_type(AddressSpace::default());
 
             let value_cast1 = env
                 .builder
@@ -511,8 +525,20 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
                 .build_pointer_cast(value_ptr2, value_type, "load_opaque");
 
             // load_roc_value(env, *element_layout, elem_ptr, "get_elem")
-            let value1 = load_roc_value(env, layout_interner, layout, value_cast1, "load_opaque");
-            let value2 = load_roc_value(env, layout_interner, layout, value_cast2, "load_opaque");
+            let value1 = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value_cast1,
+                "load_opaque",
+            );
+            let value2 = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value_cast2,
+                "load_opaque",
+            );
 
             let result = crate::llvm::compare::generic_eq(
                 env,
@@ -536,9 +562,10 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
     function_value
 }
 
-pub fn build_compare_wrapper<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub fn build_compare_wrapper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
     layout: InLayout<'a>,
@@ -588,7 +615,8 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             value_ptr1.set_name(Symbol::ARG_2.as_str(&env.interns));
             value_ptr2.set_name(Symbol::ARG_3.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout_interner, layout);
+            let value_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let value_ptr_type = value_type.ptr_type(AddressSpace::default());
 
             let value_cast1 =
@@ -599,27 +627,39 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 env.builder
                     .build_pointer_cast(value_ptr2, value_ptr_type, "load_opaque");
 
-            let value1 = env
-                .builder
-                .new_build_load(value_type, value_cast1, "load_opaque");
-            let value2 = env
-                .builder
-                .new_build_load(value_type, value_cast2, "load_opaque");
+            let value1 = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value_cast1,
+                "load_opaque",
+            );
+            let value2 = load_roc_value(
+                env,
+                layout_interner,
+                layout_interner.get_repr(layout),
+                value_cast2,
+                "load_opaque",
+            );
+
+            increment_refcount_layout(env, layout_interner, layout_ids, 1, value1, layout);
+            increment_refcount_layout(env, layout_interner, layout_ids, 1, value2, layout);
 
             let default = [value1.into(), value2.into()];
 
             let closure_data_repr = closure_data_layout.runtime_representation();
 
-            let arguments_cast = match layout_interner.get(closure_data_repr) {
-                Layout::Struct {
-                    field_layouts: &[], ..
-                } => {
+            let arguments_cast = match layout_interner.get_repr(closure_data_repr) {
+                LayoutRepr::Struct(&[]) => {
                     // nothing to add
                     &default
                 }
                 _ => {
-                    let closure_type =
-                        basic_type_from_layout(env, layout_interner, closure_data_repr);
+                    let closure_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(closure_data_repr),
+                    );
                     let closure_ptr_type = closure_type.ptr_type(AddressSpace::default());
 
                     let closure_cast = env.builder.build_pointer_cast(
@@ -705,9 +745,9 @@ impl BitcodeReturns {
         }
     }
 
-    fn return_value_64bit<'a, 'ctx, 'env>(
+    fn return_value_64bit<'a, 'ctx>(
         &self,
-        env: &Env<'a, 'ctx, 'env>,
+        env: &Env<'a, 'ctx, '_>,
         arguments: &mut bumpalo::collections::Vec<'a, BasicValueEnum<'ctx>>,
     ) -> BitcodeReturnValue<'ctx> {
         match self {
@@ -746,9 +786,9 @@ impl BitcodeReturns {
         }
     }
 
-    fn call_and_load_32bit<'a, 'ctx, 'env>(
+    fn call_and_load_32bit<'ctx>(
         &self,
-        env: &Env<'a, 'ctx, 'env>,
+        env: &Env<'_, 'ctx, '_>,
         arguments: &[BasicValueEnum<'ctx>],
         fn_name: &str,
     ) -> BasicValueEnum<'ctx> {
@@ -764,8 +804,8 @@ impl BitcodeReturns {
     }
 }
 
-fn ptr_len_cap<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn ptr_len_cap<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: StructValue<'ctx>,
 ) -> (PointerValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>) {
     let ptr_and_len = env
@@ -808,8 +848,8 @@ fn ptr_len_cap<'a, 'ctx, 'env>(
 }
 
 /// Converts the { i64, i32 } struct that zig returns into `list.RocList = type { i8*, i32, i32 }`
-fn receive_zig_roc_list_32bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn receive_zig_roc_list_32bit<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: StructValue<'ctx>,
 ) -> StructValue<'ctx> {
     let list_type = super::convert::zig_list_type(env);
@@ -824,8 +864,8 @@ fn receive_zig_roc_list_32bit<'a, 'ctx, 'env>(
 }
 
 /// Converts the { i64, i32 } struct that zig returns into `list.RocList = type { i8*, i32, i32 }`
-fn receive_zig_roc_str_32bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn receive_zig_roc_str_32bit<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: StructValue<'ctx>,
 ) -> StructValue<'ctx> {
     let str_type = super::convert::zig_str_type(env);
@@ -839,8 +879,8 @@ fn receive_zig_roc_str_32bit<'a, 'ctx, 'env>(
     )
 }
 
-pub(crate) fn pass_list_to_zig_64bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn pass_list_to_zig_64bit<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     list: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
     let parent = env
@@ -857,16 +897,16 @@ pub(crate) fn pass_list_to_zig_64bit<'a, 'ctx, 'env>(
     list_alloca
 }
 
-fn pass_string_to_zig_64bit<'a, 'ctx, 'env>(
-    _env: &Env<'a, 'ctx, 'env>,
+fn pass_string_to_zig_64bit<'ctx>(
+    _env: &Env<'_, 'ctx, '_>,
     string: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
     // we must pass strings by-pointer, and that is already how they are stored
     string.into_pointer_value()
 }
 
-pub(crate) fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn pass_list_or_string_to_zig_32bit<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     list_or_string: StructValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
     let ptr = env
@@ -907,8 +947,8 @@ pub(crate) fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
     (ptr_len, cap)
 }
 
-pub(crate) fn call_str_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn call_str_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     strings: &[BasicValueEnum<'ctx>],
     other_arguments: &[BasicValueEnum<'ctx>],
     returns: BitcodeReturns,
@@ -948,8 +988,8 @@ pub(crate) fn call_str_bitcode_fn<'a, 'ctx, 'env>(
     }
 }
 
-pub(crate) fn call_list_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn call_list_bitcode_fn<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     lists: &[StructValue<'ctx>],
     other_arguments: &[BasicValueEnum<'ctx>],
     returns: BitcodeReturns,

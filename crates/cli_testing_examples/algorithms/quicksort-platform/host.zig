@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("str");
+const str = @import("glue").str;
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -70,10 +70,6 @@ export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     const msg = @ptrCast([*:0]const u8, c_ptr);
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
     std.process.exit(0);
-}
-
-export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void {
-    return memcpy(dst, src, size);
 }
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {

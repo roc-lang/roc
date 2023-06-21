@@ -5,6 +5,11 @@ const utils = @import("utils.zig");
 const expect = @import("expect.zig");
 const panic_utils = @import("panic.zig");
 
+comptime {
+    _ = @import("compiler_rt.zig");
+    _ = @import("libc.zig");
+}
+
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
 const STR = "str";
@@ -16,6 +21,7 @@ comptime {
     exportDecFn(dec.fromStr, "from_str");
     exportDecFn(dec.toStr, "to_str");
     exportDecFn(dec.fromF64C, "from_f64");
+    exportDecFn(dec.toI128, "to_i128");
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.negateC, "negate");
@@ -54,6 +60,9 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
+    exportListFn(list.listCapacity, "capacity");
+    exportListFn(list.listRefcountPtr, "refcount_ptr");
+    exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
 }
 
 // Num Module
@@ -67,13 +76,22 @@ const NUMBERS = INTEGERS ++ FLOATS;
 comptime {
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
+    exportNumFn(num.bytesToU64C, "bytes_to_u64");
+    exportNumFn(num.bytesToU128C, "bytes_to_u128");
+
+    exportNumFn(num.shiftRightZeroFillI128, "shift_right_zero_fill.i128");
+    exportNumFn(num.shiftRightZeroFillU128, "shift_right_zero_fill.u128");
 
     inline for (INTEGERS) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
 
-        num.exportRoundF32(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
-        num.exportRoundF64(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+        num.exportRound(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
+        num.exportRound(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+        num.exportFloor(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f32.");
+        num.exportFloor(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f64.");
+        num.exportCeiling(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f32.");
+        num.exportCeiling(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f64.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
@@ -86,6 +104,13 @@ comptime {
         num.exportMulWithOverflow(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_with_overflow.");
         num.exportMulOrPanic(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_or_panic.");
         num.exportMulSaturatedInt(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_saturated.");
+        num.exportMulWrappedInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".mul_wrapped.");
+
+        num.exportIsMultipleOf(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_multiple_of.");
+
+        num.exportCountLeadingZeroBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_leading_zero_bits.");
+        num.exportCountTrailingZeroBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_trailing_zero_bits.");
+        num.exportCountOneBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_one_bits.");
     }
 
     inline for (INTEGERS) |FROM| {
@@ -106,11 +131,15 @@ comptime {
 
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow.");
         num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");
+        num.exportFAbs(T, ROC_BUILTINS ++ "." ++ NUM ++ ".fabs.");
+        num.exportSqrt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sqrt.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportSubWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_with_overflow.");
         num.exportMulWithOverflow(T, T, ROC_BUILTINS ++ "." ++ NUM ++ ".mul_with_overflow.");
 
+        num.exportIsNan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_nan.");
+        num.exportIsInfinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_infinite.");
         num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
     }
 }
@@ -124,6 +153,7 @@ comptime {
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
+    exportStrFn(str.isEmpty, "is_empty");
     exportStrFn(str.getCapacity, "capacity");
     exportStrFn(str.startsWith, "starts_with");
     exportStrFn(str.startsWithScalar, "starts_with_scalar");
@@ -138,15 +168,16 @@ comptime {
     exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
     exportStrFn(str.appendScalar, "append_scalar");
     exportStrFn(str.strToUtf8C, "to_utf8");
-    exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
     exportStrFn(str.strTrim, "trim");
-    exportStrFn(str.strTrimLeft, "trim_left");
-    exportStrFn(str.strTrimRight, "trim_right");
+    exportStrFn(str.strTrimStart, "trim_start");
+    exportStrFn(str.strTrimEnd, "trim_end");
     exportStrFn(str.strCloneTo, "clone_to");
     exportStrFn(str.withCapacity, "with_capacity");
     exportStrFn(str.strGraphemes, "graphemes");
+    exportStrFn(str.strRefcountPtr, "refcount_ptr");
+    exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
 
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
@@ -162,10 +193,14 @@ comptime {
 // Utils
 comptime {
     exportUtilsFn(utils.test_panic, "test_panic");
-    exportUtilsFn(utils.increfC, "incref");
-    exportUtilsFn(utils.decrefC, "decref");
+    exportUtilsFn(utils.increfRcPtrC, "incref_rc_ptr");
+    exportUtilsFn(utils.decrefRcPtrC, "decref_rc_ptr");
+    exportUtilsFn(utils.increfDataPtrC, "incref_data_ptr");
+    exportUtilsFn(utils.decrefDataPtrC, "decref_data_ptr");
+    exportUtilsFn(utils.isUnique, "is_unique");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
+    exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
 
     @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 
@@ -249,61 +284,4 @@ test "" {
     const testing = std.testing;
 
     testing.refAllDecls(@This());
-}
-
-// For unclear reasons, sometimes this function is not linked in on some machines.
-// Therefore we provide it as LLVM bitcode and mark it as externally linked during our LLVM codegen
-//
-// Taken from
-// https://github.com/ziglang/zig/blob/85755c51d529e7d9b406c6bdf69ce0a0f33f3353/lib/std/special/compiler_rt/muloti4.zig
-//
-// Thank you Zig Contributors!
-
-// Export it as weak incase it is already linked in by something else.
-comptime {
-    if (builtin.target.os.tag != .windows) {
-        @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
-    }
-}
-fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
-    // @setRuntimeSafety(std.builtin.is_test);
-
-    const min = @bitCast(i128, @as(u128, 1 << (128 - 1)));
-    const max = ~min;
-    overflow.* = 0;
-
-    const r = a *% b;
-    if (a == min) {
-        if (b != 0 and b != 1) {
-            overflow.* = 1;
-        }
-        return r;
-    }
-    if (b == min) {
-        if (a != 0 and a != 1) {
-            overflow.* = 1;
-        }
-        return r;
-    }
-
-    const sa = a >> (128 - 1);
-    const abs_a = (a ^ sa) -% sa;
-    const sb = b >> (128 - 1);
-    const abs_b = (b ^ sb) -% sb;
-
-    if (abs_a < 2 or abs_b < 2) {
-        return r;
-    }
-
-    if (sa == sb) {
-        if (abs_a > @divTrunc(max, abs_b)) {
-            overflow.* = 1;
-        }
-    } else {
-        if (abs_a > @divTrunc(min, -abs_b)) {
-            overflow.* = 1;
-        }
-    }
-
-    return r;
 }

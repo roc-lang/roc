@@ -3,13 +3,8 @@
 extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::Bump;
-use docs_error::{DocsError, DocsResult};
-use html::mark_node_to_html;
 use roc_can::scope::Scope;
-use roc_code_markup::markup::nodes::MarkupNode;
-use roc_code_markup::slow_pool::SlowPool;
 use roc_collections::VecSet;
-use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -21,10 +16,9 @@ use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-mod docs_error;
-mod html;
-
 const BUILD_DIR: &str = "./generated-docs";
+
+const LINK_SVG: &str = include_str!("./static/link.svg");
 
 pub fn generate_docs_html(root_file: PathBuf) {
     let build_dir = Path::new(BUILD_DIR);
@@ -42,25 +36,71 @@ pub fn generate_docs_html(root_file: PathBuf) {
     fs::create_dir_all(build_dir).expect("TODO gracefully handle being unable to create build dir");
 
     // Copy over the assets
-    fs::write(
-        build_dir.join("search.js"),
-        include_str!("./static/search.js"),
-    )
-    .expect("TODO gracefully handle failing to make the search javascript");
+    // For debug builds, read assets from fs to speed up build
+    // Otherwise, include as string literal
 
-    fs::write(
-        build_dir.join("styles.css"),
-        include_str!("./static/styles.css"),
-    )
-    .expect("TODO gracefully handle failing to make the stylesheet");
+    struct Assets<S: AsRef<str>> {
+        search_js: S,
+        styles_css: S,
+        favicon_svg: S,
+        raw_template_html: S,
+    }
 
-    fs::write(
-        build_dir.join("favicon.svg"),
-        include_str!("./static/favicon.svg"),
-    )
-    .expect("TODO gracefully handle failing to make the favicon");
+    #[cfg(not(debug_assertions))]
+    let assets = {
+        let search_js = include_str!("./static/search.js");
+        let styles_css = include_str!("./static/styles.css");
+        let favicon_svg = include_str!("./static/favicon.svg");
+        let raw_template_html = include_str!("./static/index.html");
 
-    let template_html = include_str!("./static/index.html")
+        Assets {
+            search_js,
+            styles_css,
+            favicon_svg,
+            raw_template_html,
+        }
+    };
+
+    #[cfg(debug_assertions)]
+    let assets = {
+        // Construct the absolute path to the static assets
+        let workspace_dir = std::env!("ROC_WORKSPACE_DIR");
+        let static_dir = Path::new(workspace_dir).join("crates/docs/src/static");
+
+        // Read the assets from the filesystem
+        let search_js = fs::read_to_string(static_dir.join("search.js")).unwrap();
+        let styles_css = fs::read_to_string(static_dir.join("styles.css")).unwrap();
+        let favicon_svg = fs::read_to_string(static_dir.join("favicon.svg")).unwrap();
+        let raw_template_html = fs::read_to_string(static_dir.join("index.html")).unwrap();
+
+        Assets {
+            search_js,
+            styles_css,
+            favicon_svg,
+            raw_template_html,
+        }
+    };
+
+    // Write CSS, JS, and favicon
+    // (The HTML requires more work!)
+    for (file, contents) in [
+        ("search.js", assets.search_js),
+        ("styles.css", assets.styles_css),
+        ("favicon.svg", assets.favicon_svg),
+    ] {
+        let dir = build_dir.join(file);
+        fs::write(&dir, contents).unwrap_or_else(|error| {
+            panic!(
+                "Attempted to write {} but failed with this error: {}",
+                dir.display(),
+                error
+            )
+        })
+    }
+
+    // Insert asset urls & sidebar links
+    let template_html = assets
+        .raw_template_html
         .replace("<!-- search.js -->", "/search.js")
         .replace("<!-- styles.css -->", "/styles.css")
         .replace("<!-- favicon.svg -->", "/favicon.svg")
@@ -70,7 +110,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 .docs_by_module
                 .iter()
                 .map(|(_, module)| {
-                    let href = sidebar_link_url(module.name.as_str());
+                    let href = module_link_url(module.name.as_str());
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
                 })
@@ -93,7 +133,32 @@ pub fn generate_docs_html(root_file: PathBuf) {
         set
     };
 
-    // Write each package's module docs html file
+    // TODO fix: as is, this overrides an existing index.html
+    // Write index.html for package (/index.html)
+    {
+        let rendered_package = template_html
+            .replace(
+                "<!-- Page title -->",
+                page_title(package_name.as_str(), "").as_str(),
+            )
+            .replace(
+                "<!-- Package Name and Version -->",
+                render_name_and_version(package_name.as_str(), version.as_str()).as_str(),
+            )
+            .replace(
+                "<!-- Module Docs -->",
+                render_package_index(&loaded_module).as_str(),
+            );
+
+        fs::write(build_dir.join("index.html"), rendered_package).unwrap_or_else(|error| {
+            panic!(
+                "Attempted to write index.html but failed with this error: {}",
+                error
+            )
+        });
+    }
+
+    // Write each package module's index.html file
     for module_docs in loaded_module.docs_by_module.values() {
         let module_name = module_docs.name.as_str();
         let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
@@ -123,7 +188,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn sidebar_link_url(module_name: &str) -> String {
+fn module_link_url(module_name: &str) -> String {
     format!("{}{}", base_url(), module_name)
 }
 
@@ -131,47 +196,37 @@ fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
 
-// converts plain-text code to highlighted html
-pub fn syntax_highlight_expr(code_str: &str) -> DocsResult<String> {
-    let trimmed_code_str = code_str.trim_end().trim();
-    let mut mark_node_pool = SlowPool::default();
+fn render_package_index(root_module: &LoadedModule) -> String {
+    // The list items containing module links
+    let mut module_list_buf = String::new();
 
-    let mut highlighted_html_str = String::new();
+    for module in root_module.docs_by_module.values() {
+        // The anchor tag containing the module link
+        let mut link_buf = String::new();
+        let href = module_link_url(module.name.as_str());
 
-    match highlight_expr(trimmed_code_str, &mut mark_node_pool) {
-        Ok(root_mark_node_id) => {
-            let root_mark_node = mark_node_pool.get(root_mark_node_id);
-            mark_node_to_html(root_mark_node, &mark_node_pool, &mut highlighted_html_str);
+        push_html(
+            &mut link_buf,
+            "a",
+            vec![("href", href.as_str())],
+            module.name.as_str(),
+        );
 
-            Ok(highlighted_html_str)
-        }
-        Err(err) => Err(DocsError::from(err)),
+        push_html(&mut module_list_buf, "li", vec![], link_buf.as_str());
     }
-}
 
-// converts plain-text code to highlighted html
-pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
-    let trimmed_code_str = code_str.trim_end().trim();
+    // The HTML for the index page
+    let mut index_buf = String::new();
 
-    let mut mark_node_pool = SlowPool::default();
+    push_html(&mut index_buf, "h2", vec![], "Exposed Modules");
+    push_html(
+        &mut index_buf,
+        "ul",
+        vec![("class", "index-module-links")],
+        module_list_buf.as_str(),
+    );
 
-    let mut highlighted_html_str = String::new();
-
-    match highlight_defs(trimmed_code_str, &mut mark_node_pool) {
-        Ok(mark_node_id_vec) => {
-            let def_mark_nodes: Vec<&MarkupNode> = mark_node_id_vec
-                .iter()
-                .map(|mn_id| mark_node_pool.get(*mn_id))
-                .collect();
-
-            for mn in def_mark_nodes {
-                mark_node_to_html(mn, &mark_node_pool, &mut highlighted_html_str)
-            }
-
-            Ok(highlighted_html_str)
-        }
-        Err(err) => Err(DocsError::from(err)),
-    }
+    index_buf
 }
 
 fn render_module_documentation(
@@ -197,7 +252,7 @@ fn render_module_documentation(
     for entry in &module.entries {
         match entry {
             DocEntry::DocDef(doc_def) => {
-                // Only redner entries that are exposed
+                // Only render entries that are exposed
                 if all_exposed_symbols.contains(&doc_def.symbol) {
                     buf.push_str("<section>");
 
@@ -205,7 +260,8 @@ fn render_module_documentation(
                     let href = format!("#{name}");
                     let mut content = String::new();
 
-                    push_html(&mut content, "a", vec![("href", href.as_str())], name);
+                    push_html(&mut content, "a", vec![("href", href.as_str())], LINK_SVG);
+                    push_html(&mut content, "strong", vec![], name);
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
@@ -344,7 +400,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     let mut buf = String::new();
 
     for module in modules {
-        let href = sidebar_link_url(module.name.as_str());
+        let href = module_link_url(module.name.as_str());
         let mut sidebar_entry_content = String::new();
 
         push_html(
@@ -588,6 +644,7 @@ fn type_annotation_to_html(
             type_annotation_to_html(indent_level, buf, extension, true);
         }
         TypeAnnotation::Function { args, output } => {
+            let mut paren_is_open = false;
             let mut peekable_args = args.iter().peekable();
             while let Some(arg) = peekable_args.next() {
                 if is_multiline {
@@ -596,8 +653,14 @@ fn type_annotation_to_html(
                     }
                     indent(buf, indent_level + 1);
                 }
+                if needs_parens && !paren_is_open {
+                    buf.push('(');
+                    paren_is_open = true;
+                }
 
-                type_annotation_to_html(indent_level, buf, arg, false);
+                let child_needs_parens =
+                    matches!(arg, TypeAnnotation::Function { args: _, output: _ });
+                type_annotation_to_html(indent_level, buf, arg, child_needs_parens);
 
                 if peekable_args.peek().is_some() {
                     buf.push_str(", ");
@@ -618,6 +681,9 @@ fn type_annotation_to_html(
             }
 
             type_annotation_to_html(next_indent_level, buf, output, false);
+            if needs_parens && paren_is_open {
+                buf.push(')');
+            }
         }
         TypeAnnotation::Ability { members: _ } => {
             // TODO(abilities): fill me in
@@ -728,7 +794,6 @@ fn doc_url<'a>(
                 module_name = symbol.module_string(interns);
             }
             Err(_) => {
-                dbg!(scope);
                 // TODO return Err here
                 panic!(
                     "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
@@ -857,65 +922,24 @@ fn markdown_to_html(
 
     let markdown_options = pulldown_cmark::Options::ENABLE_TABLES;
 
-    let mut expecting_code_block = false;
+    let mut in_code_block: Option<CowStr> = None;
+    let mut to_highlight = String::new();
 
     let mut docs_parser = vec![];
-    let (_, _) = pulldown_cmark::Parser::new_with_broken_link_callback(
+    let parser = pulldown_cmark::Parser::new_with_broken_link_callback(
         markdown,
         markdown_options,
         Some(&mut broken_link_callback),
-    )
-    .fold((0, 0), |(start_quote_count, end_quote_count), event| {
+    );
 
-        match &event {
-            // Replace this sequence (`>>>` syntax):
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(Paragraph)
-            // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::Start(BlockQuote) => {
-                docs_parser.push(event);
-                (start_quote_count + 1, 0)
+    for event in parser {
+        match event {
+            Event::Code(code_str) => {
+                let inline_code =
+                    pulldown_cmark::CowStr::from(format!("<code>{}</code>", code_str));
+                docs_parser.push(pulldown_cmark::Event::Html(inline_code));
             }
-            Event::Start(Paragraph) => {
-                if start_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                } else {
-                    docs_parser.push(event);
-                }
-                (0, 0)
-            }
-            // Replace this sequence (`>>>` syntax):
-            //     End(Paragraph)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::End(Paragraph) => {
-                docs_parser.push(event);
-                (0, 1)
-            }
-            Event::End(BlockQuote) => {
-                if end_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                    (0, 0)
-                } else {
-                    docs_parser.push(event);
-                    (0, end_quote_count + 1)
-                }
-            }
-            Event::End(Link(LinkType::ShortcutUnknown, _url, _title)) => {
+            Event::End(Link(LinkType::ShortcutUnknown, ref _url, ref _title)) => {
                 // Replace the preceding Text node with a Code node, so it
                 // renders as the equivalent of [`List.len`] instead of [List.len]
                 match docs_parser.pop() {
@@ -929,41 +953,59 @@ fn markdown_to_html(
                 }
 
                 docs_parser.push(event);
-
-                (start_quote_count, end_quote_count)
             }
-            Event::Start(CodeBlock(CodeBlockKind::Fenced(_))) => {
-                expecting_code_block = true;
-                docs_parser.push(event);
-                (0, 0)
+            Event::Start(CodeBlock(CodeBlockKind::Fenced(code_str))) => {
+                in_code_block = Some(code_str);
             }
             Event::End(CodeBlock(_)) => {
-                expecting_code_block = false;
-                docs_parser.push(event);
-                (0, 0)
-            }
-            Event::Text(CowStr::Borrowed(code_str)) if expecting_code_block => {
+                match in_code_block {
+                    Some(code_str) => {
+                        if code_str.contains("unchecked") {
+                            // TODO HANDLE UNCHECKED
+                        }
 
-                match syntax_highlight_expr(
-                    code_str
-                )
-                {
-                    Ok(highlighted_code_str) => {
-                        docs_parser.push(Event::Html(CowStr::from(highlighted_code_str)));
-                    }
-                    Err(syntax_error) => {
-                        panic!("Unexpected parse failure when parsing this for rendering in docs:\n\n{}\n\nParse error was:\n\n{:?}\n\n", code_str, syntax_error)
-                    }
-                };
+                        if code_str.contains("repl") {
+                            // TODO HANDLE REPL
+                        }
 
-                (0, 0)
-            }
-            _ => {
+                        // TODO HANDLE CHECKING BY DEFAULT
+                        let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                        docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+                    }
+                    None => {
+                        // Indented code block
+
+                        let highlighted_html = roc_highlight::highlight_roc_code(&to_highlight);
+                        docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+                    }
+                }
+
+                // Reset codeblock buffer
+                to_highlight = String::new();
+                in_code_block = None;
+
+                // Push Event::End(CodeBlock)
                 docs_parser.push(event);
-                (0, 0)
+            }
+            Event::Text(t) => {
+                match in_code_block {
+                    Some(_) => {
+                        // If we're in a code block, build up the string of text
+                        to_highlight.push_str(&t);
+                    }
+                    None => {
+                        docs_parser.push(Event::Text(t));
+                    }
+                }
+            }
+            Event::Html(html) => {
+                docs_parser.push(Event::Text(html));
+            }
+            e => {
+                docs_parser.push(e);
             }
         }
-    });
+    }
 
     pulldown_cmark::html::push_html(buf, docs_parser.into_iter());
 }

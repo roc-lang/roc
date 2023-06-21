@@ -35,8 +35,8 @@ pub fn add_node(
     mark_node_id
 }
 
-pub fn def2_to_markup<'a>(
-    env: &mut Env<'a>,
+pub fn def2_to_markup(
+    env: &mut Env<'_>,
     def2: &Def2,
     def2_node_id: DefId,
     mark_node_pool: &mut SlowPool,

@@ -1,0 +1,17 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Id n := [Id U32 n]
+
+    f : Id [A, B, C { a : Str }e] -> Str
+    f = \id ->
+        when id is
+            @Id (Id _ A) -> ""
+            @Id (Id _ B) -> ""
+            @Id (Id _ (C { a: "" })) -> ""
+            @Id (Id _ (C { a: _ })) -> "" # any other string, for exhautiveness
+
+    f
+
+main = entry
+#      ^^^^^ Id [A, B, C { a : Str }e] -[[f(3)]]-> Str

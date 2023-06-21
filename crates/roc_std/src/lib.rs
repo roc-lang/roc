@@ -1,5 +1,5 @@
 //! Provides Rust representations of Roc data structures.
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![crate_type = "lib"]
 
 use arrayvec::ArrayString;
@@ -36,7 +36,6 @@ extern "C" {
     ) -> *mut c_void;
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
     pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
-    pub fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
 }
 
@@ -298,12 +297,36 @@ impl RocDec {
         };
 
         // Calculate the high digits - the ones before the decimal point.
-        match before_point.parse::<i128>() {
-            Ok(answer) => match answer.checked_mul(Self::ONE_POINT_ZERO) {
-                Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
-                None => None,
-            },
-            Err(_) => None,
+        let (is_pos, digits) = match before_point.chars().next() {
+            Some('+') => (true, &before_point[1..]),
+            Some('-') => (false, &before_point[1..]),
+            _ => (true, before_point),
+        };
+
+        let mut hi: i128 = 0;
+        macro_rules! adjust_hi {
+            ($op:ident) => {{
+                for digit in digits.chars() {
+                    if digit == '_' {
+                        continue;
+                    }
+
+                    let digit = digit.to_digit(10)?;
+                    hi = hi.checked_mul(10)?;
+                    hi = hi.$op(digit as _)?;
+                }
+            }};
+        }
+
+        if is_pos {
+            adjust_hi!(checked_add);
+        } else {
+            adjust_hi!(checked_sub);
+        }
+
+        match hi.checked_mul(Self::ONE_POINT_ZERO) {
+            Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
+            None => None,
         }
     }
 

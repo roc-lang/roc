@@ -1,7 +1,7 @@
 use crate::{
     generic64::{Assembler, CallConv, RegTrait},
-    sign_extended_int_builtins, single_register_floats, single_register_int_builtins,
-    single_register_integers, single_register_layouts, Env,
+    pointer_layouts, sign_extended_int_builtins, single_register_floats,
+    single_register_int_builtins, single_register_integers, single_register_layouts, Env,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -11,7 +11,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
     layout::{
-        Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+        Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
     },
 };
 use roc_target::TargetInfo;
@@ -22,6 +22,8 @@ use std::rc::Rc;
 use RegStorage::*;
 use StackStorage::*;
 use Storage::*;
+
+use super::RegisterWidth;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
@@ -90,7 +92,7 @@ pub struct StorageManager<
     phantom_cc: PhantomData<CC>,
     phantom_asm: PhantomData<ASM>,
     pub(crate) env: &'r Env<'a>,
-    target_info: TargetInfo,
+    pub(crate) target_info: TargetInfo,
     // Data about where each symbol is stored.
     symbol_storage_map: MutMap<Symbol, Storage<GeneralReg, FloatReg>>,
 
@@ -252,7 +254,11 @@ impl<
     /// Claims a general reg for a specific symbol.
     /// They symbol should not already have storage.
     pub fn claim_general_reg(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) -> GeneralReg {
-        debug_assert_eq!(self.symbol_storage_map.get(sym), None);
+        debug_assert_eq!(
+            self.symbol_storage_map.get(sym),
+            None,
+            "Symbol {sym:?} is already in the storage map!"
+        );
         let reg = self.get_general_reg(buf);
         self.general_used_regs.push((reg, *sym));
         self.symbol_storage_map.insert(*sym, Reg(General(reg)));
@@ -339,10 +345,19 @@ impl<
                 sign_extend,
             }) => {
                 let reg = self.get_general_reg(buf);
+
+                let register_width = match size {
+                    8 => RegisterWidth::W64,
+                    4 => RegisterWidth::W32,
+                    2 => RegisterWidth::W16,
+                    1 => RegisterWidth::W8,
+                    _ => internal_error!("Invalid size: {size}"),
+                };
+
                 if sign_extend {
-                    ASM::movsx_reg64_base32(buf, reg, base_offset, size as u8);
+                    ASM::movsx_reg_base32(buf, register_width, reg, base_offset);
                 } else {
-                    ASM::movzx_reg64_base32(buf, reg, base_offset, size as u8);
+                    ASM::movzx_reg_base32(buf, register_width, reg, base_offset);
                 }
                 self.general_used_regs.push((reg, *sym));
                 self.symbol_storage_map.insert(*sym, Reg(General(reg)));
@@ -465,10 +480,18 @@ impl<
             }) => {
                 debug_assert!(*size <= 8);
 
+                let register_width = match size {
+                    8 => RegisterWidth::W64,
+                    4 => RegisterWidth::W32,
+                    2 => RegisterWidth::W16,
+                    1 => RegisterWidth::W8,
+                    _ => internal_error!("Invalid size: {size}"),
+                };
+
                 if *sign_extend {
-                    ASM::movsx_reg64_base32(buf, reg, *base_offset, *size as u8)
+                    ASM::movsx_reg_base32(buf, register_width, reg, *base_offset)
                 } else {
-                    ASM::movzx_reg64_base32(buf, reg, *base_offset, *size as u8)
+                    ASM::movzx_reg_base32(buf, register_width, reg, *base_offset)
                 }
             }
             Stack(Complex { size, .. }) => {
@@ -542,19 +565,29 @@ impl<
         field_layouts: &'a [InLayout<'a>],
     ) {
         debug_assert!(index < field_layouts.len() as u64);
+
+        let storage = *self.get_storage_for_sym(structure);
+
+        if let NoData = storage {
+            return self.no_data(sym);
+        }
+
         // This must be removed and reinserted for ownership and mutability reasons.
         let owned_data = self.remove_allocation_for_sym(structure);
         self.allocation_map
             .insert(*structure, Rc::clone(&owned_data));
-        match self.get_storage_for_sym(structure) {
+
+        match storage {
             Stack(Complex { base_offset, size }) => {
-                let (base_offset, size) = (*base_offset, *size);
                 let mut data_offset = base_offset;
                 for layout in field_layouts.iter().take(index as usize) {
                     let field_size = layout_interner.stack_size(*layout);
                     data_offset += field_size as i32;
                 }
-                debug_assert!(data_offset < base_offset + size as i32);
+
+                // check that the record completely contains the field
+                debug_assert!(data_offset <= base_offset + size as i32,);
+
                 let layout = field_layouts[index as usize];
                 let size = layout_interner.stack_size(layout);
                 self.allocation_map.insert(*sym, owned_data);
@@ -583,40 +616,37 @@ impl<
         }
     }
 
-    pub fn load_union_tag_id(
+    pub fn load_union_tag_id_nonrecursive(
         &mut self,
         layout_interner: &mut STLayoutInterner<'a>,
         _buf: &mut Vec<'a, u8>,
         sym: &Symbol,
         structure: &Symbol,
-        union_layout: &UnionLayout<'a>,
+        tags: &[&[InLayout]],
     ) {
+        let union_layout = UnionLayout::NonRecursive(tags);
+
         // This must be removed and reinserted for ownership and mutability reasons.
         let owned_data = self.remove_allocation_for_sym(structure);
         self.allocation_map
             .insert(*structure, Rc::clone(&owned_data));
-        match union_layout {
-            UnionLayout::NonRecursive(_) => {
-                let (union_offset, _) = self.stack_offset_and_size(structure);
 
-                let (data_size, data_alignment) =
-                    union_layout.data_size_and_alignment(layout_interner, self.target_info);
-                let id_offset = data_size - data_alignment;
-                let discriminant = union_layout.discriminant();
+        let (union_offset, _) = self.stack_offset_and_size(structure);
 
-                let size = discriminant.stack_size();
-                self.allocation_map.insert(*sym, owned_data);
-                self.symbol_storage_map.insert(
-                    *sym,
-                    Stack(ReferencedPrimitive {
-                        base_offset: union_offset + id_offset as i32,
-                        size,
-                        sign_extend: false, // tag ids are always unsigned
-                    }),
-                );
-            }
-            x => todo!("getting tag id of union with layout ({:?})", x),
-        }
+        let (data_size, data_alignment) = union_layout.data_size_and_alignment(layout_interner);
+        let id_offset = data_size - data_alignment;
+        let discriminant = union_layout.discriminant();
+
+        let size = discriminant.stack_size();
+        self.allocation_map.insert(*sym, owned_data);
+        self.symbol_storage_map.insert(
+            *sym,
+            Stack(ReferencedPrimitive {
+                base_offset: union_offset + id_offset as i32,
+                size,
+                sign_extend: false, // tag ids are always unsigned
+            }),
+        );
     }
 
     // Loads the dst to be the later 64 bits of a list (its length).
@@ -651,7 +681,15 @@ impl<
         }
         let base_offset = self.claim_stack_area(sym, struct_size);
 
-        if let Layout::Struct { field_layouts, .. } = layout_interner.get(*layout) {
+        let mut in_layout = *layout;
+        let layout = loop {
+            match layout_interner.get_repr(in_layout) {
+                LayoutRepr::LambdaSet(inner) => in_layout = inner.runtime_representation(),
+                other => break other,
+            }
+        };
+
+        if let LayoutRepr::Struct(field_layouts) = layout {
             let mut current_offset = base_offset;
             for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
                 self.copy_symbol_to_stack_offset(
@@ -667,50 +705,13 @@ impl<
         } else {
             // This is a single element struct. Just copy the single field to the stack.
             debug_assert_eq!(fields.len(), 1);
-            self.copy_symbol_to_stack_offset(layout_interner, buf, base_offset, &fields[0], layout);
-        }
-    }
-
-    /// Creates a union on the stack, moving the data in fields into the union and tagging it.
-    pub fn create_union(
-        &mut self,
-        layout_interner: &mut STLayoutInterner<'a>,
-        buf: &mut Vec<'a, u8>,
-        sym: &Symbol,
-        union_layout: &UnionLayout<'a>,
-        fields: &'a [Symbol],
-        tag_id: TagIdIntType,
-    ) {
-        match union_layout {
-            UnionLayout::NonRecursive(field_layouts) => {
-                let (data_size, data_alignment) =
-                    union_layout.data_size_and_alignment(layout_interner, self.target_info);
-                let id_offset = data_size - data_alignment;
-                if data_alignment < 8 || data_alignment % 8 != 0 {
-                    todo!("small/unaligned tagging");
-                }
-                let base_offset = self.claim_stack_area(sym, data_size);
-                let mut current_offset = base_offset;
-                for (field, field_layout) in
-                    fields.iter().zip(field_layouts[tag_id as usize].iter())
-                {
-                    self.copy_symbol_to_stack_offset(
-                        layout_interner,
-                        buf,
-                        current_offset,
-                        field,
-                        field_layout,
-                    );
-                    let field_size = layout_interner.stack_size(*field_layout);
-                    current_offset += field_size as i32;
-                }
-                self.with_tmp_general_reg(buf, |_symbol_storage, buf, reg| {
-                    ASM::mov_reg64_imm64(buf, reg, tag_id as i64);
-                    debug_assert!((base_offset + id_offset as i32) % 8 == 0);
-                    ASM::mov_base32_reg64(buf, base_offset + id_offset as i32, reg);
-                });
-            }
-            x => todo!("creating unions with layout: {:?}", x),
+            self.copy_symbol_to_stack_offset(
+                layout_interner,
+                buf,
+                base_offset,
+                &fields[0],
+                &in_layout,
+            );
         }
     }
 
@@ -745,8 +746,8 @@ impl<
         sym: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match layout_interner.get(*layout) {
-            Layout::Builtin(builtin) => match builtin {
+        match layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(builtin) => match builtin {
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::I128 | IntWidth::U128 => {
                         let (from_offset, size) = self.stack_offset_and_size(sym);
@@ -785,26 +786,31 @@ impl<
                     FloatWidth::F32 => todo!(),
                 },
                 Builtin::Bool => {
-                    // same as 8-bit integer
-                    let reg = self.load_to_general_reg(buf, sym);
-                    ASM::mov_base32_reg8(buf, to_offset, reg);
+                    // same as 8-bit integer, but we special-case true/false because these symbols
+                    // are thunks and literal values
+                    match *sym {
+                        Symbol::BOOL_FALSE => {
+                            let reg = self.claim_general_reg(buf, sym);
+                            ASM::mov_reg64_imm64(buf, reg, false as i64)
+                        }
+                        Symbol::BOOL_TRUE => {
+                            let reg = self.claim_general_reg(buf, sym);
+                            ASM::mov_reg64_imm64(buf, reg, true as i64)
+                        }
+                        _ => {
+                            let reg = self.load_to_general_reg(buf, sym);
+                            ASM::mov_base32_reg8(buf, to_offset, reg);
+                        }
+                    }
                 }
                 Builtin::Decimal => todo!(),
                 Builtin::Str | Builtin::List(_) => {
                     let (from_offset, size) = self.stack_offset_and_size(sym);
-                    debug_assert_eq!(from_offset % 8, 0);
-                    debug_assert_eq!(size % 8, 0);
                     debug_assert_eq!(size, layout_interner.stack_size(*layout));
                     self.copy_to_stack_offset(buf, size, from_offset, to_offset)
                 }
             },
-            Layout::Boxed(_) => {
-                // like a 64-bit integer
-                debug_assert_eq!(to_offset % 8, 0);
-                let reg = self.load_to_general_reg(buf, sym);
-                ASM::mov_base32_reg64(buf, to_offset, reg);
-            }
-            Layout::LambdaSet(lambda_set) => {
+            LayoutRepr::LambdaSet(lambda_set) => {
                 // like its runtime representation
                 self.copy_symbol_to_stack_offset(
                     layout_interner,
@@ -814,19 +820,18 @@ impl<
                     &lambda_set.runtime_representation(),
                 )
             }
-            _ if layout_interner.stack_size(*layout) == 0 => {}
-            // TODO: Verify this is always true.
-            // The dev backend does not deal with refcounting and does not care about if data is safe to memcpy.
-            // It is just temporarily storing the value due to needing to free registers.
-            // Later, it will be reloaded and stored in refcounted as needed.
-            _ if layout_interner.stack_size(*layout) > 8 => {
+            LayoutRepr::Struct { .. } | LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 let (from_offset, size) = self.stack_offset_and_size(sym);
-                debug_assert_eq!(from_offset % 8, 0);
-                debug_assert_eq!(size % 8, 0);
                 debug_assert_eq!(size, layout_interner.stack_size(*layout));
+
                 self.copy_to_stack_offset(buf, size, from_offset, to_offset)
             }
-            x => todo!("copying data to the stack with layout, {:?}", x),
+            LayoutRepr::RecursivePointer(_) | LayoutRepr::Boxed(_) | LayoutRepr::Union(_) => {
+                // like a 64-bit integer
+                debug_assert_eq!(to_offset % 8, 0);
+                let reg = self.load_to_general_reg(buf, sym);
+                ASM::mov_base32_reg64(buf, to_offset, reg);
+            }
         }
     }
 
@@ -841,6 +846,14 @@ impl<
         let size = size as i32;
 
         self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+            // on targets beside x86, misaligned copies might be a problem
+            for _ in 0..size % 8 {
+                ASM::mov_reg8_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg8(buf, to_offset + copied, reg);
+
+                copied += 1;
+            }
+
             if size - copied >= 8 {
                 for _ in (0..(size - copied)).step_by(8) {
                     ASM::mov_reg64_base32(buf, reg, from_offset + copied);
@@ -1035,6 +1048,7 @@ impl<
                 }
                 | Complex { base_offset, size },
             ) => (*base_offset, *size),
+            NoData => (0, 0),
             storage => {
                 internal_error!(
                     "Data not on the stack for sym {:?} with storage {:?}",
@@ -1080,7 +1094,7 @@ impl<
     }
 
     /// Specifies a no data exists.
-    pub fn no_data_arg(&mut self, sym: &Symbol) {
+    pub fn no_data(&mut self, sym: &Symbol) {
         self.symbol_storage_map.insert(*sym, NoData);
     }
 
@@ -1100,6 +1114,41 @@ impl<
     /// updates the function call stack size to the max of its current value and the size need for this call.
     pub fn update_fn_call_stack_size(&mut self, tmp_size: u32) {
         self.fn_call_stack_size = max(self.fn_call_stack_size, tmp_size);
+    }
+
+    fn joinpoint_argument_stack_storage(
+        &mut self,
+        layout_interner: &mut STLayoutInterner<'a>,
+        symbol: Symbol,
+        layout: InLayout<'a>,
+    ) {
+        match layout_interner.get_repr(layout) {
+            single_register_layouts!() | pointer_layouts!() => {
+                let base_offset = self.claim_stack_size(8);
+                self.symbol_storage_map.insert(
+                    symbol,
+                    Stack(Primitive {
+                        base_offset,
+                        reg: None,
+                    }),
+                );
+                self.allocation_map
+                    .insert(symbol, Rc::new((base_offset, 8)));
+            }
+            LayoutRepr::LambdaSet(lambda_set) => self.joinpoint_argument_stack_storage(
+                layout_interner,
+                symbol,
+                lambda_set.runtime_representation(),
+            ),
+            _ => {
+                let stack_size = layout_interner.stack_size(layout);
+                if stack_size == 0 {
+                    self.no_data(&symbol);
+                } else {
+                    self.claim_stack_area(&symbol, stack_size);
+                }
+            }
+        }
     }
 
     /// Setups a join point.
@@ -1123,31 +1172,46 @@ impl<
         {
             // Claim a location for every join point parameter to be loaded at.
             // Put everything on the stack for simplicity.
-            match *layout {
-                single_register_layouts!() => {
-                    let base_offset = self.claim_stack_size(8);
-                    self.symbol_storage_map.insert(
-                        *symbol,
-                        Stack(Primitive {
-                            base_offset,
-                            reg: None,
-                        }),
-                    );
-                    self.allocation_map
-                        .insert(*symbol, Rc::new((base_offset, 8)));
-                }
-                _ => {
-                    let stack_size = layout_interner.stack_size(*layout);
-                    if stack_size == 0 {
-                        self.symbol_storage_map.insert(*symbol, NoData);
-                    } else {
-                        self.claim_stack_area(symbol, stack_size);
-                    }
-                }
-            }
+            self.joinpoint_argument_stack_storage(layout_interner, *symbol, *layout);
+
             param_storage.push(*self.get_storage_for_sym(symbol));
         }
         self.join_param_map.insert(*id, param_storage);
+    }
+
+    fn jump_argument_stack_storage(
+        &mut self,
+        layout_interner: &mut STLayoutInterner<'a>,
+        buf: &mut Vec<'a, u8>,
+        symbol: Symbol,
+        layout: InLayout<'a>,
+        base_offset: i32,
+    ) {
+        match layout_interner.get_repr(layout) {
+            single_register_integers!() | pointer_layouts!() => {
+                let reg = self.load_to_general_reg(buf, &symbol);
+                ASM::mov_base32_reg64(buf, base_offset, reg);
+            }
+            single_register_floats!() => {
+                let reg = self.load_to_float_reg(buf, &symbol);
+                ASM::mov_base32_freg64(buf, base_offset, reg);
+            }
+            LayoutRepr::LambdaSet(lambda_set) => {
+                self.jump_argument_stack_storage(
+                    layout_interner,
+                    buf,
+                    symbol,
+                    lambda_set.runtime_representation(),
+                    base_offset,
+                );
+            }
+            _ => {
+                internal_error!(
+                    r"cannot load non-primitive layout ({:?}) to primitive stack location",
+                    layout_interner.dbg(layout)
+                )
+            }
+        }
     }
 
     /// Setup jump loads the parameters for the joinpoint.
@@ -1166,9 +1230,9 @@ impl<
             Some(storages) => storages,
             None => internal_error!("Jump: unknown point specified to jump to: {:?}", id),
         };
-        for ((sym, layout), wanted_storage) in
-            args.iter().zip(arg_layouts).zip(param_storage.iter())
-        {
+
+        let it = args.iter().zip(arg_layouts).zip(param_storage.iter());
+        for ((sym, layout), wanted_storage) in it {
             // Note: it is possible that the storage we want to move to is in use by one of the args we want to pass.
             if self.get_storage_for_sym(sym) == wanted_storage {
                 continue;
@@ -1193,22 +1257,15 @@ impl<
                 Stack(Primitive {
                     base_offset,
                     reg: None,
-                }) => match *layout {
-                    single_register_integers!() => {
-                        let reg = self.load_to_general_reg(buf, sym);
-                        ASM::mov_base32_reg64(buf, *base_offset, reg);
-                    }
-                    single_register_floats!() => {
-                        let reg = self.load_to_float_reg(buf, sym);
-                        ASM::mov_base32_freg64(buf, *base_offset, reg);
-                    }
-                    _ => {
-                        internal_error!(
-                            "cannot load non-primitive layout ({:?}) to primitive stack location",
-                            layout
-                        );
-                    }
-                },
+                }) => {
+                    self.jump_argument_stack_storage(
+                        layout_interner,
+                        buf,
+                        *sym,
+                        *layout,
+                        *base_offset,
+                    );
+                }
                 NoData => {}
                 Stack(Primitive { reg: Some(_), .. }) => {
                     internal_error!(
@@ -1235,6 +1292,22 @@ impl<
             .insert(*sym, Stack(Complex { base_offset, size }));
         self.allocation_map
             .insert(*sym, Rc::new((base_offset, size)));
+        base_offset
+    }
+
+    pub fn claim_pointer_stack_area(&mut self, sym: Symbol) -> i32 {
+        let size = 8;
+
+        let base_offset = self.claim_stack_size(size);
+
+        self.symbol_storage_map.insert(
+            sym,
+            Stack(Primitive {
+                base_offset,
+                reg: None,
+            }),
+        );
+
         base_offset
     }
 
@@ -1436,14 +1509,12 @@ impl<
 }
 
 fn is_primitive(layout_interner: &mut STLayoutInterner<'_>, layout: InLayout<'_>) -> bool {
-    match layout {
+    match layout_interner.get_repr(layout) {
         single_register_layouts!() => true,
-        _ => match layout_interner.get(layout) {
-            Layout::Boxed(_) => true,
-            Layout::LambdaSet(lambda_set) => {
-                is_primitive(layout_interner, lambda_set.runtime_representation())
-            }
-            _ => false,
-        },
+        pointer_layouts!() => true,
+        LayoutRepr::LambdaSet(lambda_set) => {
+            is_primitive(layout_interner, lambda_set.runtime_representation())
+        }
+        _ => false,
     }
 }

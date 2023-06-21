@@ -1,0 +1,9 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Id n := [Id U32 n]
+
+    @Id (Id 21 "sasha")
+
+main = entry
+#      ^^^^^ Id Str

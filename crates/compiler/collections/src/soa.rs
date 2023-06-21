@@ -137,6 +137,10 @@ impl<T> Slice<T> {
     pub fn into_iter(&self) -> impl Iterator<Item = Index<T>> {
         self.indices().map(|i| Index::new(i as _))
     }
+
+    pub const fn at(&self, i: usize) -> Index<T> {
+        Index::new(self.start + i as u32)
+    }
 }
 
 #[derive(PartialEq, Eq)]

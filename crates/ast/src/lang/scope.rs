@@ -203,13 +203,14 @@ impl Scope {
     pub fn lookup(&mut self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         match self.idents.get(ident) {
             Some((symbol, _)) => Ok(*symbol),
-            None => Err(RuntimeError::LookupNotInScope(
-                Loc {
+            None => Err(RuntimeError::LookupNotInScope {
+                loc_name: Loc {
                     region,
                     value: ident.clone().into(),
                 },
-                self.idents.keys().map(|v| v.as_ref().into()).collect(),
-            )),
+                suggestion_options: self.idents.keys().map(|v| v.as_ref().into()).collect(),
+                underscored_suggestion_region: None,
+            }),
         }
     }
 

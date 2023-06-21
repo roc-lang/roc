@@ -1,36 +1,39 @@
 [package]
-edition = "2021"
 name = "roc_repl_wasm"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
 description = "Provides a build of the REPL for the Roc website using WebAssembly."
+
+authors = ["The Roc Contributors"]
+edition = "2021"
+license = "UPL-1.0"
+version = "0.0.1"
 
 [lib]
 crate-type = ["cdylib"]
 
 [build-dependencies]
-roc_builtins = {path = "../compiler/builtins"}
-roc_utils = {path = "../utils"}
+roc_bitcode = { path = "../compiler/builtins/bitcode" }
+roc_builtins = { path = "../compiler/builtins" }
 wasi_libc_sys = { path = "../wasi-libc-sys" }
+
 tempfile.workspace = true
 
 [dependencies]
 bumpalo.workspace = true
-console_error_panic_hook = {version = "0.1.7", optional = true}
-futures = {version = "0.3.24", optional = true}
-js-sys = "0.3.60"
-wasm-bindgen = "0.2.79"
-wasm-bindgen-futures = "0.4.33"
+console_error_panic_hook = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+getrandom = { version = "0.2", features = ["js"] } # not a direct dependency, needed because of https://docs.rs/getrandom/latest/getrandom/#webassembly-support
+js-sys.workspace = true
+wasm-bindgen-futures.workspace = true
+wasm-bindgen.workspace = true
 
-roc_collections = {path = "../compiler/collections"}
-roc_gen_wasm = {path = "../compiler/gen_wasm"}
-roc_load = {path = "../compiler/load"}
-roc_parse = {path = "../compiler/parse"}
-roc_repl_eval = {path = "../repl_eval"}
-roc_reporting = {path = "../reporting"}
-roc_target = {path = "../compiler/roc_target"}
-roc_types = {path = "../compiler/types"}
+roc_collections = { path = "../compiler/collections" }
+roc_gen_wasm = { path = "../compiler/gen_wasm" }
+roc_load = { path = "../compiler/load" }
+roc_parse = { path = "../compiler/parse" }
+roc_repl_eval = { path = "../repl_eval" }
+roc_reporting = { path = "../reporting" }
+roc_target = { path = "../compiler/roc_target" }
+roc_types = { path = "../compiler/types" }
 
 [features]
 wasi_test = ["futures"]

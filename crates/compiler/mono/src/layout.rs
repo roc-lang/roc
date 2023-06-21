@@ -5,7 +5,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
-use roc_collections::VecSet;
+use roc_collections::{SmallVec, VecSet};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
@@ -13,61 +13,63 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, TagExt,
-    TupleElems, UnsortedUnionLabels, Variable, VariableSubsSlice,
+    self, Content, FlatType, GetSubsSlice, OptVariable, RecordFields, Subs, TagExt, TupleElems,
+    UnsortedUnionLabels, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, gather_tuple_elems_unsorted_iter, RecordField, RecordFieldsError,
     TupleElemsError,
 };
 use std::cmp::Ordering;
-use std::collections::hash_map::{DefaultHasher, Entry};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use ven_pretty::{DocAllocator, DocBuilder};
 
 mod intern;
+mod semantic;
 pub use intern::{
     GlobalLayoutInterner, InLayout, LayoutInterner, STLayoutInterner, TLLayoutInterner,
 };
+pub use semantic::SemanticRepr;
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 roc_error_macros::assert_sizeof_aarch64!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Layout, 6 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Layout, 9 * 8);
 roc_error_macros::assert_sizeof_aarch64!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 5 * 8);
 
 roc_error_macros::assert_sizeof_wasm!(Builtin, 2 * 4);
-roc_error_macros::assert_sizeof_wasm!(Layout, 6 * 4);
+roc_error_macros::assert_sizeof_wasm!(Layout, 9 * 4);
 roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
 roc_error_macros::assert_sizeof_wasm!(LambdaSet, 5 * 4);
 
 roc_error_macros::assert_sizeof_default!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_default!(Layout, 6 * 8);
+roc_error_macros::assert_sizeof_default!(Layout, 9 * 8);
 roc_error_macros::assert_sizeof_default!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_default!(LambdaSet, 5 * 8);
 
 type LayoutResult<'a> = Result<InLayout<'a>, LayoutProblem>;
 type RawFunctionLayoutResult<'a> = Result<RawFunctionLayout<'a>, LayoutProblem>;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct CacheMeta {
     /// Does this cache entry include a recursive structure? If so, what's the recursion variable
     /// of that structure?
-    has_recursive_structure: OptVariable,
+    recursive_structures: SmallVec<Variable, 2>,
 }
 
 impl CacheMeta {
     #[inline(always)]
-    fn to_criteria(self) -> CacheCriteria {
+    fn into_criteria(self) -> CacheCriteria {
         let CacheMeta {
-            has_recursive_structure,
+            recursive_structures,
         } = self;
         CacheCriteria {
             has_naked_recursion_pointer: false,
-            has_recursive_structure,
+            recursive_structures,
         }
     }
 }
@@ -208,7 +210,7 @@ impl<'a> LayoutCache<'a> {
             // TODO: it's possible that after unification, roots in earlier cache layers changed...
             // how often does that happen?
             if let Some(result) = layer.0.get(&root) {
-                return Some(*result);
+                return Some(result.clone());
             }
         }
         None
@@ -326,9 +328,15 @@ impl<'a> LayoutCache<'a> {
     pub fn get_in(&self, interned: InLayout<'a>) -> Layout<'a> {
         self.interner.get(interned)
     }
+    pub fn get_repr(&self, interned: InLayout<'a>) -> LayoutRepr<'a> {
+        self.interner.get_repr(interned)
+    }
 
     pub fn put_in(&mut self, layout: Layout<'a>) -> InLayout<'a> {
         self.interner.insert(layout)
+    }
+    pub(crate) fn put_in_direct_no_semantic(&mut self, repr: LayoutRepr<'a>) -> InLayout<'a> {
+        self.interner.insert_direct_no_semantic(repr)
     }
 
     #[cfg(debug_assertions)]
@@ -342,24 +350,24 @@ pub struct CacheSnapshot {
     layer: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct CacheCriteria {
     /// Whether there is a naked recursion pointer in this layout, that doesn't pass through a
     /// recursive structure.
     has_naked_recursion_pointer: bool,
-    /// Whether this layout contains a recursive structure. If `Some`, contains the variable of the
-    /// recursion variable of that structure.
-    has_recursive_structure: OptVariable,
+    /// Recursive structures this layout contains, if any.
+    // Typically at most 1 recursive structure is contained, but there may be more.
+    recursive_structures: SmallVec<Variable, 2>,
 }
 
 const CACHEABLE: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: false,
-    has_recursive_structure: OptVariable::NONE,
+    recursive_structures: SmallVec::new(),
 };
 
 const NAKED_RECURSION_PTR: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: true,
-    has_recursive_structure: OptVariable::NONE,
+    recursive_structures: SmallVec::new(),
 };
 
 impl CacheCriteria {
@@ -371,25 +379,32 @@ impl CacheCriteria {
 
     /// Makes `self` cacheable iff self and other are cacheable.
     #[inline(always)]
-    fn and(&mut self, other: Self) {
+    fn and(&mut self, other: Self, subs: &Subs) {
         self.has_naked_recursion_pointer =
             self.has_naked_recursion_pointer || other.has_naked_recursion_pointer;
-        // TODO: can these ever conflict?
-        self.has_recursive_structure = self
-            .has_recursive_structure
-            .or(other.has_recursive_structure);
+
+        for &other_rec in other.recursive_structures.iter() {
+            if self
+                .recursive_structures
+                .iter()
+                .any(|rec| subs.equivalent_without_compacting(*rec, other_rec))
+            {
+                continue;
+            }
+            self.recursive_structures.push(other_rec);
+        }
     }
 
     #[inline(always)]
     fn pass_through_recursive_union(&mut self, recursion_var: Variable) {
         self.has_naked_recursion_pointer = false;
-        self.has_recursive_structure = OptVariable::some(recursion_var);
+        self.recursive_structures.push(recursion_var);
     }
 
     #[inline(always)]
     fn cache_metadata(&self) -> CacheMeta {
         CacheMeta {
-            has_recursive_structure: self.has_recursive_structure,
+            recursive_structures: self.recursive_structures.clone(),
         }
     }
 }
@@ -404,9 +419,9 @@ impl<T> Cacheable<T> {
     }
 
     #[inline(always)]
-    fn decompose(self, and_with: &mut CacheCriteria) -> T {
+    fn decompose(self, and_with: &mut CacheCriteria, subs: &Subs) -> T {
         let Self(value, criteria) = self;
-        and_with.and(criteria);
+        and_with.and(criteria, subs);
         value
     }
 
@@ -438,10 +453,10 @@ fn cacheable<T>(v: T) -> Cacheable<T> {
 /// If the layout is not an error, the cache policy is `and`ed with `total_criteria`, and the layout
 /// is passed back.
 macro_rules! cached {
-    ($expr:expr, $total_criteria:expr) => {
+    ($expr:expr, $total_criteria:expr, $subs:expr) => {
         match $expr {
             Cacheable(Ok(v), criteria) => {
-                $total_criteria.and(criteria);
+                $total_criteria.and(criteria, $subs);
                 v
             }
             Cacheable(Err(v), criteria) => return Cacheable(Err(v), criteria),
@@ -450,7 +465,7 @@ macro_rules! cached {
 }
 
 pub type TagIdIntType = u16;
-pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<TagIdIntType>() * 8) as usize;
+pub const MAX_ENUM_SIZE: usize = std::mem::size_of::<TagIdIntType>() * 8;
 const GENERATE_NULLABLE: bool = true;
 
 #[derive(Debug, Clone, Copy)]
@@ -583,17 +598,18 @@ impl<'a> RawFunctionLayout<'a> {
 
                 for index in args.into_iter() {
                     let arg_var = env.subs[index];
-                    let layout = cached!(Layout::from_var(env, arg_var), cache_criteria);
+                    let layout = cached!(Layout::from_var(env, arg_var), cache_criteria, env.subs);
                     fn_args.push(layout);
                 }
 
-                let ret = cached!(Layout::from_var(env, ret_var), cache_criteria);
+                let ret = cached!(Layout::from_var(env, ret_var), cache_criteria, env.subs);
 
                 let fn_args = fn_args.into_bump_slice();
 
                 let lambda_set = cached!(
                     LambdaSet::from_var(env, args, closure_var, ret_var),
-                    cache_criteria
+                    cache_criteria,
+                    env.subs
                 );
 
                 Cacheable(Ok(Self::Function(fn_args, lambda_set, ret)), cache_criteria)
@@ -617,7 +633,7 @@ impl<'a> RawFunctionLayout<'a> {
             }
             _ => {
                 let mut criteria = CACHEABLE;
-                let layout = cached!(layout_from_flat_type(env, flat_type), criteria);
+                let layout = cached!(layout_from_flat_type(env, flat_type), criteria, env.subs);
                 Cacheable(Ok(Self::ZeroArgumentThunk(layout)), criteria)
             }
         }
@@ -626,7 +642,10 @@ impl<'a> RawFunctionLayout<'a> {
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
-    fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Cacheable<RawFunctionLayoutResult<'a>> {
+    pub(crate) fn from_var(
+        env: &mut Env<'a, '_>,
+        var: Variable,
+    ) -> Cacheable<RawFunctionLayoutResult<'a>> {
         env.cached_raw_function_or(var, |env| {
             if env.is_seen(var) {
                 unreachable!("The initial variable of a signature cannot be seen already")
@@ -639,54 +658,22 @@ impl<'a> RawFunctionLayout<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FieldOrderHash(u64);
+pub struct Layout<'a> {
+    repr: LayoutWrapper<'a>,
+    semantic: SemanticRepr<'a>,
+}
 
-impl FieldOrderHash {
-    // NB: This should really be a proper "zero" hash via `DefaultHasher::new().finish()`, but Rust
-    // stdlib hashers are not (yet) compile-time-computable.
-    const ZERO_FIELD_HASH: Self = Self(0);
-    const IRRELEVANT_NON_ZERO_FIELD_HASH: Self = Self(1);
-
-    pub fn from_ordered_fields(fields: &[&Lowercase]) -> Self {
-        if fields.is_empty() {
-            // HACK: we must make sure this is always equivalent to a `ZERO_FIELD_HASH`.
-            return Self::ZERO_FIELD_HASH;
-        }
-
-        let mut hasher = DefaultHasher::new();
-        fields.iter().for_each(|field| field.hash(&mut hasher));
-        Self(hasher.finish())
-    }
-
-    pub fn from_ordered_tuple_elems(elems: &[usize]) -> Self {
-        if elems.is_empty() {
-            // HACK: we must make sure this is always equivalent to a `ZERO_FIELD_HASH`.
-            return Self::ZERO_FIELD_HASH;
-        }
-
-        let mut hasher = DefaultHasher::new();
-        elems.iter().for_each(|elem| elem.hash(&mut hasher));
-        Self(hasher.finish())
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum LayoutWrapper<'a> {
+    Direct(LayoutRepr<'a>),
+    Newtype(InLayout<'a>),
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Layout<'a> {
+pub enum LayoutRepr<'a> {
     Builtin(Builtin<'a>),
-    Struct {
-        /// Two different struct types can have the same layout, for example
-        ///   { a: U8,  b: I64 }
-        ///   { a: I64, b: U8 }
-        /// both have the layout {I64, U8}. Not distinguishing the order of record fields can cause
-        /// us problems during monomorphization when we specialize the same type in different ways,
-        /// so keep a hash of the record order for disambiguation. This still of course may result
-        /// in collisions, but it's unlikely.
-        ///
-        /// See also https://github.com/roc-lang/roc/issues/2535.
-        field_order_hash: FieldOrderHash,
-        field_layouts: &'a [InLayout<'a>],
-    },
+    Struct(&'a [InLayout<'a>]),
     Boxed(InLayout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
@@ -890,13 +877,13 @@ impl<'a> UnionLayout<'a> {
             } => {
                 debug_assert_ne!(nullable_id, tag_id != 0);
 
-                other_fields[index as usize]
+                other_fields[index]
             }
         };
 
         // TODO(recursive-layouts): simplify after we have disjoint recursive pointers
-        if let Layout::RecursivePointer(_) = interner.get(result) {
-            interner.insert(Layout::Union(self))
+        if let LayoutRepr::RecursivePointer(_) = interner.get_repr(result) {
+            interner.insert_direct_no_semantic(LayoutRepr::Union(self))
         } else {
             result
         }
@@ -985,55 +972,46 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    fn tags_alignment_bytes<I>(
-        interner: &I,
-        tags: &[&'a [InLayout<'a>]],
-        target_info: TargetInfo,
-    ) -> u32
+    fn tags_alignment_bytes<I>(interner: &I, tags: &[&'a [InLayout<'a>]]) -> u32
     where
         I: LayoutInterner<'a>,
     {
         tags.iter()
-            .map(|field_layouts| {
-                Layout::struct_no_name_order(field_layouts).alignment_bytes(interner, target_info)
-            })
+            .map(|field_layouts| LayoutRepr::struct_(field_layouts).alignment_bytes(interner))
             .max()
             .unwrap_or(0)
     }
 
-    pub fn allocation_alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    pub fn allocation_alignment_bytes<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
         let allocation = match self {
-            UnionLayout::NonRecursive(tags) => {
-                Self::tags_alignment_bytes(interner, tags, target_info)
-            }
-            UnionLayout::Recursive(tags) => Self::tags_alignment_bytes(interner, tags, target_info),
+            UnionLayout::NonRecursive(tags) => Self::tags_alignment_bytes(interner, tags),
+            UnionLayout::Recursive(tags) => Self::tags_alignment_bytes(interner, tags),
             UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                Layout::struct_no_name_order(field_layouts).alignment_bytes(interner, target_info)
+                LayoutRepr::struct_(field_layouts).alignment_bytes(interner)
             }
             UnionLayout::NullableWrapped { other_tags, .. } => {
-                Self::tags_alignment_bytes(interner, other_tags, target_info)
+                Self::tags_alignment_bytes(interner, other_tags)
             }
             UnionLayout::NullableUnwrapped { other_fields, .. } => {
-                Layout::struct_no_name_order(other_fields).alignment_bytes(interner, target_info)
+                LayoutRepr::struct_(other_fields).alignment_bytes(interner)
             }
         };
 
         // because we store a refcount, the alignment must be at least the size of a pointer
-        allocation.max(target_info.ptr_width() as u32)
+        allocation.max(interner.target_info().ptr_width() as u32)
     }
 
     /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
-    pub fn data_size_and_alignment<I>(&self, interner: &I, target_info: TargetInfo) -> (u32, u32)
+    pub fn data_size_and_alignment<I>(&self, interner: &I) -> (u32, u32)
     where
         I: LayoutInterner<'a>,
     {
-        let (data_width, data_align) =
-            self.data_size_and_alignment_help_match(interner, target_info);
+        let (data_width, data_align) = self.data_size_and_alignment_help_match(interner);
 
-        if self.stores_tag_id_as_data(target_info) {
+        if self.stores_tag_id_as_data(interner.target_info()) {
             use Discriminant::*;
             match self.discriminant() {
                 U0 => (round_up_to_alignment(data_width, data_align), data_align),
@@ -1059,48 +1037,37 @@ impl<'a> UnionLayout<'a> {
 
     /// Size of the data before the tag_id, if it exists.
     /// Returns None if the tag_id is not stored as data in the layout.
-    pub fn data_size_without_tag_id<I>(&self, interner: &I, target_info: TargetInfo) -> Option<u32>
+    pub fn data_size_without_tag_id<I>(&self, interner: &I) -> Option<u32>
     where
         I: LayoutInterner<'a>,
     {
-        if !self.stores_tag_id_as_data(target_info) {
+        if !self.stores_tag_id_as_data(interner.target_info()) {
             return None;
         };
 
-        Some(
-            self.data_size_and_alignment_help_match(interner, target_info)
-                .0,
-        )
+        Some(self.data_size_and_alignment_help_match(interner).0)
     }
 
-    fn data_size_and_alignment_help_match<I>(
-        &self,
-        interner: &I,
-        target_info: TargetInfo,
-    ) -> (u32, u32)
+    fn data_size_and_alignment_help_match<I>(&self, interner: &I) -> (u32, u32)
     where
         I: LayoutInterner<'a>,
     {
         match self {
-            Self::NonRecursive(tags) => {
-                Layout::stack_size_and_alignment_slices(interner, tags, target_info)
-            }
-            Self::Recursive(tags) => {
-                Layout::stack_size_and_alignment_slices(interner, tags, target_info)
-            }
+            Self::NonRecursive(tags) => Layout::stack_size_and_alignment_slices(interner, tags),
+            Self::Recursive(tags) => Layout::stack_size_and_alignment_slices(interner, tags),
             Self::NonNullableUnwrapped(fields) => {
-                Layout::stack_size_and_alignment_slices(interner, &[fields], target_info)
+                Layout::stack_size_and_alignment_slices(interner, &[fields])
             }
             Self::NullableWrapped { other_tags, .. } => {
-                Layout::stack_size_and_alignment_slices(interner, other_tags, target_info)
+                Layout::stack_size_and_alignment_slices(interner, other_tags)
             }
             Self::NullableUnwrapped { other_fields, .. } => {
-                Layout::stack_size_and_alignment_slices(interner, &[other_fields], target_info)
+                Layout::stack_size_and_alignment_slices(interner, &[other_fields])
             }
         }
     }
 
-    pub fn tag_id_offset<I>(&self, interner: &I, target_info: TargetInfo) -> Option<u32>
+    pub fn tag_id_offset<I>(&self, interner: &I) -> Option<u32>
     where
         I: LayoutInterner<'a>,
     {
@@ -1109,39 +1076,34 @@ impl<'a> UnionLayout<'a> {
             | UnionLayout::Recursive(tags)
             | UnionLayout::NullableWrapped {
                 other_tags: tags, ..
-            } => Some(Self::tag_id_offset_help(interner, tags, target_info)),
+            } => Some(Self::tag_id_offset_help(interner, tags)),
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
         }
     }
 
-    fn tag_id_offset_help<I>(
-        interner: &I,
-        layouts: &[&[InLayout<'a>]],
-        target_info: TargetInfo,
-    ) -> u32
+    fn tag_id_offset_help<I>(interner: &I, layouts: &[&[InLayout<'a>]]) -> u32
     where
         I: LayoutInterner<'a>,
     {
-        let (data_width, data_align) =
-            Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
+        let (data_width, data_align) = Layout::stack_size_and_alignment_slices(interner, layouts);
 
         round_up_to_alignment(data_width, data_align)
     }
 
     /// Very important to use this when doing a memcpy!
-    fn stack_size_without_alignment<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    fn stack_size_without_alignment<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
         match self {
             UnionLayout::NonRecursive(_) => {
-                let (width, align) = self.data_size_and_alignment(interner, target_info);
+                let (width, align) = self.data_size_and_alignment(interner);
                 round_up_to_alignment(width, align)
             }
             UnionLayout::Recursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::NullableWrapped { .. }
-            | UnionLayout::NullableUnwrapped { .. } => target_info.ptr_width() as u32,
+            | UnionLayout::NullableUnwrapped { .. } => interner.target_info().ptr_width() as u32,
         }
     }
 }
@@ -1317,9 +1279,17 @@ impl<'a> Niche<'a> {
     pub fn dbg_deep<'r, I: LayoutInterner<'a>>(
         &'r self,
         interner: &'r I,
-    ) -> crate::layout::intern::dbg::DbgFields<'a, 'r, I> {
+    ) -> crate::layout::intern::dbg_deep::DbgFields<'a, 'r, I> {
         let NichePriv::Captures(caps) = &self.0;
         interner.dbg_deep_iter(caps)
+    }
+
+    pub fn dbg_stable<'r, I: LayoutInterner<'a>>(
+        &'r self,
+        interner: &'r I,
+    ) -> crate::layout::intern::dbg_stable::DbgFields<'a, 'r, I> {
+        let NichePriv::Captures(caps) = &self.0;
+        interner.dbg_stable_iter(caps)
     }
 }
 
@@ -1411,10 +1381,7 @@ pub enum ClosureCallOptions<'a> {
     /// One of a few capturing functions can be called to
     Union(UnionLayout<'a>),
     /// The closure is one function, whose captures are represented as a struct.
-    Struct {
-        field_layouts: &'a [InLayout<'a>],
-        field_order_hash: FieldOrderHash,
-    },
+    Struct(&'a [InLayout<'a>]),
     /// The closure is one function that captures a single identifier, whose value is unwrapped.
     UnwrappedCapture(InLayout<'a>),
     /// The closure dispatches to multiple possible functions, none of which capture.
@@ -1442,10 +1409,8 @@ impl<'a> LambdaSet<'a> {
             None
         } else {
             let repr = self.representation;
-            match interner.get(repr) {
-                Layout::Struct {
-                    field_layouts: &[], ..
-                } => None,
+            match interner.get_repr(repr) {
+                LayoutRepr::Struct(&[]) => None,
                 _ => Some(repr),
             }
         }
@@ -1558,10 +1523,10 @@ impl<'a> LambdaSet<'a> {
             return ClosureRepresentation::UnwrappedCapture(self.representation);
         }
 
-        let repr = interner.chase_recursive(self.representation);
+        let repr_layout = interner.chase_recursive(self.representation);
 
-        match repr {
-            Layout::Union(union) => {
+        match repr_layout {
+            LayoutRepr::Union(union) => {
                 // here we rely on the fact that a union in a closure would be stored in a one-element record.
                 // a closure representation that is itself union must be a of the shape `Closure1 ... | Closure2 ...`
                 match union {
@@ -1621,14 +1586,30 @@ impl<'a> LambdaSet<'a> {
                             union_layout: union,
                         }
                     }
-                    UnionLayout::NonNullableUnwrapped(_) => todo!("recursive closures"),
                     UnionLayout::NullableWrapped {
                         nullable_id: _,
                         other_tags: _,
-                    } => todo!("recursive closures"),
+                    } => {
+                        let (index, (name, fields)) = self
+                            .set
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (s, layouts))| comparator(*s, layouts))
+                            .unwrap();
+
+                        let closure_name = *name;
+
+                        ClosureRepresentation::Union {
+                            tag_id: index as TagIdIntType,
+                            alphabetic_order_fields: fields,
+                            closure_name,
+                            union_layout: union,
+                        }
+                    }
+                    UnionLayout::NonNullableUnwrapped(_) => internal_error!("I thought a non-nullable-unwrapped variant for a lambda set was impossible: how could such a lambda set be created without a base case?"),
                 }
             }
-            Layout::Struct { .. } => {
+            LayoutRepr::Struct { .. } => {
                 debug_assert_eq!(self.set.len(), 1);
 
                 // get the fields from the set, where they are sorted in alphabetic order
@@ -1644,8 +1625,8 @@ impl<'a> LambdaSet<'a> {
             layout => {
                 debug_assert!(self.has_enum_dispatch_repr());
                 let enum_repr = match layout {
-                    Layout::Builtin(Builtin::Bool) => EnumDispatch::Bool,
-                    Layout::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
+                    LayoutRepr::Builtin(Builtin::Bool) => EnumDispatch::Bool,
+                    LayoutRepr::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
                     other => internal_error!("Invalid layout for enum dispatch: {:?}", other),
                 };
                 ClosureRepresentation::EnumDispatch(enum_repr)
@@ -1669,31 +1650,25 @@ impl<'a> LambdaSet<'a> {
             return ClosureCallOptions::UnwrappedCapture(self.representation);
         }
 
-        let repr = interner.chase_recursive(self.representation);
+        let repr_layout = interner.chase_recursive(self.representation);
 
-        match repr {
-            Layout::Union(union_layout) => {
-                if repr == Layout::VOID_NAKED {
+        match repr_layout {
+            LayoutRepr::Union(union_layout) => {
+                if repr_layout == Layout::VOID_NAKED.repr(interner) {
                     debug_assert!(self.set.is_empty());
                     return ClosureCallOptions::Void;
                 }
                 ClosureCallOptions::Union(union_layout)
             }
-            Layout::Struct {
-                field_layouts,
-                field_order_hash,
-            } => {
+            LayoutRepr::Struct(field_layouts) => {
                 debug_assert_eq!(self.set.len(), 1);
-                ClosureCallOptions::Struct {
-                    field_layouts,
-                    field_order_hash,
-                }
+                ClosureCallOptions::Struct(field_layouts)
             }
             layout => {
                 debug_assert!(self.has_enum_dispatch_repr());
                 let enum_repr = match layout {
-                    Layout::Builtin(Builtin::Bool) => EnumDispatch::Bool,
-                    Layout::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
+                    LayoutRepr::Builtin(Builtin::Bool) => EnumDispatch::Bool,
+                    LayoutRepr::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
                     other => internal_error!("Invalid layout for enum dispatch: {:?}", other),
                 };
                 ClosureCallOptions::EnumDispatch(enum_repr)
@@ -1765,7 +1740,7 @@ impl<'a> LambdaSet<'a> {
         });
 
         match result.map(|l| env.cache.interner.chase_recursive(l)) {
-            Ok(Layout::LambdaSet(lambda_set)) => Cacheable(Ok(lambda_set), criteria),
+            Ok(LayoutRepr::LambdaSet(lambda_set)) => Cacheable(Ok(lambda_set), criteria),
             Err(err) => Cacheable(Err(err), criteria),
             Ok(layout) => internal_error!("other layout found for lambda set: {:?}", layout),
         }
@@ -1787,11 +1762,11 @@ impl<'a> LambdaSet<'a> {
 
         for index in args.into_iter() {
             let arg_var = env.subs[index];
-            let layout = cached!(Layout::from_var(env, arg_var), cache_criteria);
+            let layout = cached!(Layout::from_var(env, arg_var), cache_criteria, env.subs);
             fn_args.push(layout);
         }
 
-        let ret = cached!(Layout::from_var(env, ret_var), cache_criteria);
+        let ret = cached!(Layout::from_var(env, ret_var), cache_criteria, env.subs);
 
         let fn_args = env.arena.alloc(fn_args.into_bump_slice());
 
@@ -1821,7 +1796,7 @@ impl<'a> LambdaSet<'a> {
                         // We determine cacheability of the lambda set based on the runtime
                         // representation, so here the criteria doesn't matter.
                         let mut criteria = CACHEABLE;
-                        let arg = cached!(Layout::from_var(env, *var), criteria);
+                        let arg = cached!(Layout::from_var(env, *var), criteria, env.subs);
                         arguments.push(arg);
                         set_captures_have_naked_rec_ptr =
                             set_captures_have_naked_rec_ptr || criteria.has_naked_recursion_pointer;
@@ -1883,7 +1858,7 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables,
                     opt_recursion_var.into_variable(),
                 );
-                cache_criteria.and(criteria);
+                cache_criteria.and(criteria, env.subs);
 
                 let needs_recursive_fixup = NeedsRecursionPointerFixup(
                     opt_recursion_var.is_some() && set_captures_have_naked_rec_ptr,
@@ -1935,36 +1910,36 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn stack_size<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    pub fn stack_size<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
-        interner
-            .get(self.representation)
-            .stack_size(interner, target_info)
+        interner.get_repr(self.representation).stack_size(interner)
     }
     pub fn contains_refcounted<I>(&self, interner: &I) -> bool
     where
         I: LayoutInterner<'a>,
     {
         interner
-            .get(self.representation)
+            .get_repr(self.representation)
             .contains_refcounted(interner)
     }
     pub fn safe_to_memcpy<I>(&self, interner: &I) -> bool
     where
         I: LayoutInterner<'a>,
     {
-        interner.get(self.representation).safe_to_memcpy(interner)
+        interner
+            .get_repr(self.representation)
+            .safe_to_memcpy(interner)
     }
 
-    pub fn alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    pub fn alignment_bytes<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
         interner
-            .get(self.representation)
-            .alignment_bytes(interner, target_info)
+            .get_repr(self.representation)
+            .alignment_bytes(interner)
     }
 }
 
@@ -2142,8 +2117,8 @@ pub enum Builtin<'a> {
 #[macro_export]
 macro_rules! list_element_layout {
     ($interner:expr, $list_layout:expr) => {
-        match $interner.get($list_layout) {
-            Layout::Builtin(Builtin::List(list_layout)) => list_layout,
+        match $interner.get_repr($list_layout) {
+            LayoutRepr::Builtin(Builtin::List(list_layout)) => list_layout,
             _ => internal_error!("invalid list layout"),
         }
     };
@@ -2151,9 +2126,9 @@ macro_rules! list_element_layout {
 
 pub struct Env<'a, 'b> {
     target_info: TargetInfo,
-    arena: &'a Bump,
+    pub(crate) arena: &'a Bump,
     seen: Vec<'a, Variable>,
-    subs: &'b Subs,
+    pub(crate) subs: &'b Subs,
     cache: &'b mut LayoutCache<'a>,
 }
 
@@ -2197,11 +2172,11 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 
     #[inline(always)]
-    fn can_reuse_cached(&self, var: Variable, cache_metadata: CacheMeta) -> bool {
+    fn can_reuse_cached(&self, var: Variable, cache_metadata: &CacheMeta) -> bool {
         let CacheMeta {
-            has_recursive_structure,
+            recursive_structures,
         } = cache_metadata;
-        if let Some(recursive_structure) = has_recursive_structure.into_variable() {
+        for &recursive_structure in recursive_structures.iter() {
             if self.is_seen(recursive_structure) {
                 // If the cached entry references a recursive structure that we're in the process
                 // of visiting currently, we can't use the cached entry, and instead must
@@ -2239,9 +2214,9 @@ macro_rules! cached_or_impl {
             // cache HIT
             inc_stat!($self.cache.$stats, hits);
 
-            if $self.can_reuse_cached($var, metadata) {
+            if $self.can_reuse_cached($var, &metadata) {
                 // Happy path - the cached layout can be reused, return it immediately.
-                return Cacheable(result, metadata.to_criteria());
+                return Cacheable(result, metadata.into_criteria());
             } else {
                 // Although we have a cached layout, we cannot readily reuse it at this time. We'll
                 // need to recompute the layout, as done below.
@@ -2343,6 +2318,32 @@ pub fn is_any_float_range(subs: &Subs, var: Variable) -> bool {
 }
 
 impl<'a> Layout<'a> {
+    pub(crate) const fn new(repr: LayoutWrapper<'a>, semantic: SemanticRepr<'a>) -> Self {
+        Self { repr, semantic }
+    }
+
+    pub(crate) const fn no_semantic(repr: LayoutWrapper<'a>) -> Self {
+        Self {
+            repr,
+            semantic: SemanticRepr::NONE,
+        }
+    }
+
+    pub(crate) fn repr<I>(&self, interner: &I) -> LayoutRepr<'a>
+    where
+        I: LayoutInterner<'a>,
+    {
+        let mut lay = *self;
+        loop {
+            match lay.repr {
+                LayoutWrapper::Direct(repr) => return repr,
+                LayoutWrapper::Newtype(real) => {
+                    lay = interner.get(real);
+                }
+            }
+        }
+    }
+
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
         _var: Variable,
@@ -2444,17 +2445,95 @@ impl<'a> Layout<'a> {
         })
     }
 
+    pub fn stack_size_and_alignment_slices<I>(
+        interner: &I,
+        slices: &[&[InLayout<'a>]],
+    ) -> (u32, u32)
+    where
+        I: LayoutInterner<'a>,
+    {
+        let mut data_align = 1;
+        let mut data_width = 0;
+
+        for tag in slices {
+            let mut total = 0;
+            for layout in tag.iter() {
+                let (stack_size, alignment) = interner
+                    .get_repr(*layout)
+                    .stack_size_and_alignment(interner);
+                total += stack_size;
+                data_align = data_align.max(alignment);
+            }
+
+            data_width = data_width.max(total);
+        }
+
+        data_width = round_up_to_alignment(data_width, data_align);
+
+        (data_width, data_align)
+    }
+
+    pub fn runtime_representation<I>(&self, interner: &I) -> Self
+    where
+        I: LayoutInterner<'a>,
+    {
+        use LayoutRepr::*;
+        match self.repr(interner) {
+            LambdaSet(lambda_set) => interner.get(lambda_set.runtime_representation()),
+            _ => *self,
+        }
+    }
+
+    pub fn runtime_representation_in<I>(layout: InLayout<'a>, interner: &I) -> InLayout<'a>
+    where
+        I: LayoutInterner<'a>,
+    {
+        use LayoutRepr::*;
+        match interner.get_repr(layout) {
+            LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+            _ => layout,
+        }
+    }
+}
+
+impl<'a> LayoutRepr<'a> {
+    pub const UNIT: Self = LayoutRepr::struct_(&[]);
+    pub const BOOL: Self = LayoutRepr::Builtin(Builtin::Bool);
+    pub const U8: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U8));
+    pub const U16: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U16));
+    pub const U32: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U32));
+    pub const U64: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U64));
+    pub const U128: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::U128));
+    pub const I8: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I8));
+    pub const I16: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I16));
+    pub const I32: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I32));
+    pub const I64: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I64));
+    pub const I128: Self = LayoutRepr::Builtin(Builtin::Int(IntWidth::I128));
+    pub const F32: Self = LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32));
+    pub const F64: Self = LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64));
+    pub const DEC: Self = LayoutRepr::Builtin(Builtin::Decimal);
+    pub const STR: Self = LayoutRepr::Builtin(Builtin::Str);
+    pub const OPAQUE_PTR: Self = LayoutRepr::Boxed(Layout::VOID);
+
+    pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
+        Self::Struct(field_layouts)
+    }
+
+    pub(crate) const fn direct(self) -> LayoutWrapper<'a> {
+        LayoutWrapper::Direct(self)
+    }
+
     pub fn safe_to_memcpy<I>(&self, interner: &I) -> bool
     where
         I: LayoutInterner<'a>,
     {
-        use Layout::*;
+        use LayoutRepr::*;
 
         match self {
             Builtin(builtin) => builtin.safe_to_memcpy(),
-            Struct { field_layouts, .. } => field_layouts
+            Struct(field_layouts) => field_layouts
                 .iter()
-                .all(|field_layout| interner.get(*field_layout).safe_to_memcpy(interner)),
+                .all(|field_layout| interner.get_repr(*field_layout).safe_to_memcpy(interner)),
             Union(variant) => {
                 use UnionLayout::*;
 
@@ -2462,7 +2541,7 @@ impl<'a> Layout<'a> {
                     NonRecursive(tags) => tags.iter().all(|tag_layout| {
                         tag_layout
                             .iter()
-                            .all(|field| interner.get(*field).safe_to_memcpy(interner))
+                            .all(|field| interner.get_repr(*field).safe_to_memcpy(interner))
                     }),
                     Recursive(_)
                     | NullableWrapped { .. }
@@ -2474,7 +2553,7 @@ impl<'a> Layout<'a> {
                 }
             }
             LambdaSet(lambda_set) => interner
-                .get(lambda_set.runtime_representation())
+                .get_repr(lambda_set.runtime_representation())
                 .safe_to_memcpy(interner),
             Boxed(_) | RecursivePointer(_) => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
@@ -2490,15 +2569,15 @@ impl<'a> Layout<'a> {
         false // TODO this should use is_zero_sized once doing so doesn't break things!
     }
 
-    pub fn is_passed_by_reference<I>(&self, interner: &I, target_info: TargetInfo) -> bool
+    pub fn is_passed_by_reference<I>(&self, interner: &I) -> bool
     where
         I: LayoutInterner<'a>,
     {
         match self {
-            Layout::Builtin(builtin) => {
+            LayoutRepr::Builtin(builtin) => {
                 use Builtin::*;
 
-                match target_info.ptr_width() {
+                match interner.target_info().ptr_width() {
                     PtrWidth::Bytes4 => {
                         // more things fit into a register
                         false
@@ -2509,76 +2588,80 @@ impl<'a> Layout<'a> {
                     }
                 }
             }
-            Layout::Union(UnionLayout::NonRecursive(_)) => true,
-            Layout::LambdaSet(lambda_set) => interner
-                .get(lambda_set.runtime_representation())
-                .is_passed_by_reference(interner, target_info),
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => true,
+            LayoutRepr::Struct(_) => {
+                // TODO: write tests for this!
+                self.stack_size(interner) as usize > interner.target_info().max_by_value_size()
+            }
+
+            LayoutRepr::LambdaSet(lambda_set) => interner
+                .get_repr(lambda_set.runtime_representation())
+                .is_passed_by_reference(interner),
             _ => false,
         }
     }
 
-    pub fn stack_size<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    pub fn stack_size<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
-        let width = self.stack_size_without_alignment(interner, target_info);
-        let alignment = self.alignment_bytes(interner, target_info);
+        let width = self.stack_size_without_alignment(interner);
+        let alignment = self.alignment_bytes(interner);
 
         round_up_to_alignment(width, alignment)
     }
 
-    pub fn stack_size_and_alignment<I>(&self, interner: &I, target_info: TargetInfo) -> (u32, u32)
+    pub fn stack_size_and_alignment<I>(&self, interner: &I) -> (u32, u32)
     where
         I: LayoutInterner<'a>,
     {
-        let width = self.stack_size_without_alignment(interner, target_info);
-        let alignment = self.alignment_bytes(interner, target_info);
+        let width = self.stack_size_without_alignment(interner);
+        let alignment = self.alignment_bytes(interner);
 
         let size = round_up_to_alignment(width, alignment);
         (size, alignment)
     }
 
     /// Very important to use this when doing a memcpy!
-    pub fn stack_size_without_alignment<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    pub fn stack_size_without_alignment<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
-        use Layout::*;
+        use LayoutRepr::*;
 
         match self {
-            Builtin(builtin) => builtin.stack_size(target_info),
-            Struct { field_layouts, .. } => {
+            Builtin(builtin) => builtin.stack_size(interner.target_info()),
+            Struct(field_layouts) => {
                 let mut sum = 0;
 
                 for field_layout in *field_layouts {
-                    sum += interner
-                        .get(*field_layout)
-                        .stack_size(interner, target_info);
+                    sum += interner.get_repr(*field_layout).stack_size(interner);
                 }
 
                 sum
             }
-            Union(variant) => variant.stack_size_without_alignment(interner, target_info),
+            Union(variant) => variant.stack_size_without_alignment(interner),
             LambdaSet(lambda_set) => interner
-                .get(lambda_set.runtime_representation())
-                .stack_size_without_alignment(interner, target_info),
-            RecursivePointer(_) => target_info.ptr_width() as u32,
-            Boxed(_) => target_info.ptr_width() as u32,
+                .get_repr(lambda_set.runtime_representation())
+                .stack_size_without_alignment(interner),
+            RecursivePointer(_) => interner.target_info().ptr_width() as u32,
+            Boxed(_) => interner.target_info().ptr_width() as u32,
         }
     }
 
-    pub fn alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    pub fn alignment_bytes<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
+        use LayoutRepr::*;
         match self {
-            Layout::Struct { field_layouts, .. } => field_layouts
+            Struct(field_layouts) => field_layouts
                 .iter()
-                .map(|x| interner.get(*x).alignment_bytes(interner, target_info))
+                .map(|x| interner.get_repr(*x).alignment_bytes(interner))
                 .max()
                 .unwrap_or(0),
 
-            Layout::Union(variant) => {
+            Union(variant) => {
                 use UnionLayout::*;
 
                 match variant {
@@ -2587,7 +2670,7 @@ impl<'a> Layout<'a> {
                             .iter()
                             .flat_map(|layouts| {
                                 layouts.iter().map(|layout| {
-                                    interner.get(*layout).alignment_bytes(interner, target_info)
+                                    interner.get_repr(*layout).alignment_bytes(interner)
                                 })
                             })
                             .max();
@@ -2607,74 +2690,45 @@ impl<'a> Layout<'a> {
                     Recursive(_)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => target_info.ptr_width() as u32,
+                    | NonNullableUnwrapped(_) => interner.target_info().ptr_width() as u32,
                 }
             }
-            Layout::LambdaSet(lambda_set) => interner
-                .get(lambda_set.runtime_representation())
-                .alignment_bytes(interner, target_info),
-            Layout::Builtin(builtin) => builtin.alignment_bytes(target_info),
-            Layout::RecursivePointer(_) => target_info.ptr_width() as u32,
-            Layout::Boxed(_) => target_info.ptr_width() as u32,
+            LambdaSet(lambda_set) => interner
+                .get_repr(lambda_set.runtime_representation())
+                .alignment_bytes(interner),
+            Builtin(builtin) => builtin.alignment_bytes(interner.target_info()),
+            RecursivePointer(_) => interner.target_info().ptr_width() as u32,
+            Boxed(_) => interner.target_info().ptr_width() as u32,
         }
     }
 
-    pub fn allocation_alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    pub fn allocation_alignment_bytes<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
-        let ptr_width = target_info.ptr_width() as u32;
+        let ptr_width = interner.target_info().ptr_width() as u32;
 
+        use LayoutRepr::*;
         match self {
-            Layout::Builtin(builtin) => builtin.allocation_alignment_bytes(interner, target_info),
-            Layout::Struct { .. } => self.alignment_bytes(interner, target_info).max(ptr_width),
-            Layout::Union(union_layout) => {
-                union_layout.allocation_alignment_bytes(interner, target_info)
-            }
-            Layout::LambdaSet(lambda_set) => interner
-                .get(lambda_set.runtime_representation())
-                .allocation_alignment_bytes(interner, target_info),
-            Layout::RecursivePointer(_) => {
+            Builtin(builtin) => builtin.allocation_alignment_bytes(interner),
+            Struct { .. } => self.alignment_bytes(interner).max(ptr_width),
+            Union(union_layout) => union_layout.allocation_alignment_bytes(interner),
+            LambdaSet(lambda_set) => interner
+                .get_repr(lambda_set.runtime_representation())
+                .allocation_alignment_bytes(interner),
+            RecursivePointer(_) => {
                 unreachable!("should be looked up to get an actual layout")
             }
-            Layout::Boxed(inner) => interner
-                .get(*inner)
-                .allocation_alignment_bytes(interner, target_info),
+            Boxed(inner) => Ord::max(
+                ptr_width,
+                interner.get_repr(*inner).alignment_bytes(interner),
+            ),
         }
-    }
-
-    pub fn stack_size_and_alignment_slices<I>(
-        interner: &I,
-        slices: &[&[InLayout<'a>]],
-        target_info: TargetInfo,
-    ) -> (u32, u32)
-    where
-        I: LayoutInterner<'a>,
-    {
-        let mut data_align = 1;
-        let mut data_width = 0;
-
-        for tag in slices {
-            let mut total = 0;
-            for layout in tag.iter() {
-                let (stack_size, alignment) = interner
-                    .get(*layout)
-                    .stack_size_and_alignment(interner, target_info);
-                total += stack_size;
-                data_align = data_align.max(alignment);
-            }
-
-            data_width = data_width.max(total);
-        }
-
-        data_width = round_up_to_alignment(data_width, data_align);
-
-        (data_width, data_align)
     }
 
     pub fn is_refcounted(&self) -> bool {
         use self::Builtin::*;
-        use Layout::*;
+        use LayoutRepr::*;
 
         match self {
             Union(UnionLayout::NonRecursive(_)) => false,
@@ -2696,13 +2750,13 @@ impl<'a> Layout<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        use Layout::*;
+        use LayoutRepr::*;
 
         match self {
             Builtin(builtin) => builtin.is_refcounted(),
-            Struct { field_layouts, .. } => field_layouts
+            Struct(field_layouts) => field_layouts
                 .iter()
-                .any(|f| interner.get(*f).contains_refcounted(interner)),
+                .any(|f| interner.get_repr(*f).contains_refcounted(interner)),
             Union(variant) => {
                 use UnionLayout::*;
 
@@ -2710,7 +2764,7 @@ impl<'a> Layout<'a> {
                     NonRecursive(fields) => fields
                         .iter()
                         .flat_map(|ls| ls.iter())
-                        .any(|f| interner.get(*f).contains_refcounted(interner)),
+                        .any(|f| interner.get_repr(*f).contains_refcounted(interner)),
                     Recursive(_)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
@@ -2718,7 +2772,7 @@ impl<'a> Layout<'a> {
                 }
             }
             LambdaSet(lambda_set) => interner
-                .get(lambda_set.runtime_representation())
+                .get_repr(lambda_set.runtime_representation())
                 .contains_refcounted(interner),
             RecursivePointer(_) => true,
             Boxed(_) => true,
@@ -2729,86 +2783,64 @@ impl<'a> Layout<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        let mut stack: Vec<Layout> = bumpalo::collections::Vec::new_in(arena);
+        let mut stack: Vec<LayoutRepr> = bumpalo::collections::Vec::new_in(arena);
 
         stack.push(self);
 
+        use LayoutRepr::*;
         while let Some(layout) = stack.pop() {
             match layout {
-                Layout::Builtin(builtin) => match builtin {
-                    Builtin::Int(_)
-                    | Builtin::Float(_)
-                    | Builtin::Bool
-                    | Builtin::Decimal
-                    | Builtin::Str
-                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
-                    | Builtin::List(_) => { /* do nothing */ }
-                },
-                // If there's any layer of indirection (behind a pointer), then it doesn't vary!
-                Layout::Struct { field_layouts, .. } => {
-                    stack.extend(field_layouts.iter().map(|interned| interner.get(*interned)))
+                Builtin(builtin) => {
+                    use self::Builtin::*;
+                    match builtin {
+                    Int(_)
+                        | Float(_)
+                        | Bool
+                        | Decimal
+                        | Str
+                        // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                        | List(_) => { /* do nothing */ }
                 }
-                Layout::Union(tag_union) => match tag_union {
+                }
+                // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                Struct(field_layouts) => stack.extend(
+                    field_layouts
+                        .iter()
+                        .map(|interned| interner.get_repr(*interned)),
+                ),
+                Union(tag_union) => match tag_union {
                     UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
                         for tag in tags {
-                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                            stack.extend(tag.iter().map(|interned| interner.get_repr(*interned)));
                         }
                     }
                     UnionLayout::NonNullableUnwrapped(fields) => {
-                        stack.extend(fields.iter().map(|interned| interner.get(*interned)));
+                        stack.extend(fields.iter().map(|interned| interner.get_repr(*interned)));
                     }
                     UnionLayout::NullableWrapped { other_tags, .. } => {
                         for tag in other_tags {
-                            stack.extend(tag.iter().map(|interned| interner.get(*interned)));
+                            stack.extend(tag.iter().map(|interned| interner.get_repr(*interned)));
                         }
                     }
                     UnionLayout::NullableUnwrapped { other_fields, .. } => {
-                        stack.extend(other_fields.iter().map(|interned| interner.get(*interned)));
+                        stack.extend(
+                            other_fields
+                                .iter()
+                                .map(|interned| interner.get_repr(*interned)),
+                        );
                     }
                 },
-                Layout::LambdaSet(_) => return true,
-                Layout::Boxed(_) => {
+                LambdaSet(_) => return true,
+                Boxed(_) => {
                     // If there's any layer of indirection (behind a pointer), then it doesn't vary!
                 }
-                Layout::RecursivePointer(_) => {
+                RecursivePointer(_) => {
                     /* do nothing, we've already generated for this type through the Union(_) */
                 }
             }
         }
 
         false
-    }
-
-    /// Used to build a `Layout::Struct` where the field name order is irrelevant.
-    pub fn struct_no_name_order(field_layouts: &'a [InLayout]) -> Self {
-        if field_layouts.is_empty() {
-            Self::UNIT_NAKED
-        } else {
-            Self::Struct {
-                field_layouts,
-                field_order_hash: FieldOrderHash::IRRELEVANT_NON_ZERO_FIELD_HASH,
-            }
-        }
-    }
-
-    pub fn runtime_representation<I>(&self, interner: &I) -> Self
-    where
-        I: LayoutInterner<'a>,
-    {
-        match self {
-            Layout::LambdaSet(lambda_set) => interner.get(lambda_set.runtime_representation()),
-            other => *other,
-        }
-    }
-
-    pub fn runtime_representation_in<I>(layout: InLayout<'a>, interner: &I) -> InLayout<'a>
-    where
-        I: LayoutInterner<'a>,
-    {
-        match interner.get(layout) {
-            Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
-            _ => layout,
-        }
     }
 }
 
@@ -2861,6 +2893,21 @@ impl<'a> Layout<'a> {
             // dec int literal bounded by i128, so fit it into an i128
             Dec => Layout::DEC,
         }
+    }
+
+    pub fn is_recursive_tag_union<I>(self, interner: &I) -> bool
+    where
+        I: LayoutInterner<'a>,
+    {
+        matches!(
+            self.repr(interner),
+            LayoutRepr::Union(
+                UnionLayout::NullableUnwrapped { .. }
+                    | UnionLayout::Recursive(_)
+                    | UnionLayout::NullableWrapped { .. }
+                    | UnionLayout::NonNullableUnwrapped { .. },
+            )
+        )
     }
 }
 
@@ -2992,17 +3039,18 @@ impl<'a> Builtin<'a> {
         }
     }
 
-    pub fn allocation_alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
+    pub fn allocation_alignment_bytes<I>(&self, interner: &I) -> u32
     where
         I: LayoutInterner<'a>,
     {
+        let target_info = interner.target_info();
         let ptr_width = target_info.ptr_width() as u32;
 
         let allocation = match self {
             Builtin::Str => ptr_width,
             Builtin::List(e) => {
-                let e = interner.get(*e);
-                e.alignment_bytes(interner, target_info).max(ptr_width)
+                let e = interner.get_repr(*e);
+                e.alignment_bytes(interner).max(ptr_width)
             }
             // The following are usually not heap-allocated, but they might be when inside a Box.
             Builtin::Int(int_width) => int_width.alignment_bytes(target_info).max(ptr_width),
@@ -3111,8 +3159,12 @@ fn layout_from_flat_type<'a>(
                     let mut criteria = CACHEABLE;
 
                     let inner_var = args[0];
-                    let inner_layout = cached!(Layout::from_var(env, inner_var), criteria);
-                    let boxed_layout = env.cache.put_in(Layout::Boxed(inner_layout));
+                    let inner_layout =
+                        cached!(Layout::from_var(env, inner_var), criteria, env.subs);
+                    let boxed_layout = env.cache.put_in(Layout {
+                        repr: LayoutRepr::Boxed(inner_layout).direct(),
+                        semantic: SemanticRepr::NONE,
+                    });
 
                     Cacheable(Ok(boxed_layout), criteria)
                 }
@@ -3135,7 +3187,8 @@ fn layout_from_flat_type<'a>(
 
                 let lambda_set = cached!(
                     LambdaSet::from_var(env, args, closure_var, ret_var),
-                    criteria
+                    criteria,
+                    env.subs
                 );
                 let lambda_set = lambda_set.full_layout;
 
@@ -3159,7 +3212,8 @@ fn layout_from_flat_type<'a>(
                     RecordField::Required(field_var)
                     | RecordField::Demanded(field_var)
                     | RecordField::RigidRequired(field_var) => {
-                        let field_layout = cached!(Layout::from_var(env, field_var), criteria);
+                        let field_layout =
+                            cached!(Layout::from_var(env, field_var), criteria, env.subs);
                         sortables.push((label, field_layout));
                     }
                     RecordField::Optional(_) | RecordField::RigidOptional(_) => {
@@ -3169,34 +3223,29 @@ fn layout_from_flat_type<'a>(
             }
 
             sortables.sort_by(|(label1, layout1), (label2, layout2)| {
-                cmp_fields(
-                    &env.cache.interner,
-                    label1,
-                    *layout1,
-                    label2,
-                    *layout2,
-                    target_info,
-                )
+                cmp_fields(&env.cache.interner, label1, *layout1, label2, *layout2)
             });
 
-            let ordered_field_names =
-                Vec::from_iter_in(sortables.iter().map(|(label, _)| *label), arena);
-            let field_order_hash =
-                FieldOrderHash::from_ordered_fields(ordered_field_names.as_slice());
+            let ordered_field_names = Vec::from_iter_in(
+                sortables
+                    .iter()
+                    .map(|(label, _)| &*arena.alloc_str(label.as_str())),
+                arena,
+            )
+            .into_bump_slice();
+            let semantic = SemanticRepr::record(ordered_field_names);
 
-            let result = if sortables.len() == 1 {
+            let repr = if sortables.len() == 1 {
                 // If the record has only one field that isn't zero-sized,
                 // unwrap it.
-                Ok(sortables.pop().unwrap().1)
+                let inner_repr = sortables.pop().unwrap().1;
+                inner_repr.newtype()
             } else {
                 let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
-                let struct_layout = Layout::Struct {
-                    field_order_hash,
-                    field_layouts: layouts.into_bump_slice(),
-                };
-
-                Ok(env.cache.put_in(struct_layout))
+                LayoutRepr::Struct(layouts.into_bump_slice()).direct()
             };
+
+            let result = Ok(env.cache.put_in(Layout { repr, semantic }));
 
             Cacheable(result, criteria)
         }
@@ -3211,35 +3260,24 @@ fn layout_from_flat_type<'a>(
             };
 
             for (index, elem) in it {
-                let elem_layout = cached!(Layout::from_var(env, elem), criteria);
+                let elem_layout = cached!(Layout::from_var(env, elem), criteria, env.subs);
                 sortables.push((index, elem_layout));
             }
 
             sortables.sort_by(|(index1, layout1), (index2, layout2)| {
-                cmp_fields(
-                    &env.cache.interner,
-                    index1,
-                    *layout1,
-                    index2,
-                    *layout2,
-                    target_info,
-                )
+                cmp_fields(&env.cache.interner, index1, *layout1, index2, *layout2)
             });
-
-            let ordered_field_names =
-                Vec::from_iter_in(sortables.iter().map(|(index, _)| *index), arena);
-            let field_order_hash =
-                FieldOrderHash::from_ordered_tuple_elems(ordered_field_names.as_slice());
 
             let result = if sortables.len() == 1 {
                 // If the tuple has only one field that isn't zero-sized,
                 // unwrap it.
                 Ok(sortables.pop().unwrap().1)
             } else {
-                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
-                let struct_layout = Layout::Struct {
-                    field_order_hash,
-                    field_layouts: layouts.into_bump_slice(),
+                let field_layouts =
+                    Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena).into_bump_slice();
+                let struct_layout = Layout {
+                    repr: LayoutRepr::Struct(field_layouts).direct(),
+                    semantic: SemanticRepr::tuple(field_layouts.len()),
                 };
 
                 Ok(env.cache.put_in(struct_layout))
@@ -3298,8 +3336,6 @@ fn sort_tuple_elems_help<'a>(
     env: &mut Env<'a, '_>,
     elems_map: impl Iterator<Item = (usize, Variable)>,
 ) -> Result<Vec<'a, SortedTupleElem<'a>>, LayoutProblem> {
-    let target_info = env.target_info;
-
     let mut sorted_elems = Vec::with_capacity_in(elems_map.size_hint().0, env.arena);
 
     for (index, elem) in elems_map {
@@ -3315,7 +3351,6 @@ fn sort_tuple_elems_help<'a>(
             *res_layout1,
             index2,
             *res_layout2,
-            target_info,
         )
     });
 
@@ -3344,8 +3379,6 @@ fn sort_record_fields_help<'a>(
     env: &mut Env<'a, '_>,
     fields_map: impl Iterator<Item = (Lowercase, RecordField<Variable>)>,
 ) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
-    let target_info = env.target_info;
-
     // Sort the fields by label
     let mut sorted_fields = Vec::with_capacity_in(fields_map.size_hint().0, env.arena);
 
@@ -3367,14 +3400,9 @@ fn sort_record_fields_help<'a>(
     sorted_fields.sort_by(
         |(label1, _, res_layout1), (label2, _, res_layout2)| match res_layout1 {
             Ok(layout1) | Err(layout1) => match res_layout2 {
-                Ok(layout2) | Err(layout2) => cmp_fields(
-                    &env.cache.interner,
-                    label1,
-                    *layout1,
-                    label2,
-                    *layout2,
-                    target_info,
-                ),
+                Ok(layout2) | Err(layout2) => {
+                    cmp_fields(&env.cache.interner, label1, *layout1, label2, *layout2)
+                }
             },
         },
     );
@@ -3597,21 +3625,38 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
-fn is_recursive_tag_union(layout: &Layout) -> bool {
-    matches!(
-        layout,
-        Layout::Union(
-            UnionLayout::NullableUnwrapped { .. }
-                | UnionLayout::Recursive(_)
-                | UnionLayout::NullableWrapped { .. }
-                | UnionLayout::NonNullableUnwrapped { .. },
+trait Label: subs::Label + Ord + Clone + Into<TagOrClosure> {
+    fn semantic_repr<'a, 'r>(
+        arena: &'a Bump,
+        labels: impl ExactSizeIterator<Item = &'r Self>,
+    ) -> SemanticRepr<'a>
+    where
+        Self: 'r;
+}
+
+impl Label for TagName {
+    fn semantic_repr<'a, 'r>(
+        arena: &'a Bump,
+        labels: impl ExactSizeIterator<Item = &'r Self>,
+    ) -> SemanticRepr<'a> {
+        SemanticRepr::tag_union(
+            arena.alloc_slice_fill_iter(labels.map(|x| &*arena.alloc_str(x.0.as_str()))),
         )
-    )
+    }
+}
+
+impl Label for Symbol {
+    fn semantic_repr<'a, 'r>(
+        arena: &'a Bump,
+        labels: impl ExactSizeIterator<Item = &'r Self>,
+    ) -> SemanticRepr<'a> {
+        SemanticRepr::lambdas(arena.alloc_slice_fill_iter(labels.copied()))
+    }
 }
 
 fn union_sorted_non_recursive_tags_help<'a, L>(
     env: &mut Env<'a, '_>,
-    tags_list: &[(&'_ L, &[Variable])],
+    tags_list: &mut Vec<'_, &'_ (&'_ L, &[Variable])>,
 ) -> Cacheable<UnionVariant<'a>>
 where
     L: Label + Ord + Clone + Into<TagOrClosure>,
@@ -3619,7 +3664,6 @@ where
     let mut cache_criteria = CACHEABLE;
 
     // sort up front; make sure the ordering stays intact!
-    let mut tags_list = Vec::from_iter_in(tags_list.iter(), env.arena);
     tags_list.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     match tags_list.len() {
@@ -3628,7 +3672,7 @@ where
             Cacheable(UnionVariant::Never, cache_criteria)
         }
         1 => {
-            let &(tag_name, arguments) = tags_list.remove(0);
+            let &&(tag_name, arguments) = &tags_list[0];
             let tag_name = tag_name.clone().into();
 
             // just one tag in the union (but with arguments) can be a struct
@@ -3636,7 +3680,7 @@ where
 
             for &var in arguments {
                 let Cacheable(result, criteria) = Layout::from_var(env, var);
-                cache_criteria.and(criteria);
+                cache_criteria.and(criteria, env.subs);
                 match result {
                     Ok(layout) => {
                         layouts.push(layout);
@@ -3657,12 +3701,12 @@ where
             layouts.sort_by(|layout1, layout2| {
                 let size1 = env
                     .cache
-                    .get_in(*layout1)
-                    .alignment_bytes(&env.cache.interner, env.target_info);
+                    .get_repr(*layout1)
+                    .alignment_bytes(&env.cache.interner);
                 let size2 = env
                     .cache
-                    .get_in(*layout2)
-                    .alignment_bytes(&env.cache.interner, env.target_info);
+                    .get_repr(*layout2)
+                    .alignment_bytes(&env.cache.interner);
 
                 size2.cmp(&size1)
             });
@@ -3687,12 +3731,12 @@ where
 
             let mut inhabited_tag_ids = BitVec::<usize>::repeat(true, num_tags);
 
-            for &(tag_name, arguments) in tags_list.into_iter() {
+            for &&(tag_name, arguments) in tags_list.iter() {
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, env.arena);
 
                 for &var in arguments {
                     let Cacheable(result, criteria) = Layout::from_var(env, var);
-                    cache_criteria.and(criteria);
+                    cache_criteria.and(criteria, env.subs);
                     match result {
                         Ok(layout) => {
                             has_any_arguments = true;
@@ -3719,12 +3763,12 @@ where
                 arg_layouts.sort_by(|layout1, layout2| {
                     let size1 = env
                         .cache
-                        .get_in(*layout1)
-                        .alignment_bytes(&env.cache.interner, env.target_info);
+                        .get_repr(*layout1)
+                        .alignment_bytes(&env.cache.interner);
                     let size2 = env
                         .cache
-                        .get_in(*layout2)
-                        .alignment_bytes(&env.cache.interner, env.target_info);
+                        .get_repr(*layout2)
+                        .alignment_bytes(&env.cache.interner);
 
                     size2.cmp(&size1)
                 });
@@ -3814,7 +3858,7 @@ where
 
             for var in arguments {
                 let Cacheable(result, criteria) = Layout::from_var(env, var);
-                cache_criteria.and(criteria);
+                cache_criteria.and(criteria, env.subs);
                 match result {
                     Ok(layout) => {
                         layouts.push(layout);
@@ -3888,7 +3932,7 @@ where
 
                 for var in arguments {
                     let Cacheable(result, criteria) = Layout::from_var(env, var);
-                    cache_criteria.and(criteria);
+                    cache_criteria.and(criteria, env.subs);
                     match result {
                         Ok(in_layout) => {
                             has_any_arguments = true;
@@ -3901,7 +3945,7 @@ where
                                     == env
                                         .subs
                                         .get_root_key_without_compacting(opt_rec_var.unwrap())
-                                && is_recursive_tag_union(&layout);
+                                && layout.is_recursive_tag_union(&env.cache.interner);
 
                             let arg_layout = if self_recursion {
                                 Layout::NAKED_RECURSIVE_PTR
@@ -3931,12 +3975,12 @@ where
                 arg_layouts.sort_by(|layout1, layout2| {
                     let size1 = env
                         .cache
-                        .get_in(*layout1)
-                        .alignment_bytes(&env.cache.interner, env.target_info);
+                        .get_repr(*layout1)
+                        .alignment_bytes(&env.cache.interner);
                     let size2 = env
                         .cache
-                        .get_in(*layout2)
-                        .alignment_bytes(&env.cache.interner, env.target_info);
+                        .get_repr(*layout2)
+                        .alignment_bytes(&env.cache.interner);
 
                     size2.cmp(&size1)
                 });
@@ -4057,17 +4101,26 @@ where
         return layout_from_newtype(env, tags);
     }
 
-    let tags_vec = &tags.tags;
+    let mut tags_vec = Vec::from_iter_in(tags.tags.iter(), env.arena);
 
     let mut criteria = CACHEABLE;
 
-    let variant = union_sorted_non_recursive_tags_help(env, tags_vec).decompose(&mut criteria);
+    let variant =
+        union_sorted_non_recursive_tags_help(env, &mut tags_vec).decompose(&mut criteria, env.subs);
+
+    let compute_semantic = || L::semantic_repr(env.arena, tags_vec.iter().map(|(l, _)| *l));
 
     let result = match variant {
         Never => Layout::VOID,
-        Unit => Layout::UNIT,
-        BoolUnion { .. } => Layout::BOOL,
-        ByteUnion(_) => Layout::U8,
+        Unit => env
+            .cache
+            .put_in(Layout::new(LayoutRepr::UNIT.direct(), compute_semantic())),
+        BoolUnion { .. } => env
+            .cache
+            .put_in(Layout::new(LayoutRepr::BOOL.direct(), compute_semantic())),
+        ByteUnion(_) => env
+            .cache
+            .put_in(Layout::new(LayoutRepr::U8.direct(), compute_semantic())),
         Newtype {
             arguments: field_layouts,
             ..
@@ -4075,9 +4128,8 @@ where
             let answer1 = if field_layouts.len() == 1 {
                 field_layouts[0]
             } else {
-                env.cache.put_in(Layout::struct_no_name_order(
-                    field_layouts.into_bump_slice(),
-                ))
+                env.cache
+                    .put_in_direct_no_semantic(LayoutRepr::struct_(field_layouts.into_bump_slice()))
             };
 
             answer1
@@ -4088,7 +4140,7 @@ where
             if data_tag_arguments.len() == 1 {
                 data_tag_arguments[0]
             } else {
-                env.cache.put_in(Layout::struct_no_name_order(
+                env.cache.put_in_direct_no_semantic(LayoutRepr::struct_(
                     data_tag_arguments.into_bump_slice(),
                 ))
             }
@@ -4103,8 +4155,13 @@ where
                     let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
                     tag_layouts.extend(tags.iter().map(|r| r.1));
 
-                    let layout =
-                        Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()));
+                    let layout = Layout {
+                        repr: LayoutRepr::Union(UnionLayout::NonRecursive(
+                            tag_layouts.into_bump_slice(),
+                        ))
+                        .direct(),
+                        semantic: SemanticRepr::NONE,
+                    };
                     env.cache.put_in(layout)
                 }
 
@@ -4172,10 +4229,11 @@ where
                 // The naked pointer will get fixed-up to loopback to the union below when we
                 // intern the union.
                 tag_layout.push(Layout::NAKED_RECURSIVE_PTR);
+                criteria.and(NAKED_RECURSION_PTR, env.subs);
                 continue;
             }
 
-            let payload = cached!(Layout::from_var(env, var), criteria);
+            let payload = cached!(Layout::from_var(env, var), criteria, env.subs);
             tag_layout.push(payload);
         }
 
@@ -4212,12 +4270,24 @@ where
     } else {
         UnionLayout::Recursive(tag_layouts.into_bump_slice())
     };
-    criteria.pass_through_recursive_union(rec_var);
 
-    let union_layout = env
-        .cache
-        .interner
-        .insert_recursive(env.arena, Layout::Union(union_layout));
+    let union_layout = if criteria.has_naked_recursion_pointer {
+        env.cache.interner.insert_recursive(
+            env.arena,
+            Layout {
+                repr: LayoutRepr::Union(union_layout).direct(),
+                semantic: SemanticRepr::NONE,
+            },
+        )
+    } else {
+        // There are no naked recursion pointers, so we can insert the layout as-is.
+        env.cache.interner.insert(Layout {
+            repr: LayoutRepr::Union(union_layout).direct(),
+            semantic: SemanticRepr::NONE,
+        })
+    };
+
+    criteria.pass_through_recursive_union(rec_var);
 
     Cacheable(Ok(union_layout), criteria)
 }
@@ -4344,12 +4414,13 @@ pub(crate) fn list_layout_from_elem<'a>(
     } else {
         // NOTE: cannot re-use Content, because it may be recursive
         // then some state is not correctly kept, we have to go through from_var
-        cached!(Layout::from_var(env, element_var), criteria)
+        cached!(Layout::from_var(env, element_var), criteria, env.subs)
     };
 
-    let list_layout = env
-        .cache
-        .put_in(Layout::Builtin(Builtin::List(element_layout)));
+    let list_layout = env.cache.put_in(Layout {
+        repr: LayoutRepr::Builtin(Builtin::List(element_layout)).direct(),
+        semantic: SemanticRepr::NONE,
+    });
 
     Cacheable(Ok(list_layout), criteria)
 }
@@ -4372,17 +4443,22 @@ impl LayoutId {
         let ident_string = symbol.as_str(interns);
         format!("roc__{}_{}_exposed", ident_string, self.0)
     }
+
+    pub fn to_exposed_generic_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
+        let ident_string = symbol.as_str(interns);
+        format!("roc__{}_{}_exposed_generic", ident_string, self.0)
+    }
 }
 
 struct IdsByLayout<'a> {
-    by_id: MutMap<InLayout<'a>, u32>,
+    by_id: MutMap<LayoutRepr<'a>, u32>,
     toplevels_by_id: MutMap<crate::ir::ProcLayout<'a>, u32>,
     next_id: u32,
 }
 
 impl<'a> IdsByLayout<'a> {
     #[inline(always)]
-    fn insert_layout(&mut self, layout: InLayout<'a>) -> LayoutId {
+    fn insert_layout(&mut self, layout: LayoutRepr<'a>) -> LayoutId {
         match self.by_id.entry(layout) {
             Entry::Vacant(vacant) => {
                 let answer = self.next_id;
@@ -4396,7 +4472,7 @@ impl<'a> IdsByLayout<'a> {
     }
 
     #[inline(always)]
-    fn singleton_layout(layout: InLayout<'a>) -> (Self, LayoutId) {
+    fn singleton_layout(layout: LayoutRepr<'a>) -> (Self, LayoutId) {
         let mut by_id = HashMap::with_capacity_and_hasher(1, default_hasher());
         by_id.insert(layout, 1);
 
@@ -4447,7 +4523,7 @@ impl<'a> LayoutIds<'a> {
     /// Returns a LayoutId which is unique for the given symbol and layout.
     /// If given the same symbol and same layout, returns the same LayoutId.
     #[inline(always)]
-    pub fn get<'b>(&mut self, symbol: Symbol, layout: &'b InLayout<'a>) -> LayoutId {
+    pub fn get<'b>(&mut self, symbol: Symbol, layout: &'b LayoutRepr<'a>) -> LayoutId {
         match self.by_symbol.entry(symbol) {
             Entry::Vacant(vacant) => {
                 let (ids_by_layout, layout_id) = IdsByLayout::singleton_layout(*layout);
@@ -4491,13 +4567,12 @@ pub fn cmp_fields<'a, L: Ord, I>(
     layout1: InLayout<'a>,
     label2: &L,
     layout2: InLayout<'a>,
-    target_info: TargetInfo,
 ) -> Ordering
 where
     I: LayoutInterner<'a>,
 {
-    let size1 = interner.get(layout1).alignment_bytes(interner, target_info);
-    let size2 = interner.get(layout2).alignment_bytes(interner, target_info);
+    let size1 = interner.get_repr(layout1).alignment_bytes(interner);
+    let size2 = interner.get_repr(layout2).alignment_bytes(interner);
 
     size2.cmp(&size1).then(label1.cmp(label2))
 }
@@ -4519,37 +4594,43 @@ mod test {
         };
 
         let a = &[Layout::UNIT] as &[_];
-        let b = &[interner.insert(Layout::LambdaSet(lambda_set))] as &[_];
+        let b = &[interner.insert(Layout {
+            repr: LayoutRepr::LambdaSet(lambda_set).direct(),
+            semantic: SemanticRepr::NONE,
+        })] as &[_];
         let tt = [a, b];
 
-        let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
+        let repr = LayoutRepr::Union(UnionLayout::NonRecursive(&tt));
 
-        let target_info = TargetInfo::default_x86_64();
-        assert_eq!(layout.stack_size(&interner, target_info), 1);
-        assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
+        assert_eq!(repr.stack_size(&interner), 1);
+        assert_eq!(repr.alignment_bytes(&interner), 1);
     }
 
     #[test]
     fn memcpy_size_result_u32_unit() {
         let mut interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
 
-        let ok_tag = &[interner.insert(Layout::Builtin(Builtin::Int(IntWidth::U32)))];
+        let ok_tag = &[interner.insert(Layout {
+            repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U32)).direct(),
+            semantic: SemanticRepr::NONE,
+        })];
         let err_tag = &[Layout::UNIT];
         let tags = [ok_tag as &[_], err_tag as &[_]];
         let union_layout = UnionLayout::NonRecursive(&tags as &[_]);
-        let layout = Layout::Union(union_layout);
+        let repr = LayoutRepr::Union(union_layout);
 
-        let target_info = TargetInfo::default_x86_64();
-        assert_eq!(
-            layout.stack_size_without_alignment(&interner, target_info),
-            8
-        );
+        assert_eq!(repr.stack_size_without_alignment(&interner), 8);
     }
 
     #[test]
     fn void_stack_size() {
         let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
-        let target_info = TargetInfo::default_x86_64();
-        assert_eq!(Layout::VOID_NAKED.stack_size(&interner, target_info), 0);
+        assert_eq!(Layout::VOID_NAKED.repr(&interner).stack_size(&interner), 0);
+    }
+
+    #[test]
+    fn align_u128_in_tag_union() {
+        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        assert_eq!(interner.alignment_bytes(Layout::U128), 16);
     }
 }

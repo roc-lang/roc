@@ -16,6 +16,40 @@ use indoc::indoc;
 use roc_std::{RocList, RocResult, RocStr};
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn string_eq() {
+    // context: the dev backend did not correctly mask the boolean that zig returns here
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main : I64
+            main = if "*" == "*" then 123 else 456
+            "#
+        ),
+        123,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn string_neq() {
+    // context: the dev backend did not correctly mask the boolean that zig returns here
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main : I64
+            main = if "*" != "*" then 123 else 456
+            "#
+        ),
+        456,
+        u64
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_empty_delimiter() {
     assert_evals_to!(
@@ -463,23 +497,23 @@ fn str_concat_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_is_empty() {
     assert_evals_to!(r#"Str.isEmpty "abc""#, false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn big_str_is_empty() {
     assert_evals_to!(
-        r#"Str.isEmpty "this is more than 15 chars long""#,
+        r#"Str.isEmpty "this is more than 23 chars long""#,
         false,
         bool
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn empty_str_is_empty() {
     assert_evals_to!(r#"Str.isEmpty """#, true, bool);
 }
@@ -1184,15 +1218,15 @@ fn str_trim_small_to_small_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_trim_left_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimLeft " ""#), RocStr::from(""), RocStr);
+fn str_trim_start_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimStart " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_trim_left_small_to_small() {
+fn str_trim_start_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft "  hello world  ""#),
+        indoc!(r#"Str.trimStart "  hello world  ""#),
         RocStr::from("hello world  "),
         RocStr
     );
@@ -1200,9 +1234,9 @@ fn str_trim_left_small_to_small() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_trim_left_large_to_large_unique() {
+fn str_trim_start_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft (Str.concat "    " "hello world from a large string ")"#),
+        indoc!(r#"Str.trimStart (Str.concat "    " "hello world from a large string ")"#),
         RocStr::from("hello world from a large string "),
         RocStr
     );
@@ -1210,9 +1244,9 @@ fn str_trim_left_large_to_large_unique() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_trim_left_large_to_small_unique() {
+fn str_trim_start_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft (Str.concat "  " "hello world        ")"#),
+        indoc!(r#"Str.trimStart (Str.concat "  " "hello world        ")"#),
         RocStr::from("hello world        "),
         RocStr
     );
@@ -1220,14 +1254,14 @@ fn str_trim_left_large_to_small_unique() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_trim_left_large_to_large_shared() {
+fn str_trim_start_large_to_large_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello world world "
 
-               { trimmed: Str.trimLeft original, original: original }
+               { trimmed: Str.trimStart original, original: original }
                "#
         ),
         (
@@ -1240,14 +1274,14 @@ fn str_trim_left_large_to_large_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_trim_left_large_to_small_shared() {
+fn str_trim_start_large_to_small_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello world             "
 
-               { trimmed: Str.trimLeft original, original: original }
+               { trimmed: Str.trimStart original, original: original }
                "#
         ),
         (
@@ -1260,14 +1294,14 @@ fn str_trim_left_large_to_small_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_trim_left_small_to_small_shared() {
+fn str_trim_start_small_to_small_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello world "
 
-               { trimmed: Str.trimLeft original, original: original }
+               { trimmed: Str.trimStart original, original: original }
                "#
         ),
         (RocStr::from(" hello world "), RocStr::from("hello world "),),
@@ -1277,15 +1311,15 @@ fn str_trim_left_small_to_small_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_trim_right_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimRight " ""#), RocStr::from(""), RocStr);
+fn str_trim_end_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimEnd " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_trim_right_small_to_small() {
+fn str_trim_end_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight "  hello world  ""#),
+        indoc!(r#"Str.trimEnd "  hello world  ""#),
         RocStr::from("  hello world"),
         RocStr
     );
@@ -1293,9 +1327,9 @@ fn str_trim_right_small_to_small() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_trim_right_large_to_large_unique() {
+fn str_trim_end_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight (Str.concat " hello world from a large string" "    ")"#),
+        indoc!(r#"Str.trimEnd (Str.concat " hello world from a large string" "    ")"#),
         RocStr::from(" hello world from a large string"),
         RocStr
     );
@@ -1303,9 +1337,9 @@ fn str_trim_right_large_to_large_unique() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
-fn str_trim_right_large_to_small_unique() {
+fn str_trim_end_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight (Str.concat "        hello world" "  ")"#),
+        indoc!(r#"Str.trimEnd (Str.concat "        hello world" "  ")"#),
         RocStr::from("        hello world"),
         RocStr
     );
@@ -1313,14 +1347,14 @@ fn str_trim_right_large_to_small_unique() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_trim_right_large_to_large_shared() {
+fn str_trim_end_large_to_large_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello world world "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (
@@ -1333,14 +1367,14 @@ fn str_trim_right_large_to_large_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_trim_right_large_to_small_shared() {
+fn str_trim_end_large_to_small_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = "             hello world "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (
@@ -1353,14 +1387,14 @@ fn str_trim_right_large_to_small_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_trim_right_small_to_small_shared() {
+fn str_trim_end_small_to_small_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello world "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (RocStr::from(" hello world "), RocStr::from(" hello world"),),
@@ -1824,6 +1858,33 @@ fn str_split_overlapping_substring_2() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_walk_utf8() {
+    #[cfg(not(feature = "gen-llvm-wasm"))]
+    assert_evals_to!(
+        // Reverse the bytes
+        indoc!(
+            r#"
+            Str.walkUtf8 "abcd" [] (\list, byte -> List.prepend list byte)
+            "#
+        ),
+        RocList::from_slice(&[b'd', b'c', b'b', b'a']),
+        RocList<u8>
+    );
+
+    #[cfg(feature = "gen-llvm-wasm")]
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
+            "#
+        ),
+        RocList::from_slice(&[(0, 'a'), (1, 'b'), (2, 'c'), (3, 'd')]),
+        RocList<(u32, char)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_walk_utf8_with_index() {
     #[cfg(not(feature = "gen-llvm-wasm"))]
     assert_evals_to!(
@@ -2033,5 +2094,53 @@ fn destructure_pattern_assigned_from_thunk_tag() {
         ),
         RocStr::from("hello world"),
         RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.reserve "" 50
+            |> Str.releaseExcessCapacity
+            "#
+        ),
+        (RocStr::empty().capacity(), RocStr::empty()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity_with_len() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "123456789012345678901234567890"
+            |> Str.reserve 50
+            |> Str.releaseExcessCapacity
+            "#
+        ),
+        (30, "123456789012345678901234567890".into()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn release_excess_capacity_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.releaseExcessCapacity ""
+            "#
+        ),
+        (RocStr::empty().capacity(), RocStr::empty()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
     );
 }

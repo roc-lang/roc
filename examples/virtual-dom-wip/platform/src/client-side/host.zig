@@ -1,5 +1,5 @@
 const std = @import("std");
-const str = @import("str");
+const str = @import("glue").str;
 const builtin = @import("builtin");
 const RocStr = str.RocStr;
 
@@ -26,10 +26,6 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
 
     free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
-}
-
-export fn roc_memcpy(dest: *anyopaque, src: *anyopaque, count: usize) callconv(.C) void {
-    _ = memcpy(dest, src, count);
 }
 
 export fn roc_panic(message: RocStr, tag_id: u32) callconv(.C) void {

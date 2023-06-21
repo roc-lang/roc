@@ -5,6 +5,7 @@ use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
+use roc_command_utils::zig;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
@@ -12,7 +13,6 @@ use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
-use roc_utils::zig;
 use target_lexicon::Triple;
 
 #[cfg(feature = "gen-llvm-wasm")]
@@ -99,7 +99,7 @@ fn create_llvm_module<'a>(
     let MonomorphizedModule {
         procedures,
         interns,
-        mut layout_interner,
+        layout_interner,
         ..
     } = loaded;
 
@@ -253,17 +253,18 @@ fn create_llvm_module<'a>(
     let (main_fn_name, main_fn) = match config.mode {
         LlvmBackendMode::Binary => unreachable!(),
         LlvmBackendMode::BinaryDev => unreachable!(),
+        LlvmBackendMode::BinaryGlue => unreachable!(),
         LlvmBackendMode::CliTest => unreachable!(),
         LlvmBackendMode::WasmGenTest => roc_gen_llvm::llvm::build::build_wasm_test_wrapper(
             &env,
-            &mut layout_interner,
+            &layout_interner,
             config.opt_level,
             procedures,
             entry_point,
         ),
         LlvmBackendMode::GenTest => roc_gen_llvm::llvm::build::build_procedures_return_main(
             &env,
-            &mut layout_interner,
+            &layout_interner,
             config.opt_level,
             procedures,
             entry_point,
@@ -278,23 +279,30 @@ fn create_llvm_module<'a>(
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
+    let panic_bad_llvm = |errors| {
+        let path = std::env::temp_dir().join("test.ll");
+        env.module.print_to_file(&path).unwrap();
+        panic!(
+            "Errors defining module:\n\n{}\n\nI have written the full module to `{:?}`",
+            errors, path
+        );
+    };
+
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
-        panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
+        panic_bad_llvm(main_fn_name);
     }
 
     module_pass.run_on(env.module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        let path = std::env::temp_dir().join("test.ll");
-        env.module.print_to_file(&path).unwrap();
-        panic!(
-            "Errors defining module:\n\n{}\n\nI have written the full module to `{:?}`",
-            errors.to_string(),
-            path
-        );
+        panic_bad_llvm(&errors.to_string());
+    }
+
+    if let Ok(path) = std::env::var("ROC_DEBUG_LLVM") {
+        env.module.print_to_file(path).unwrap();
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:

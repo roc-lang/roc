@@ -6,9 +6,10 @@
 , pkgs ? import nixpkgsSource { }
 ,
 }:
-# we only this file to release a nix package, use flake.nix for development
+# we only use this file to release a nix package, use flake.nix for development
 let
   rustPlatform = pkgs.rustPlatform;
+
   llvmPkgs = pkgs.llvmPackages_13;
   # nix does not store libs in /usr/lib or /lib
   nixGlibcPath = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
@@ -22,8 +23,7 @@ rustPlatform.buildRustPackage {
   cargoLock = {
     lockFile = ./Cargo.lock;
     outputHashes = {
-      "confy-0.5.0" = "sha256-BVTczVbURL1Id/k/5ArlDQTZxLuI3XxQl7BdIx230U4=";
-      "criterion-0.3.5" = "sha256-7REd3phV6PBzqWwKF8hwttw4FTq2tKGxxAAJDpLC50A=";
+      "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
       "inkwell-0.1.0" = "sha256-1kpvY3naS33B99nuu5ZYhb7mdddAyG+DkbUl/RG1Ptg=";
       "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
       "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";

@@ -12,13 +12,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<NonRecursive> = core::mem::MaybeUninit::uninit();
-
-        roc_main(ret.as_mut_ptr());
-
-        ret.assume_init()
-    };
+    let tag_union = test_glue::mainForHost(());
 
     // Verify that it has all the expected traits.
 
@@ -33,8 +27,8 @@ pub extern "C" fn rust_main() -> i32 {
         tag_union,
         NonRecursive::Foo("small str".into()),
         NonRecursive::Foo("A long enough string to not be small".into()),
-        NonRecursive::Bar(123.into()),
-        NonRecursive::Baz,
+        NonRecursive::Bar(123),
+        NonRecursive::Baz(),
         NonRecursive::Blah(456),
     ); // Debug
 
@@ -86,11 +80,6 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         }
         _ => todo!(),
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
 }
 
 #[no_mangle]

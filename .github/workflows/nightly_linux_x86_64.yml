@@ -16,9 +16,9 @@ jobs:
       - name: create version.txt
         run: ./ci/write_version.sh
 
-      - name: build release
-        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --release --locked
-        # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
+      - name: build release with lto
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --features "editor" --bin roc 
+        # target-cpu=x86-64 -> For maximal compatibility for all CPU's. This was also faster in our tests: https://roc.zulipchat.com/#narrow/stream/231635-compiler-development/topic/.2Ecargo.2Fconfig.2Etoml/near/325726299
 
       - name: get commit SHA
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
@@ -44,7 +44,7 @@ jobs:
 
       # this makes the roc binary a lot smaller
       - name: strip debug info
-        run: strip ./target/release/roc
+        run: strip ./target/release-with-lto/roc
        
       - name: Make nightly release tar archive
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}

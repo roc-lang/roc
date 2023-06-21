@@ -1,4 +1,7 @@
-use crate::types::{RocNum, RocTagUnion, RocType, TypeId, Types};
+use crate::types::{
+    Accessors, File, RocFn, RocNum, RocSingleTagPayload, RocStructFields, RocTagUnion, RocType,
+    TypeId, Types,
+};
 use indexmap::IndexMap;
 use roc_target::{Architecture, TargetInfo};
 use std::fmt::{Display, Write};
@@ -57,13 +60,13 @@ fn add_decl(impls: &mut Impls, opt_impl: Impl, target_info: TargetInfo, body: St
     targets.push(target_info);
 }
 
-pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
-    let mut buf = String::new();
+pub fn emit(types: &[Types]) -> Vec<File> {
+    let mut buf = std::str::from_utf8(HEADER).unwrap().to_string();
     let mut impls: Impls = IndexMap::default();
 
-    for (types, target_info) in types_and_targets {
+    for types in types {
         for id in types.sorted_ids() {
-            add_type(*target_info, id, types, &mut impls);
+            add_type(types.target(), id, types, &mut impls);
         }
     }
 
@@ -135,7 +138,10 @@ pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
         }
     }
 
-    buf
+    vec![crate::types::File {
+        name: "mod.rs".to_string(),
+        content: buf,
+    }]
 }
 
 fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impls) {
@@ -248,16 +254,9 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::SingleTagStruct {
                     name,
                     tag_name,
-                    payload_fields,
+                    payload,
                 } => {
-                    add_single_tag_struct(
-                        name,
-                        tag_name,
-                        payload_fields,
-                        types,
-                        impls,
-                        target_info,
-                    );
+                    add_single_tag_struct(name, tag_name, payload, types, impls, target_info);
                 }
                 RocTagUnion::NonNullableUnwrapped {
                     name,
@@ -289,21 +288,20 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
         | RocType::RocList(_)
-        | RocType::RocBox(_) => {}
+        | RocType::RocBox(_)
+        | RocType::Unsized => {}
         RocType::RecursivePointer { .. } => {
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
         }
-        RocType::Function { .. } => {
-            // TODO actually generate glue functions!
-        }
+        RocType::Function(roc_fn) => add_function(target_info, roc_fn, types, impls),
     }
 }
 
 fn add_single_tag_struct(
     name: &str,
     tag_name: &str,
-    payload_fields: &[TypeId],
+    payload: &RocSingleTagPayload,
     types: &Types,
     impls: &mut IndexMap<Option<String>, IndexMap<String, Vec<TargetInfo>>>,
     target_info: TargetInfo,
@@ -314,224 +312,277 @@ fn add_single_tag_struct(
     // because they have only one alternative. However, still
     // offer the usual tag union APIs.
     {
-        let derive = derive_str(
-            &RocType::Struct {
-                // Deriving doesn't depend on the struct's name,
-                // so no need to clone name here.
-                name: String::new(),
-                fields: payload_fields
+        let mut buf = String::new();
+
+        // Make a dummy RocType::Struct so that we can pass it to deriving
+        // and have that work out as normal.
+        let struct_type = match payload {
+            RocSingleTagPayload::HasClosure { payload_getters } => {
+                {
+                    if payload_getters.is_empty() {
+                        // A single tag with no payload is a zero-sized unit type, so
+                        // represent it as a zero-sized struct (e.g. "struct Foo()").
+                        buf.push_str("();\n");
+                    } else {
+                        buf.push_str("{\n");
+
+                        for (_index, _getter_fn) in payload_getters.iter().enumerate() {
+                            // TODO these should be added as separate functions in the impl!
+                            todo!("TODO generate payload getters");
+                        }
+
+                        buf.push_str("}\n");
+                    }
+
+                    let fields = payload_getters
+                        .iter()
+                        .map(|(type_id, getter)| {
+                            (
+                                String::new(),
+                                *type_id,
+                                Accessors {
+                                    getter: getter.clone(),
+                                },
+                            )
+                        })
+                        .collect();
+
+                    RocType::Struct {
+                        // Deriving doesn't depend on the struct's name,
+                        // so no need to clone name here.
+                        name: String::new(),
+                        fields: RocStructFields::HasClosure { fields },
+                    }
+                }
+            }
+            RocSingleTagPayload::HasNoClosure {
+                payload_fields: payloads,
+            } => {
+                if payloads.is_empty() {
+                    // A single tag with no payload is a zero-sized unit type, so
+                    // represent it as a zero-sized struct (e.g. "struct Foo()").
+                    buf.push_str("();\n");
+                } else {
+                    buf.push_str("{\n");
+
+                    for (index, field_id) in payloads.iter().enumerate() {
+                        let field_type = type_name(*field_id, types);
+
+                        // These are all private fields, since this is a tag union.
+                        // ignore returned result, writeln can not fail as it is used here
+                        let _ = writeln!(buf, "{INDENT}f{index}: {field_type},");
+                    }
+
+                    buf.push_str("}\n");
+                }
+
+                let fields = payloads
                     .iter()
                     .map(|type_id| (String::new(), *type_id))
-                    .collect(),
-            },
-            types,
-            false,
-        );
+                    .collect();
 
-        let mut body = format!("#[repr(transparent)]\n{derive}\npub struct {name} ");
-
-        if payload_fields.is_empty() {
-            // A single tag with no payload is a zero-sized unit type, so
-            // represent it as a zero-sized struct (e.g. "struct Foo()").
-            body.push_str("();\n");
-        } else {
-            body.push_str("{\n");
-
-            for (index, field_id) in payload_fields.iter().enumerate() {
-                let field_type = type_name(*field_id, types);
-
-                // These are all private fields, since this is a tag union.
-                // ignore returned result, writeln can not fail as it is used here
-                let _ = writeln!(body, "{INDENT}f{index}: {field_type},");
+                RocType::Struct {
+                    // Deriving doesn't depend on the struct's name,
+                    // so no need to clone name here.
+                    name: String::new(),
+                    fields: RocStructFields::HasNoClosure { fields },
+                }
             }
+        };
+        let derive = derive_str(&struct_type, types, false);
 
-            body.push_str("}\n");
-        }
+        let body = format!("#[repr(transparent)]\n{derive}\npub struct {name} {buf}");
 
         add_decl(impls, None, target_info, body);
     }
 
     // the impl for the single-tag union itself
-    {
-        let opt_impl = Some(format!("impl {name}"));
+    match payload {
+        RocSingleTagPayload::HasNoClosure { payload_fields } => {
+            let opt_impl = Some(format!("impl {name}"));
 
-        if payload_fields.is_empty() {
-            add_decl(
-                impls,
-                opt_impl.clone(),
-                target_info,
-                format!(
-                    r#"/// A tag named {tag_name}, which has no payload.
+            if payload_fields.is_empty() {
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// A tag named {tag_name}, which has no payload.
         pub const {tag_name}: Self = Self();"#,
-                ),
-            );
-
-            add_decl(
-                impls,
-                opt_impl.clone(),
-                target_info,
-                format!(
-                    r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
-        /// has no payload, this does nothing and is only here for completeness.
-        pub fn into_{tag_name}(self) {{
-            ()
-        }}"#,
-                ),
-            );
-
-            add_decl(
-                impls,
-                opt_impl,
-                target_info,
-                format!(
-                    r#"/// Other `as` methods return a payload, but since the {tag_name} tag
-        /// has no payload, this does nothing and is only here for completeness.
-        pub fn as_{tag_name}(&self) {{
-            ()
-        }}"#,
-                ),
-            );
-        } else {
-            let mut args: Vec<String> = Vec::with_capacity(payload_fields.len());
-            let mut fields: Vec<String> = Vec::with_capacity(payload_fields.len());
-            let mut field_types: Vec<String> = Vec::with_capacity(payload_fields.len());
-            let mut field_access: Vec<String> = Vec::with_capacity(payload_fields.len());
-
-            for (index, field_id) in payload_fields.iter().enumerate() {
-                let field_type = type_name(*field_id, types);
-
-                field_access.push(format!("self.f{index}"));
-                args.push(format!("f{index}: {field_type}"));
-                fields.push(format!("{INDENT}{INDENT}{INDENT}f{index},"));
-                field_types.push(field_type);
-            }
-
-            let args = args.join(", ");
-            let fields = fields.join("\n");
-
-            add_decl(
-                impls,
-                opt_impl.clone(),
-                target_info,
-                format!(
-                    r#"/// A tag named {tag_name}, with the given payload.
-    pub fn {tag_name}({args}) -> Self {{
-        Self {{
-{fields}
-        }}
-    }}"#,
-                ),
-            );
-
-            {
-                // Return a tuple
-                let ret_type = {
-                    let joined = field_types.join(", ");
-
-                    if field_types.len() == 1 {
-                        joined
-                    } else {
-                        format!("({joined})")
-                    }
-                };
-                let ret_expr = {
-                    let joined = field_access.join(", ");
-
-                    if field_access.len() == 1 {
-                        joined
-                    } else {
-                        format!("({joined})")
-                    }
-                };
+                    ),
+                );
 
                 add_decl(
                     impls,
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"/// Since `{tag_name}` only has one tag (namely, `{tag_name}`),
-    /// convert it to `{tag_name}`'s payload.
-    pub fn into_{tag_name}(self) -> {ret_type} {{
-        {ret_expr}
-    }}"#,
+                        r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
+        /// has no payload, this does nothing and is only here for completeness.
+        pub fn into_{tag_name}(self) {{
+            ()
+        }}"#,
                     ),
                 );
-            }
-
-            {
-                // Return a tuple
-                let ret_type = {
-                    let joined = field_types
-                        .iter()
-                        .map(|field_type| format!("&{field_type}"))
-                        .collect::<Vec<String>>()
-                        .join(", ");
-
-                    if field_types.len() == 1 {
-                        joined
-                    } else {
-                        format!("({joined})")
-                    }
-                };
-                let ret_expr = {
-                    let joined = field_access
-                        .iter()
-                        .map(|field| format!("&{field}"))
-                        .collect::<Vec<String>>()
-                        .join(", ");
-
-                    if field_access.len() == 1 {
-                        joined
-                    } else {
-                        format!("({joined})")
-                    }
-                };
 
                 add_decl(
                     impls,
                     opt_impl,
                     target_info,
                     format!(
-                        r#"/// Since `{tag_name}` only has one tag (namely, `{tag_name}`),
+                        r#"/// Other `as` methods return a payload, but since the {tag_name} tag
+        /// has no payload, this does nothing and is only here for completeness.
+        pub fn as_{tag_name}(&self) {{
+            ()
+        }}"#,
+                    ),
+                );
+            } else {
+                let mut args: Vec<String> = Vec::with_capacity(payload_fields.len());
+                let mut fields: Vec<String> = Vec::with_capacity(payload_fields.len());
+                let mut field_types: Vec<String> = Vec::with_capacity(payload_fields.len());
+                let mut field_access: Vec<String> = Vec::with_capacity(payload_fields.len());
+
+                for (index, field_id) in payload_fields.iter().enumerate() {
+                    let field_type = type_name(*field_id, types);
+
+                    field_access.push(format!("self.f{index}"));
+                    args.push(format!("f{index}: {field_type}"));
+                    fields.push(format!("{INDENT}{INDENT}{INDENT}f{index},"));
+                    field_types.push(field_type);
+                }
+
+                let args = args.join(", ");
+                let fields = fields.join("\n");
+
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// A tag named {tag_name}, with the given payload.
+    pub fn {tag_name}({args}) -> Self {{
+        Self {{
+{fields}
+        }}
+    }}"#,
+                    ),
+                );
+
+                {
+                    // Return a tuple
+                    let ret_type = {
+                        let joined = field_types.join(", ");
+
+                        if field_types.len() == 1 {
+                            joined
+                        } else {
+                            format!("({joined})")
+                        }
+                    };
+                    let ret_expr = {
+                        let joined = field_access.join(", ");
+
+                        if field_access.len() == 1 {
+                            joined
+                        } else {
+                            format!("({joined})")
+                        }
+                    };
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        target_info,
+                        format!(
+                            r#"/// Since `{tag_name}` only has one tag (namely, `{tag_name}`),
+    /// convert it to `{tag_name}`'s payload.
+    pub fn into_{tag_name}(self) -> {ret_type} {{
+        {ret_expr}
+    }}"#,
+                        ),
+                    );
+                }
+
+                {
+                    // Return a tuple
+                    let ret_type = {
+                        let joined = field_types
+                            .iter()
+                            .map(|field_type| format!("&{field_type}"))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+
+                        if field_types.len() == 1 {
+                            joined
+                        } else {
+                            format!("({joined})")
+                        }
+                    };
+                    let ret_expr = {
+                        let joined = field_access
+                            .iter()
+                            .map(|field| format!("&{field}"))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+
+                        if field_access.len() == 1 {
+                            joined
+                        } else {
+                            format!("({joined})")
+                        }
+                    };
+
+                    add_decl(
+                        impls,
+                        opt_impl,
+                        target_info,
+                        format!(
+                            r#"/// Since `{tag_name}` only has one tag (namely, `{tag_name}`),
     /// convert it to `{tag_name}`'s payload.
     pub fn as_{tag_name}(&self) -> {ret_type} {{
         {ret_expr}
     }}"#,
-                    ),
-                );
+                        ),
+                    );
+                }
             }
         }
+        RocSingleTagPayload::HasClosure { payload_getters: _ } => todo!(),
     }
 
     // The Debug impl for the single-tag union
-    {
-        let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
+    match payload {
+        RocSingleTagPayload::HasNoClosure { payload_fields } => {
+            let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
 
-        let mut buf =
-            "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {".to_string();
+            let mut buf = "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {"
+                .to_string();
 
-        if payload_fields.is_empty() {
-            // ignore returned result, write can not fail as it is used here
-            let _ = write!(buf, "f.write_str(\"{name}::{tag_name}\")");
-        } else {
-            let _ = write!(
-                buf,
-                "\n{INDENT}{INDENT}{INDENT}f.debug_tuple(\"{name}::{tag_name}\")"
-            );
-
-            for (index, _) in payload_fields.iter().enumerate() {
+            if payload_fields.is_empty() {
+                // ignore returned result, write can not fail as it is used here
+                let _ = write!(buf, "f.write_str(\"{name}::{tag_name}\")");
+            } else {
                 let _ = write!(
                     buf,
-                    "{INDENT}{INDENT}{INDENT}{INDENT}.field(&self.f{index})"
+                    "\n{INDENT}{INDENT}{INDENT}f.debug_tuple(\"{name}::{tag_name}\")"
                 );
+
+                for (index, _) in payload_fields.iter().enumerate() {
+                    let _ = write!(
+                        buf,
+                        "{INDENT}{INDENT}{INDENT}{INDENT}.field(&self.f{index})"
+                    );
+                }
+
+                let _ = write!(buf, "{INDENT}{INDENT}{INDENT}{INDENT}.finish()");
             }
 
-            let _ = write!(buf, "{INDENT}{INDENT}{INDENT}{INDENT}.finish()");
+            buf.push_str("    }\n");
+
+            add_decl(impls, opt_impl, target_info, buf);
         }
-
-        buf.push_str("    }\n");
-
-        add_decl(impls, opt_impl, target_info, buf);
+        RocSingleTagPayload::HasClosure { payload_getters: _ } => todo!(),
     }
 }
 
@@ -958,9 +1009,11 @@ pub struct {name} {{
                             "arg".to_string()
                         };
                     }
-                    RocType::Struct { fields, name } => {
-                        let answer =
-                            tag_union_struct_help(name, fields.iter(), *payload_id, types, false);
+                    RocType::Struct {
+                        fields: RocStructFields::HasNoClosure { fields },
+                        name,
+                    } => {
+                        let answer = tag_union_struct_help(name, fields, *payload_id, types, false);
 
                         owned_ret = answer.owned_ret;
                         borrowed_ret = answer.borrowed_ret;
@@ -969,9 +1022,11 @@ pub struct {name} {{
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
                     }
-                    RocType::TagUnionPayload { fields, name } => {
-                        let answer =
-                            tag_union_struct_help(name, fields.iter(), *payload_id, types, true);
+                    RocType::TagUnionPayload {
+                        fields: RocStructFields::HasNoClosure { fields },
+                        name,
+                    } => {
+                        let answer = tag_union_struct_help(name, fields, *payload_id, types, true);
 
                         owned_ret = answer.owned_ret;
                         borrowed_ret = answer.borrowed_ret;
@@ -980,7 +1035,102 @@ pub struct {name} {{
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
                     }
-                    RocType::Function { .. } => todo!(),
+                    RocType::Struct {
+                        fields: RocStructFields::HasClosure { fields: _ },
+                        name: _,
+                    } => {
+                        todo!("struct");
+                    }
+                    RocType::TagUnionPayload {
+                        fields: RocStructFields::HasClosure { fields },
+                        name: _, // TODO call this payload_struct_name and use it to define the struct...or don't define it at all, maybe, since there are only getters and setters?
+                    } => {
+                        // TODO don't generate op.into_StdoutWrite() - only getters/setters instead!
+                        for (field_name, field, accessor) in fields {
+                            let getter_name = &accessor.getter;
+                            let ret = type_name(*field, types);
+                            let returns_via_pointer = true;
+
+                            let body = if let RocType::Function(_) = types.get_type(*field) {
+                                format!(
+                                    r#"
+                                    extern "C" {{
+                                        #[link_name = "{getter_name}_size"]
+                                        fn size() -> usize;
+
+                                        #[link_name = "{getter_name}_generic"]
+                                        fn getter(_: *mut u8, _: *const {name});
+                                    }}
+
+                                    // allocate memory to store this variably-sized value
+                                    // allocates with roc_alloc, but that likely still uses the heap
+                                    let it = std::iter::repeat(0xAAu8).take(size());
+                                    let mut bytes = roc_std::RocList::from_iter(it);
+
+                                    getter(bytes.as_mut_ptr(), self);
+
+                                    {ret} {{
+                                        closure_data: bytes,
+                                    }}
+                                    "#
+                                )
+                            } else if returns_via_pointer {
+                                format!(
+                                    r#"
+                                    extern "C" {{
+                                        #[link_name = "{getter_name}_generic"]
+                                        fn getter(_: *mut {ret}, _: *const {name});
+                                    }}
+
+                                    let mut ret = core::mem::MaybeUninit::uninit();
+                                    getter(ret.as_mut_ptr(), self);
+                                    ret.assume_init()
+                                    "#
+                                )
+                            } else {
+                                format!(
+                                    r#"
+                                    extern "C" {{
+                                        #[link_name = "{getter_name}"]
+                                        fn getter(_: *const {name}) -> {ret};
+                                    }}
+
+                                    getter(self)
+                                    "#
+                                )
+                            };
+
+                            add_decl(
+                                impls,
+                                opt_impl.clone(),
+                                target_info,
+                                format!(
+                                    r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{tag_name}` and return its payload at index {field_name}.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
+    pub unsafe fn get_{tag_name}_{field_name}(&self) -> {ret} {{
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
+
+        {body}
+    }}"#,
+                                ),
+                            );
+                        }
+
+                        // TODO revise these - they're all copy/pasted from somewhere else
+                        owned_ret_type = type_name(*payload_id, types);
+                        borrowed_ret_type = format!("&{}", owned_ret_type);
+                        owned_ret = "payload".to_string();
+                        borrowed_ret = format!("&{owned_ret}");
+                        payload_args = format!("arg: {owned_ret_type}");
+                        args_to_payload = if cannot_derive_copy(payload_type, types) {
+                            "core::mem::ManuallyDrop::new(arg)".to_string()
+                        } else {
+                            "arg".to_string()
+                        };
+                    }
+                    RocType::Unsized => todo!(),
+                    RocType::Function(RocFn { .. }) => todo!(),
                 };
 
                 {
@@ -1047,7 +1197,7 @@ pub struct {name} {{
                         )
                     } else {
                         format!(
-                            r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{tag_name}` and convert it to `{tag_name}`'s payload.
+                            r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{tag_name}` and convert it to `{tag_name}`'s payload.
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
             pub unsafe fn into_{tag_name}({self_for_into}) -> {owned_ret_type} {{
@@ -1078,7 +1228,7 @@ pub struct {name} {{
                         )
                     } else {
                         format!(
-                            r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{tag_name}` and return its payload.
+                            r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{tag_name}` and return its payload.
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
             pub unsafe fn as_{tag_name}(&self) -> {borrowed_ret_type} {{
@@ -1579,16 +1729,24 @@ pub struct {name} {{
                             RocType::TagUnionPayload { fields, .. } => {
                                 let mut buf = Vec::new();
 
-                                for (label, _) in fields {
-                                    // Needs an "f" prefix
-                                    buf.push(format!(
+                                match fields {
+                                    RocStructFields::HasNoClosure { fields } => {
+                                        for (label, _) in fields {
+                                            // Needs an "f" prefix
+                                            buf.push(format!(
                                         ".field(&({deref_str}{actual_self}.{tag_name}).f{label})"
                                     ));
+                                        }
+                                    }
+                                    RocStructFields::HasClosure { fields: _ } => {
+                                        buf.push("// TODO HAS CLOSURE".to_string());
+                                    }
                                 }
 
                                 buf.join("\n")
                             }
-                            RocType::Function { .. } => todo!(),
+                            RocType::Unsized => todo!(),
+                            RocType::Function(RocFn { .. }) => todo!(),
                         };
 
                         format!(
@@ -1681,10 +1839,104 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     add_decl(impls, None, target_info, buf);
 }
 
-fn add_struct<S: Display>(
+fn add_function(
+    // name: &str,
+    target_info: TargetInfo,
+    roc_fn: &RocFn,
+    types: &Types,
+    impls: &mut Impls,
+) {
+    let name = escape_kw(roc_fn.function_name.to_string());
+    // let derive = derive_str(types.get_type(struct_id), types, true);
+    let derive = "";
+    let pub_str = "pub ";
+    let mut buf;
+
+    let repr = "C";
+    buf = format!("{derive}\n#[repr({repr})]\n{pub_str}struct {name} {{\n");
+
+    let fields = [("closure_data", &roc_fn.lambda_set)];
+
+    for (label, type_id) in fields {
+        let type_str = type_name(*type_id, types);
+
+        // Tag union payloads have numbered fields, so we prefix them
+        // with an "f" because Rust doesn't allow struct fields to be numbers.
+        let label = escape_kw(label.to_string());
+
+        writeln!(buf, "{INDENT}pub {label}: {type_str},",).unwrap();
+    }
+
+    buf.push('}');
+
+    buf.push('\n');
+    buf.push('\n');
+
+    let extern_name = &roc_fn.extern_name;
+
+    let return_type_str = type_name(roc_fn.ret, types);
+
+    writeln!(buf, "impl {name} {{").unwrap();
+
+    write!(buf, "{INDENT}pub fn force_thunk(mut self").unwrap();
+    for (i, argument_type) in roc_fn.args.iter().enumerate() {
+        write!(buf, ", arg_{i}: {}", type_name(*argument_type, types)).unwrap();
+    }
+    writeln!(buf, ") -> {return_type_str} {{").unwrap();
+
+    writeln!(buf, "{INDENT}{INDENT}extern \"C\" {{").unwrap();
+
+    // fn extern_name(output: *mut return_type, arg1: arg1_type, ..., closure_data: *mut u8);
+    write!(buf, "{INDENT}{INDENT}{INDENT} fn {extern_name}(").unwrap();
+
+    for (i, argument_type) in roc_fn.args.iter().enumerate() {
+        write!(buf, "arg_{i}: &{}, ", type_name(*argument_type, types)).unwrap();
+    }
+
+    writeln!(
+        buf,
+        "closure_data: *mut u8, output: *mut {return_type_str});"
+    )
+    .unwrap();
+
+    // {argument_types} "
+
+    writeln!(buf, "{INDENT}{INDENT}}}").unwrap();
+
+    writeln!(buf).unwrap();
+
+    writeln!(
+        buf,
+        "{INDENT}{INDENT}let mut output = std::mem::MaybeUninit::uninit();"
+    )
+    .unwrap();
+
+    writeln!(
+        buf,
+        "{INDENT}{INDENT}let ptr = self.closure_data.as_mut_ptr();"
+    )
+    .unwrap();
+
+    write!(buf, "{INDENT}{INDENT}unsafe {{ {extern_name}(").unwrap();
+
+    for (i, _) in roc_fn.args.iter().enumerate() {
+        write!(buf, "&arg_{i}, ").unwrap();
+    }
+
+    writeln!(buf, "ptr, output.as_mut_ptr()) }};").unwrap();
+
+    writeln!(buf, "{INDENT}{INDENT}unsafe {{ output.assume_init() }}").unwrap();
+
+    writeln!(buf, "{INDENT}}}").unwrap();
+    buf.push('}');
+
+    add_decl(impls, None, target_info, buf);
+}
+
+fn add_struct(
     name: &str,
     target_info: TargetInfo,
-    fields: &[(S, TypeId)],
+    fields: &RocStructFields,
     struct_id: TypeId,
     types: &Types,
     impls: &mut Impls,
@@ -1693,28 +1945,38 @@ fn add_struct<S: Display>(
     let name = escape_kw(name.to_string());
     let derive = derive_str(types.get_type(struct_id), types, true);
     let pub_str = if is_tag_union_payload { "" } else { "pub " };
-    let repr = if fields.len() == 1 {
-        "transparent"
-    } else {
-        "C"
-    };
-    let mut buf = format!("{derive}\n#[repr({repr})]\n{pub_str}struct {name} {{\n");
+    let mut buf;
 
-    for (label, type_id) in fields {
-        let type_str = type_name(*type_id, types);
+    match fields {
+        RocStructFields::HasNoClosure { fields } => {
+            let repr = if fields.len() == 1 {
+                "transparent"
+            } else {
+                "C"
+            };
 
-        // Tag union payloads have numbered fields, so we prefix them
-        // with an "f" because Rust doesn't allow struct fields to be numbers.
-        let label = if is_tag_union_payload {
-            format!("f{label}")
-        } else {
-            escape_kw(label.to_string())
-        };
+            buf = format!("{derive}\n#[repr({repr})]\n{pub_str}struct {name} {{\n");
 
-        writeln!(buf, "{INDENT}pub {label}: {type_str},",).unwrap();
+            for (label, type_id) in fields {
+                let type_str = type_name(*type_id, types);
+
+                // Tag union payloads have numbered fields, so we prefix them
+                // with an "f" because Rust doesn't allow struct fields to be numbers.
+                let label = if is_tag_union_payload {
+                    format!("f{label}")
+                } else {
+                    escape_kw(label.to_string())
+                };
+
+                writeln!(buf, "{INDENT}pub {label}: {type_str},",).unwrap();
+            }
+
+            buf.push('}');
+        }
+        RocStructFields::HasClosure { fields: _ } => {
+            buf = "//TODO HAS CLOSURE 2".to_string();
+        }
     }
-
-    buf.push('}');
 
     add_decl(impls, None, target_info, buf);
 }
@@ -1746,6 +2008,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocSet(elem_id) => format!("roc_std::RocSet<{}>", type_name(*elem_id, types)),
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
+        RocType::Unsized => "roc_std::RocList<u8>".to_string(),
         RocType::RocResult(ok_id, err_id) => {
             format!(
                 "roc_std::RocResult<{}, {}>",
@@ -1763,7 +2026,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::SingleTagStruct { name, .. }) => escape_kw(name.clone()),
         RocType::RecursivePointer(content) => type_name(*content, types),
-        RocType::Function { name, .. } => escape_kw(name.clone()),
+        RocType::Function(RocFn { function_name, .. }) => escape_kw(function_name.clone()),
     }
 }
 
@@ -1771,27 +2034,136 @@ fn type_name(id: TypeId, types: &Types) -> String {
 /// case of a struct that's a payload for a recursive tag union, typ.has_enumeration()
 /// will return true, but actually we want to derive Debug here anyway.
 fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
-    let mut buf = "#[derive(Clone, ".to_string();
+    let mut derives = vec!["Clone"];
 
     if !cannot_derive_copy(typ, types) {
-        buf.push_str("Copy, ");
+        derives.push("Copy");
     }
 
     if include_debug {
-        buf.push_str("Debug, ");
+        derives.push("Debug");
     }
 
-    if !cannot_derive_default(typ, types) {
-        buf.push_str("Default, ");
+    if !has_functions(typ, types) {
+        derives.push("PartialEq");
+        derives.push("PartialOrd");
+
+        if !has_float(typ, types) {
+            derives.push("Eq");
+            derives.push("Ord");
+            derives.push("Hash");
+        }
+
+        if !cannot_derive_default(typ, types) {
+            derives.push("Default");
+        }
     }
 
-    if !has_float(typ, types) {
-        buf.push_str("Eq, Ord, Hash, ");
+    derives.sort();
+
+    format!("#[derive({})]", derives.join(", "))
+}
+
+fn has_functions(start: &RocType, types: &Types) -> bool {
+    let mut seen: Vec<TypeId> = vec![];
+    let mut stack = vec![start];
+
+    macro_rules! push {
+        ($id:expr) => {{
+            if !seen.contains($id) {
+                seen.push(*$id);
+                stack.push(types.get_type(*$id));
+            }
+        }};
     }
 
-    buf.push_str("PartialEq, PartialOrd)]");
+    while let Some(typ) = stack.pop() {
+        match typ {
+            RocType::RocStr
+            | RocType::Bool
+            | RocType::Unit
+            | RocType::Num(_)
+            | RocType::EmptyTagUnion
+            | RocType::Unsized
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => { /* terminal */ }
 
-    buf
+            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. })
+            | RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
+            | RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
+                for (_, opt_payload_id) in tags.iter() {
+                    if let Some(payload_id) = opt_payload_id {
+                        push!(payload_id);
+                    }
+                }
+            }
+            RocType::RocBox(type_id)
+            | RocType::RocList(type_id)
+            | RocType::RocSet(type_id)
+            | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+                non_null_payload: type_id,
+                ..
+            })
+            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped {
+                payload: type_id, ..
+            }) => {
+                push!(type_id);
+            }
+
+            RocType::TagUnion(RocTagUnion::SingleTagStruct {
+                payload: RocSingleTagPayload::HasNoClosure { payload_fields },
+                ..
+            }) => {
+                for payload_id in payload_fields {
+                    push!(payload_id);
+                }
+            }
+
+            RocType::TagUnion(RocTagUnion::SingleTagStruct {
+                payload: RocSingleTagPayload::HasClosure { payload_getters },
+                ..
+            }) => {
+                for (payload_id, _) in payload_getters {
+                    push!(payload_id);
+                }
+            }
+
+            RocType::TagUnionPayload {
+                fields: RocStructFields::HasNoClosure { fields },
+                ..
+            }
+            | RocType::Struct {
+                fields: RocStructFields::HasNoClosure { fields },
+                ..
+            } => {
+                for (_, type_id) in fields {
+                    push!(type_id);
+                }
+            }
+
+            RocType::TagUnionPayload {
+                fields: RocStructFields::HasClosure { fields },
+                ..
+            }
+            | RocType::Struct {
+                fields: RocStructFields::HasClosure { fields },
+                ..
+            } => {
+                for (_, type_id, _) in fields {
+                    push!(type_id);
+                }
+            }
+            RocType::RecursivePointer(type_id) => {
+                push!(type_id);
+            }
+            RocType::RocResult(id1, id2) | RocType::RocDict(id1, id2) => {
+                push!(id1);
+                push!(id2);
+            }
+            RocType::Function(_) => return true,
+        }
+    }
+
+    false
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1889,29 +2261,36 @@ pub struct {name} {{
                 owned_ret = "payload".to_string();
                 borrowed_ret = format!("&{owned_ret}");
             }
-            RocType::Struct { fields, name } => {
-                let answer =
-                    tag_union_struct_help(name, fields.iter(), non_null_payload, types, false);
+            RocType::Struct { fields, name } => match fields {
+                RocStructFields::HasNoClosure { fields } => {
+                    let answer =
+                        tag_union_struct_help(name, fields, non_null_payload, types, false);
 
-                payload_args = answer.payload_args;
-                args_to_payload = answer.args_to_payload;
-                owned_ret = answer.owned_ret;
-                borrowed_ret = answer.borrowed_ret;
-                owned_ret_type = answer.owned_ret_type;
-                borrowed_ret_type = answer.borrowed_ret_type;
-            }
-            RocType::TagUnionPayload { fields, name } => {
-                let answer =
-                    tag_union_struct_help(name, fields.iter(), non_null_payload, types, true);
+                    payload_args = answer.payload_args;
+                    args_to_payload = answer.args_to_payload;
+                    owned_ret = answer.owned_ret;
+                    borrowed_ret = answer.borrowed_ret;
+                    owned_ret_type = answer.owned_ret_type;
+                    borrowed_ret_type = answer.borrowed_ret_type;
+                }
 
-                payload_args = answer.payload_args;
-                args_to_payload = answer.args_to_payload;
-                owned_ret = answer.owned_ret;
-                borrowed_ret = answer.borrowed_ret;
-                owned_ret_type = answer.owned_ret_type;
-                borrowed_ret_type = answer.borrowed_ret_type;
-            }
+                RocStructFields::HasClosure { .. } => todo!(),
+            },
+            RocType::TagUnionPayload { fields, name } => match fields {
+                RocStructFields::HasNoClosure { fields } => {
+                    let answer = tag_union_struct_help(name, fields, non_null_payload, types, true);
+
+                    payload_args = answer.payload_args;
+                    args_to_payload = answer.args_to_payload;
+                    owned_ret = answer.owned_ret;
+                    borrowed_ret = answer.borrowed_ret;
+                    owned_ret_type = answer.owned_ret_type;
+                    borrowed_ret_type = answer.borrowed_ret_type;
+                }
+                RocStructFields::HasClosure { .. } => todo!(),
+            },
             RocType::Function { .. } => todo!(),
+            RocType::Unsized => todo!(),
         };
 
         // Add a convenience constructor function for the tag with the payload, e.g.
@@ -1986,7 +2365,7 @@ pub struct {name} {{
                 opt_impl.clone(),
                 target_info,
                 format!(
-                    r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and convert it to `{non_null_tag}`'s payload.
+                    r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{non_null_tag}` and convert it to `{non_null_tag}`'s payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return {non_null_tag}.
     pub unsafe fn into_{non_null_tag}(self) -> {owned_ret_type} {{
@@ -2005,7 +2384,7 @@ pub struct {name} {{
             opt_impl.clone(),
             target_info,
             format!(
-                r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and return its payload.
+                r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{non_null_tag}` and return its payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `{non_null_tag}`.
     pub unsafe fn as_{non_null_tag}(&self) -> {borrowed_ret_type} {{
@@ -2138,8 +2517,13 @@ pub struct {name} {{
             RocType::Struct { fields, .. } => {
                 let mut buf = Vec::new();
 
-                for (label, _) in fields {
-                    buf.push(format!(".field(&(&*{extra_deref}self.pointer).{label})"));
+                match fields {
+                    RocStructFields::HasNoClosure { fields } => {
+                        for (label, _) in fields {
+                            buf.push(format!(".field(&(&*{extra_deref}self.pointer).{label})"));
+                        }
+                    }
+                    RocStructFields::HasClosure { fields: _ } => todo!(),
                 }
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
@@ -2147,13 +2531,19 @@ pub struct {name} {{
             RocType::TagUnionPayload { fields, .. } => {
                 let mut buf = Vec::new();
 
-                for (label, _) in fields {
-                    // Needs an "f" prefix
-                    buf.push(format!(".field(&(&*{extra_deref}self.pointer).f{label})"));
+                match fields {
+                    RocStructFields::HasNoClosure { fields } => {
+                        for (label, _) in fields {
+                            // Needs an "f" prefix
+                            buf.push(format!(".field(&(&*{extra_deref}self.pointer).f{label})"));
+                        }
+                    }
+                    RocStructFields::HasClosure { fields: _ } => todo!(),
                 }
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
             }
+            RocType::Unsized => todo!(),
             RocType::Function { .. } => todo!(),
         };
 
@@ -2221,17 +2611,13 @@ struct StructIngredients {
     borrowed_ret_type: String,
 }
 
-fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + PartialOrd + 'a>(
+fn tag_union_struct_help(
     name: &str,
-    fields: I,
+    fields: &[(String, TypeId)],
     payload_id: TypeId,
     types: &Types,
     is_tag_union_payload: bool,
 ) -> StructIngredients {
-    let mut sorted_fields = fields.collect::<Vec<&(L, TypeId)>>();
-
-    sorted_fields.sort_by(|(label1, _), (label2, _)| label1.partial_cmp(label2).unwrap());
-
     let mut ret_types = if is_tag_union_payload {
         // This will be a tuple we create when iterating over the fields.
         Vec::new()
@@ -2241,13 +2627,13 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 
     let mut ret_values = Vec::new();
 
-    for (label, type_id) in sorted_fields.iter() {
+    for (label, type_id) in fields.iter() {
         let label = if is_tag_union_payload {
             // Tag union payload fields need "f" prefix
             // because they're numbers
             format!("f{}", label)
         } else {
-            escape_kw(format!("{}", label))
+            escape_kw(label.to_string())
         };
 
         ret_values.push(format!("payload.{label}"));
@@ -2266,7 +2652,7 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         .collect::<Vec<String>>()
         .join(", ");
     let args_to_payload = if is_tag_union_payload {
-        let prefixed_fields = sorted_fields
+        let prefixed_fields = fields
             .iter()
             .enumerate()
             .map(|(index, (label, _))| {
@@ -2361,7 +2747,16 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
         | RocType::TagUnion { .. }
         | RocType::RocResult(_, _)
         | RocType::RecursivePointer { .. }
-        | RocType::Function { .. } => true,
+        | RocType::Struct {
+            fields: RocStructFields::HasClosure { .. },
+            ..
+        }
+        | RocType::TagUnionPayload {
+            fields: RocStructFields::HasClosure { .. },
+            ..
+        }
+        | RocType::Unsized => true,
+        RocType::Function { .. } => true,
         RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             cannot_derive_default(types.get_type(*id), types)
@@ -2370,10 +2765,16 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
             cannot_derive_default(types.get_type(*key_id), types)
                 || cannot_derive_default(types.get_type(*val_id), types)
         }
-        RocType::Struct { fields, .. } => fields
+        RocType::Struct {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        } => fields
             .iter()
             .any(|(_, type_id)| cannot_derive_default(types.get_type(*type_id), types)),
-        RocType::TagUnionPayload { fields, .. } => fields
+        RocType::TagUnionPayload {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        } => fields
             .iter()
             .any(|(_, type_id)| cannot_derive_default(types.get_type(*type_id), types)),
     }
@@ -2387,6 +2788,7 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
+        | RocType::Unsized
         | RocType::Function { .. } => false,
         RocType::RocStr
         | RocType::RocList(_)
@@ -2398,9 +2800,18 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::TagUnion(RocTagUnion::Recursive { .. })
         | RocType::RecursivePointer { .. }
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { .. }) => true,
-        RocType::TagUnion(RocTagUnion::SingleTagStruct { payload_fields, .. }) => payload_fields
+        RocType::TagUnion(RocTagUnion::SingleTagStruct {
+            payload: RocSingleTagPayload::HasNoClosure { payload_fields },
+            ..
+        }) => payload_fields
             .iter()
             .any(|type_id| cannot_derive_copy(types.get_type(*type_id), types)),
+        RocType::TagUnion(RocTagUnion::SingleTagStruct {
+            payload: RocSingleTagPayload::HasClosure { payload_getters },
+            ..
+        }) => payload_getters
+            .iter()
+            .any(|(type_id, _)| cannot_derive_copy(types.get_type(*type_id), types)),
         RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
             tags.iter().any(|(_, payloads)| {
                 payloads
@@ -2412,12 +2823,26 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
             cannot_derive_copy(types.get_type(*ok_id), types)
                 || cannot_derive_copy(types.get_type(*err_id), types)
         }
-        RocType::Struct { fields, .. } => fields
+        RocType::Struct {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        }
+        | RocType::TagUnionPayload {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        } => fields
             .iter()
             .any(|(_, type_id)| cannot_derive_copy(types.get_type(*type_id), types)),
-        RocType::TagUnionPayload { fields, .. } => fields
+        RocType::Struct {
+            fields: RocStructFields::HasClosure { fields },
+            ..
+        }
+        | RocType::TagUnionPayload {
+            fields: RocStructFields::HasClosure { fields },
+            ..
+        } => fields
             .iter()
-            .any(|(_, type_id)| cannot_derive_copy(types.get_type(*type_id), types)),
+            .any(|(_, type_id, _)| cannot_derive_copy(types.get_type(*type_id), types)),
     }
 }
 
@@ -2441,7 +2866,8 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::Function { .. } => false,
+        | RocType::Function { .. }
+        | RocType::Unsized => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             has_float_help(types.get_type(*id), types, do_not_recurse)
         }
@@ -2453,30 +2879,61 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             has_float_help(types.get_type(*key_id), types, do_not_recurse)
                 || has_float_help(types.get_type(*val_id), types, do_not_recurse)
         }
-        RocType::Struct { fields, .. } => fields
+        RocType::TagUnionPayload {
+            fields: RocStructFields::HasNoClosure { fields },
+            name: _,
+        }
+        | RocType::Struct {
+            fields: RocStructFields::HasNoClosure { fields },
+            name: _,
+        } => fields
             .iter()
             .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
-        RocType::TagUnionPayload { fields, .. } => fields
+        RocType::TagUnionPayload {
+            fields: RocStructFields::HasClosure { fields },
+            name: _,
+        }
+        | RocType::Struct {
+            fields: RocStructFields::HasClosure { fields },
+            name: _,
+        } => fields
             .iter()
-            .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
-        RocType::TagUnion(RocTagUnion::SingleTagStruct { payload_fields, .. }) => payload_fields
+            .any(|(_, type_id, _)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
+        RocType::TagUnion(RocTagUnion::SingleTagStruct {
+            payload: RocSingleTagPayload::HasNoClosure { payload_fields },
+            ..
+        }) => payload_fields
             .iter()
             .any(|type_id| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
-        RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-        | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
-            tags.iter().any(|(_, payloads)| {
-                payloads
-                    .iter()
-                    .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
-            })
-        }
-        RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
-            tags.iter().any(|(_, payloads)| {
-                payloads
-                    .iter()
-                    .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
-            })
-        }
+        RocType::TagUnion(RocTagUnion::SingleTagStruct {
+            payload: RocSingleTagPayload::HasClosure { payload_getters },
+            ..
+        }) => payload_getters
+            .iter()
+            .any(|(type_id, _)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
+        RocType::TagUnion(RocTagUnion::Recursive {
+            tags,
+            name: _,
+            discriminant_offset: _,
+            discriminant_size: _,
+        })
+        | RocType::TagUnion(RocTagUnion::NonRecursive {
+            tags,
+            name: _,
+            discriminant_offset: _,
+            discriminant_size: _,
+        })
+        | RocType::TagUnion(RocTagUnion::NullableWrapped {
+            tags,
+            name: _,
+            index_of_null_tag: _,
+            discriminant_size: _,
+            discriminant_offset: _,
+        }) => tags.iter().any(|(_, payloads)| {
+            payloads
+                .iter()
+                .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
+        }),
         RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { payload, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
             non_null_payload: payload,

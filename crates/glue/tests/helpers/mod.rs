@@ -1,3 +1,4 @@
+use indoc::indoc;
 use roc_glue::load::{load_types, IgnoreErrors};
 use roc_glue::rust_glue;
 use roc_load::Threading;
@@ -7,7 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[allow(dead_code)]
-pub fn generate_bindings(decl_src: &str) -> String {
+pub fn generate_bindings(decl_src: &str) -> Vec<roc_glue::types::File> {
     use tempfile::tempdir;
 
     let mut src = indoc!(
@@ -25,7 +26,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
 
     src.push_str(decl_src);
 
-    let pairs = {
+    let types = {
         let dir = tempdir().expect("Unable to create tempdir");
         let filename = PathBuf::from("platform.roc");
         let file_path = dir.path().join(filename);
@@ -45,7 +46,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
         result.expect("had problems loading")
     };
 
-    rust_glue::emit(&pairs)
+    rust_glue::emit(&types)
 }
 
 #[allow(dead_code)]

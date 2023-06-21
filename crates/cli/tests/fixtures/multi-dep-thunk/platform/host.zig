@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("str");
+const str = @import("glue").str;
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -45,10 +45,6 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
     free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
-}
-
-export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void {
-    return memcpy(dst, src, size);
 }
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
@@ -114,7 +110,7 @@ pub export fn main() i32 {
     // stdout the result
     stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
 
-    callresult.deinit();
+    callresult.decref();
 
     stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 

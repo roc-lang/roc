@@ -1,0 +1,9 @@
+app "test" provides [main] to "./platform"
+
+main =
+    when A "" is
+    #    ^^^^ [A Str, B Str]
+        A x | B x -> x
+        #            ^ Str
+        #       ^ Str
+        # ^ Str

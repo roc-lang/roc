@@ -232,6 +232,9 @@ pub enum EImports {
     IndentSetStart(Position),
     SetStart(Position),
     SetEnd(Position),
+    TypedIdent(Position),
+    AsKeyword(Position),
+    StrLiteral(Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,6 +358,8 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
+    OptionalValueInRecordBuilder(Region),
+    RecordUpdateBuilder(Region),
 
     // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
@@ -407,6 +412,7 @@ pub enum ERecord<'a> {
     Field(Position),
     Colon(Position),
     QuestionMark(Position),
+    Arrow(Position),
     Ampersand(Position),
 
     // TODO remove
@@ -672,6 +678,7 @@ pub enum ETypeAbilityImpl<'a> {
 
     Field(Position),
     Colon(Position),
+    Arrow(Position),
     Optional(Position),
     Type(&'a EType<'a>, Position),
 
@@ -692,6 +699,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Open(p) => ETypeAbilityImpl::Open(p),
             ERecord::Field(p) => ETypeAbilityImpl::Field(p),
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
+            ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
             ERecord::Updateable(p) => ETypeAbilityImpl::Updateable(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),

@@ -12,19 +12,19 @@ use indoc::indoc;
 use roc_std::{RocBox, RocList, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_int() {
     assert_evals_to!("123", 123, i64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_float() {
     assert_evals_to!("1234.0", 1234.0, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn branch_first_float() {
     assert_evals_to!(
         indoc!(
@@ -40,7 +40,7 @@ fn branch_first_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn branch_second_float() {
     assert_evals_to!(
         indoc!(
@@ -56,7 +56,7 @@ fn branch_second_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn branch_third_float() {
     assert_evals_to!(
         indoc!(
@@ -73,7 +73,7 @@ fn branch_third_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn branch_first_int() {
     assert_evals_to!(
         indoc!(
@@ -89,7 +89,7 @@ fn branch_first_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn branch_second_int() {
     assert_evals_to!(
         indoc!(
@@ -122,7 +122,7 @@ fn branch_third_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn branch_store_variable() {
     assert_evals_to!(
         indoc!(
@@ -138,7 +138,7 @@ fn branch_store_variable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_one_element_tag() {
     assert_evals_to!(
         indoc!(
@@ -156,7 +156,7 @@ fn when_one_element_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_two_element_tag_first() {
     assert_evals_to!(
         indoc!(
@@ -175,7 +175,7 @@ fn when_two_element_tag_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_two_element_tag_second() {
     assert_evals_to!(
         indoc!(
@@ -194,7 +194,7 @@ fn when_two_element_tag_second() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_when_one_branch() {
     assert_evals_to!(
         indoc!(
@@ -209,7 +209,7 @@ fn gen_when_one_branch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_large_when_int() {
     assert_evals_to!(
         indoc!(
@@ -232,7 +232,7 @@ fn gen_large_when_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_large_when_float() {
     assert_evals_to!(
         indoc!(
@@ -255,7 +255,7 @@ fn gen_large_when_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn or_pattern() {
     assert_evals_to!(
         indoc!(
@@ -271,7 +271,7 @@ fn or_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn apply_identity() {
     assert_evals_to!(
         indoc!(
@@ -287,7 +287,7 @@ fn apply_identity() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn apply_unnamed_identity() {
     assert_evals_to!(
         indoc!(
@@ -304,7 +304,7 @@ fn apply_unnamed_identity() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_unnamed_fn() {
     assert_evals_to!(
         indoc!(
@@ -325,7 +325,7 @@ fn return_unnamed_fn() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_when_fn() {
     assert_evals_to!(
         indoc!(
@@ -345,7 +345,7 @@ fn gen_when_fn() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_basic_def() {
     assert_evals_to!(
         indoc!(
@@ -373,7 +373,7 @@ fn gen_basic_def() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_multiple_defs() {
     assert_evals_to!(
         indoc!(
@@ -492,7 +492,7 @@ fn gen_multiple_defs() {
 //    }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn factorial() {
     assert_evals_to!(
         indoc!(
@@ -514,7 +514,7 @@ fn factorial() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn peano1() {
     assert_evals_to!(
         indoc!(
@@ -535,7 +535,7 @@ fn peano1() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn peano2() {
     assert_evals_to!(
         indoc!(
@@ -557,7 +557,7 @@ fn peano2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn top_level_constant() {
     assert_evals_to!(
         indoc!(
@@ -577,7 +577,7 @@ fn top_level_constant() {
 
 #[test]
 #[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn top_level_destructure() {
     assert_evals_to!(
         indoc!(
@@ -597,7 +597,7 @@ fn top_level_destructure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_0() {
     assert_evals_to!(
         indoc!(
@@ -625,7 +625,7 @@ fn linked_list_len_0() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_twice_0() {
     assert_evals_to!(
         indoc!(
@@ -653,7 +653,7 @@ fn linked_list_len_twice_0() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_1() {
     assert_evals_to!(
         indoc!(
@@ -681,7 +681,7 @@ fn linked_list_len_1() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_twice_1() {
     assert_evals_to!(
         indoc!(
@@ -709,7 +709,7 @@ fn linked_list_len_twice_1() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_len_3() {
     assert_evals_to!(
         indoc!(
@@ -738,7 +738,7 @@ fn linked_list_len_3() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_sum_num_a() {
     assert_evals_to!(
         indoc!(
@@ -767,7 +767,7 @@ fn linked_list_sum_num_a() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_sum_int() {
     assert_evals_to!(
         indoc!(
@@ -795,7 +795,7 @@ fn linked_list_sum_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_map() {
     assert_evals_to!(
         indoc!(
@@ -829,7 +829,7 @@ fn linked_list_map() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_nested_maybe() {
     assert_evals_to!(
         indoc!(
@@ -886,7 +886,7 @@ fn when_nested_maybe() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_peano() {
     assert_evals_to!(
         indoc!(
@@ -1011,7 +1011,7 @@ fn annotation_without_body() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn simple_closure() {
     assert_evals_to!(
         indoc!(
@@ -1033,7 +1033,7 @@ fn simple_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_closure() {
     assert_evals_to!(
         indoc!(
@@ -1057,7 +1057,7 @@ fn nested_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn closure_in_list() {
     use roc_std::RocList;
 
@@ -1085,7 +1085,7 @@ fn closure_in_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn specialize_closure() {
     use roc_std::RocList;
 
@@ -1117,7 +1117,7 @@ fn specialize_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn io_poc_effect() {
     assert_evals_to!(
         indoc!(
@@ -1148,7 +1148,7 @@ fn io_poc_effect() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn io_poc_desugared() {
     assert_evals_to!(
         indoc!(
@@ -1176,7 +1176,7 @@ fn io_poc_desugared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_wrapped_function_a() {
     assert_evals_to!(
         indoc!(
@@ -1198,7 +1198,7 @@ fn return_wrapped_function_a() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_wrapped_function_b() {
     assert_evals_to!(
         indoc!(
@@ -1219,7 +1219,7 @@ fn return_wrapped_function_b() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn return_wrapped_closure() {
     assert_evals_to!(
         indoc!(
@@ -1244,7 +1244,7 @@ fn return_wrapped_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_is_singleton() {
     assert_evals_to!(
         indoc!(
@@ -1279,7 +1279,7 @@ fn linked_list_is_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_is_empty_1() {
     assert_evals_to!(
         indoc!(
@@ -1314,7 +1314,7 @@ fn linked_list_is_empty_1() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_is_empty_2() {
     assert_evals_to!(
         indoc!(
@@ -1346,7 +1346,7 @@ fn linked_list_is_empty_2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
     assert_evals_to!(
@@ -1367,7 +1367,7 @@ fn linked_list_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn recursive_function_with_rigid() {
     assert_evals_to!(
         indoc!(
@@ -1394,7 +1394,7 @@ fn recursive_function_with_rigid() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn rbtree_insert() {
     assert_evals_to!(
         indoc!(
@@ -1606,7 +1606,7 @@ fn rbtree_balance_mono_problem() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn rbtree_balance_full() {
     assert_evals_to!(
         indoc!(
@@ -1658,7 +1658,7 @@ fn rbtree_balance_full() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_pattern_match_two_ways() {
     // exposed an issue in the ordering of pattern match checks when ran with `--release` mode
     assert_evals_to!(
@@ -1712,7 +1712,7 @@ fn nested_pattern_match_two_ways() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_guarded_double_pattern_match() {
     // the important part here is that the first case (with the nested Cons) does not match
     // TODO this also has undefined behavior
@@ -1744,7 +1744,7 @@ fn linked_list_guarded_double_pattern_match() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn linked_list_double_pattern_match() {
     assert_evals_to!(
         indoc!(
@@ -1771,6 +1771,7 @@ fn linked_list_double_pattern_match() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// dev backend: this test somehow corrupts the errors vector ?!
 fn binary_tree_double_pattern_match() {
     assert_evals_to!(
         indoc!(
@@ -1796,7 +1797,7 @@ fn binary_tree_double_pattern_match() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn unified_empty_closure_bool() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
@@ -1821,7 +1822,7 @@ fn unified_empty_closure_bool() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn unified_empty_closure_byte() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
@@ -1847,7 +1848,7 @@ fn unified_empty_closure_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn task_always_twice() {
     assert_evals_to!(
         indoc!(
@@ -1892,7 +1893,7 @@ fn task_always_twice() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn wildcard_rigid() {
     assert_evals_to!(
         indoc!(
@@ -1921,7 +1922,7 @@ fn wildcard_rigid() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn alias_of_alias_with_type_arguments() {
     assert_evals_to!(
         indoc!(
@@ -1998,7 +1999,7 @@ fn todo_bad_error_message() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn hof_conditional() {
     // exposed issue with the if condition being just a symbol
     assert_evals_to!(
@@ -2095,7 +2096,7 @@ fn fingertree_basic() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn case_or_pattern() {
     // the `0` branch body should only be generated once in the future
     // it is currently duplicated
@@ -2144,7 +2145,7 @@ fn rosetree_basic() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn case_jump() {
     // the decision tree will generate a jump to the `1` branch here
     assert_evals_to!(
@@ -2171,7 +2172,7 @@ fn case_jump() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nullable_eval_cfold() {
     // the decision tree will generate a jump to the `1` branch here
     assert_evals_to!(
@@ -2208,7 +2209,7 @@ fn nullable_eval_cfold() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_switch() {
     // exposed bug with passing the right symbol/layout down into switch branch generation
     // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
@@ -2252,7 +2253,7 @@ fn nested_switch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn count_deriv_x() {
     // exposed bug with basing the block_of_memory on a specific (smaller) tag layout
     assert_evals_to!(
@@ -2279,7 +2280,7 @@ fn count_deriv_x() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn deriv_pow() {
     // exposed bug with ordering of variable declarations before switch
     assert_evals_to!(
@@ -2316,7 +2317,7 @@ fn deriv_pow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn multiple_increment() {
     // the `leaf` value will be incremented multiple times at once
     assert_evals_to!(
@@ -2350,7 +2351,7 @@ fn multiple_increment() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn switch_fuse_rc_non_exhaustive() {
     assert_evals_to!(
         indoc!(
@@ -2380,7 +2381,7 @@ fn switch_fuse_rc_non_exhaustive() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn switch_fuse_rc_exhaustive() {
     assert_evals_to!(
         indoc!(
@@ -2409,7 +2410,7 @@ fn switch_fuse_rc_exhaustive() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn build_then_apply_closure() {
     assert_evals_to!(
         indoc!(
@@ -2429,7 +2430,7 @@ fn build_then_apply_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn expanded_result() {
     assert_evals_to!(
         indoc!(
@@ -2460,7 +2461,7 @@ fn expanded_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn backpassing_result() {
     assert_evals_to!(
         indoc!(
@@ -2530,7 +2531,7 @@ fn call_invalid_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn increment_or_double_closure() {
     assert_evals_to!(
         indoc!(
@@ -2568,7 +2569,7 @@ fn increment_or_double_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn module_thunk_is_function() {
     assert_evals_to!(
         indoc!(
@@ -2585,7 +2586,7 @@ fn module_thunk_is_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pass_through_unresolved_type_variable() {
     assert_evals_to!(
         indoc!(
@@ -2608,7 +2609,7 @@ fn pass_through_unresolved_type_variable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pattern_match_empty_record() {
     assert_evals_to!(
         indoc!(
@@ -2628,7 +2629,7 @@ fn pattern_match_empty_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pattern_match_unit_tag() {
     assert_evals_to!(
         indoc!(
@@ -2653,7 +2654,7 @@ fn pattern_match_unit_tag() {
 // see for why this is disabled on wasm32 https://github.com/roc-lang/roc/issues/1687
 #[cfg(not(feature = "gen-llvm-wasm"))]
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mirror_llvm_alignment_padding() {
     // see https://github.com/roc-lang/roc/issues/1569
     assert_evals_to!(
@@ -2676,7 +2677,7 @@ fn mirror_llvm_alignment_padding() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lambda_set_bool() {
     assert_evals_to!(
         indoc!(
@@ -2701,7 +2702,7 @@ fn lambda_set_bool() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lambda_set_byte() {
     assert_evals_to!(
         indoc!(
@@ -2727,7 +2728,7 @@ fn lambda_set_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lambda_set_struct_byte() {
     assert_evals_to!(
         indoc!(
@@ -2755,7 +2756,7 @@ fn lambda_set_struct_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lambda_set_enum_byte_byte() {
     assert_evals_to!(
         indoc!(
@@ -2786,7 +2787,7 @@ fn lambda_set_enum_byte_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_until() {
     // see https://github.com/roc-lang/roc/issues/1576
     assert_evals_to!(
@@ -2812,7 +2813,7 @@ fn list_walk_until() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_literal_not_specialized_with_annotation() {
     // see https://github.com/roc-lang/roc/issues/1600
     assert_evals_to!(
@@ -2840,7 +2841,7 @@ fn int_literal_not_specialized_with_annotation() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_literal_not_specialized_no_annotation() {
     // see https://github.com/roc-lang/roc/issues/1600
     assert_evals_to!(
@@ -2867,7 +2868,7 @@ fn int_literal_not_specialized_no_annotation() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn unresolved_tvar_when_capture_is_unused() {
     // see https://github.com/roc-lang/roc/issues/1585
     assert_evals_to!(
@@ -2913,7 +2914,7 @@ fn value_not_exposed_hits_panic() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mix_function_and_closure() {
     // see https://github.com/roc-lang/roc/pull/1706
     assert_evals_to!(
@@ -2939,7 +2940,7 @@ fn mix_function_and_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mix_function_and_closure_level_of_indirection() {
     // see https://github.com/roc-lang/roc/pull/1706
     assert_evals_to!(
@@ -2964,7 +2965,7 @@ fn mix_function_and_closure_level_of_indirection() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[cfg_attr(debug_assertions, ignore)] // this test stack-overflows the compiler in debug mode
 fn do_pass_bool_byte_closure_layout() {
     // see https://github.com/roc-lang/roc/pull/1706
@@ -3041,7 +3042,7 @@ fn do_pass_bool_byte_closure_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_rigid_list() {
     assert_evals_to!(
         indoc!(
@@ -3118,7 +3119,7 @@ fn nested_rigid_tag_union() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn call_that_needs_closure_parameter() {
     // here both p2 is lifted to the top-level, which means that `list` must be
     // passed to it from `manyAux`.
@@ -3146,7 +3147,7 @@ fn call_that_needs_closure_parameter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn alias_defined_out_of_order() {
     assert_evals_to!(
         indoc!(
@@ -3167,7 +3168,7 @@ fn alias_defined_out_of_order() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn recursively_build_effect() {
     assert_evals_to!(
         indoc!(
@@ -3214,7 +3215,7 @@ fn recursively_build_effect() {
 
 #[test]
 #[ignore = "TODO; currently generates bad code because `a` isn't specialized inside the closure."]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn polymophic_expression_captured_inside_closure() {
     assert_evals_to!(
         indoc!(
@@ -3238,7 +3239,7 @@ fn polymophic_expression_captured_inside_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2322() {
     assert_evals_to!(
         indoc!(
@@ -3271,7 +3272,7 @@ fn box_and_unbox_small_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_and_unbox_big_string() {
     assert_evals_to!(
         indoc!(
@@ -3290,13 +3291,31 @@ fn box_and_unbox_big_string() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_nonrecursive_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result U64 U64
+            result = Ok 42
+
+            result
+            |> Box.box
+            |> Box.unbox
+            "#
+        ),
+        roc_std::RocResult::ok(42),
+        roc_std::RocResult<u64, u64>
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_num() {
     assert_evals_to!("Box.box 123u64", RocBox::new(123), RocBox<u64>)
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-#[ignore = "triggers some UB somewhere in at least the llvm and dev backends"]
 fn box_str() {
     assert_evals_to!(
         "Box.box \"short\"",
@@ -3348,7 +3367,7 @@ fn box_and_unbox_f32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_and_unbox_record() {
     assert_evals_to!(
         indoc!(
@@ -3362,7 +3381,7 @@ fn box_and_unbox_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_and_unbox_tag_union() {
     assert_evals_to!(
         indoc!(
@@ -3379,7 +3398,7 @@ fn box_and_unbox_tag_union() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn closure_called_in_its_defining_scope() {
     assert_evals_to!(
         indoc!(
@@ -3404,7 +3423,7 @@ fn closure_called_in_its_defining_scope() {
 
 #[test]
 #[ignore]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2894() {
     assert_evals_to!(
         indoc!(
@@ -3431,7 +3450,7 @@ fn issue_2894() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn polymorphic_def_used_in_closure() {
     assert_evals_to!(
         indoc!(
@@ -3452,7 +3471,7 @@ fn polymorphic_def_used_in_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn polymorphic_lambda_set_usage() {
     assert_evals_to!(
         indoc!(
@@ -3470,7 +3489,7 @@ fn polymorphic_lambda_set_usage() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn polymorphic_lambda_set_multiple_specializations() {
     assert_evals_to!(
         indoc!(
@@ -3511,7 +3530,7 @@ fn list_map2_conslist() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mutual_recursion_top_level_defs() {
     assert_evals_to!(
         indoc!(
@@ -3539,7 +3558,7 @@ fn mutual_recursion_top_level_defs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn polymorphic_lambda_captures_polymorphic_value() {
     assert_evals_to!(
         indoc!(
@@ -3558,7 +3577,7 @@ fn polymorphic_lambda_captures_polymorphic_value() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lambda_capture_niche_u64_vs_u8_capture() {
     assert_evals_to!(
         indoc!(
@@ -3586,7 +3605,7 @@ fn lambda_capture_niche_u64_vs_u8_capture() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lambda_capture_niches_with_other_lambda_capture() {
     assert_evals_to!(
         indoc!(
@@ -3619,7 +3638,7 @@ fn lambda_capture_niches_with_other_lambda_capture() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lambda_capture_niches_with_non_capturing_function() {
     assert_evals_to!(
         indoc!(
@@ -3652,7 +3671,7 @@ fn lambda_capture_niches_with_non_capturing_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lambda_capture_niches_have_captured_function_in_closure() {
     assert_evals_to!(
         indoc!(
@@ -3686,7 +3705,7 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn recursive_call_capturing_function() {
     assert_evals_to!(
         indoc!(
@@ -3705,7 +3724,7 @@ fn recursive_call_capturing_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn shared_pattern_variable_in_when_branches() {
     assert_evals_to!(
         indoc!(
@@ -3779,7 +3798,7 @@ fn runtime_error_when_degenerate_pattern_reached() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn recursive_lambda_set_issue_3444() {
     assert_evals_to!(
         indoc!(
@@ -3800,7 +3819,7 @@ fn recursive_lambda_set_issue_3444() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn recursive_lambda_set_toplevel_issue_3444() {
     assert_evals_to!(
         indoc!(
@@ -3824,7 +3843,7 @@ fn recursive_lambda_set_toplevel_issue_3444() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn recursive_lambda_set_issue_3444_inferred() {
     assert_evals_to!(
         indoc!(
@@ -3844,7 +3863,7 @@ fn recursive_lambda_set_issue_3444_inferred() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn compose_recursive_lambda_set_productive_toplevel() {
     assert_evals_to!(
         indoc!(
@@ -3869,7 +3888,7 @@ fn compose_recursive_lambda_set_productive_toplevel() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn compose_recursive_lambda_set_productive_nested() {
     assert_evals_to!(
         indoc!(
@@ -3891,7 +3910,7 @@ fn compose_recursive_lambda_set_productive_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn compose_recursive_lambda_set_productive_inferred() {
     assert_evals_to!(
         indoc!(
@@ -3912,7 +3931,35 @@ fn compose_recursive_lambda_set_productive_inferred() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             compose = \forward -> \f, g ->
+                if forward
+                then \x -> g (f x)
+                else \x -> f (g x)
+
+             identity = \x -> x
+             exclame = \s -> "\(s)!"
+             whisper = \s -> "(\(s))"
+
+             main =
+                 res: Str -> Str
+                 res = List.walk [ exclame, whisper ] identity (compose Bool.false)
+                 res "hello"
+             "#
+        ),
+        RocStr::from("(hello)!"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn local_binding_aliases_function() {
     assert_evals_to!(
         indoc!(
@@ -3935,7 +3982,7 @@ fn local_binding_aliases_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn local_binding_aliases_function_inferred() {
     assert_evals_to!(
         indoc!(
@@ -3956,7 +4003,7 @@ fn local_binding_aliases_function_inferred() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn transient_captures() {
     assert_evals_to!(
         indoc!(
@@ -3976,7 +4023,7 @@ fn transient_captures() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn transient_captures_after_def_ordering() {
     assert_evals_to!(
         indoc!(
@@ -3996,7 +4043,7 @@ fn transient_captures_after_def_ordering() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn deep_transient_capture_chain() {
     assert_evals_to!(
         indoc!(
@@ -4018,7 +4065,7 @@ fn deep_transient_capture_chain() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn deep_transient_capture_chain_with_multiple_captures() {
     assert_evals_to!(
         indoc!(
@@ -4043,7 +4090,7 @@ fn deep_transient_capture_chain_with_multiple_captures() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn transient_captures_from_outer_scope() {
     assert_evals_to!(
         indoc!(
@@ -4065,7 +4112,7 @@ fn transient_captures_from_outer_scope() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mutually_recursive_captures() {
     assert_evals_to!(
         indoc!(
@@ -4091,12 +4138,12 @@ fn mutually_recursive_captures() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_let_generalization() {
     assert_evals_to!(
         indoc!(
             r#"
-            manyAux : {} -> I32 
+            manyAux : {} -> I32
             manyAux = \_ ->
                 output = \_ -> 42
 
@@ -4112,7 +4159,7 @@ fn int_let_generalization() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pattern_match_char() {
     assert_evals_to!(
         indoc!(
@@ -4130,7 +4177,7 @@ fn pattern_match_char() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_4348() {
     assert_evals_to!(
         indoc!(
@@ -4148,7 +4195,7 @@ fn issue_4348() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_4349() {
     assert_evals_to!(
         indoc!(
@@ -4170,7 +4217,7 @@ fn issue_4349() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_4712() {
     assert_evals_to!(
         indoc!(
@@ -4208,7 +4255,7 @@ fn issue_4712() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pattern_as_toplevel() {
     assert_evals_to!(
         indoc!(
@@ -4229,7 +4276,7 @@ fn pattern_as_toplevel() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pattern_as_nested() {
     assert_evals_to!(
         indoc!(
@@ -4250,7 +4297,7 @@ fn pattern_as_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pattern_as_of_symbol() {
     assert_evals_to!(
         indoc!(
@@ -4268,7 +4315,7 @@ fn pattern_as_of_symbol() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn function_specialization_information_in_lambda_set_thunk() {
     assert_evals_to!(
         indoc!(
@@ -4290,7 +4337,7 @@ fn function_specialization_information_in_lambda_set_thunk() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     assert_evals_to!(
         indoc!(
@@ -4310,5 +4357,145 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         ),
         30,
         u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            go : U8 -> U8
+            go = \byte ->
+                when byte is
+                    15 if Bool.true -> 1
+                    b if Bool.true -> b + 2
+                    _ -> 3
+
+            main = go '.'
+            "#
+        ),
+        b'.' + 2,
+        u8
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn recursive_lambda_set_resolved_only_upon_specialization() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            factCPS = \n, cont ->
+                if n == 0 then
+                    cont 1
+                else
+                    factCPS (n - 1) \value -> cont (n * value)
+
+            main =
+                factCPS 5u64 \x -> x
+            "#
+        ),
+        120,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn layout_cache_structure_with_multiple_recursive_structures() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Chain : [
+                End,
+                Link Chain,
+            ]
+
+            LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
+
+            main =
+                base : LinkedList
+                base = Nil
+
+                walker : LinkedList, Chain -> LinkedList
+                walker = \rest, first -> Cons { first, rest }
+
+                list : List Chain
+                list = []
+
+                r = List.walk list base walker
+
+                if r == base then 11u8 else 22u8
+            "#
+        ),
+        11,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn reset_recursive_type_wraps_in_named_type() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            main : Str
+            main =
+              newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
+              printLinkedList newList Num.toStr
+
+            LinkedList a : [Cons a (LinkedList a), Nil]
+
+            mapLinkedList : LinkedList a, (a -> b) -> LinkedList b
+            mapLinkedList = \linkedList, f -> when linkedList is
+              Nil -> Nil
+              Cons x xs ->
+                s = if Bool.true then "true" else "false"
+                expect s == "true"
+
+                Cons (f x) (mapLinkedList xs f)
+
+            printLinkedList : LinkedList a, (a -> Str) -> Str
+            printLinkedList = \linkedList, f ->
+              when linkedList is
+                Nil -> "Nil"
+                Cons x xs ->
+                  strX = f x
+                  strXs = printLinkedList xs f
+                  "Cons \(strX) (\(strXs))"
+            "###
+        ),
+        RocStr::from("Cons 2 (Cons 3 (Cons 4 (Nil)))"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn pass_lambda_set_to_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            instr = if Bool.true then Num.mul else Num.add
+
+            fn = \a -> instr a a
+
+            main = fn 3
+            "#
+        ),
+        3 * 3,
+        i64
     );
 }

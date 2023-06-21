@@ -96,25 +96,7 @@ impl ReplState {
         let arena = Bump::new();
 
         match parse_src(&arena, line) {
-            ParseOutcome::Empty => {
-                if line.is_empty() {
-                    Ok(TIPS.to_string())
-                } else if line.ends_with('\n') {
-                    // After two blank lines in a row, give up and try parsing it
-                    // even though it's going to fail. This way you don't get stuck
-                    // in a perpetual Incomplete state due to a syntax error.
-                    Ok(self.eval_and_format(line, dimensions))
-                } else {
-                    // The previous line wasn't blank, but the line isn't empty either.
-                    // This could mean that, for example, you're writing a multiline `when`
-                    // and want to add a blank line. No problem! Print a blank line and
-                    // continue waiting for input.
-                    //
-                    // If the user presses enter again, next time prev_line_blank() will be true
-                    //  and we'll try parsing the source as-is.
-                    Ok("\n".to_string())
-                }
-            }
+            ParseOutcome::Empty => Ok(TIPS.to_string()),
             ParseOutcome::Expr(_)
             | ParseOutcome::ValueDef(_)
             | ParseOutcome::TypeDef(_)
@@ -596,7 +578,7 @@ fn format_output(
 
                 let term_width = match dimensions {
                     Some((width, _)) => width.min(VAR_NAME_COLUMN_MAX),
-                    None => VAR_NAME_COLUMN_MAX as usize,
+                    None => VAR_NAME_COLUMN_MAX,
                 };
 
                 let expr_with_type = format!("{expr}{EXPR_TYPE_SEPARATOR}{expr_type}");

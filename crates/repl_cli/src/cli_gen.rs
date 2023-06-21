@@ -42,8 +42,13 @@ pub fn gen_and_eval_llvm<'a, I: Iterator<Item = &'a str>>(
         }
     };
 
-    debug_assert_eq!(loaded.exposed_to_host.values.len(), 1);
-    let (main_fn_symbol, main_fn_var) = loaded.exposed_to_host.values.iter().next().unwrap();
+    debug_assert_eq!(loaded.exposed_to_host.top_level_values.len(), 1);
+    let (main_fn_symbol, main_fn_var) = loaded
+        .exposed_to_host
+        .top_level_values
+        .iter()
+        .next()
+        .unwrap();
     let main_fn_symbol = *main_fn_symbol;
     let main_fn_var = *main_fn_var;
 
@@ -188,7 +193,7 @@ fn mono_module_to_dylib<'a>(
         entry_point,
         interns,
         subs,
-        mut layout_interner,
+        layout_interner,
         ..
     } = loaded;
 
@@ -241,7 +246,7 @@ fn mono_module_to_dylib<'a>(
 
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
-        &mut layout_interner,
+        &layout_interner,
         opt_level,
         procedures,
         entry_point,

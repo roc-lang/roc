@@ -44,8 +44,7 @@ fn main() -> io::Result<()> {
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
         .help("Arguments to pass into the WebAssembly app\ne.g. `roc_wasm_interp app.wasm 123 123.45`")
-        .multiple_values(true)
-        .takes_value(true);
+        .num_args(0..);
 
     let app = Command::new("roc_wasm_interp")
         .about("Run the given .wasm file")
@@ -53,7 +52,6 @@ fn main() -> io::Result<()> {
         .arg(flag_debug)
         .arg(flag_hex)
         .arg(wasm_file_to_run)
-        .trailing_var_arg(true)
         .arg(args_for_app);
 
     // Parse the command line arguments

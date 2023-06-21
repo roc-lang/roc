@@ -1,6 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const Monotonic = std.builtin.AtomicOrder.Monotonic;
+
+const DEBUG_INCDEC = false;
 
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
@@ -15,9 +18,6 @@ extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
 
 // This should never be passed a null pointer.
 extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
-
-// should work just like libc memcpy (we can't assume libc is present)
-extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 
 extern fn kill(pid: c_int, sig: c_int) c_int;
 extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
@@ -40,14 +40,12 @@ fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int
 }
 
 comptime {
-    const builtin = @import("builtin");
     // During tests, use the testing allocators to satisfy these functions.
     if (builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
-        @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
 
         if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
             @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
@@ -81,14 +79,6 @@ fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     @panic("Roc panicked");
 }
 
-fn testing_roc_memcpy(dest: *anyopaque, src: *anyopaque, bytes: usize) callconv(.C) ?*anyopaque {
-    const zig_dest = @ptrCast([*]u8, dest);
-    const zig_src = @ptrCast([*]u8, src);
-
-    @memcpy(zig_dest, zig_src, bytes);
-    return dest;
-}
-
 pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
     return @ptrCast(?[*]u8, roc_alloc(size, alignment));
 }
@@ -101,21 +91,18 @@ pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
     return roc_dealloc(c_ptr, alignment);
 }
 
-pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
-    roc_memcpy(dst, src, size);
-}
-
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
-pub fn test_panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
     _ = c_ptr;
-    _ = alignment;
-    // const cstr = @ptrCast([*:0]u8, c_ptr);
+    _ = crash_tag;
 
-    // const stderr = std.io.getStdErr().writer();
-    // stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
-
-    // std.c.exit(1);
+    //    const cstr = @ptrCast([*:0]u8, c_ptr);
+    //
+    //    const stderr = std.io.getStdErr().writer();
+    //    stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
+    //
+    //    std.c.exit(1);
 }
 
 pub const Inc = fn (?[*]u8) callconv(.C) void;
@@ -147,14 +134,29 @@ const Refcount = enum {
 
 const RC_TYPE = Refcount.normal;
 
-pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
+pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == Refcount.none) return;
+
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("| increment {*}: ", .{ptr_to_refcount});
+    }
+
     // Ensure that the refcount is not whole program lifetime.
     if (ptr_to_refcount.* != REFCOUNT_MAX_ISIZE) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             Refcount.normal => {
+                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const old = @bitCast(usize, ptr_to_refcount.*);
+                    const new = old + @intCast(usize, amount);
+
+                    const oldH = old - REFCOUNT_ONE + 1;
+                    const newH = new - REFCOUNT_ONE + 1;
+
+                    std.debug.print("{} + {} = {}!\n", .{ oldH, amount, newH });
+                }
+
                 ptr_to_refcount.* += amount;
             },
             Refcount.atomic => {
@@ -165,7 +167,7 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     }
 }
 
-pub fn decrefC(
+pub fn decrefRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
 ) callconv(.C) void {
@@ -186,6 +188,36 @@ pub fn decrefCheckNullC(
         const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
         return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, alignment });
     }
+}
+
+pub fn decrefDataPtrC(
+    bytes_or_null: ?[*]isize,
+    alignment: u32,
+) callconv(.C) void {
+    var bytes = bytes_or_null orelse return;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+
+    return decrefRcPtrC(isizes - 1, alignment);
+}
+
+pub fn increfDataPtrC(
+    bytes_or_null: ?[*]isize,
+    inc_amount: isize,
+) callconv(.C) void {
+    var bytes = bytes_or_null orelse return;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: *isize = @intToPtr(*isize, masked_ptr - @sizeOf(usize));
+
+    return increfRcPtrC(isizes, inc_amount);
 }
 
 pub fn decref(
@@ -210,12 +242,27 @@ inline fn decref_ptr_to_refcount(
 ) void {
     if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
+
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("| decrement {*}: ", .{refcount_ptr});
+    }
+
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = refcount_ptr[0];
     if (refcount != REFCOUNT_MAX_ISIZE) {
         switch (RC_TYPE) {
             Refcount.normal => {
+                const old = @bitCast(usize, refcount);
                 refcount_ptr[0] = refcount -% 1;
+                const new = @bitCast(usize, refcount -% 1);
+
+                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+                    const oldH = old - REFCOUNT_ONE + 1;
+                    const newH = new - REFCOUNT_ONE + 1;
+
+                    std.debug.print("{} - 1 = {}!\n", .{ oldH, newH });
+                }
+
                 if (refcount == REFCOUNT_ONE_ISIZE) {
                     dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
                 }
@@ -229,6 +276,26 @@ inline fn decref_ptr_to_refcount(
             Refcount.none => unreachable,
         }
     }
+}
+
+pub fn isUnique(
+    bytes_or_null: ?[*]u8,
+) callconv(.C) bool {
+    var bytes = bytes_or_null orelse return true;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("| is unique {*}\n", .{&bytes[0]});
+    }
+
+    const refcount = (isizes - 1)[0];
+
+    return refcount == REFCOUNT_ONE_ISIZE;
 }
 
 // We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
@@ -347,13 +414,25 @@ pub const UpdateMode = enum(u8) {
 test "increfC, refcounted data" {
     var mock_rc: isize = REFCOUNT_ONE_ISIZE + 17;
     var ptr_to_refcount: *isize = &mock_rc;
-    increfC(ptr_to_refcount, 2);
+    increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_ONE_ISIZE + 19);
 }
 
 test "increfC, static data" {
     var mock_rc: isize = REFCOUNT_MAX_ISIZE;
     var ptr_to_refcount: *isize = &mock_rc;
-    increfC(ptr_to_refcount, 2);
+    increfRcPtrC(ptr_to_refcount, 2);
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
+}
+
+// This returns a compilation dependent pseudo random seed for dictionaries.
+// The seed is the address of this function.
+// This avoids all roc Dicts using a known seed and being trivial to DOS.
+// Still not as secure as true random, but a lot better.
+// This value must not change between calls unless Dict is changed to store the seed on creation.
+// Note: On esstentially all OSes, this will be affected by ASLR and different each run.
+// In wasm, the value will be constant to the build as a whole.
+// Either way, it can not be know by an attacker unless they get access to the executable.
+pub fn dictPseudoSeed() callconv(.C) u64 {
+    return @intCast(u64, @ptrToInt(dictPseudoSeed));
 }

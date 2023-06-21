@@ -1,0 +1,16 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Id n := [Id U32 n]
+    condition : Bool
+
+    v : Id [Y Str, Z Str]
+    v =
+        if condition
+        then @Id (Id 21 (Y "sasha"))
+        else @Id (Id 21 (Z "felix"))
+
+    v
+
+main = entry
+#      ^^^^^ Id [Y Str, Z Str]w_a

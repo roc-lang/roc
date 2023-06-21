@@ -1,3 +1,6 @@
+use std::io;
+use std::path::PathBuf;
+
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
@@ -204,11 +207,15 @@ pub enum Problem {
     OverAppliedCrash {
         region: Region,
     },
+    FileProblem {
+        filename: PathBuf,
+        error: io::ErrorKind,
+    },
 }
 
 impl Problem {
     pub fn severity(&self) -> Severity {
-        use Severity::{RuntimeError, Warning};
+        use Severity::{Fatal, RuntimeError, Warning};
 
         match self {
             Problem::UnusedDef(_, _) => Warning,
@@ -269,6 +276,7 @@ impl Problem {
             Problem::UnappliedCrash { .. } => RuntimeError,
             Problem::OverAppliedCrash { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
+            Problem::FileProblem { .. } => Fatal,
         }
     }
 
@@ -327,7 +335,11 @@ impl Problem {
             })
             | Problem::RuntimeError(RuntimeError::UnsupportedPattern(region))
             | Problem::RuntimeError(RuntimeError::MalformedPattern(_, region))
-            | Problem::RuntimeError(RuntimeError::LookupNotInScope(Loc { region, .. }, _))
+            | Problem::RuntimeError(RuntimeError::LookupNotInScope {
+                loc_name: Loc { region, .. },
+                suggestion_options: _,
+                underscored_suggestion_region: _,
+            })
             | Problem::RuntimeError(RuntimeError::OpaqueNotDefined {
                 usage: Loc { region, .. },
                 ..
@@ -353,6 +365,8 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
             | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
+            | Problem::RuntimeError(RuntimeError::MultipleRecordBuilders(region))
+            | Problem::RuntimeError(RuntimeError::UnappliedRecordBuilder(region))
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
             | Problem::InvalidHexadecimal(region)
@@ -414,6 +428,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::VoidValue)
             | Problem::RuntimeError(RuntimeError::ExposedButNotDefined(_))
             | Problem::RuntimeError(RuntimeError::NoImplementationNamed { .. })
+            | Problem::FileProblem { .. }
             | Problem::ExposedButNotDefined(_) => None,
         }
     }
@@ -494,7 +509,14 @@ pub enum RuntimeError {
     UnresolvedTypeVar,
     ErroneousType,
 
-    LookupNotInScope(Loc<Ident>, MutSet<Box<str>>),
+    LookupNotInScope {
+        loc_name: Loc<Ident>,
+        /// All of the names in scope (for the error message)
+        suggestion_options: MutSet<Box<str>>,
+        /// If the unfound variable is `name` and there's an ignored variable called `_name`,
+        /// this is the region where `_name` is defined (for the error message)
+        underscored_suggestion_region: Option<Region>,
+    },
     OpaqueNotDefined {
         usage: Loc<Ident>,
         opaques_in_scope: MutSet<Box<str>>,
@@ -579,6 +601,9 @@ pub enum RuntimeError {
     MultipleCharsInSingleQuote(Region),
 
     DegenerateBranch(Region),
+
+    MultipleRecordBuilders(Region),
+    UnappliedRecordBuilder(Region),
 }
 
 impl RuntimeError {

@@ -1,0 +1,13 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Foo a : [Blah (Result (Bar a) { val: a })]
+    Bar a : Foo a
+
+    v : Bar U8
+    v = Blah (Ok (Blah (Err { val: 1 })))
+
+    v
+
+main = entry
+#      ^^^^^ Bar U8

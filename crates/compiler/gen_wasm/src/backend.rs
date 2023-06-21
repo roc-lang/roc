@@ -12,8 +12,8 @@ use roc_mono::ir::{
     Param, Proc, ProcLayout, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
-    UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+    TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 
@@ -507,9 +507,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
         let inner_ret_layout = match wrapper_arg_layouts
             .last()
-            .map(|l| self.layout_interner.get(*l))
+            .map(|l| self.layout_interner.get_repr(*l))
         {
-            Some(Layout::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
+            Some(LayoutRepr::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
@@ -539,8 +539,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 continue;
             }
 
-            let inner_layout = match self.layout_interner.get(*wrapper_arg) {
-                Layout::Boxed(inner) => inner,
+            let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
+                LayoutRepr::Boxed(inner) => inner,
                 x => internal_error!("Expected a Boxed layout, got {:?}", x),
             };
             if self.layout_interner.stack_size(inner_layout) == 0 {
@@ -558,11 +558,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if self.layout_interner.stack_size(closure_data_layout) > 0 {
             // The closure data exists, and will have been passed in to the wrapper as a
             // one-element struct.
-            let inner_closure_data_layout = match self.layout_interner.get(closure_data_layout) {
-                Layout::Struct {
-                    field_layouts: [inner],
-                    ..
-                } => inner,
+            let inner_closure_data_layout = match self.layout_interner.get_repr(closure_data_layout)
+            {
+                LayoutRepr::Struct([inner]) => inner,
                 other => internal_error!(
                     "Expected a boxed layout for wrapped closure data, got {:?}",
                     other
@@ -635,8 +633,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             n_inner_args += 1;
         }
 
-        let inner_layout = match self.layout_interner.get(value_layout) {
-            Layout::Boxed(inner) => inner,
+        let inner_layout = match self.layout_interner.get_repr(value_layout) {
+            LayoutRepr::Boxed(inner) => inner,
             x => internal_error!("Expected a Boxed layout, got {:?}", x),
         };
         self.code_builder.get_local(LocalId(1));
@@ -664,26 +662,26 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     fn dereference_boxed_value(&mut self, inner: InLayout) {
         use Align::*;
 
-        match self.layout_interner.get(inner) {
-            Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+        match self.layout_interner.get_repr(inner) {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
                 self.code_builder.i32_load8_u(Bytes1, 0);
             }
-            Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
                 self.code_builder.i32_load16_u(Bytes2, 0);
             }
-            Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
                 self.code_builder.i32_load(Bytes4, 0);
             }
-            Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
                 self.code_builder.i64_load(Bytes8, 0);
             }
-            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
                 self.code_builder.f32_load(Bytes4, 0);
             }
-            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 self.code_builder.f64_load(Bytes8, 0);
             }
-            Layout::Builtin(Builtin::Bool) => {
+            LayoutRepr::Builtin(Builtin::Bool) => {
                 self.code_builder.i32_load8_u(Bytes1, 0);
             }
             _ => {
@@ -885,7 +883,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                         self.code_builder.f32_eq();
                     }
                     ValueType::F64 => {
-                        self.code_builder.f64_const(f64::from_bits(*value as u64));
+                        self.code_builder.f64_const(f64::from_bits(*value));
                         self.code_builder.f64_eq();
                     }
                 }
@@ -1041,6 +1039,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         match expr {
             Expr::Literal(lit) => self.expr_literal(lit, storage),
 
+            Expr::NullPointer => self.expr_null_pointer(),
+
             Expr::Call(roc_mono::ir::Call {
                 call_type,
                 arguments,
@@ -1093,6 +1093,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
+            Expr::ResetRef { symbol: arg, .. } => self.expr_resetref(*arg, sym, storage),
+
             Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100, false))
             }
@@ -1110,7 +1112,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {
                 match (lit, value_type) {
-                    (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x as f64),
+                    (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x),
                     (Literal::Float(x), ValueType::F32) => self.code_builder.f32_const(*x as f32),
                     (Literal::Int(x), ValueType::I64) => {
                         self.code_builder.i64_const(i128::from_ne_bytes(*x) as i64)
@@ -1230,6 +1232,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.module.data.append_segment(segment);
 
         elements_addr
+    }
+
+    fn expr_null_pointer(&mut self) {
+        self.code_builder.i32_const(0);
     }
 
     /*******************************************************************
@@ -1356,7 +1362,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             arguments,
             ret_symbol,
             ret_layout,
-            ret_layout_raw: self.layout_interner.get(ret_layout),
+            ret_layout_raw: self.layout_interner.get_repr(ret_layout),
             ret_storage: ret_storage.to_owned(),
         };
         low_level_call.generate(self);
@@ -1434,8 +1440,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         storage: &StoredValue,
         fields: &'a [Symbol],
     ) {
-        match self.layout_interner.get(layout) {
-            Layout::Struct { .. } => {
+        match self.layout_interner.get_repr(layout) {
+            LayoutRepr::Struct { .. } => {
                 match storage {
                     StoredValue::StackMemory { location, size, .. } => {
                         if *size > 0 {
@@ -1460,7 +1466,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     }
                 };
             }
-            Layout::LambdaSet(lambdaset) => {
+            LayoutRepr::LambdaSet(lambdaset) => {
                 self.expr_struct(sym, lambdaset.runtime_representation(), storage, fields)
             }
             _ => {
@@ -1630,7 +1636,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET_INFO);
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
         let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(self.layout_interner, TARGET_INFO);
+            union_layout.data_size_and_alignment(self.layout_interner);
 
         // We're going to use the pointer many times, so put it in a local variable
         let stored_with_local =
@@ -1682,10 +1688,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
-            let id_offset = data_offset
-                + union_layout
-                    .tag_id_offset(self.layout_interner, TARGET_INFO)
-                    .unwrap();
+            let id_offset = data_offset + union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
@@ -1768,9 +1771,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
-            let id_offset = union_layout
-                .tag_id_offset(self.layout_interner, TARGET_INFO)
-                .unwrap();
+            let id_offset = union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
@@ -1892,8 +1893,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         // allocate heap memory and load its data address onto the value stack
-        let arg_layout = match self.layout_interner.get(layout) {
-            Layout::Boxed(arg) => arg,
+        let arg_layout = match self.layout_interner.get_repr(layout) {
+            LayoutRepr::Boxed(arg) => arg,
             _ => internal_error!("ExprBox should always produce a Boxed layout"),
         };
         let (size, alignment) = self.layout_interner.stack_size_and_alignment(arg_layout);
@@ -1996,6 +1997,33 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let (specialized_call_expr, new_specializations) = self
             .helper_proc_gen
             .call_reset_refcount(ident_ids, self.layout_interner, layout, argument);
+
+        // If any new specializations were created, register their symbol data
+        for (spec_sym, spec_layout) in new_specializations.into_iter() {
+            self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
+        }
+
+        // Generate Wasm code for the IR call expression
+        self.expr(
+            ret_symbol,
+            self.env.arena.alloc(specialized_call_expr),
+            Layout::BOOL,
+            ret_storage,
+        );
+    }
+
+    fn expr_resetref(&mut self, argument: Symbol, ret_symbol: Symbol, ret_storage: &StoredValue) {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        // Get an IR expression for the call to the specialized procedure
+        let layout = self.storage.symbol_layouts[&argument];
+        let (specialized_call_expr, new_specializations) = self
+            .helper_proc_gen
+            .call_resetref_refcount(ident_ids, self.layout_interner, layout, argument);
 
         // If any new specializations were created, register their symbol data
         for (spec_sym, spec_layout) in new_specializations.into_iter() {

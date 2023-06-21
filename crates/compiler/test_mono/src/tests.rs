@@ -76,7 +76,7 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
+fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: bool, no_check: bool) {
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
 
@@ -146,9 +146,9 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
-    assert!(type_problems.is_empty());
+    assert!(allow_type_errors || type_problems.is_empty());
 
-    let main_fn_symbol = exposed_to_host.values.keys().copied().next();
+    let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
 
     if !no_check {
         check_procedures(arena, &interns, &mut layout_interner, &procedures);
@@ -1476,7 +1476,7 @@ fn encode_custom_type() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         HelloWorld := {}
@@ -1486,7 +1486,7 @@ fn encode_custom_type() {
                     |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1499,11 +1499,11 @@ fn encode_derived_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes "abc" Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes "abc" TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1517,11 +1517,11 @@ fn encode_derived_record() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "a"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "a"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1854,16 +1854,16 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
     )
 }
 
-#[mono_test]
+#[mono_test(large_stack = "true")]
 fn encode_derived_record_one_field_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1871,16 +1871,16 @@ fn encode_derived_record_one_field_string() {
     )
 }
 
-#[mono_test]
+#[mono_test(large_stack = "true")]
 fn encode_derived_record_two_field_strings() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1888,16 +1888,16 @@ fn encode_derived_record_two_field_strings() {
     )
 }
 
-#[mono_test]
+#[mono_test(large_stack = "true")]
 fn encode_derived_nested_record_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1910,13 +1910,13 @@ fn encode_derived_tag_one_field_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
             x : [A Str]
             x = A "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1951,13 +1951,13 @@ fn encode_derived_tag_two_payloads_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2087,10 +2087,7 @@ fn match_list() {
 }
 
 #[mono_test]
-#[ignore = "https://github.com/roc-lang/roc/issues/4561"]
 fn recursive_function_and_union_with_inference_hole() {
-    let _tracing_guards = roc_tracing::setup_tracing!();
-
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
@@ -2223,15 +2220,15 @@ fn issue_4705() {
     )
 }
 
-#[mono_test(mode = "test")]
+#[mono_test(mode = "test", large_stack = "true")]
 fn issue_4749() {
     indoc!(
         r###"
-        interface Test exposes [] imports [Json]
+        interface Test exposes [] imports [TotallyNotJson]
 
         expect
             input = [82, 111, 99]
-            got = Decode.fromBytes input Json.fromUtf8
+            got = Decode.fromBytes input TotallyNotJson.json
             got == Ok "Roc"
         "###
     )
@@ -2463,27 +2460,27 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     )
 }
 
-#[mono_test(mode = "test")]
+#[mono_test(mode = "test", large_stack = "true")]
 fn issue_4772_weakened_monomorphic_destructure() {
     indoc!(
         r###"
-        interface Test exposes [] imports [Json]
+        interface Test exposes [] imports [TotallyNotJson]
 
         getNumber =
-            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.fromUtf8
-                    
-            when result is 
-                Ok val -> 
-                    when Str.toI64 val is 
+            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") TotallyNotJson.json
+
+            when result is
+                Ok val ->
+                    when Str.toI64 val is
                         Ok number ->
                             Ok {val : number, input : rest}
                         Err InvalidNumStr ->
                             Err (ParsingFailure "not a number")
 
-                Err _ -> 
+                Err _ ->
                     Err (ParsingFailure "not a number")
 
-        expect 
+        expect
             result = getNumber
             result == Ok {val : -1234i64, input : []}
         "###
@@ -2664,7 +2661,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
     // rather than collapsing to `[[] + [A, B]:toEncoder:1]`.
     indoc!(
         r#"
-        app "test" imports [Json] provides [main] to "./platform"
+        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
         Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
 
@@ -2679,7 +2676,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         accessor = @Q {a : A, b: B}
 
         main =
-            Encode.toBytes accessor Json.toUtf8
+            Encode.toBytes accessor TotallyNotJson.json
         "#
     )
 }
@@ -2702,7 +2699,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
     // `t.a` and `t.b` are filled in.
     indoc!(
         r#"
-        app "test" imports [Json] provides [main] to "./platform"
+        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
         Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
 
@@ -2719,7 +2716,433 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
             @Q {a : x, b: x}
 
         main =
-            Encode.toBytes accessor Json.toUtf8
+            Encode.toBytes accessor TotallyNotJson.json
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_bool_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = if Bool.false then f else \n -> n
+            caller (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_enum_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n
+                C -> \n -> n + 1
+                D -> \n -> n + 2
+            (caller A) (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn inline_return_joinpoints_in_union_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        f = \x ->
+            caller = \t -> when t is
+                A -> f
+                B -> \n -> n + x
+            (caller A) (x + 1)
+        "#
+    )
+}
+
+#[mono_test]
+fn recursive_closure_with_transiently_used_capture() {
+    indoc!(
+        r#"
+        app "test" provides [f] to "./platform"
+
+        thenDo = \x, callback ->
+            callback x
+
+        f = \{} ->
+            code = 10u16
+
+            bf = \{} ->
+                thenDo code \_ -> bf {}
+
+            bf {}
+        "#
+    )
+}
+
+#[mono_test]
+fn when_guard_appears_multiple_times_in_compiled_decision_tree_issue_5176() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        go : U8 -> U8
+        go = \byte ->
+            when byte is
+                15 if Bool.true -> 1
+                b if Bool.true -> b + 2
+                _ -> 3
+
+        main = go '.'
+        "#
+    )
+}
+
+#[mono_test]
+fn recursive_lambda_set_resolved_only_upon_specialization() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        factCPS = \n, cont ->
+            if n == 0u8 then
+                cont 1u8
+            else
+                factCPS (n - 1) \value -> cont (n * value)
+
+        main =
+            factCPS 5 \x -> x
+        "#
+    )
+}
+
+#[mono_test]
+fn compose_recursive_lambda_set_productive_nullable_wrapped() {
+    indoc!(
+        r#"
+         app "test" provides [main] to "./platform"
+
+         compose = \forward -> \f, g ->
+            if forward
+            then \x -> g (f x)
+            else \x -> f (g x)
+
+         identity = \x -> x
+         exclame = \s -> "\(s)!"
+         whisper = \s -> "(\(s))"
+
+         main =
+             res: Str -> Str
+             res = List.walk [ exclame, whisper ] identity (compose Bool.true)
+             res "hello"
+         "#
+    )
+}
+
+#[mono_test]
+fn issue_4759() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            update { a : { x : "x", y: "y" } }
+
+        update = \state -> { state & a : { x : "ux", y: "uy" } }
+        "#
+    )
+}
+
+#[mono_test]
+fn layout_cache_structure_with_multiple_recursive_structures() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Chain : [
+            End,
+            Link Chain,
+        ]
+
+        LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
+
+        main =
+            base : LinkedList 
+            base = Nil
+
+            walker : LinkedList, Chain -> LinkedList
+            walker = \rest, first -> Cons { first, rest } 
+
+            list : List Chain
+            list = []
+
+            r = List.walk list base walker
+
+            r
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_4770() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            isCorrectOrder { left: IsList [IsInteger 10], right: IsList [IsInteger 20] }
+
+        isCorrectOrder = \pair ->
+            when pair is
+                { left: IsInteger left, right: IsInteger right } -> left < right
+                { left: IsList l, right: IsList r } ->
+                    if List.map2 l r (\left, right -> { left, right }) |> List.all isCorrectOrder then
+                        List.len l < List.len r
+                    else
+                        Bool.false
+
+                { left: IsList _, right: IsInteger _ } -> isCorrectOrder { left: pair.left, right: IsList [pair.right] }
+                { left: IsInteger _, right: IsList _ } -> isCorrectOrder { left: IsList [pair.left], right: pair.right }
+        "#
+    )
+}
+
+#[mono_test(allow_type_errors = "true")]
+fn error_on_erroneous_condition() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = if True then 1 else 2
+        "#
+    )
+}
+
+#[mono_test]
+fn binary_tree_fbip() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            tree = Node (Node (Node (Node Tip Tip) Tip) (Node Tip Tip)) (Node Tip Tip)
+            checkFbip tree
+
+        Tree : [Node Tree Tree, Tip]
+
+        check : Tree -> Num a
+        check = \t -> when t is
+            Node l r -> check l + check r + 1
+            Tip -> 0
+
+        Visit : [NodeR Tree Visit, Done]
+
+        checkFbip : Tree -> Num a
+        checkFbip = \t -> checkFbipHelper t Done 0
+
+        checkFbipHelper : Tree, Visit, Num a-> Num a
+        checkFbipHelper = \t, v, a -> when t is
+            Node l r -> checkFbipHelper l (NodeR r v) (a + 1)
+            Tip -> when v is
+                NodeR r v2 -> checkFbipHelper r v2 a
+                Done -> a
+        "#
+    )
+}
+
+#[mono_test(large_stack = "true")]
+fn rb_tree_fbip() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = Leaf
+            |> ins 0 0
+            |> ins 5 1
+            |> ins 6 2
+            |> ins 4 3
+            |> ins 9 4
+            |> ins 3 5
+            |> ins 2 6
+            |> ins 1 7
+            |> ins 8 8
+            |> ins 7 9
+
+        Color : [Red, Black]
+
+        Tree a : [Node Color (Tree a) I32 a (Tree a), Leaf]
+
+        ins : Tree a, I32, a -> Tree a
+        ins = \t, k, v -> when t is
+            Leaf -> Node Red Leaf k v Leaf
+            Node Black l kx vx r ->
+                if k < kx
+                    then when l is
+                        Node Red _ _ _ _ -> when (ins l k v) is
+                            Node _ (Node Red ly ky vy ry) kz vz rz -> Node Red (Node Black ly ky vy ry) kz vz (Node Black rz kx vx r)
+                            Node _ lz kz vz (Node Red ly ky vy ry) -> Node Red (Node Black lz kz vz ly) ky vy (Node Black ry kx vx r)
+                            Node _ ly ky vy ry -> Node Black (Node Red ly ky vy ry) kx vx r
+                            Leaf -> Leaf
+                        _ -> Node Black (ins l k v) kx vx r
+                else
+                    if k > kx
+                        then when r is
+                            Node Red _ _ _ _ -> when ins r k v is
+                                Node _ (Node Red ly ky vy ry) kz vz rz -> Node Red (Node Black ly ky vy ry) kz vz (Node Black rz kx vx r)
+                                Node _ lz kz vz (Node Red ly ky vy ry) -> Node Red (Node Black lz kz vz ly) ky vy (Node Black ry kx vx r)
+                                Node _ ly ky vy ry -> Node Black (Node Red ly ky vy ry) kx vx r
+                                Leaf -> Leaf
+                            _ -> Node Black l kx vx (ins r k v)
+                    else Node Black l k v r
+            Node Red l kx vx r ->
+                if k < kx
+                    then Node Red (ins l k v) kx vx r
+                else
+                    if k > kx 
+                        then Node Red l kx vx (ins r k v)
+                        else Node Red l k v r
+        "#
+    )
+}
+
+#[mono_test]
+fn specialize_after_match() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = 
+            listA : LinkedList Str
+            listA = Nil
+            
+            listB : LinkedList Str
+            listB = Nil
+
+            longestLinkedList listA listB
+
+        LinkedList a : [Cons a (LinkedList a), Nil]
+
+        longestLinkedList : LinkedList a, LinkedList a -> Nat
+        longestLinkedList = \listA, listB -> when listA is
+            Nil -> linkedListLength listB
+            Cons a aa -> when listB is
+                Nil -> linkedListLength listA
+                Cons b bb -> 
+                    lengthA = (linkedListLength aa) + 1
+                    lengthB = linkedListLength listB
+                    if lengthA > lengthB
+                        then lengthA
+                        else lengthB
+        
+        linkedListLength : LinkedList a -> Nat
+        linkedListLength = \list -> when list is
+            Nil -> 0
+            Cons _ rest -> 1 + linkedListLength rest
+        "#
+    )
+}
+
+#[mono_test]
+fn drop_specialize_after_struct() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: v, right: v }
+            "result"
+        "#
+    )
+}
+
+#[mono_test]
+fn record_update() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+        main = f {a: [], b: [], c:[]}
+        f : {a: List Nat, b: List Nat, c: List Nat} -> {a: List Nat, b: List Nat, c: List Nat}
+        f = \record -> {record & a: List.set record.a 7 7, b: List.set record.b 8 8}
+        "#
+    )
+}
+
+#[mono_test]
+fn drop_specialize_after_jump() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: { left: v, right: v }, right: v }
+            tupleItem t
+        
+        tupleItem = \t ->
+            true = Bool.true
+            l = t.left
+            x = if true then 1 else 0
+            ll = l.left
+            { left: t, right: ll}
+        "#
+    )
+}
+
+#[mono_test(mode = "test")]
+fn dbg_in_expect() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        expect
+            dbg ""
+            Bool.true
+        "###
+    )
+}
+
+#[mono_test]
+fn drop_specialize_before_jump() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: v, right: v }
+            tupleItem t
+
+        tupleItem = \t ->
+            true = Bool.true
+            l = t.left
+            x = if true then 1 else 0
+            {left: l, right: {left: l, right: t}}
+        "#
+    )
+}
+
+#[mono_test]
+fn dbg_str_followed_by_number() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            dbg ""
+            42
         "#
     )
 }

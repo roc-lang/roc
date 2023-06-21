@@ -24,7 +24,10 @@ use roc_types::{
 };
 use roc_unify::unify::{unify, Env as UEnv, Mode, MustImplementConstraints};
 
-use crate::solve::{deep_copy_var_in, introduce, Pools};
+use crate::{
+    ability::builtin_module_with_unlisted_ability_impl,
+    solve::{deep_copy_var_in, introduce, Pools},
+};
 
 /// What phase in the compiler is reaching out to specialize lambda sets?
 /// This is important to distinguish subtle differences in the behavior of the solving algorithm.
@@ -542,7 +545,7 @@ fn compact_lambda_set<P: Phase>(
         Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. subs, t_f1);
+            trace_compact!(3iter_end_skipped.subs, t_f1);
             return OneCompactionResult::Compacted {
                 new_obligations: Default::default(),
                 new_lambda_sets_to_specialize: Default::default(),
@@ -565,7 +568,7 @@ fn compact_lambda_set<P: Phase>(
         Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. subs, t_f1);
+            trace_compact!(3iter_end_skipped.subs, t_f1);
             return OneCompactionResult::Compacted {
                 new_obligations: Default::default(),
                 new_lambda_sets_to_specialize: Default::default(),
@@ -578,7 +581,7 @@ fn compact_lambda_set<P: Phase>(
     let t_f2 = deep_copy_var_in(subs, target_rank, pools, t_f2, arena);
 
     // 3. Unify `t_f1 ~ t_f2`.
-    trace_compact!(3iter_start. subs, this_lambda_set, t_f1, t_f2);
+    trace_compact!(3iter_start.subs, this_lambda_set, t_f1, t_f2);
     let (vars, new_obligations, new_lambda_sets_to_specialize, _meta) = unify(
         &mut UEnv::new(subs),
         t_f1,
@@ -587,7 +590,7 @@ fn compact_lambda_set<P: Phase>(
         Polarity::Pos,
     )
     .expect_success("ambient functions don't unify");
-    trace_compact!(3iter_end. subs, t_f1);
+    trace_compact!(3iter_end.subs, t_f1);
 
     introduce(subs, target_rank, pools, &vars);
 
@@ -625,7 +628,9 @@ fn make_specialization_decision<P: Phase>(
     use Content::*;
     use SpecializationTypeKey::*;
     match subs.get_content_without_compacting(var) {
-        Alias(opaque, _, _, AliasKind::Opaque) if opaque.module_id() != ModuleId::NUM => {
+        Alias(opaque, _, _, AliasKind::Opaque)
+            if !builtin_module_with_unlisted_ability_impl(opaque.module_id()) =>
+        {
             if P::IS_LATE {
                 SpecializeDecision::Specialize(Opaque(*opaque))
             } else {
@@ -743,7 +748,7 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
                                 let specialized_lambda_set = *specialization
                                     .specialization_lambda_sets
                                     .get(&lset_region)
-                                    .expect("lambda set region not resolved");
+                                    .unwrap_or_else(|| panic!("lambda set region not resolved: {:?}", (spec_symbol, specialization)));
                                 Ok(specialized_lambda_set)
                             }
                             MemberImpl::Error => todo_abilities!(),

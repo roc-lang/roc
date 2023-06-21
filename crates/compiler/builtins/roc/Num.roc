@@ -33,11 +33,17 @@ interface Num
         Decimal,
         Binary32,
         Binary64,
+        e,
+        pi,
+        tau,
         abs,
+        absDiff,
         neg,
         add,
         sub,
         mul,
+        min,
+        max,
         isLt,
         isLte,
         isGt,
@@ -54,6 +60,9 @@ interface Num
         toFrac,
         isPositive,
         isNegative,
+        isNaN,
+        isInfinite,
+        isFinite,
         rem,
         remChecked,
         div,
@@ -68,12 +77,16 @@ interface Num
         compare,
         pow,
         powInt,
+        countLeadingZeroBits,
+        countTrailingZeroBits,
+        countOneBits,
         addWrap,
         addChecked,
         addSaturated,
         bitwiseAnd,
         bitwiseXor,
         bitwiseOr,
+        bitwiseNot,
         shiftLeftBy,
         shiftRightBy,
         shiftRightZfBy,
@@ -86,6 +99,8 @@ interface Num
         intCast,
         bytesToU16,
         bytesToU32,
+        bytesToU64,
+        bytesToU128,
         divCeil,
         divCeilChecked,
         divTrunc,
@@ -151,9 +166,9 @@ interface Num
 ## Represents a number that could be either an [Int] or a [Frac].
 ##
 ## This is useful for functions that can work on either, for example [Num.add], whose type is:
-##
-##     add : Num a, Num a -> Num a
-##
+## ```
+## add : Num a, Num a -> Num a
+## ```
 ## The number 1.5 technically has the type `Num (Fraction *)`, so when you pass
 ## two of them to [Num.add], the answer you get is `3.0 : Num (Fraction *)`.
 ##
@@ -191,9 +206,9 @@ interface Num
 ##
 ## If this default of [I64] is not big enough for your purposes,
 ## you can add an `i128` to the end of the number literal, like so:
-##
-## >>> Num.toStr 5_000_000_000i128
-##
+## ```
+## Num.toStr 5_000_000_000i128
+## ```
 ## This `i128` suffix specifies that you want this number literal to be
 ## an [I128] instead of a `Num *`. All the other numeric types have
 ## suffixes just like `i128`; here are some other examples:
@@ -224,7 +239,7 @@ Num range := range
 ##
 ## [I8] is a signed integer that takes up 8 bits. The `I` is for Integer, since
 ## integers in mathematics are signed by default. Because it has 8 bits just
-## like [U8], it can store 256 numbers (still 2^16), but because it is signed,
+## like [U8], it can store 256 numbers (still 2^8), but because it is signed,
 ## the range is different. Its 256 numbers range from -128 to 127.
 ##
 ## Here are some other examples:
@@ -234,7 +249,7 @@ Num range := range
 ##
 ## This pattern continues up to [U128] and [I128].
 ##
-## ## Performance notes
+## ## Performance Details
 ##
 ## In general, using smaller numeric sizes means your program will use less memory.
 ## However, if a mathematical operation results in an answer that is too big
@@ -259,15 +274,11 @@ Num range := range
 ##
 ## All number literals without decimal points are compatible with [Int] values.
 ##
-## >>> 1
-##
-## >>> 0
-##
 ## You can optionally put underscores in your [Int] literals.
 ## They have no effect on the number's value, but can make large numbers easier to read.
-##
-## >>> 1_000_000
-##
+## ```
+## 1_000_000
+## ```
 ## Integers come in two flavors: *signed* and *unsigned*.
 ##
 ## * *Unsigned* integers can never be negative. The lowest value they can hold is zero.
@@ -278,7 +289,7 @@ Num range := range
 ## general trade-offs are:
 ##
 ## * Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
-## * Smaller integer sizes take up less memory. This savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can be a performance bottleneck.
+## * Smaller integer sizes take up less memory. These savings rarely matter in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can be a performance bottleneck.
 ## * Certain CPUs work faster on some numeric sizes than others. If the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 ##
 ## Here are the different fixed size integer types:
@@ -322,7 +333,7 @@ Num range := range
 ##
 ## A common use for [Nat] is to store the length ("len" for short) of a
 ## collection like a [List]. 64-bit systems can represent longer
-## lists in memory than 32-bit systems can, which is why the length of a list
+## lists in memory than 32-bit systems, which is why the length of a list
 ## is represented as a [Nat] in Roc.
 ##
 ## If any operation would result in an [Int] that is either too big
@@ -342,16 +353,16 @@ Int range : Num (Integer range)
 ##
 ## If you don't specify a type, Roc will default to using [Dec] because it's
 ## the least error-prone overall. For example, suppose you write this:
-##
-##     wasItPrecise = 0.1 + 0.2 == 0.3
-##
+## ```
+## wasItPrecise = 0.1 + 0.2 == 0.3
+## ```
 ## The value of `wasItPrecise` here will be `Bool.true`, because Roc uses [Dec]
 ## by default when there are no types specified.
 ##
 ## In contrast, suppose we use `f32` or `f64` for one of these numbers:
-##
-##     wasItPrecise = 0.1f64 + 0.2 == 0.3
-##
+## ```
+## wasItPrecise = 0.1f64 + 0.2 == 0.3
+## ```
 ## Here, `wasItPrecise` will be `Bool.false` because the entire calculation will have
 ## been done in a base-2 floating point calculation, which causes noticeable
 ## precision loss in this case.
@@ -380,7 +391,7 @@ Int range : Num (Integer range)
 ## Whenever a function in this module could return one of these values, that
 ## possibility is noted in the function's documentation.
 ##
-## ## Performance Notes
+## ## Performance Details
 ##
 ## On typical modern CPUs, performance is similar between [Dec], [F64], and [F32]
 ## for addition and subtraction. For example, [F32] and [F64] do addition using
@@ -437,7 +448,7 @@ U8 : Num (Integer Unsigned8)
 ## on 32-bit systems, and so on.
 ##
 ## This system-specific size makes it useful for certain data structure
-## functions like [List.len], because the number of elements many data strucures
+## functions like [List.len], because the number of elements many data structures
 ## can hold is also system-specific. For example, the maximum number of elements
 ## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
 ## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
@@ -468,7 +479,7 @@ F32 : Num (FloatingPoint Binary32)
 ##
 ## This means a [Dec] can represent whole numbers up to slightly over 170
 ## quintillion, along with 18 decimal places. (To be precise, it can store
-## numbers betwween `-170_141_183_460_469_231_731.687303715884105728`
+## numbers between `-170_141_183_460_469_231_731.687303715884105728`
 ## and `170_141_183_460_469_231_731.687303715884105727`.) Why 18
 ## decimal places? It's the highest number of decimal places where you can still
 ## convert any [U64] to a [Dec] without losing information.
@@ -480,27 +491,38 @@ F32 : Num (FloatingPoint Binary32)
 ## details, below), and decimal precision loss isn't as big a concern when
 ## dealing with screen coordinates as it is when dealing with currency.
 ##
-## ## Performance
+## ## Performance Details
 ##
 ## [Dec] typically takes slightly less time than [F64] to perform addition and
 ## subtraction, but 10-20 times longer to perform multiplication and division.
 ## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
 Dec : Num (FloatingPoint Decimal)
 
+## Euler's number (e)
+e : Frac *
+e = 2.71828182845904523536028747135266249775724709369995
+
+## Archimedes' constant (π)
+pi : Frac *
+pi = 3.14159265358979323846264338327950288419716939937510
+
+## Circle constant (τ)
+tau : Frac *
+tau = 2 * pi
+
 # ------- Functions
 ## Convert a number to a [Str].
 ##
 ## This is the same as calling `Num.format {}` - so for more details on
 ## exact formatting, see `Num.format`.
-##
-## >>> Num.toStr 42
-##
+## ```
+## Num.toStr 42
+## ```
 ## Only [Frac] values will include a decimal point, and they will always include one.
-##
-## >>> Num.toStr 4.2
-##
-## >>> Num.toStr 4.0
-##
+## ```
+## Num.toStr 4.2
+## Num.toStr 4.0
+## ```
 ## When this function is given a non-[finite](Num.isFinite)
 ## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
 ##
@@ -510,6 +532,8 @@ intCast : Int a -> Int b
 
 bytesToU16Lowlevel : List U8, Nat -> U16
 bytesToU32Lowlevel : List U8, Nat -> U32
+bytesToU64Lowlevel : List U8, Nat -> U64
+bytesToU128Lowlevel : List U8, Nat -> U128
 
 bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
 bytesToU16 = \bytes, index ->
@@ -531,6 +555,26 @@ bytesToU32 = \bytes, index ->
     else
         Err OutOfBounds
 
+bytesToU64 : List U8, Nat -> Result U64 [OutOfBounds]
+bytesToU64 = \bytes, index ->
+    # we need at least 7 more bytes
+    offset = 7
+
+    if index + offset < List.len bytes then
+        Ok (bytesToU64Lowlevel bytes index)
+    else
+        Err OutOfBounds
+
+bytesToU128 : List U8, Nat -> Result U128 [OutOfBounds]
+bytesToU128 = \bytes, index ->
+    # we need at least 15 more bytes
+    offset = 15
+
+    if index + offset < List.len bytes then
+        Ok (bytesToU128Lowlevel bytes index)
+    else
+        Err OutOfBounds
+
 compare : Num a, Num a -> [LT, EQ, GT]
 
 ## Returns `Bool.true` if the first number is less than the second.
@@ -539,9 +583,10 @@ compare : Num a, Num a -> [LT, EQ, GT]
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-##
-## >>> 5
-## >>>     |> Num.isLt 6
+## ```
+## 5
+##     |> Num.isLt 6
+## ```
 isLt : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the first number is greater than the second.
@@ -550,9 +595,10 @@ isLt : Num a, Num a -> Bool
 ##
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-##
-## >>> 6
-## >>>     |> Num.isGt 5
+## ```
+## 6
+##     |> Num.isGt 5
+## ```
 isGt : Num a, Num a -> Bool
 
 ## Returns `Bool.true` if the first number is less than or equal to the second.
@@ -596,20 +642,43 @@ isNegative = \x -> x < 0
 
 toFrac : Num * -> Frac *
 
-## Return the absolute value of the number.
+## Returns `Bool.true` if the [Frac] is not a number as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+##
+## ```
+## Num.isNaN (0 / 0)
+## ```
+isNaN : Frac * -> Bool
+
+## Returns `Bool.true` if the [Frac] is positive or negative infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+##
+## ```
+## Num.isInfinite (1 / 0)
+##
+## Num.isInfinite (-1 / 0)
+## ```
+isInfinite : Frac * -> Bool
+
+## Returns `Bool.true` if the [Frac] is not an infinity as defined by [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+##
+## ```
+## Num.isFinite 42
+## ```
+isFinite : Frac * -> Bool
+
+## Returns the absolute value of the number.
 ##
 ## * For a positive number, returns the same number.
 ## * For a negative number, returns the same number except positive.
 ## * For zero, returns zero.
+## ```
+## Num.abs 4
 ##
-## >>> Num.abs 4
+## Num.abs -2.5
 ##
-## >>> Num.abs -2.5
+## Num.abs 0
 ##
-## >>> Num.abs 0
-##
-## >>> Num.abs 0.0
-##
+## Num.abs 0.0
+## ```
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
 ## For example, calling #Num.abs on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
@@ -619,16 +688,37 @@ toFrac : Num * -> Frac *
 ## Calling this on an unsigned integer (like [U32] or [U64]) never does anything.
 abs : Num a -> Num a
 
-## Return a negative number when given a positive one, and vice versa.
+## Returns the absolute difference between two numbers.
 ##
-## >>> Num.neg 5
+## ```
+## Num.absDiff 5 3
 ##
-## >>> Num.neg -2.5
+## Num.absDiff -3 5
 ##
-## >>> Num.neg 0
+## Num.absDiff 3.0 5.0
+## ```
 ##
-## >>> Num.neg 0.0
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## ∞ or -∞. For all other number types, overflow results in a panic.
+absDiff : Num a, Num a -> Num a
+absDiff = \a, b ->
+    if a > b then
+        a - b
+    else
+        b - a
+
+## Returns a negative number when given a positive one, and vice versa.
+## ```
+## Num.neg 5
 ##
+## Num.neg -2.5
+##
+## Num.neg 0
+##
+## Num.neg 0.0
+## ```
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
 ## For example, calling #Num.neg on the lowest value of a signed integer (such as [Num.minI64] or [Num.minI32]) will cause overflow.
@@ -640,68 +730,98 @@ abs : Num a -> Num a
 ## (It will never crash when given a [Frac], however, because of how floating point numbers represent positive and negative numbers.)
 neg : Num a -> Num a
 
-## Add two numbers of the same type.
+## Adds two numbers of the same type.
 ##
 ## (To add an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a + b` is shorthand for `Num.add a b`.
+## ```
+## 5 + 7
 ##
-## >>> 5 + 7
-##
-## >>> Num.add 5 7
-##
+## Num.add 5 7
+## ```
 ## `Num.add` can be convenient in pipelines.
-##
-## >>> Frac.pi
-## >>>     |> Num.add 1.0
-##
+## ```
+## Frac.pi
+##     |> Num.add 1.0
+## ```
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
 ## *overflow*. For [F64] and [F32], overflow results in an answer of either
 ## ∞ or -∞. For all other number types, overflow results in a panic.
 add : Num a, Num a -> Num a
 
-## Subtract two numbers of the same type.
+## Subtracts two numbers of the same type.
 ##
 ## (To subtract an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
+## ```
+## 7 - 5
 ##
-## >>> 7 - 5
-##
-## >>> Num.sub 7 5
-##
+## Num.sub 7 5
+## ```
 ## `Num.sub` can be convenient in pipelines.
-##
-## >>> Frac.pi
-## >>>     |> Num.sub 2.0
-##
+## ```
+## Frac.pi
+##     |> Num.sub 2.0
+## ```
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
 ## *overflow*. For [F64] and [F32], overflow results in an answer of either
 ## ∞ or -∞. For all other number types, overflow results in a panic.
 sub : Num a, Num a -> Num a
 
-## Multiply two numbers of the same type.
+## Multiplies two numbers of the same type.
 ##
 ## (To multiply an [Int] and a [Frac], first convert one so that they both have the same type. There are functions in this module that can convert both [Int] to [Frac] and the other way around.)
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
+## ```
+## 5 * 7
 ##
-## >>> 5 * 7
-##
-## >>> Num.mul 5 7
+## Num.mul 5 7
+## ```
 ##
 ## `Num.mul` can be convenient in pipelines.
 ##
-## >>> Frac.pi
-## >>>     |> Num.mul 2.0
-##
+## ```
+## Frac.pi
+##     |> Num.mul 2.0
+## ```
 ## If the answer to this operation can't fit in the return value (e.g. an
 ## [I8] answer that's higher than 127 or lower than -128), the result is an
 ## *overflow*. For [F64] and [F32], overflow results in an answer of either
 ## ∞ or -∞. For all other number types, overflow results in a panic.
 mul : Num a, Num a -> Num a
+
+## Obtains the smaller between two numbers of the same type.
+##
+## ```
+## Num.min 100 0
+##
+## Num.min 3.0 -3.0
+## ```
+min : Num a, Num a -> Num a
+min = \a, b ->
+    if a < b then
+        a
+    else
+        b
+
+## Obtains the greater between two numbers of the same type.
+##
+## ```
+## Num.max 100 0
+##
+## Num.max 3.0 -3.0
+## ```
+max : Num a, Num a -> Num a
+max = \a, b ->
+    if a > b then
+        a
+    else
+        b
 
 sin : Frac a -> Frac a
 cos : Frac a -> Frac a
@@ -731,14 +851,15 @@ atan : Frac a -> Frac a
 ## > this standard, deviating from these rules has a significant performance
 ## > cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
 ## > access to hardware-accelerated performance, Roc follows these rules exactly.
+## ```
+## Num.sqrt 4.0
 ##
-## >>> Num.sqrt 4.0
+## Num.sqrt 1.5
 ##
-## >>> Num.sqrt 1.5
+## Num.sqrt 0.0
 ##
-## >>> Num.sqrt 0.0
-##
-## >>> Num.sqrt -4.0f64
+## Num.sqrt -4.0f64
+## ```
 sqrt : Frac a -> Frac a
 
 sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]
@@ -758,12 +879,12 @@ logChecked = \x ->
     else
         Ok (Num.log x)
 
-## Divide one [Frac] by another.
+## Divides one [Frac] by another.
 ##
 ## `a / b` is shorthand for `Num.div a b`.
 ##
 ## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero).
-## As such, you should make sure never to pass zero as the denomaintor to this function!
+## As such, you should make sure never to pass zero as the denominator to this function!
 ## Calling [div] on a [Dec] denominator of zero will cause a panic.
 ##
 ## Calling [div] on [F32] and [F64] values follows these rules:
@@ -779,15 +900,16 @@ logChecked = \x ->
 ##
 ## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
 ## one of the functions in this module like #toDec.
+## ```
+## 5.0 / 7.0
 ##
-## >>> 5.0 / 7.0
-##
-## >>> Num.div 5 7
-##
+## Num.div 5 7
+## ```
 ## `Num.div` can be convenient in pipelines.
-##
-## >>> Num.pi
-## >>>     |> Num.div 2.0
+## ```
+## Num.pi
+##     |> Num.div 2.0
+## ```
 div : Frac a, Frac a -> Frac a
 
 divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]
@@ -806,22 +928,22 @@ divCeilChecked = \a, b ->
     else
         Ok (Num.divCeil a b)
 
-## Divide two integers, truncating the result towards zero.
+## Divides two integers, truncating the result towards zero.
 ##
 ## `a // b` is shorthand for `Num.divTrunc a b`.
 ##
 ## Division by zero is undefined in mathematics. As such, you should make
-## sure never to pass zero as the denomaintor to this function! If you do,
+## sure never to pass zero as the denominator to this function! If you do,
 ## it will crash.
+## ```
+## 5 // 7
 ##
-## >>> 5 // 7
+## Num.divTrunc 5 7
 ##
-## >>> Num.divTrunc 5 7
+## 8 // -3
 ##
-## >>> 8 // -3
-##
-## >>> Num.divTrunc 8 -3
-##
+## Num.divTrunc 8 -3
+## ```
 divTrunc : Int a, Int a -> Int a
 
 divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]
@@ -831,17 +953,18 @@ divTruncChecked = \a, b ->
     else
         Ok (Num.divTrunc a b)
 
-## Obtain the remainder (truncating modulo) from the division of two integers.
+## Obtains the remainder (truncating modulo) from the division of two integers.
 ##
 ## `a % b` is shorthand for `Num.rem a b`.
+## ```
+## 5 % 7
 ##
-## >>> 5 % 7
+## Num.rem 5 7
 ##
-## >>> Num.rem 5 7
+## -8 % -3
 ##
-## >>> -8 % -3
-##
-## >>> Num.rem -8 -3
+## Num.rem -8 -3
+## ```
 rem : Int a, Int a -> Int a
 
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]
@@ -853,32 +976,47 @@ remChecked = \a, b ->
 
 isMultipleOf : Int a, Int a -> Bool
 
+## Does a "bitwise and". Each bit of the output is 1 if the corresponding bit
+## of x AND of y is 1, otherwise it's 0.
 bitwiseAnd : Int a, Int a -> Int a
+
+## Does a "bitwise exclusive or". Each bit of the output is the same as the
+## corresponding bit in x if that bit in y is 0, and it's the complement of
+## the bit in x if that bit in y is 1.
 bitwiseXor : Int a, Int a -> Int a
+
+## Does a "bitwise or". Each bit of the output is 0 if the corresponding bit
+## of x OR of y is 0, otherwise it's 1.
 bitwiseOr : Int a, Int a -> Int a
+
+## Returns the complement of x - the number you get by switching each 1 for a
+## 0 and each 0 for a 1. This is the same as -x - 1.
+bitwiseNot : Int a -> Int a
+bitwiseNot = \n ->
+    bitwiseXor n (subWrap 0 1)
 
 ## Bitwise left shift of a number by another
 ##
 ## The least significant bits always become 0. This means that shifting left is
 ## like multiplying by factors of two for unsigned integers.
+## ```
+## shiftLeftBy 0b0000_0011 2 == 0b0000_1100
 ##
-## >>> shiftLeftBy 0b0000_0011 2 == 0b0000_1100
-##
-## >>> 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
-##
+## 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
+## ```
 ## In some languages `shiftLeftBy` is implemented as a binary operator `<<`.
 shiftLeftBy : Int a, U8 -> Int a
 
 ## Bitwise arithmetic shift of a number by another
 ##
 ## The most significant bits are copied from the current.
+## ```
+## shiftRightBy 0b0000_0011 2 == 0b0000_1100
 ##
-## >>> shiftRightBy 0b0000_0011 2 == 0b0000_1100
+## 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
 ##
-## >>> 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
-##
-## >>> 0b1001_0000 |> shiftRightBy 2 == 0b1110_0100
-##
+## 0b1001_0000 |> shiftRightBy 2 == 0b1110_0100
+## ```
 ## In some languages `shiftRightBy` is implemented as a binary operator `>>>`.
 shiftRightBy : Int a, U8 -> Int a
 
@@ -886,13 +1024,13 @@ shiftRightBy : Int a, U8 -> Int a
 ##
 ## The most significant bits always become 0. This means that shifting left is
 ## like dividing by factors of two for unsigned integers.
+## ```
+## shiftRightBy 0b0010_1000 2 == 0b0000_1010
 ##
-## >>> shiftRightBy 0b0010_1000 2 == 0b0000_1010
+## 0b0010_1000 |> shiftRightBy 2 == 0b0000_1010
 ##
-## >>> 0b0010_1000 |> shiftRightBy 2 == 0b0000_1010
-##
-## >>> 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
-##
+## 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
+## ```
 ## In some languages `shiftRightBy` is implemented as a binary operator `>>`.
 shiftRightZfBy : Int a, U8 -> Int a
 
@@ -912,25 +1050,56 @@ pow : Frac a, Frac a -> Frac a
 ## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
 ##
 ## For a [Frac] alternative to this function, which supports negative exponents,
-## see #Num.exp.
+## see #Num.pow.
 ##
-## >>> Num.exp 5 0
+## ## Warning
 ##
-## >>> Num.exp 5 1
-##
-## >>> Num.exp 5 2
-##
-## >>> Num.exp 5 6
-##
-## ## Performance Notes
-##
-## Be careful! It is very easy for this function to produce an answer
+## It is very easy for this function to produce an answer
 ## so large it causes an overflow.
 powInt : Int a, Int a -> Int a
 
+## Counts the number of most-significant (leading in a big-Endian sense) zeroes in an integer.
+##
+## ```
+## Num.countLeadingZeroBits 0b0001_1100u8
+##
+## 3
+##
+## Num.countLeadingZeroBits 0b0000_0000u8
+##
+## 8
+## ```
+countLeadingZeroBits : Int a -> Nat
+
+## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
+##
+## ```
+## Num.countTrailingZeroBits 0b0001_1100u8
+##
+## 2
+##
+## Num.countTrailingZeroBits 0b0000_0000u8
+##
+## 8
+## ```
+countTrailingZeroBits : Int a -> Nat
+
+## Counts the number of set bits in an integer.
+##
+## ```
+## Num.countOneBits 0b0001_1100u8
+##
+## 3
+##
+## Num.countOneBits 0b0000_0000u8
+##
+## 0
+## ```
+countOneBits : Int a -> Nat
+
 addWrap : Int range, Int range -> Int range
 
-## Add two numbers, clamping on the maximum representable number rather than
+## Adds two numbers, clamping on the maximum representable number rather than
 ## overflowing.
 ##
 ## This is the same as [Num.add] except for the saturating behavior if the
@@ -939,7 +1108,7 @@ addWrap : Int range, Int range -> Int range
 ## yield 255, the maximum value of a `U8`.
 addSaturated : Num a, Num a -> Num a
 
-## Add two numbers and check for overflow.
+## Adds two numbers and checks for overflow.
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
@@ -956,7 +1125,7 @@ addCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
 subWrap : Int range, Int range -> Int range
 
-## Subtract two numbers, clamping on the minimum representable number rather
+## Subtracts two numbers, clamping on the minimum representable number rather
 ## than overflowing.
 ##
 ## This is the same as [Num.sub] except for the saturating behavior if the
@@ -965,7 +1134,7 @@ subWrap : Int range, Int range -> Int range
 ## yield 0, the minimum value of a `U8`.
 subSaturated : Num a, Num a -> Num a
 
-## Subtract two numbers and check for overflow.
+## Subtracts two numbers and checks for overflow.
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
@@ -982,14 +1151,14 @@ subCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
 mulWrap : Int range, Int range -> Int range
 
-## Multiply two numbers, clamping on the maximum representable number rather than
+## Multiplies two numbers, clamping on the maximum representable number rather than
 ## overflowing.
 ##
 ## This is the same as [Num.mul] except for the saturating behavior if the
 ## addition is to overflow.
 mulSaturated : Num a, Num a -> Num a
 
-## Multiply two numbers and check for overflow.
+## Multiplies two numbers and checks for overflow.
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
@@ -1004,8 +1173,8 @@ mulChecked = \a, b ->
 
 mulCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
-## The lowest number that can be stored in an [I8] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I8] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-128`.
 ##
@@ -1014,8 +1183,8 @@ mulCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 minI8 : I8
 minI8 = -128i8
 
-## The highest number that can be stored in an [I8] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I8] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `127`.
 ##
@@ -1024,8 +1193,8 @@ minI8 = -128i8
 maxI8 : I8
 maxI8 = 127i8
 
-## The lowest number that can be stored in a [U8] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U8] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U8] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1034,15 +1203,15 @@ maxI8 = 127i8
 minU8 : U8
 minU8 = 0u8
 
-## The highest number that can be stored in a [U8] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U8] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `255`.
 maxU8 : U8
 maxU8 = 255u8
 
-## The lowest number that can be stored in an [I16] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I16] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-32_768`.
 ##
@@ -1051,8 +1220,8 @@ maxU8 = 255u8
 minI16 : I16
 minI16 = -32768i16
 
-## The highest number that can be stored in an [I16] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I16] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `32_767`.
 ##
@@ -1061,8 +1230,8 @@ minI16 = -32768i16
 maxI16 : I16
 maxI16 = 32767i16
 
-## The lowest number that can be stored in a [U16] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U16] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U16] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1071,15 +1240,15 @@ maxI16 = 32767i16
 minU16 : U16
 minU16 = 0u16
 
-## The highest number that can be stored in a [U16] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U16] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `65_535`.
 maxU16 : U16
 maxU16 = 65535u16
 
-## The lowest number that can be stored in an [I32] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I32] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-2_147_483_648`.
 ##
@@ -1088,8 +1257,8 @@ maxU16 = 65535u16
 minI32 : I32
 minI32 = -2147483648
 
-## The highest number that can be stored in an [I32] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I32] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `2_147_483_647`,
 ## which is over 2 million.
@@ -1099,8 +1268,8 @@ minI32 = -2147483648
 maxI32 : I32
 maxI32 = 2147483647
 
-## The lowest number that can be stored in a [U32] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U32] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U32] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1109,15 +1278,15 @@ maxI32 = 2147483647
 minU32 : U32
 minU32 = 0
 
-## The highest number that can be stored in a [U32] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U32] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `4_294_967_295`.
 maxU32 : U32
 maxU32 = 4294967295
 
-## The lowest number that can be stored in an [I64] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I64] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-9_223_372_036_854_775_808`,
 ## which is under 9 quintillion.
@@ -1127,8 +1296,8 @@ maxU32 = 4294967295
 minI64 : I64
 minI64 = -9223372036854775808
 
-## The highest number that can be stored in an [I64] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I64] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `9_223_372_036_854_775_807`,
 ## which is over 9 quintillion.
@@ -1138,8 +1307,8 @@ minI64 = -9223372036854775808
 maxI64 : I64
 maxI64 = 9223372036854775807
 
-## The lowest number that can be stored in a [U64] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U64] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U64] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1148,16 +1317,16 @@ maxI64 = 9223372036854775807
 minU64 : U64
 minU64 = 0
 
-## The highest number that can be stored in a [U64] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U64] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `18_446_744_073_709_551_615`,
 ## which is over 18 quintillion.
 maxU64 : U64
 maxU64 = 18446744073709551615
 
-## The lowest number that can be stored in an [I128] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in an [I128] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `-170_141_183_460_469_231_731_687_303_715_884_105_728`.
 ## which is under 170 undecillion.
@@ -1167,8 +1336,8 @@ maxU64 = 18446744073709551615
 minI128 : I128
 minI128 = -170141183460469231731687303715884105728
 
-## The highest number that can be stored in an [I128] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in an [I128] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `170_141_183_460_469_231_731_687_303_715_884_105_727`,
 ## which is over 170 undecillion.
@@ -1178,8 +1347,8 @@ minI128 = -170141183460469231731687303715884105728
 maxI128 : I128
 maxI128 = 170141183460469231731687303715884105727
 
-## The lowest number that can be stored in a [U128] without underflowing its
-## available memory and crashing.
+## Returns the lowest number that can be stored in a [U128] without underflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is zero, because [U128] is
 ## [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
@@ -1188,8 +1357,8 @@ maxI128 = 170141183460469231731687303715884105727
 minU128 : U128
 minU128 = 0
 
-## The highest number that can be stored in a [U128] without overflowing its
-## available memory and crashing.
+## Returns the highest number that can be stored in a [U128] without overflowing
+## its available memory and crashing.
 ##
 ## For reference, this number is `340_282_366_920_938_463_463_374_607_431_768_211_455`,
 ## which is over 340 undecillion.
@@ -1221,7 +1390,7 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
-## Convert an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
+## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
 ## Since [Nat] has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
@@ -1262,164 +1431,3 @@ toU128Checked : Int * -> Result U128 [OutOfBounds]
 toNatChecked : Int * -> Result Nat [OutOfBounds]
 toF32Checked : Num * -> Result F32 [OutOfBounds]
 toF64Checked : Num * -> Result F64 [OutOfBounds]
-
-# Special Floating-Point operations
-## When given a [F64] or [F32] value, returns `Bool.false` if that value is
-## [*NaN*](Num.isNaN), ∞ or -∞, and `Bool.true` otherwise.
-##
-## Always returns `Bool.true` when given a [Dec].
-##
-## This is the opposite of #isInfinite, except when given [*NaN*](Num.isNaN). Both
-## #isFinite and #isInfinite return `Bool.false` for [*NaN*](Num.isNaN).
-# isFinite : Frac * -> Bool
-## When given a [F64] or [F32] value, returns `Bool.true` if that value is either
-## ∞ or -∞, and `Bool.false` otherwise.
-##
-## Always returns `Bool.false` when given a [Dec].
-##
-## This is the opposite of #isFinite, except when given [*NaN*](Num.isNaN). Both
-## #isFinite and #isInfinite return `Bool.false` for [*NaN*](Num.isNaN).
-# isInfinite : Frac * -> Bool
-## When given a [F64] or [F32] value, returns `Bool.true` if that value is
-## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `Bool.false` otherwise.
-##
-## Always returns `Bool.false` when given a [Dec].
-##
-## >>> Num.isNaN 12.3
-##
-## >>> Num.isNaN (Num.pow -1 0.5)
-##
-## *NaN* is unusual from other numberic values in that:
-## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `Bool.false` if either argument is *NaN*.
-## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `Bool.false` if either argument is *NaN*.
-##
-## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
-## floating point standard. Because almost all modern processors are built to
-## this standard, deviating from these rules has a significant performance
-## cost! Since the most common reason to choose [F64] or [F32] over [Dec] is
-## access to hardware-accelerated performance, Roc follows these rules exactly.
-##
-## Note that you should never put a *NaN* into a [Set], or use it as the key in
-## a [Dict]. The result is entries that can never be removed from those
-## collections! See the documentation for [Set.insert] and [Dict.insert] for details.
-# isNaN : Frac * -> Bool
-## Returns the higher of two numbers.
-##
-## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
-## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-# max : Num a, Num a -> Num a
-## Returns the lower of two numbers.
-##
-## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
-## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
-# min : Num a, Num a -> Num a
-# Branchless implementation that works for all numeric types:
-#
-# let is_lt = arg1 < arg2;
-# let is_eq = arg1 == arg2;
-# return (is_lt as i8 - is_eq as i8) + 1;
-#
-# 1, 1 -> (0 - 1) + 1 == 0 # Eq
-# 5, 1 -> (0 - 0) + 1 == 1 # Gt
-# 1, 5 -> (1 - 0) + 1 == 2 # Lt
-## Returns `Lt` if the first number is less than the second, `Gt` if
-## the first is greater than the second, and `Eq` if they're equal.
-##
-## Although this can be passed to `List.sort`, you'll get better performance
-## by using `List.sortAsc` or `List.sortDesc` instead.
-# compare : Num a, Num a -> [Lt, Eq, Gt]
-## [Endianness](https://en.wikipedia.org/wiki/Endianness)
-# Endi : [Big, Little, Native]
-## The `Endi` argument does not matter for [U8] and [I8], since they have
-## only one byte.
-# toBytes : Num *, Endi -> List U8
-## when Num.parseBytes bytes Big is
-##     Ok { val: f64, rest } -> ...
-##     Err (ExpectedNum (Frac Binary64)) -> ...
-# parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ExpectedNum a]*
-## when Num.fromBytes bytes Big is
-##     Ok f64 -> ...
-##     Err (ExpectedNum (Frac Binary64)) -> ...
-# fromBytes : List U8, Endi -> Result (Num a) [ExpectedNum a]*
-# Bit shifts
-## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) left.
-##
-## `a << b` is shorthand for `Num.shl a b`.
-# shl : Int a, Int a -> Int a
-## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) left.
-##
-## This is called `shlWrap` because any bits shifted
-## off the beginning of the number will be wrapped around to
-## the end. (In contrast, #shl replaces discarded bits with zeroes.)
-# shlWrap : Int a, Int a -> Int a
-## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) right.
-##
-## `a >> b` is shorthand for `Num.shr a b`.
-# shr : Int a, Int a -> Int a
-## [Arithmetic bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Arithmetic_shift) right.
-##
-## This is called `shrWrap` because any bits shifted
-## off the end of the number will be wrapped around to
-## the beginning. (In contrast, #shr replaces discarded bits with zeroes.)
-# shrWrap : Int a, Int a -> Int a
-# ## Convert a number into a [Str], formatted with the given options.
-# ##
-# ## Default options:
-# ## * `base: Decimal`
-# ## * `notation: Standard`
-# ## * `decimalMark: HideForIntegers "."`
-# ## * `decimalDigits: { min: 0, max: All }`
-# ## * `minIntDigits: 1`
-# ## * `wholeSep: { mark: ",", places: 3 }`
-# ##
-# ## ## Options
-# ##
-# ##
-# ## ### decimalMark
-# ##
-# ## * `AlwaysShow` always shows the decimal mark, no matter what.
-# ## * `HideForIntegers` hides the decimal mark if all the numbers after the decimal mark are 0.
-# ##
-# ## The [Str] included in either of these represents the mark itself.
-# ##
-# ## ### `decimalDigits
-# ##
-# ## With 0 decimal digits, the decimal mark will still be rendered if
-# ## `decimalMark` is set to `AlwaysShow`.
-# ##
-# ## If `max` is less than `min`, then first the number will be truncated to `max`
-# ## digits, and then zeroes will be added afterwards until it reaches `min` digits.
-# ##
-# ## >>> Num.format 1.23 { decPlaces: 0, decPointVis: AlwaysShow }
-# ##
-# ## ### minIntDigits
-# ##
-# ## If the integer portion of number is fewer than this many digits, zeroes will
-# ## be added in front of it until there are at least `minWholeDigits` digits.
-# ##
-# ## If this is set to zero, then numbers less than 1 will begin with `"."`
-# ## rather than `"0."`.
-# ##
-# ## ### wholeSep
-# ##
-# ## Examples:
-# ##
-# ## In some countries (e.g. USA and UK), a comma is used to separate thousands:
-# ## >>> Num.format 1_000_000 { pf: Decimal, wholeSep: { mark: ",", places: 3 } }
-# ##
-# ## Sometimes when rendering bits, it's nice to group them into groups of 4:
-# ## >>> Num.format 1_000_000 { pf: Binary, wholeSep: { mark: " ", places: 4 } }
-# ##
-# ## It's also common to render hexadecimal in groups of 2:
-# ## >>> Num.format 1_000_000 { pf: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
-# format :
-#     Num *,
-#     {
-#         base ? [Decimal, Hexadecimal, Octal, Binary],
-#         notation ? [Standard, Scientific],
-#         decimalMark ? [AlwaysShow Str, HideForIntegers],
-#         decimalDigits ? { min : U16, max : [All, Trunc U16, Round U16, Floor U16, Ceil U16] },
-#         minWholeDigits ? U16,
-#         wholeSep ? { mark : Str, places : U64 }
-#     }
-#     -> Str

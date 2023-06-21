@@ -228,8 +228,8 @@ fn union_recursive_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(4), // s
-            Live(4), // sym
+            Live(1), // s
+            Live(2), // x
             Live(2), // e
         ]
     );
@@ -294,7 +294,7 @@ fn refcount_different_rosetrees_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(2), // s
+            Live(1), // s
             Live(3), // i1
             Live(2), // s1
             Live(1), // [i1, i1]
@@ -364,10 +364,10 @@ fn union_linked_list_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(6), // s
-            Live(2), // Cons
-            Live(2), // Cons
-            Live(2), // Cons
+            Live(3), // s
+            Live(1), // inner-most Cons
+            Live(1), // middle Cons
+            Live(2), // linked
         ]
     );
 }
@@ -468,7 +468,7 @@ fn boxed_str_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(2), // s
+            Live(1), // s
             Live(2), // b
         ]
     );
@@ -493,6 +493,81 @@ fn boxed_str_dec() {
         &[
             Deallocated, // s
             Deallocated, // b
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn non_nullable_unwrapped_alignment_8() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+            Expr : [ZAdd Expr Expr, Val I64, Var I64]
+
+            eval : Expr -> I64
+            eval = \e ->
+                when e is
+                    Var _ -> 0
+                    Val v -> v
+                    ZAdd l r -> eval l + eval r
+
+            expr : Expr
+            expr = (ZAdd (Val 4) (Val 5))
+
+            eval expr
+            "#
+        ),
+        i64,
+        &[
+            Deallocated, // Val 4
+            Deallocated, // Val 5
+            Deallocated, // ZAdd _ _
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn reset_reuse_alignment_8() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Expr : [ZAdd Expr Expr, Val I64, Var I64]
+
+            eval : Expr -> I64
+            eval = \e ->
+                when e is
+                    Var _ -> 0
+                    Val v -> v
+                    ZAdd l r -> eval l + eval r
+
+            constFolding : Expr -> Expr
+            constFolding = \e ->
+                when e is
+                    ZAdd e1 e2 ->
+                        when Pair e1 e2 is
+                            Pair (Val a) (Val b) -> Val (a+b)
+                            Pair _ _             -> ZAdd e1 e2
+
+
+                    _ -> e
+
+
+            expr : Expr
+            expr = ZAdd (Val 4) (Val 5)
+
+            main : I64
+            main = eval (constFolding expr)
+            "#
+        ),
+        i64,
+        &[
+            Deallocated, // Val 4
+            Deallocated, // Val 5
+            Deallocated, // ZAdd _ _
         ]
     );
 }

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# run from root of repo with `./www/build.sh`
+# check www/README.md to run a test server
+
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
@@ -20,18 +23,18 @@ DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
 DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
 DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
 
-curl -LJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
+curl -fLJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT  
 tar -xzf $DESIGN_ASSETS_TARFILE
 mv $DESIGN_ASSETS_DIR/fonts build/
 rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
 
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 pushd build
-curl -LJO https://github.com/roc-lang/roc/archive/www.tar.gz
+curl -fLJO https://github.com/roc-lang/roc/archive/www.tar.gz
 
 # Download the latest pre-built Web REPL as a zip file. (Build takes longer than Netlify's timeout.)
 REPL_TARFILE="roc_repl_wasm.tar.gz"
-curl -LJO https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
+curl -fLJO https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
 tar -xzf $REPL_TARFILE -C repl
 rm $REPL_TARFILE
 ls -lh repl
@@ -48,8 +51,11 @@ cargo --version
 export ROC_DOCS_URL_ROOT=/builtins
 
 cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
-mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
-mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
+mv generated-docs/*.js www/build # move all .js files to build/
+mv generated-docs/*.css www/build
+mv generated-docs/*.svg www/build
+
+mv generated-docs/ www/build/builtins # move all the rest to build/builtins/
 
 # Manually add this tip to all the builtin docs.
 find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
@@ -58,43 +64,34 @@ find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div c
 # cleanup files that could have stayed behind if the script failed
 rm -rf roc_nightly roc_releases.json
 
-echo 'Fetching latest roc nightly...'
-
-# to prevent GitHub from rate limiting netlify servers
+# we use `! [ -v GITHUB_TOKEN_READ_ONLY ];` to check if we're on a netlify server
 if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
-  curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+  echo 'Building tutorial.html from tutorial.md...'
+  mkdir www/build/tutorial
+
+  cargo run --release --bin roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 else
-  curl --request GET \
-          --url https://api.github.com/repos/roc-lang/roc/releases \
-          -u $GITHUB_TOKEN_READ_ONLY \
-          --output roc_releases.json
+  echo 'Fetching latest roc nightly...'
+  
+  # get roc release archive
+  curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+  # extract archive
+  ls | grep "roc_nightly" | xargs tar -xzvf
+  # delete archive
+  ls | grep "roc_nightly.*tar.gz" | xargs rm
+  # simplify dir name
+  mv roc_nightly* roc_nightly
+
+  echo 'Building tutorial.html from tutorial.md...'
+  mkdir www/build/tutorial
+
+  ./roc_nightly/roc version
+  ./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
+
+  # cleanup
+  rm -rf roc_nightly roc_releases.json
 fi
 
-# get the url of the latest release
-if [ "$(uname)" == "Linux" ]; then
-  RELEASE_MACHINE="linux_x86_64"
-elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "arm64" ]; then
-  RELEASE_MACHINE="macos_apple_silicon"
-elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "x86_64" ]; then
-  RELEASE_MACHINE="macos_x86_64"
-else
-  RELEASE_MACHINE="UNSUPPORTED_MACHINE"
-fi
-
-export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh $RELEASE_MACHINE)
-# get roc release archive
-curl -OL $ROC_RELEASE_URL
-# extract archive
-ls | grep "roc_nightly" | xargs tar -xzvf
-# delete archive
-ls | grep "roc_nightly.*tar.gz" | xargs rm
-# simplify dir name
-mv roc_nightly* roc_nightly
-
-echo 'Building tutorial.html from tutorial.md...'
-mkdir www/build/tutorial
-./roc_nightly/roc version
-./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
 # cleanup

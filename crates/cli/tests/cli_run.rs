@@ -10,8 +10,9 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, known_bad_file,
-        run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError, ValgrindErrorXWhat,
+        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError,
+        ValgrindErrorXWhat,
     };
     use const_format::concatcp;
     use indoc::indoc;
@@ -51,7 +52,7 @@ mod cli_run {
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
-    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT, "=true");
+    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT);
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
@@ -143,16 +144,8 @@ mod cli_run {
             env,
         );
 
-        let ignorable = "🔨 Rebuilding platform...\n";
-        let stderr = compile_out.stderr.replacen(ignorable, "", 1);
-
-        // for some reason, llvm prints out this warning when targeting windows
-        let ignorable = "warning: ignoring debug info with an invalid version (0) in app\r\n";
-        let stderr = stderr.replacen(ignorable, "", 1);
-
-        let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
-        if !(stderr.is_empty() || is_reporting_runtime) {
-            panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
+        if has_error(&compile_out.stderr) {
+            panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, compile_out.stderr);
         }
 
         compile_out
@@ -474,7 +467,8 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
+    #[cfg_attr(windows, ignore)]
     fn hello_world() {
         test_roc_app_slim(
             "examples",
@@ -532,7 +526,9 @@ mod cli_run {
         )
     }
 
+    // zig_platform_parser_package_basic_cli_url use to be split up but then things could get stuck
     #[test]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
@@ -676,6 +672,7 @@ mod cli_run {
     }
 
     #[cfg_attr(windows, ignore)] // flaky error; issue #5024
+    #[serial(breakout)]
     #[test]
     fn breakout() {
         test_roc_app_slim(
@@ -688,6 +685,7 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(breakout)]
     fn breakout_hello_gui() {
         test_roc_app_slim(
             "examples/gui/breakout",
@@ -727,7 +725,7 @@ mod cli_run {
                 Arg::PlainText("81"),
             ],
             &[],
-            "4\n",
+            "4.000000000000001\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -802,10 +800,10 @@ mod cli_run {
             "False.roc",
             "false",
             &[],
-            &[Arg::ExamplePath("examples/hello.false")],
+            &[Arg::ExamplePath("examples/sqrt.false")],
             &[],
-            &("Hello, World!".to_string() + LINE_ENDING),
-            UseValgrind::No,
+            "1414",
+            UseValgrind::Yes,
             TestCliCommands::Many,
         )
     }
@@ -831,7 +829,7 @@ mod cli_run {
             &[],
             &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
             &[],
-            "Processed 3 files with 3 successes and 0 errors\n",
+            "Processed 4 files with 3 successes and 0 errors\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
@@ -861,6 +859,57 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file() {
+        test_roc_app(
+            "examples/cli",
+            "ingested-file.roc",
+            "ingested-file",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This roc file can print it's own source code. The source is:
+
+                app "ingested-file"
+                    packages { pf: "cli-platform/main.roc" }
+                    imports [
+                        pf.Stdout,
+                        "ingested-file.roc" as ownCode : Str,
+                    ]
+                    provides [main] to pf
+
+                main =
+                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
+
+                "#
+            ),
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn ingested_file_bytes() {
+        test_roc_app(
+            "examples/cli",
+            "ingested-file-bytes.roc",
+            "ingested-file-bytes",
+            &[],
+            &[],
+            &[],
+            "22424\n",
+            UseValgrind::No,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
@@ -873,7 +922,8 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
+    #[serial(zig_platform_parser_package_basic_cli_url)]
+    #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
             "examples/parser/examples",

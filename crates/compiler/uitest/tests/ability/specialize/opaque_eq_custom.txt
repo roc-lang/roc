@@ -1,0 +1,8 @@
+app "test" provides [main] to "./platform"
+
+Trivial := {} has [Eq {isEq}]
+
+isEq = \@Trivial {}, @Trivial {} -> Bool.true
+
+main = Bool.isEq (@Trivial {}) (@Trivial {})
+#      ^^^^^^^^^ Trivial#Bool.isEq(2): Trivial, Trivial -[[isEq(2)]]-> Bool

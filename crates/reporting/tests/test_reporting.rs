@@ -543,7 +543,7 @@ mod test_reporting {
                  ^
 
     Since these variables have the same name, it's easy to use the wrong
-    one on accident. Give one of them a new name.
+    one by accident. Give one of them a new name.
     "###
     );
 
@@ -575,7 +575,7 @@ mod test_reporting {
             ^^^^^^^^^^^^^^^^^^^^^^^^
 
     Since these aliases have the same name, it's easy to use the wrong one
-    on accident. Give one of them a new name.
+    by accident. Give one of them a new name.
     "###
     );
 
@@ -1237,20 +1237,20 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 1st argument to `f` has an unexpected type:
+    This expression is used in an unexpected way:
 
     7│      g = \x -> f [x]
-                        ^^^
+                      ^^^^^
 
-    The argument is a list of type:
+    This `f` call produces:
+
+        List List b
+
+    But you are trying to use it as:
 
         List b
 
-    But `f` needs its 1st argument to be:
-
-        a
-
-    Tip: The type annotation uses the type variable `a` to say that this
+    Tip: The type annotation uses the type variable `b` to say that this
     definition can produce any type of value. But in the body I see that
     it will only produce a `List` value of a single specific type. Maybe
     change the type annotation to be more specific? Maybe change the code
@@ -1461,7 +1461,10 @@ mod test_reporting {
 
     But `f` needs its 1st argument to be:
 
-        [Green, Red]
+        [
+            Green,
+            Red,
+        ]
 
     Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1495,7 +1498,10 @@ mod test_reporting {
 
     But `f` needs its 1st argument to be:
 
-        [Green Str, Red (Int *)]
+        [
+            Green Str,
+            Red (Int *),
+        ]
 
     Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -2528,11 +2534,11 @@ mod test_reporting {
 
     This `a` value is a:
 
-        [A]
+        […]
 
     But the type annotation on `f` says it should be:
 
-        [A, B]
+        [B, …]
 
     Tip: Looks like a closed tag union does not have the `B` tag.
 
@@ -2562,11 +2568,15 @@ mod test_reporting {
 
     This `a` value is a:
 
-        [A]
+        […]
 
     But the type annotation on `f` says it should be:
 
-        [A, B, C]
+        [
+            B,
+            C,
+            …
+        ]
 
     Tip: Looks like a closed tag union does not have the `B` and `C` tags.
 
@@ -2605,6 +2615,27 @@ mod test_reporting {
     I would have to crash if I saw one of those! So rather than pattern
     matching in function arguments, put a `when` in the function body to
     account for all possibilities.
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+     9│      f : Either -> {}
+    10│      f = \Left v -> v
+                 ^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        […] -> {}
+
+    But the type annotation on `f` says it should be:
+
+        [Right Str, …] -> {}
+
+    Tip: Looks like a closed tag union does not have the `Right` tag.
+
+    Tip: Closed tag unions can't grow, because that might change the size
+    in memory. Can you use an open tag union?
     "###
     );
 
@@ -2631,11 +2662,11 @@ mod test_reporting {
 
     This `x` value is a:
 
-        [Left {}, Right Str]
+        [Right Str, …]
 
     But you are trying to use it as:
 
-        [Left *]
+        […]
 
     Tip: Looks like a closed tag union does not have the `Right` tag.
 
@@ -3380,11 +3411,23 @@ mod test_reporting {
 
     This `Cons` tag application has the type:
 
-        [Cons {} [Cons Str [Cons {} a, Nil]b as a, Nil]b, Nil]b
+        [
+            Cons {} [
+                Cons Str [
+                    Cons {} a,
+                    Nil,
+                ]b as a,
+                Nil,
+            ]b,
+            Nil,
+        ]b
 
     But the type annotation on `x` says it should be:
 
-        [Cons {} a, Nil] as a
+        [
+            Cons {} a,
+            Nil,
+        ] as a
     "###
     );
 
@@ -3417,12 +3460,29 @@ mod test_reporting {
 
     This `ACons` tag application has the type:
 
-        [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
-        ANil]b as ∞, BNil]c, ANil]b, BNil]c, ANil]b
+        [
+            ACons (Int Signed64) [
+                BCons (Int Signed64) [
+                    ACons Str [
+                        BCons I64 [
+                            ACons I64 (BList I64 I64),
+                            ANil,
+                        ]b as ∞,
+                        BNil,
+                    ]c,
+                    ANil,
+                ]b,
+                BNil,
+            ]c,
+            ANil,
+        ]b
 
     But the type annotation on `x` says it should be:
 
-        [ACons I64 (BList I64 I64), ANil] as a
+        [
+            ACons I64 (BList I64 I64),
+            ANil,
+        ] as a
     "###
     );
 
@@ -5582,8 +5642,8 @@ All branches in an `if` must have the same type!
 
         Num.sin
         Num.div
-        Num.abs
-        Num.neg
+        Num.min
+        Num.e
     "###
     );
 
@@ -7946,11 +8006,11 @@ In roc, functions are always written as a lambda, like{}
 
     This `v` value is a:
 
-        F [A, B, C]
+        F [C, …]
 
     But the branch patterns have type:
 
-        F [A, B]
+        F […]
 
     The branches must be cases of the `when` condition's type!
 
@@ -8425,7 +8485,7 @@ In roc, functions are always written as a lambda, like{}
                                                ^^^^^^^^^
 
         Since these variables have the same name, it's easy to use the wrong
-        one on accident. Give one of them a new name.
+        one by accident. Give one of them a new name.
         "#
     );
 
@@ -8454,7 +8514,7 @@ In roc, functions are always written as a lambda, like{}
             ^^^^^^^
 
         Since these abilities have the same name, it's easy to use the wrong
-        one on accident. Give one of them a new name.
+        one by accident. Give one of them a new name.
         "#
     );
 
@@ -8976,26 +9036,30 @@ In roc, functions are always written as a lambda, like{}
             foo
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        The branches of this `when` expression don't match the condition:
+    The branches of this `when` expression don't match the condition:
 
-        6│>          when bool is
-        7│               True -> "true"
-        8│               False -> "false"
-        9│               Wat -> "surprise!"
+    6│>          when bool is
+    7│               True -> "true"
+    8│               False -> "false"
+    9│               Wat -> "surprise!"
 
-        This `bool` value is a:
+    This `bool` value is a:
 
-            Bool
+        Bool
 
-        But the branch patterns have type:
+    But the branch patterns have type:
 
-            [False, True, Wat]
+        [
+            False,
+            True,
+            Wat,
+        ]
 
-        The branches must be cases of the `when` condition's type!
-        "#
+    The branches must be cases of the `when` condition's type!
+    "###
     );
 
     // from https://github.com/roc-lang/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
@@ -9739,7 +9803,7 @@ In roc, functions are always written as a lambda, like{}
         ^^^^
 
     Since these variables have the same name, it's easy to use the wrong
-    one on accident. Give one of them a new name.
+    one by accident. Give one of them a new name.
 
     ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
 
@@ -9976,7 +10040,10 @@ In roc, functions are always written as a lambda, like{}
 
     This `lst` value is a:
 
-        [Cons {} ∞, Nil] as ∞
+        [
+            Cons {} ∞,
+            Nil,
+        ] as ∞
 
     But the type annotation on `olist` says it should be:
 
@@ -10085,6 +10152,41 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        forgot_to_remove_underscore,
+        indoc!(
+            r#"
+            \_foo -> foo
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+                Nothing is named `foo` in this scope.
+
+                4│      \_foo -> foo
+                                 ^^^
+
+                There is an ignored identifier of a similar name here:
+
+                4│      \_foo -> foo
+                         ^^^^
+
+                Did you mean to remove the leading underscore?
+
+                If not, did you mean one of these?
+
+                    Box
+                    Bool
+                    U8
+                    F64
+                "###
+            ),
+        )
+    );
+
+    test_report!(
         call_with_underscore_identifier,
         indoc!(
             r#"
@@ -10095,20 +10197,265 @@ In roc, functions are always written as a lambda, like{}
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
-            &format!(
+            indoc!(
                 r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-Underscores are not allowed in identifier names:
+                An underscore is being used as a variable here:
 
-6│      f 1 _ 1
-{}
+                6│      f 1 _ 1
+                            ^
 
-I recommend using camelCase. It's the standard style in Roc code!
-"###,
-                "  " // TODO make the reporter not insert extraneous spaces here in the first place!
+                An underscore can be used to ignore a value when pattern matching, but
+                it cannot be used as a variable.
+                "###
             ),
         )
     );
+
+    test_report!(
+        call_with_declared_identifier_starting_with_underscore,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a _b 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This variable's name starts with an underscore:
+
+                6│      \a, _b -> f a _b 1
+                            ^^
+
+                But then it is used here:
+
+                6│      \a, _b -> f a _b 1
+                                      ^^
+
+                A variable's name can only start with an underscore if the variable is
+                unused. Since you are using this variable, you could remove the
+                underscore from its name in both places.
+                "###
+            ),
+        )
+    );
+
+    test_report!(
+        call_with_undeclared_identifier_starting_with_underscore,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a _r 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"
+                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This variable's name starts with an underscore:
+
+                6│      \a, _b -> f a _r 1
+                                      ^^
+
+                A variable's name can only start with an underscore if the variable is
+                unused. But it looks like the variable is being used here!
+                "###
+            ),
+        )
+    );
+
+    test_report!(
+        underscore_in_middle_of_identifier,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a var_name 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"
+                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                Underscores are not allowed in identifier names:
+
+                6│      \a, _b -> f a var_name 1
+                                      ^^^^^^^^
+
+                I recommend using camelCase. It's the standard style in Roc code!
+                "###
+            ),
+        )
+    );
+
+    // Record Builders
+
+    test_report!(
+        optional_field_in_record_builder,
+        indoc!(
+            r#"
+            { 
+                a: <- apply "a",
+                b,
+                c ? "optional"
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD BUILDER ────────── tmp/optional_field_in_record_builder/Test.roc ─
+
+    I am partway through parsing a record builder, and I found an optional
+    field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { 
+    5│          a: <- apply "a",
+    6│          b,
+    7│          c ? "optional"
+                ^^^^^^^^^^^^^^
+
+    Optional fields can only appear when you destructure a record.
+    "###
+    );
+
+    test_report!(
+        record_update_builder,
+        indoc!(
+            r#"
+            { rec &
+                a: <- apply "a",
+                b: 3
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD UPDATE ────────────────────── tmp/record_update_builder/Test.roc ─
+
+    I am partway through parsing a record update, and I found a record
+    builder field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { rec &
+    5│          a: <- apply "a",
+                ^^^^^^^^^^^^^^^
+
+    Record builders cannot be updated like records.
+    "###
+    );
+
+    test_report!(
+        multiple_record_builders,
+        indoc!(
+            r#"
+            succeed
+                { a: <- apply "a" }
+                { b: <- apply "b" }
+            "#
+        ),
+        @r###"
+    ── MULTIPLE RECORD BUILDERS ────────────────────────────── /code/proj/Main.roc ─
+
+    This function is applied to multiple record builders:
+
+    4│>      succeed
+    5│>          { a: <- apply "a" }
+    6│>          { b: <- apply "b" }
+
+    Note: Functions can only take at most one record builder!
+
+    Tip: You can combine them or apply them separately.
+
+    "###
+    );
+
+    test_report!(
+        unapplied_record_builder,
+        indoc!(
+            r#"
+            { a: <- apply "a" }
+            "#
+        ),
+        @r###"
+    ── UNAPPLIED RECORD BUILDER ────────────────────────────── /code/proj/Main.roc ─
+
+    This record builder was not applied to a function:
+
+    4│      { a: <- apply "a" }
+            ^^^^^^^^^^^^^^^^^^^
+
+    However, we need a function to construct the record.
+
+    Note: Functions must be applied directly. The pipe operator (|>) cannot be used.
+    "###
+    );
+
+    test_report!(
+        record_builder_apply_non_function,
+        indoc!(
+            r#"
+            succeed = \_ -> crash ""
+
+            succeed { 
+                a: <- "a",
+            }
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value is not a function, but it was given 1 argument:
+
+    7│          a: <- "a",
+                      ^^^
+
+    Tip: Remove `<-` to assign the field directly.
+    "###
+    );
+
+    // Skipping test because opaque types defined in the same module
+    // do not fail with the special opaque type error
+    //
+    // test_report!(
+    //     record_builder_apply_opaque,
+    //     indoc!(
+    //         r#"
+    //         succeed = \_ -> crash ""
+
+    //         Decode := {}
+
+    //         get : Str -> Decode
+    //         get = \_ -> @Decode {}
+
+    //         succeed {
+    //             a: <- get "a",
+    //             # missing |> apply ^
+    //         }
+    //         "#
+    //     ),
+    //     @r###"
+    // ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    // This value is an opaque type, so it cannot be called with an argument:
+
+    // 12│          a: <- get "a",
+    //                    ^^^^^^^
+
+    // Hint: Did you mean to apply it to a function first?
+    //     "###
+    // );
 
     test_report!(
         destructure_assignment_introduces_no_variables_nested,
@@ -10543,11 +10890,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `u8` value is a:
 
-        [Bad [DecodeProblem], Good (List U8)]
+        [Good …, …]
 
     But the branch patterns have type:
 
-        [Bad [DecodeProblem], Good (List U8) *]
+        [Good … *, …]
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -10648,10 +10995,10 @@ I recommend using camelCase. It's the standard style in Roc code!
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
                 when decoded is
                     Ok rcd -> rcd.first rcd.second
                     _ -> "something went wrong"
@@ -11177,6 +11524,55 @@ I recommend using camelCase. It's the standard style in Roc code!
     "###
     );
 
+    test_no_problem!(
+        derive_hash_for_tuple,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo ("", 1)
+             "#
+        )
+    );
+
+    test_report!(
+        cannot_hash_tuple_with_non_hash_element,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Hash
+
+             main = foo ("", \{} -> {})
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo ("", \{} -> {})
+                   ^^^^^^^^^^^^^^^
+
+    I can't generate an implementation of the `Hash` ability for
+
+        (
+            Str,
+            {}a -> {},
+        )a
+
+    In particular, an implementation for
+
+        {}a -> {}
+
+    cannot be generated.
+
+    Note: `Hash` cannot be generated for functions.
+    "###
+    );
+
     test_report!(
         shift_by_negative,
         indoc!(
@@ -11556,6 +11952,58 @@ I recommend using camelCase. It's the standard style in Roc code!
         a -> a
 
     Note: `Eq` cannot be generated for functions.
+    "###
+    );
+
+    test_no_problem!(
+        derive_eq_for_tuple,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo ("", 1)
+             "#
+        )
+    );
+
+    test_report!(
+        cannot_eq_tuple_with_non_eq_element,
+        indoc!(
+            r#"
+             app "test" provides [main] to "./platform"
+
+             foo : a -> {} | a has Eq
+
+             main = foo ("", 1.0f64)
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = foo ("", 1.0f64)
+                   ^^^^^^^^^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        (
+            Str,
+            F64,
+        )a
+
+    In particular, an implementation for
+
+        F64
+
+    cannot be generated.
+
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
     "###
     );
 
@@ -12018,7 +12466,10 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     The `when` condition is a list of type:
 
-        List [A, B]
+        List [
+            A,
+            B,
+        ]
 
     But the branch patterns have type:
 
@@ -12540,42 +12991,6 @@ I recommend using camelCase. It's the standard style in Roc code!
     );
 
     test_report!(
-        polymorphic_recursion_forces_ungeneralized_type,
-        indoc!(
-            r#"
-            foo : a, Bool -> Str
-            foo = \in, b -> if b then "done" else bar in
-
-            bar = \_ -> foo {} Bool.true
-
-            foo "" Bool.false
-            "#
-        ),
-    @r###"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-    This 1st argument to `foo` has an unexpected type:
-
-    9│      foo "" Bool.false
-                ^^
-
-    The argument is a string of type:
-
-        Str
-
-    But `foo` needs its 1st argument to be:
-
-        a
-
-    Tip: The type annotation uses the type variable `a` to say that this
-    definition can produce any type of value. But in the body I see that
-    it will only produce a `Str` value of a single specific type. Maybe
-    change the type annotation to be more specific? Maybe change the code
-    to be more general?
-    "###
-    );
-
-    test_report!(
         suggest_binding_rigid_var_to_ability,
         indoc!(
             r#"
@@ -13001,11 +13416,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `map` call produces:
 
-        List [One, Two]
+        List [Two, …]
 
     But the type annotation on `main` says it should be:
 
-        List [One]
+        List […]
     "###
     );
 
@@ -13039,11 +13454,11 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This `map` call produces:
 
-        List [One, Two]
+        List [Two, …]
 
     But the type annotation on `main` says it should be:
 
-        List [One]
+        List […]
     "###
     );
 
@@ -13127,6 +13542,90 @@ I recommend using camelCase. It's the standard style in Roc code!
     "###
     );
 
+    test_no_problem!(
+        derive_decoding_for_tuple,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (U32, Str) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        )
+    );
+
+    test_report!(
+        cannot_decode_tuple_with_non_decode_element,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (U32, {} -> {}) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    I can't generate an implementation of the `Decoding` ability for
+
+        U32, {} -> {}
+
+    Note: `Decoding` cannot be generated for functions.
+    "###
+    );
+
+    test_no_problem!(
+        derive_encoding_for_tuple,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : (U32, Str)
+
+            main = Encode.toEncoder x
+            "#
+        )
+    );
+
+    test_report!(
+        cannot_encode_tuple_with_non_encode_element,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : (U32, {} -> {})
+
+            main = Encode.toEncoder x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = Encode.toEncoder x
+                                ^
+
+    I can't generate an implementation of the `Encoding` ability for
+
+        U32, {} -> {}
+
+    Note: `Encoding` cannot be generated for functions.
+    "###
+    );
+
     test_report!(
         exhaustiveness_check_function_or_tag_union_issue_4994,
         indoc!(
@@ -13168,6 +13667,178 @@ I recommend using camelCase. It's the standard style in Roc code!
         _
 
     I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_no_problem!(
+        openness_constraint_opens_under_tuple,
+        indoc!(
+            r#"
+              x : [A, B, C]
+              when (x, 1u8) is
+                (A, _) -> Bool.true
+                (B, _) -> Bool.true
+                _ -> Bool.true
+            "#
+        )
+    );
+
+    test_report!(
+        apply_opaque_as_function,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Parser a := Str -> a
+
+            parser : Parser Str
+            parser = @Parser \s -> Str.concat s "asd"
+
+            main : Str
+            main = parser "hi"
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `parser` value is an opaque type, so it cannot be called with an
+    argument:
+
+    9│  main = parser "hi"
+               ^^^^^^
+
+    I can't call an opaque type because I don't know what it is! Maybe you
+    meant to unwrap it first?
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_too_few,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : U8, U8 -> U8
+            f = \x -> x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    3│  f : U8, U8 -> U8
+    4│  f = \x -> x
+            ^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too few arguments. I was expecting 1 more.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_too_many,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : U8, U8 -> U8
+            f = \x, y, z -> x + y + z
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    3│  f : U8, U8 -> U8
+    4│  f = \x, y, z -> x + y + z
+            ^^^^^^^^^^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8, U8, Int Unsigned8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_nested_too_few,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                f : U8, U8 -> U8
+                f = \x -> x
+
+                f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : U8, U8 -> U8
+    5│      f = \x -> x
+                ^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too few arguments. I was expecting 1 more.
+    "###
+    );
+
+    test_report!(
+        function_arity_mismatch_nested_too_many,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                f : U8, U8 -> U8
+                f = \x, y, z -> x + y + z
+
+                f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : U8, U8 -> U8
+    5│      f = \x, y, z -> x + y + z
+                ^^^^^^^^^^^^^^^^^^^^^
+
+    The body is an anonymous function of type:
+
+        (U8, U8, Int Unsigned8 -> U8)
+
+    But the type annotation on `f` says it should be:
+
+        (U8, U8 -> U8)
+
+    Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
     "###
     );
 }

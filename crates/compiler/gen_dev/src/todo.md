@@ -1,4 +1,4 @@
-# Important things to add (Not necessarily in order)
+# Important things to add (not necessarily in order)
 
 - Expand to way more builtins and assembly calls.
 - Deal with function calling, basic layouts, and all the fun basics of argument passing.
@@ -10,7 +10,7 @@
   Otherwise, many will always be inlined.
 - Add basic const folding? It should be really easy to add as an optimization.
   It should be a nice optimization for little cost. Just be sure to make it optional, otherwise our tests will do nothing.
-- Automatically build the zig builtins .o file and make it available here.
+- Automatically build the Zig builtins .o file and make it available here.
   We will need to link against it and use it whenever we call specific builtins.
 - Add unwind tables and landing pads.
 - Add ability to wrap functions with exceptions or return a results.

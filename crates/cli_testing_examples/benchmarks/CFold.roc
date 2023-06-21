@@ -6,9 +6,10 @@ app "cfold"
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 main : Task.Task {} []
 main =
-    Task.after
-        Task.getInt
-        \n ->
+    inputResult <- Task.attempt Task.getInt
+
+    when inputResult is
+        Ok n ->
             e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
             unoptimized = eval e
             optimized = eval (constFolding (reassoc e))
@@ -18,6 +19,9 @@ main =
             |> Str.concat " & "
             |> Str.concat (Num.toStr optimized)
             |> Task.putLine
+
+        Err GetIntError ->
+            Task.putLine "Error: Failed to get Integer from stdin."      
 
 Expr : [
     Add Expr Expr,
