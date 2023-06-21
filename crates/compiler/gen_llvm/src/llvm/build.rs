@@ -51,7 +51,7 @@ use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
 use std::convert::TryInto;
 use std::path::Path;
-use target_lexicon::{Architecture, OperatingSystem, Triple};
+use target_lexicon::{Architecture, OperatingSystem, Triple, Aarch64Architecture};
 
 use super::convert::{struct_type_from_union_layout, RocUnion};
 use super::intrinsics::{
@@ -490,6 +490,13 @@ pub fn module_from_builtins<'ctx>(
                 ..
             } => {
                 include_bytes!("../../../builtins/bitcode/builtins-x86_64.bc")
+            }
+            Triple {
+                architecture: Architecture::Aarch64(Aarch64Architecture::Aarch64),
+                operating_system: OperatingSystem::Linux,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-aarch64.bc")
             }
             Triple {
                 architecture: Architecture::X86_64,
