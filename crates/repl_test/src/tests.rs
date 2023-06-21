@@ -1304,3 +1304,21 @@ fn nested_tuple() {
         r#"("a", (2, 3)) : ( Str, ( U32, U32 )a )a"#,
     );
 }
+
+#[test]
+fn ordered_tag_union_memory_layout() {
+    expect_success(
+        indoc!(
+            r#"
+            Loc : { line: U32, column: U32 }
+
+            Node : [ A Loc, Height U8 Loc ]
+
+            x : Node
+            x = Height 1 { line: 2, column: 3 }
+            x
+            "#
+        ),
+        r#"Height 1 { column: 3, line: 2 } : Node"#,
+    );
+}
