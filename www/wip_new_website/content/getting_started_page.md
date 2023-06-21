@@ -1,5 +1,7 @@
 # Getting Started
 
+<!-- I want to use Roc, show me where to get the things I need -->
+
 ## Installation
 
 - [Linux x86-64 Getting Started Guide](https://github.com/roc-lang/roc/blob/main/getting_started/linux_x86_64.md)
@@ -13,15 +15,10 @@
 ## Roc CLI
 
 - Develop `roc dev`
-
 - Test `roc test`
-
 - Run `roc run`
-
 - Build `roc build`
-
 - Format `roc format`
-
 - Documentation `roc docs`
 
 ## Package Management

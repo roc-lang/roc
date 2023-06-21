@@ -1,5 +1,7 @@
 # Contribute to Roc
 
+<!-- I think the language and community are great, show me how to support Roc -->
+
 ## Sponsorship
 
 - [Github Sponsorship](https://github.com/sponsors/roc-lang)

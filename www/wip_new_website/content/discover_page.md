@@ -1,32 +1,22 @@
 # Discover Roc
 
+<!-- I'm totally new to Roc, looks interesting, show me more -->
+
 ## Meet the Community
 
-### Zulip Chat
-
-- [roc.zulipchat.com](https://roc.zulipchat.com/)
-
-### Github Project
-
-- [roc-lang/roc](https://github.com/roc-lang/roc)
-
-### Meetups & Events
-
-### Socials
+- Group Chat [roc.zulipchat.com](https://roc.zulipchat.com/)
+- Github Project [roc-lang/roc](https://github.com/roc-lang/roc)
+- Meetups & Events
+- Socials
 
 ## Roc Applications
 
-### Tools & Scripts
-
-### Web (coming soon)
-
-### Networking & Servers (coming soon)
-
-### Graphical (coming soon)
-
-### Scientific (coming soon)
-
-### Embedded (coming soon)
+- Tools & Scripts
+- Web (coming soon)
+- Networking & Servers (coming soon)
+- Graphical (coming soon)
+- Scientific (coming soon)
+- Embedded (coming soon)
 
 ## Roc Platforms
 
