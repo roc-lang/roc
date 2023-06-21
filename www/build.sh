@@ -94,4 +94,25 @@ fi
 
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
+# cleanup
+rm -rf roc_nightly roc_releases.json
+
+echo 'Generating CLI example platform docs...'
+# Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
+# "/packages/basic-cli/" rather than "/builtins/"
+export ROC_DOCS_URL_ROOT=/packages/basic-cli
+
+rm -rf ./downloaded-basic-cli
+
+git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
+
+cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
+
+rm -rf ./downloaded-basic-cli
+
+BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
+mkdir -p $BASIC_CLI_PACKAGE_DIR
+rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
+mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
+
 popd
