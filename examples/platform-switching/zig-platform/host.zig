@@ -27,7 +27,7 @@ extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
-const DEBUG: bool = true;
+const DEBUG: bool = false;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
