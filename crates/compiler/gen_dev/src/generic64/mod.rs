@@ -3018,8 +3018,8 @@ impl<
 
         let ptr_reg = self.storage_manager.claim_general_reg(&mut self.buf, &ptr);
 
-        ASM::mov_reg64_reg64(&mut self.buf, ptr_reg, CC::STACK_PTR_REG);
-        ASM::sub_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, base_offset);
+        ASM::mov_reg64_reg64(&mut self.buf, ptr_reg, CC::BASE_PTR_REG);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, base_offset);
 
         self.build_ptr_store(sym, ptr, value, element_layout);
     }
