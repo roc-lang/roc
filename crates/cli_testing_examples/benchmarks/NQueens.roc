@@ -46,7 +46,10 @@ safe = \queen, diagonal, xs ->
     when xs is
         Nil -> Bool.true
         Cons q t ->
-            queen != q && queen != q + diagonal && queen != q - diagonal && safe queen (diagonal + 1) t
+            if queen != q && queen != q + diagonal && queen != q - diagonal then
+                safe queen (diagonal + 1) t
+            else
+                Bool.false
 
 
 length : ConsList a -> I64
