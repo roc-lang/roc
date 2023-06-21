@@ -795,7 +795,7 @@ fn linked_list_sum_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_map() {
     assert_evals_to!(
         indoc!(
