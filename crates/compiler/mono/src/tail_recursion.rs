@@ -542,7 +542,7 @@ fn trmc_candidates_help<'a>(
 #[derive(Clone)]
 pub(crate) struct TrmcEnv<'a> {
     hole_symbol: Symbol,
-    initial_ptr_symbol: Symbol,
+    head_symbol: Symbol,
     joinpoint_id: JoinPointId,
     return_layout: InLayout<'a>,
     ptr_return_layout: InLayout<'a>,
@@ -659,6 +659,7 @@ impl<'a> TrmcEnv<'a> {
         // the root of the recursive structure that we'll be building
         let initial_ptr_symbol = env.named_unique_symbol("initial");
         jump_arguments.push(initial_ptr_symbol);
+        jump_arguments.push(initial_ptr_symbol);
 
         let null_symbol = env.named_unique_symbol("null");
         let let_null = |next| Stmt::Let(null_symbol, Expr::NullPointer, return_layout, next);
@@ -680,6 +681,7 @@ impl<'a> TrmcEnv<'a> {
 
         let joinpoint_id = JoinPointId(env.named_unique_symbol("trmc"));
         let hole_symbol = env.named_unique_symbol("hole");
+        let head_symbol = env.named_unique_symbol("head");
 
         let jump_stmt = Stmt::Jump(joinpoint_id, jump_arguments.into_bump_slice());
 
@@ -687,7 +689,7 @@ impl<'a> TrmcEnv<'a> {
 
         let mut this = Self {
             hole_symbol,
-            initial_ptr_symbol,
+            head_symbol,
             joinpoint_id,
             return_layout,
             ptr_return_layout,
@@ -696,6 +698,13 @@ impl<'a> TrmcEnv<'a> {
 
         let param = Param {
             symbol: hole_symbol,
+            ownership: Ownership::Owned,
+            layout: ptr_return_layout,
+        };
+        joinpoint_parameters.push(param);
+
+        let param = Param {
+            symbol: head_symbol,
             ownership: Ownership::Owned,
             layout: ptr_return_layout,
         };
@@ -834,6 +843,7 @@ impl<'a> TrmcEnv<'a> {
                             let mut jump_arguments =
                                 Vec::from_iter_in(call.arguments.iter().copied(), env.arena);
                             jump_arguments.push(new_hole_symbol);
+                            jump_arguments.push(self.head_symbol);
 
                             let jump =
                                 Stmt::Jump(self.joinpoint_id, jump_arguments.into_bump_slice());
@@ -963,7 +973,7 @@ impl<'a> TrmcEnv<'a> {
                 op: LowLevel::PtrLoad,
                 update_mode: UpdateModeId::BACKEND_DUMMY,
             },
-            arguments: &*arena.alloc([self.initial_ptr_symbol]),
+            arguments: &*arena.alloc([self.head_symbol]),
         };
 
         let ptr_load = |next| Stmt::Let(final_symbol, Expr::Call(call), layout, next);
