@@ -15,9 +15,8 @@ pageData =
     |> Dict.insert "getting_started_page.html" { title: "Let's Roc", description: "Getting started with the Roc programming language" }
 
 getPage : Str -> {title : Str, description : Str}
-getPage = \current -> 
+getPage = \current ->
     Dict.get pageData current
-    |> Result.onErr \_ -> crash "expected page to be in meta"
     |> Result.withDefault { title: "", description: ""}
 
 getTitle : Str -> Str
@@ -49,7 +48,9 @@ view = \page, htmlContent ->
                 text htmlContent,
             ],
             footer [] [
-                text "Made by people who like to make nice things. © 2022"
+                text "This site is powered by ",
+                a [href "https://www.netlify.com"] [ text "Netlify"],
+                text ". Made by people who like to make nice things. © Roc 2023",
             ]
         ],
         script [src "/site.js"] [],
