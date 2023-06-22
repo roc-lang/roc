@@ -49,7 +49,7 @@ main =
         |> Command.arg "--"
         |> Command.arg "dist/"
         |> Command.status
-        |> Task.onFail \_ -> crash "Failed to change directory"
+        |> Task.onFail \_ -> crash "Failed to run file server; consider intalling with `cargo install simple-http-server`"
         |> Task.await
 
     Task.succeed {}
