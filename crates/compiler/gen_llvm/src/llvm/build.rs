@@ -51,7 +51,7 @@ use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
 use std::convert::TryInto;
 use std::path::Path;
-use target_lexicon::{Architecture, OperatingSystem, Triple, Aarch64Architecture};
+use target_lexicon::{Aarch64Architecture, Architecture, OperatingSystem, Triple};
 
 use super::convert::{struct_type_from_union_layout, RocUnion};
 use super::intrinsics::{
