@@ -39,6 +39,9 @@ use roc_unify::unify::{
     SpecializationLsetCollector, Unified::*,
 };
 
+mod scope;
+pub use scope::Scope;
+
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
 // Thank you, Evan!
@@ -420,43 +423,6 @@ impl Aliases {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Env {
-    symbols: Vec<Symbol>,
-    variables: Vec<Variable>,
-}
-
-impl Env {
-    pub fn vars_by_symbol(&self) -> impl Iterator<Item = (Symbol, Variable)> + '_ {
-        let it1 = self.symbols.iter().copied();
-        let it2 = self.variables.iter().copied();
-
-        it1.zip(it2)
-    }
-
-    #[inline(always)]
-    fn get_var_by_symbol(&self, symbol: &Symbol) -> Option<Variable> {
-        self.symbols
-            .iter()
-            .position(|s| s == symbol)
-            .map(|index| self.variables[index])
-    }
-
-    #[inline(always)]
-    fn insert_symbol_var_if_vacant(&mut self, symbol: Symbol, var: Variable) {
-        match self.symbols.iter().position(|s| *s == symbol) {
-            None => {
-                // symbol is not in vars_by_symbol yet; insert it
-                self.symbols.push(symbol);
-                self.variables.push(var);
-            }
-            Some(_) => {
-                // do nothing
-            }
-        }
-    }
-}
-
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
@@ -517,7 +483,7 @@ impl Pools {
 
 #[derive(Clone)]
 struct State {
-    env: Env,
+    scope: Scope,
     mark: Mark,
 }
 
@@ -527,7 +493,7 @@ pub fn run(
     mut subs: Subs,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
-) -> (Solved<Subs>, Env) {
+) -> (Solved<Subs>, Scope) {
     let env = run_in_place(ctx, problems, &mut subs, aliases, abilities_store);
 
     (Solved(subs), env)
@@ -541,7 +507,7 @@ fn run_in_place(
     subs: &mut Subs,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
-) -> Env {
+) -> Scope {
     let SolveCtx {
         home: _,
         constraints,
@@ -555,7 +521,7 @@ fn run_in_place(
     let mut pools = Pools::default();
 
     let state = State {
-        env: Env::default(),
+        scope: Scope::default(),
         mark: Mark::NONE.next(),
     };
     let rank = Rank::toplevel();
@@ -605,20 +571,20 @@ fn run_in_place(
         &mut awaiting_specializations,
     );
 
-    state.env
+    state.scope
 }
 
 #[derive(Debug)]
 enum Work<'a> {
     Constraint {
-        env: &'a Env,
+        scope: &'a Scope,
         rank: Rank,
         constraint: &'a Constraint,
     },
     CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
     /// The ret_con part of a let constraint that does NOT introduces rigid and/or flex variables
     LetConNoVariables {
-        env: &'a Env,
+        scope: &'a Scope,
         rank: Rank,
         let_con: &'a LetConstraint,
 
@@ -633,7 +599,7 @@ enum Work<'a> {
     /// These introduced variables must be generalized, hence this variant
     /// is more complex than `LetConNoVariables`.
     LetConIntroducesVariables {
-        env: &'a Env,
+        scope: &'a Scope,
         rank: Rank,
         let_con: &'a LetConstraint,
 
@@ -672,7 +638,7 @@ fn solve(
     } = ctx;
 
     let initial = Work::Constraint {
-        env: &Env::default(),
+        scope: &Scope::default(),
         rank,
         constraint,
     };
@@ -682,7 +648,7 @@ fn solve(
     while let Some(work_item) = stack.pop() {
         let (env, rank, constraint) = match work_item {
             Work::Constraint {
-                env,
+                scope: env,
                 rank,
                 constraint,
             } => {
@@ -699,7 +665,7 @@ fn solve(
                 continue;
             }
             Work::LetConNoVariables {
-                env,
+                scope: env,
                 rank,
                 let_con,
                 pool_variables,
@@ -744,7 +710,7 @@ fn solve(
                 }
 
                 stack.push(Work::Constraint {
-                    env: arena.alloc(new_env),
+                    scope: arena.alloc(new_env),
                     rank,
                     constraint: ret_constraint,
                 });
@@ -754,7 +720,7 @@ fn solve(
                 continue;
             }
             Work::LetConIntroducesVariables {
-                env,
+                scope: env,
                 rank,
                 let_con,
                 pool_variables,
@@ -764,7 +730,7 @@ fn solve(
                 let ret_constraint = &constraints.constraints[offset + 1];
 
                 let mark = state.mark;
-                let saved_env = state.env;
+                let saved_env = state.scope;
 
                 let young_mark = mark;
                 let visit_mark = young_mark.next();
@@ -878,14 +844,14 @@ fn solve(
                 // Note that this vars_by_symbol is the one returned by the
                 // previous call to solve()
                 let state_for_ret_con = State {
-                    env: saved_env,
+                    scope: saved_env,
                     mark: final_mark,
                 };
 
                 // Now solve the body, using the new vars_by_symbol which includes
                 // the assignments' name-to-variable mappings.
                 stack.push(Work::Constraint {
-                    env: arena.alloc(new_env),
+                    scope: arena.alloc(new_env),
                     rank,
                     constraint: ret_constraint,
                 });
@@ -903,7 +869,7 @@ fn solve(
             SaveTheEnvironment => {
                 let mut copy = state;
 
-                copy.env = env.clone();
+                copy.scope = env.clone();
 
                 copy
             }
@@ -1117,7 +1083,7 @@ fn solve(
                 let it = constraints.constraints[slice.indices()].iter().rev();
                 for sub_constraint in it {
                     stack.push(Work::Constraint {
-                        env,
+                        scope: env,
                         rank,
                         constraint: sub_constraint,
                     })
@@ -1233,7 +1199,7 @@ fn solve(
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     stack.push(Work::Constraint {
-                        env,
+                        scope: env,
                         rank,
                         constraint: defs_constraint,
                     });
@@ -1246,13 +1212,13 @@ fn solve(
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
                     stack.push(Work::LetConNoVariables {
-                        env,
+                        scope: env,
                         rank,
                         let_con,
                         pool_variables,
                     });
                     stack.push(Work::Constraint {
-                        env,
+                        scope: env,
                         rank,
                         constraint: defs_constraint,
                     });
@@ -1299,13 +1265,13 @@ fn solve(
                     // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
                     // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
                     stack.push(Work::LetConIntroducesVariables {
-                        env,
+                        scope: env,
                         rank,
                         let_con,
                         pool_variables,
                     });
                     stack.push(Work::Constraint {
-                        env,
+                        scope: env,
                         rank: binding_rank,
                         constraint: defs_constraint,
                     });
@@ -2300,6 +2266,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 
 use std::cell::RefCell;
 use std::ops::ControlFlow;
+
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
     static SCRATCHPAD: RefCell<Option<bumpalo::Bump>> = RefCell::new(Some(bumpalo::Bump::with_capacity(4 * 1024)));

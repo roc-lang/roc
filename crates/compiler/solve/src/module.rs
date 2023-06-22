@@ -76,7 +76,7 @@ pub struct SolveCtx<'a> {
 
 pub struct SolveOutput {
     pub subs: Solved<Subs>,
-    pub env: solve::Env,
+    pub scope: solve::Scope,
     pub errors: Vec<TypeError>,
     pub resolved_abilities_store: AbilitiesStore,
 }
@@ -105,12 +105,12 @@ pub fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) =
+    let (solved_subs, solved_scope) =
         solve::run(ctx, &mut problems, subs, &mut aliases, &mut abilities_store);
 
     SolveOutput {
         subs: solved_subs,
-        env: solved_env,
+        scope: solved_scope,
         errors: problems,
         resolved_abilities_store: abilities_store,
     }

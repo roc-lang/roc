@@ -5154,7 +5154,7 @@ fn run_solve_solve(
         // Expose anything that is explicitly exposed by the header, or is a specialization of an
         // ability.
         let exposed_vars_by_symbol: Vec<_> = solve_output
-            .env
+            .scope
             .vars_by_symbol()
             .filter(|(k, _)| {
                 exposed_symbols.contains(k)
@@ -5168,7 +5168,7 @@ fn run_solve_solve(
 
     let roc_solve::module::SolveOutput {
         subs,
-        env: _,
+        scope: _,
         errors,
         resolved_abilities_store,
     } = solve_output;
