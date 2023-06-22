@@ -39,10 +39,10 @@ body {
 }
 
 footer {
+    font-size: 0.9rem;
     max-width: 1024px;
     margin: 0 auto;
     font-size: 14px;
-    padding: 16px;
 }
 
 section p:last-child {

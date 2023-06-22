@@ -9,6 +9,10 @@
 - Meetups & Events
 - Socials
 
+## Blog
+
+- [Website Update Oct 2022](/blog/roc_website_2022.html) 
+
 ## Roc Applications
 
 - Tools & Scripts
