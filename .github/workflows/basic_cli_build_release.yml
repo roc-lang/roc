@@ -9,7 +9,7 @@ concurrency:
   
 # use .tar.gz for quick testing
 env:
-  ARCHIVE_FORMAT: .tar.gz
+  ARCHIVE_FORMAT: .tar.br
 
 jobs:
   fetch-releases:
