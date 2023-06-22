@@ -121,8 +121,14 @@ impl Aliases {
     }
 
     fn instantiate_result_result(
+<<<<<<< HEAD
         env: &mut Env,
         rank: Rank,
+=======
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
         alias_variables: AliasVariables,
     ) -> Variable {
         let tag_names_slice = Subs::RESULT_TAG_NAMES;
@@ -131,49 +137,85 @@ impl Aliases {
         let ok_slice = SubsSlice::new(alias_variables.variables_start, 1);
 
         let variable_slices =
+<<<<<<< HEAD
             SubsSlice::extend_new(&mut env.subs.variable_slices, [err_slice, ok_slice]);
+=======
+            SubsSlice::extend_new(&mut subs.variable_slices, [err_slice, ok_slice]);
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
 
         let union_tags = UnionTags::from_slices(tag_names_slice, variable_slices);
         let ext_var = TagExt::Any(Variable::EMPTY_TAG_UNION);
         let flat_type = FlatType::TagUnion(union_tags, ext_var);
         let content = Content::Structure(flat_type);
 
+<<<<<<< HEAD
         env.register(rank, content)
+=======
+        register(subs, rank, pools, content)
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
     }
 
     /// Build an alias of the form `Num range := range`
     fn build_num_opaque(
+<<<<<<< HEAD
         env: &mut Env,
         rank: Rank,
+=======
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
         symbol: Symbol,
         range_var: Variable,
     ) -> Variable {
         let content = Content::Alias(
             symbol,
+<<<<<<< HEAD
             AliasVariables::insert_into_subs(env.subs, [range_var], [], []),
+=======
+            AliasVariables::insert_into_subs(subs, [range_var], [], []),
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
             range_var,
             AliasKind::Opaque,
         );
 
+<<<<<<< HEAD
         env.register(rank, content)
+=======
+        register(subs, rank, pools, content)
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
     }
 
     fn instantiate_builtin_aliases_real_var(
         &mut self,
+<<<<<<< HEAD
         env: &mut Env,
         rank: Rank,
+=======
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
         symbol: Symbol,
         alias_variables: AliasVariables,
     ) -> Option<(Variable, AliasKind)> {
         match symbol {
             Symbol::RESULT_RESULT => {
+<<<<<<< HEAD
                 let var = Self::instantiate_result_result(env, rank, alias_variables);
+=======
+                let var = Self::instantiate_result_result(subs, rank, pools, alias_variables);
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
 
                 Some((var, AliasKind::Structural))
             }
             Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT => {
                 // Num range := range | Integer range := range | FloatingPoint range := range
+<<<<<<< HEAD
                 let range_var = env.subs.variables[alias_variables.variables_start as usize];
+=======
+                let range_var = subs.variables[alias_variables.variables_start as usize];
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
                 Some((range_var, AliasKind::Opaque))
             }
             Symbol::NUM_INT => {
@@ -181,15 +223,27 @@ impl Aliases {
                 //
                 // build `Integer range := range`
                 let integer_content_var = Self::build_num_opaque(
+<<<<<<< HEAD
                     env,
                     rank,
                     Symbol::NUM_INTEGER,
                     env.subs.variables[alias_variables.variables_start as usize],
+=======
+                    subs,
+                    rank,
+                    pools,
+                    Symbol::NUM_INTEGER,
+                    subs.variables[alias_variables.variables_start as usize],
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
                 );
 
                 // build `Num (Integer range) := Integer range`
                 let num_content_var =
+<<<<<<< HEAD
                     Self::build_num_opaque(env, rank, Symbol::NUM_NUM, integer_content_var);
+=======
+                    Self::build_num_opaque(subs, rank, pools, Symbol::NUM_NUM, integer_content_var);
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
 
                 Some((num_content_var, AliasKind::Structural))
             }
@@ -198,15 +252,27 @@ impl Aliases {
                 //
                 // build `FloatingPoint range := range`
                 let fpoint_content_var = Self::build_num_opaque(
+<<<<<<< HEAD
                     env,
                     rank,
                     Symbol::NUM_FLOATINGPOINT,
                     env.subs.variables[alias_variables.variables_start as usize],
+=======
+                    subs,
+                    rank,
+                    pools,
+                    Symbol::NUM_FLOATINGPOINT,
+                    subs.variables[alias_variables.variables_start as usize],
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
                 );
 
                 // build `Num (FloatingPoint range) := FloatingPoint range`
                 let num_content_var =
+<<<<<<< HEAD
                     Self::build_num_opaque(env, rank, Symbol::NUM_NUM, fpoint_content_var);
+=======
+                    Self::build_num_opaque(subs, rank, pools, Symbol::NUM_NUM, fpoint_content_var);
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
 
                 Some((num_content_var, AliasKind::Structural))
             }
@@ -228,8 +294,14 @@ impl Aliases {
 
     pub fn instantiate_real_var(
         &mut self,
+<<<<<<< HEAD
         env: &mut Env,
         rank: Rank,
+=======
+        subs: &mut Subs,
+        rank: Rank,
+        pools: &mut Pools,
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
         problems: &mut Vec<TypeError>,
         abilities_store: &AbilitiesStore,
         obligation_cache: &mut ObligationCache,
@@ -239,9 +311,20 @@ impl Aliases {
         alias_variables: AliasVariables,
     ) -> (Variable, AliasKind) {
         // hardcoded instantiations for builtin aliases
+<<<<<<< HEAD
         if let Some((var, kind)) =
             self.instantiate_builtin_aliases_real_var(env, rank, symbol, alias_variables)
         {
+=======
+        if let Some((var, kind)) = Self::instantiate_builtin_aliases_real_var(
+            self,
+            subs,
+            rank,
+            pools,
+            symbol,
+            alias_variables,
+        ) {
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
             return (var, kind);
         }
 
@@ -258,7 +341,11 @@ impl Aliases {
         let mut substitutions: MutMap<_, _> = Default::default();
 
         let old_type_variables = delayed_variables.type_variables(&mut self.variables);
+<<<<<<< HEAD
         let new_type_variables = &env.subs.variables[alias_variables.type_variables().indices()];
+=======
+        let new_type_variables = &subs.variables[alias_variables.type_variables().indices()];
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
 
         for (old, new) in old_type_variables.iter_mut().zip(new_type_variables) {
             // if constraint gen duplicated a type these variables could be the same
@@ -276,13 +363,21 @@ impl Aliases {
             .iter_mut()
         {
             debug_assert!(opt_abilities.is_none());
+<<<<<<< HEAD
             let new_var = env.subs.fresh_unnamed_flex_var();
+=======
+            let new_var = subs.fresh_unnamed_flex_var();
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
             substitutions.insert(*rec_var, new_var);
         }
 
         let old_lambda_set_variables = delayed_variables.lambda_set_variables(&mut self.variables);
         let new_lambda_set_variables =
+<<<<<<< HEAD
             &env.subs.variables[alias_variables.lambda_set_variables().indices()];
+=======
+            &subs.variables[alias_variables.lambda_set_variables().indices()];
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
 
         for (old, new) in old_lambda_set_variables
             .iter_mut()
@@ -297,7 +392,11 @@ impl Aliases {
         let old_infer_ext_vars =
             delayed_variables.infer_ext_in_output_variables(&mut self.variables);
         let new_infer_ext_vars =
+<<<<<<< HEAD
             &env.subs.variables[alias_variables.infer_ext_in_output_variables().indices()];
+=======
+            &subs.variables[alias_variables.infer_ext_in_output_variables().indices()];
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
 
         for (old, new) in old_infer_ext_vars.iter_mut().zip(new_infer_ext_vars) {
             debug_assert!(old.opt_abilities.is_none());
@@ -313,8 +412,14 @@ impl Aliases {
         };
 
         let alias_variable = type_to_var_help(
+<<<<<<< HEAD
             env,
             rank,
+=======
+            subs,
+            rank,
+            pools,
+>>>>>>> 6fa4cd24e (Break up solve/solve into smaller modules)
             problems,
             abilities_store,
             obligation_cache,
