@@ -12,6 +12,7 @@ use roc_types::{
 
 use crate::env::Env;
 
+// TODO: eventually, we could possibly use the arena in Env instead.
 pub(crate) fn deep_copy_var_in(env: &mut Env, rank: Rank, var: Variable, arena: &Bump) -> Variable {
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
