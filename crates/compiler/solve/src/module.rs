@@ -1,4 +1,4 @@
-use crate::solve::{self, Aliases};
+use crate::{aliases::Aliases, solve};
 use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expr::PendingDerives;

@@ -8,3 +8,10 @@ pub mod ability;
 pub mod module;
 pub mod solve;
 pub mod specialize;
+
+mod aliases;
+pub use aliases::Aliases;
+mod deep_copy;
+mod pools;
+pub use pools::Pools;
+mod to_var;

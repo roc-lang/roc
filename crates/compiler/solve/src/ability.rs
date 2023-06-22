@@ -21,8 +21,7 @@ use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarit
 use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
-use crate::solve::type_to_var;
-use crate::solve::{Aliases, Pools};
+use crate::{aliases::Aliases, pools::Pools, to_var::type_to_var};
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {

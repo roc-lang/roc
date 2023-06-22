@@ -25,8 +25,8 @@ use roc_types::{
 use roc_unify::unify::{unify, Env as UEnv, Mode, MustImplementConstraints};
 
 use crate::{
-    ability::builtin_module_with_unlisted_ability_impl,
-    solve::{deep_copy_var_in, introduce, Pools},
+    ability::builtin_module_with_unlisted_ability_impl, deep_copy::deep_copy_var_in, pools::Pools,
+    solve::introduce,
 };
 
 /// What phase in the compiler is reaching out to specialize lambda sets?

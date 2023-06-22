@@ -5113,7 +5113,7 @@ fn run_solve_solve(
         &import_variables,
     );
 
-    let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
+    let mut solve_aliases = roc_solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
         solve_aliases.insert(&mut types, *name, alias.clone());
     }
