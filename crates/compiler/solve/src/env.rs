@@ -75,7 +75,7 @@ impl<'a> Env<'a> {
     }
 
     /// Retrieves an environment for unification.
-    pub fn uenv<'r>(&'r mut self) -> UEnv<'r> {
+    pub fn uenv(&mut self) -> UEnv {
         UEnv::new(self.subs)
     }
 }
