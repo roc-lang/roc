@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
 
 name: Test latest nightly release for macOS, ubu 20.04, ubu 22.04 x86_64
@@ -8,11 +9,11 @@ env:
 
 jobs:
   test-nightly:
-    name: test nightly macos 11, macos 12, ubu 20.04, ubu 22.04
+    name: test nightly macos 11/12/13, ubuntu 20.04/22.04
     strategy:
       fail-fast: false
       matrix:
-        os: [ macos-11, macos-12, ubuntu-20.04, ubuntu-22.04 ]
+        os: [ macos-11, macos-12, macos-13, ubuntu-20.04, ubuntu-22.04 ]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
