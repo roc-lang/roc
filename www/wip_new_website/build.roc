@@ -1,5 +1,5 @@
 #!/usr/bin/env roc
-app "build-website"
+app "website-builder"
     # TODO update to basic-cli release when Command module is available 
     packages { pf: "https://github.com/lukewilliamboswell/roc-things/releases/download/test/VQYlmhbzLld4kAE4Y8sWt349md89iyGBg5hgoIBfvcs.tar.br" }
     imports [
