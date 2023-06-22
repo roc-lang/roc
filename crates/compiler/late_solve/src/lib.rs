@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
+use roc_can::constraint::Constraints;
 use roc_can::module::ExposedByModule;
 use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
@@ -12,13 +13,14 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_solve::ability::AbilityResolver;
-use roc_solve::specialize::{compact_lambda_sets_of_vars, DerivedEnv, Phase};
+use roc_solve::specialize::{compact_lambda_sets_of_vars, Phase};
 use roc_solve::Pools;
+use roc_solve::{DerivedEnv, Env};
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_types::types::Polarity;
 use roc_unify::unify::MetaCollector;
-use roc_unify::unify::{Env, Mode, Unified};
+use roc_unify::unify::{Env as UEnv, Mode, Unified};
 
 pub use roc_solve::ability::{ResolveError, Resolved};
 pub use roc_types::subs::instantiate_rigids;
@@ -340,6 +342,19 @@ impl MetaCollector for ChangedVariableCollector {
     }
 }
 
+std::thread_local! {
+    static SCRATCHPAD_FOR_OCCURS: std::cell::RefCell<Option<Constraints>> = std::cell::RefCell::new(Some(Constraints::empty()));
+}
+
+fn with_empty_solve_constraints<T>(f: impl FnOnce(&Constraints) -> T) -> T {
+    SCRATCHPAD_FOR_OCCURS.with(|cell| {
+        let constr = cell.take().unwrap();
+        let result = f(&constr);
+        cell.replace(Some(constr));
+        result
+    })
+}
+
 /// Unifies two variables and performs lambda set compaction.
 /// Ranks and other ability demands are disregarded.
 #[allow(clippy::too_many_arguments)]
@@ -359,7 +374,7 @@ pub fn unify(
         "derived module can only unify its subs in its own context!"
     );
     let unified = roc_unify::unify::unify_with_collector::<ChangedVariableCollector>(
-        &mut Env::new(subs),
+        &mut UEnv::new(subs),
         left,
         right,
         Mode::EQ,
@@ -381,14 +396,17 @@ pub fn unify(
                 exposed_types: exposed_by_module,
             };
 
-            let must_implement_constraints = compact_lambda_sets_of_vars(
-                subs,
-                &derived_env,
-                arena,
-                &mut pools,
-                lambda_sets_to_specialize,
-                &late_phase,
-            );
+            let must_implement_constraints = with_empty_solve_constraints(|c| {
+                let mut env = Env {
+                    constraints: c,
+                    subs,
+                    derived_env: &derived_env,
+                    arena,
+                    pools: &mut pools,
+                };
+
+                compact_lambda_sets_of_vars(&mut env, lambda_sets_to_specialize, &late_phase)
+            });
             // At this point we can't do anything with must-implement constraints, since we're no
             // longer solving. We must assume that they were totally caught during solving.
             // After we land https://github.com/roc-lang/roc/issues/3207 this concern should totally

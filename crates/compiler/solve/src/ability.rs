@@ -18,10 +18,11 @@ use roc_types::subs::{
     TupleElems, Variable,
 };
 use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity, Types};
-use roc_unify::unify::{Env, MustImplementConstraints};
+use roc_unify::unify::{Env as UEnv, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
-use crate::{aliases::Aliases, pools::Pools, to_var::type_to_var};
+use crate::env::Env;
+use crate::{aliases::Aliases, to_var::type_to_var};
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {
@@ -55,7 +56,7 @@ pub struct PendingDerivesTable(
 
 impl PendingDerivesTable {
     pub fn new(
-        subs: &mut Subs,
+        env: &mut Env,
         types: &mut Types,
         aliases: &mut Aliases,
         pending_derives: PendingDerives,
@@ -80,17 +81,16 @@ impl PendingDerivesTable {
                 // Neither rank nor pools should matter here.
                 let typ = types.from_old_type(&typ);
                 let opaque_var = type_to_var(
-                    subs,
+                    env,
                     Rank::toplevel(),
                     problems,
                     abilities_store,
                     obligation_cache,
-                    &mut Pools::default(),
                     types,
                     aliases,
                     typ,
                 );
-                let real_var = match subs.get_content_without_compacting(opaque_var) {
+                let real_var = match env.subs.get_content_without_compacting(opaque_var) {
                     Content::Alias(_, _, real_var, AliasKind::Opaque) => real_var,
                     _ => internal_error!("Non-opaque in derives table"),
                 };
@@ -1283,7 +1283,7 @@ impl DerivableVisitor for DeriveEq {
 
         // Of the floating-point types,
         // only Dec implements Eq.
-        let mut env = Env::new(subs);
+        let mut env = UEnv::new(subs);
         let unified = unify(
             &mut env,
             content_var,
@@ -1418,7 +1418,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
 
     instantiate_rigids(subs, signature_var);
     let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) = unify(
-        &mut Env::new(subs),
+        &mut UEnv::new(subs),
         specialization_var,
         signature_var,
         Mode::EQ,

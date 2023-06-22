@@ -10,29 +10,23 @@ use roc_types::{
     types::{RecordField, Uls},
 };
 
-use crate::pools::Pools;
+use crate::env::Env;
 
-pub(crate) fn deep_copy_var_in(
-    subs: &mut Subs,
-    rank: Rank,
-    pools: &mut Pools,
-    var: Variable,
-    arena: &Bump,
-) -> Variable {
+pub(crate) fn deep_copy_var_in(env: &mut Env, rank: Rank, var: Variable, arena: &Bump) -> Variable {
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
-    let pool = pools.get_mut(rank);
+    let pool = env.pools.get_mut(rank);
 
-    let var = subs.get_root_key(var);
-    match deep_copy_var_decision(subs, rank, var) {
+    let var = env.subs.get_root_key(var);
+    match deep_copy_var_decision(env.subs, rank, var) {
         ControlFlow::Break(copy) => copy,
         ControlFlow::Continue(copy) => {
-            deep_copy_var_help(subs, rank, pool, &mut visited, var, copy);
+            deep_copy_var_help(env.subs, rank, pool, &mut visited, var, copy);
 
             // we have tracked all visited variables, and can now traverse them
             // in one go (without looking at the UnificationTable) and clear the copy field
             for var in visited {
-                subs.set_copy_unchecked(var, OptVariable::NONE);
+                env.subs.set_copy_unchecked(var, OptVariable::NONE);
             }
 
             copy

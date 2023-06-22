@@ -1,14 +1,13 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
 use crate::deep_copy::deep_copy_var_in;
+use crate::env::{DerivedEnv, Env};
 use crate::module::{SolveConfig, Solved};
 use crate::pools::Pools;
 use crate::specialize::{
-    compact_lambda_sets_of_vars, AwaitingSpecializations, CompactionResult, DerivedEnv, SolvePhase,
+    compact_lambda_sets_of_vars, AwaitingSpecializations, CompactionResult, SolvePhase,
 };
 use crate::to_var::{either_type_index_to_var, type_to_var};
 use crate::Aliases;
@@ -26,8 +25,8 @@ use roc_problem::can::CycleEntry;
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{
-    self, Content, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt,
-    UlsOfVar, Variable,
+    self, Content, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt, UlsOfVar,
+    Variable,
 };
 use roc_types::types::{Category, Polarity, Reason, RecordField, Type, TypeExtension, Types, Uls};
 use roc_unify::unify::{
@@ -137,8 +136,21 @@ fn run_in_place(
     let mut obligation_cache = ObligationCache::default();
     let mut awaiting_specializations = AwaitingSpecializations::default();
 
-    let pending_derives = PendingDerivesTable::new(
+    let derived_env = DerivedEnv {
+        derived_module: &derived_module,
+        exposed_types: exposed_by_module,
+    };
+
+    let mut env = Env {
+        arena: &arena,
+        constraints,
+        derived_env: &derived_env,
         subs,
+        pools: &mut pools,
+    };
+
+    let pending_derives = PendingDerivesTable::new(
+        &mut env,
         &mut types,
         aliases,
         pending_derives,
@@ -149,29 +161,16 @@ fn run_in_place(
     let CheckedDerives {
         legal_derives: _,
         problems: derives_problems,
-    } = obligation_cache.check_derives(subs, abilities_store, pending_derives);
+    } = obligation_cache.check_derives(env.subs, abilities_store, pending_derives);
     problems.extend(derives_problems);
 
-    let derived_env = DerivedEnv {
-        derived_module: &derived_module,
-        exposed_types: exposed_by_module,
-    };
-
-    let reified_ctx = ReifiedSolveCtx {
-        arena: &arena,
-        constraints,
-        derived_env: &derived_env,
-    };
-
     let state = solve(
-        reified_ctx,
+        &mut env,
         types,
         state,
         rank,
-        &mut pools,
         problems,
         aliases,
-        subs,
         &root_constraint,
         abilities_store,
         &mut obligation_cache,
@@ -218,32 +217,18 @@ enum Work<'a> {
     },
 }
 
-struct ReifiedSolveCtx<'a> {
-    arena: &'a Bump,
-    constraints: &'a Constraints,
-    derived_env: &'a DerivedEnv<'a>,
-}
-
 fn solve(
-    ctx: ReifiedSolveCtx,
+    env: &mut Env,
     mut can_types: Types,
     mut state: State,
     rank: Rank,
-    pools: &mut Pools,
     problems: &mut Vec<TypeError>,
     aliases: &mut Aliases,
-    subs: &mut Subs,
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
 ) -> State {
-    let ReifiedSolveCtx {
-        arena,
-        constraints,
-        derived_env,
-    } = ctx;
-
     let initial = Work::Constraint {
         scope: &Scope::default(),
         rank,
@@ -253,57 +238,52 @@ fn solve(
     let mut stack = vec![initial];
 
     while let Some(work_item) = stack.pop() {
-        let (env, rank, constraint) = match work_item {
+        let (scope, rank, constraint) = match work_item {
             Work::Constraint {
-                scope: env,
+                scope,
                 rank,
                 constraint,
             } => {
                 // the default case; actually solve this constraint
-                (env, rank, constraint)
+                (scope, rank, constraint)
             }
             Work::CheckForInfiniteTypes(def_vars) => {
                 // after a LetCon, we must check if any of the variables that we introduced
                 // loop back to themselves after solving the ret_constraint
                 for (symbol, loc_var) in def_vars.iter() {
-                    check_for_infinite_type(subs, pools, problems, *symbol, *loc_var);
+                    check_for_infinite_type(env, problems, *symbol, *loc_var);
                 }
 
                 continue;
             }
             Work::LetConNoVariables {
-                scope: env,
+                scope,
                 rank,
                 let_con,
                 pool_variables,
             } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
-                let ret_constraint = &constraints.constraints[offset + 1];
+                let ret_constraint = &env.constraints.constraints[offset + 1];
 
                 // Add a variable for each def to new_vars_by_env.
                 let local_def_vars = LocalDefVarsVec::from_def_types(
-                    constraints,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
                     &mut can_types,
                     aliases,
-                    subs,
                     let_con.def_types,
                 );
 
-                pools.get_mut(rank).extend(pool_variables);
+                env.pools.get_mut(rank).extend(pool_variables);
 
-                let mut new_env = env.clone();
+                let mut new_scope = scope.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
                     check_ability_specialization(
-                        arena,
-                        subs,
-                        derived_env,
-                        pools,
+                        env,
                         rank,
                         abilities_store,
                         obligation_cache,
@@ -313,11 +293,11 @@ fn solve(
                         *loc_var,
                     );
 
-                    new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                    new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
                 stack.push(Work::Constraint {
-                    scope: arena.alloc(new_env),
+                    scope: env.arena.alloc(new_scope),
                     rank,
                     constraint: ret_constraint,
                 });
@@ -327,17 +307,17 @@ fn solve(
                 continue;
             }
             Work::LetConIntroducesVariables {
-                scope: env,
+                scope,
                 rank,
                 let_con,
                 pool_variables,
             } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
-                let ret_constraint = &constraints.constraints[offset + 1];
+                let ret_constraint = &env.constraints.constraints[offset + 1];
 
                 let mark = state.mark;
-                let saved_env = state.scope;
+                let saved_scope = state.scope;
 
                 let young_mark = mark;
                 let visit_mark = young_mark.next();
@@ -351,15 +331,13 @@ fn solve(
 
                 // Add a variable for each def to local_def_vars.
                 let local_def_vars = LocalDefVarsVec::from_def_types(
-                    constraints,
+                    env,
                     intro_rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
                     &mut can_types,
                     aliases,
-                    subs,
                     let_con.def_types,
                 );
 
@@ -369,27 +347,28 @@ fn solve(
                 // Otherwise, introduce all variables at the current rank; since none of them will
                 // end up at the next rank, none will be generalized.
                 if let_con.generalizable.0 {
-                    pools.get_mut(rank.next()).extend(pool_variables);
+                    env.pools.get_mut(rank.next()).extend(pool_variables);
                 } else {
-                    pools.get_mut(rank).extend(pool_variables);
+                    env.pools.get_mut(rank).extend(pool_variables);
                 }
 
                 debug_assert_eq!(
                     // Check that no variable ended up in a higher rank than the next rank.. that
                     // would mean we generalized one level more than we need to!
                     {
-                        let offenders = pools
+                        let offenders = env
+                            .pools
                             .get(rank.next())
                             .iter()
                             .filter(|var| {
-                                subs.get_rank(**var).into_usize() > rank.next().into_usize()
+                                env.subs.get_rank(**var).into_usize() > rank.next().into_usize()
                             })
                             .collect::<Vec<_>>();
 
                         let result = offenders.len();
 
                         if result > 0 {
-                            eprintln!("subs = {:?}", &subs);
+                            eprintln!("subs = {:?}", &env.subs);
                             eprintln!("offenders = {:?}", &offenders);
                             eprintln!("let_con.def_types = {:?}", &let_con.def_types);
                         }
@@ -403,12 +382,12 @@ fn solve(
                 // next rank. The variables introduced in the let-binding that are still at
                 // that rank (intuitively, they did not "escape" into the lower level
                 // before or after the let-binding) now get to be generalized.
-                generalize(subs, young_mark, visit_mark, rank.next(), pools);
-                debug_assert!(pools.get(rank.next()).is_empty(), "variables left over in let-binding scope, but they should all be in a lower scope or generalized now");
+                generalize(env, young_mark, visit_mark, rank.next());
+                debug_assert!(env.pools.get(rank.next()).is_empty(), "variables left over in let-binding scope, but they should all be in a lower scope or generalized now");
 
                 // check that things went well
                 dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
-                    let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
+                    let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
 
                     // NOTE the `subs.redundant` check does not come from elm.
                     // It's unclear whether this is a bug with our implementation
@@ -417,7 +396,8 @@ fn solve(
                     let mut it = rigid_vars
                         .iter()
                         .filter(|&var| {
-                            !subs.redundant(*var) && subs.get_rank(*var) != Rank::GENERALIZED
+                            !env.subs.redundant(*var)
+                                && env.subs.get_rank(*var) != Rank::GENERALIZED
                         })
                         .peekable();
 
@@ -429,13 +409,10 @@ fn solve(
                     }
                 });
 
-                let mut new_env = env.clone();
+                let mut new_scope = scope.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
                     check_ability_specialization(
-                        arena,
-                        subs,
-                        derived_env,
-                        pools,
+                        env,
                         rank,
                         abilities_store,
                         obligation_cache,
@@ -445,20 +422,20 @@ fn solve(
                         *loc_var,
                     );
 
-                    new_env.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+                    new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
                 // previous call to solve()
                 let state_for_ret_con = State {
-                    scope: saved_env,
+                    scope: saved_scope,
                     mark: final_mark,
                 };
 
                 // Now solve the body, using the new vars_by_symbol which includes
                 // the assignments' name-to-variable mappings.
                 stack.push(Work::Constraint {
-                    scope: arena.alloc(new_env),
+                    scope: env.arena.alloc(new_scope),
                     rank,
                     constraint: ret_constraint,
                 });
@@ -476,17 +453,16 @@ fn solve(
             SaveTheEnvironment => {
                 let mut copy = state;
 
-                copy.scope = env.clone();
+                copy.scope = scope.clone();
 
                 copy
             }
             Eq(roc_can::constraint::Eq(type_index, expectation_index, category_index, region)) => {
-                let category = &constraints.categories[category_index.index()];
+                let category = &env.constraints.categories[category_index.index()];
 
                 let actual = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -495,11 +471,10 @@ fn solve(
                     *type_index,
                 );
 
-                let expectation = &constraints.expectations[expectation_index.index()];
+                let expectation = &env.constraints.expectations[expectation_index.index()];
                 let expected = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -509,7 +484,7 @@ fn solve(
                 );
 
                 match unify(
-                    &mut UEnv::new(subs),
+                    &mut UEnv::new(env.subs),
                     actual,
                     expected,
                     Mode::EQ,
@@ -521,11 +496,11 @@ fn solve(
                         lambda_sets_to_specialize,
                         extra_metadata: _,
                     } => {
-                        introduce(subs, rank, pools, &vars);
+                        env.introduce(rank, &vars);
 
                         if !must_implement_ability.is_empty() {
                             let new_problems = obligation_cache.check_obligations(
-                                subs,
+                                env.subs,
                                 abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadExpr(*region, category.clone(), actual),
@@ -533,21 +508,18 @@ fn solve(
                             problems.extend(new_problems);
                         }
                         compact_lambdas_and_check_obligations(
-                            arena,
-                            pools,
+                            env,
                             problems,
-                            subs,
                             abilities_store,
                             obligation_cache,
                             awaiting_specializations,
-                            derived_env,
                             lambda_sets_to_specialize,
                         );
 
                         state
                     }
                     Failure(vars, actual_type, expected_type, _bad_impls) => {
-                        introduce(subs, rank, pools, &vars);
+                        env.introduce(rank, &vars);
 
                         let problem = TypeError::BadExpr(
                             *region,
@@ -566,9 +538,8 @@ fn solve(
                 // a special version of Eq that is used to store types in the AST.
                 // IT DOES NOT REPORT ERRORS!
                 let actual = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     &mut vec![], // don't report any extra errors
                     abilities_store,
                     obligation_cache,
@@ -577,12 +548,12 @@ fn solve(
                     *source_index,
                 );
 
-                let actual_desc = subs.get(actual);
-                subs.union(*target, actual, actual_desc);
+                let actual_desc = env.subs.get(actual);
+                env.subs.union(*target, actual, actual_desc);
                 state
             }
             Lookup(symbol, expectation_index, region) => {
-                match env.get_var_by_symbol(symbol) {
+                match scope.get_var_by_symbol(symbol) {
                     Some(var) => {
                         // Deep copy the vars associated with this symbol before unifying them.
                         // Otherwise, suppose we have this:
@@ -605,13 +576,12 @@ fn solve(
                         // then we copy from that module's Subs into our own. If the value
                         // is being looked up in this module, then we use our Subs as both
                         // the source and destination.
-                        let actual = deep_copy_var_in(subs, rank, pools, var, arena);
-                        let expectation = &constraints.expectations[expectation_index.index()];
+                        let actual = deep_copy_var_in(env, rank, var, env.arena);
+                        let expectation = &env.constraints.expectations[expectation_index.index()];
 
                         let expected = either_type_index_to_var(
-                            subs,
+                            env,
                             rank,
-                            pools,
                             problems,
                             abilities_store,
                             obligation_cache,
@@ -621,7 +591,7 @@ fn solve(
                         );
 
                         match unify(
-                            &mut UEnv::new(subs),
+                            &mut UEnv::new(env.subs),
                             actual,
                             expected,
                             Mode::EQ,
@@ -633,11 +603,11 @@ fn solve(
                                 lambda_sets_to_specialize,
                                 extra_metadata: _,
                             } => {
-                                introduce(subs, rank, pools, &vars);
+                                env.introduce(rank, &vars);
 
                                 if !must_implement_ability.is_empty() {
                                     let new_problems = obligation_cache.check_obligations(
-                                        subs,
+                                        env.subs,
                                         abilities_store,
                                         must_implement_ability,
                                         AbilityImplError::BadExpr(
@@ -649,14 +619,11 @@ fn solve(
                                     problems.extend(new_problems);
                                 }
                                 compact_lambdas_and_check_obligations(
-                                    arena,
-                                    pools,
+                                    env,
                                     problems,
-                                    subs,
                                     abilities_store,
                                     obligation_cache,
                                     awaiting_specializations,
-                                    derived_env,
                                     lambda_sets_to_specialize,
                                 );
 
@@ -664,7 +631,7 @@ fn solve(
                             }
 
                             Failure(vars, actual_type, expected_type, _bad_impls) => {
-                                introduce(subs, rank, pools, &vars);
+                                env.introduce(rank, &vars);
 
                                 let problem = TypeError::BadExpr(
                                     *region,
@@ -687,10 +654,10 @@ fn solve(
                 }
             }
             And(slice) => {
-                let it = constraints.constraints[slice.indices()].iter().rev();
+                let it = env.constraints.constraints[slice.indices()].iter().rev();
                 for sub_constraint in it {
                     stack.push(Work::Constraint {
-                        scope: env,
+                        scope,
                         rank,
                         constraint: sub_constraint,
                     })
@@ -700,12 +667,11 @@ fn solve(
             }
             Pattern(type_index, expectation_index, category_index, region)
             | PatternPresence(type_index, expectation_index, category_index, region) => {
-                let category = &constraints.pattern_categories[category_index.index()];
+                let category = &env.constraints.pattern_categories[category_index.index()];
 
                 let actual = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -714,11 +680,10 @@ fn solve(
                     *type_index,
                 );
 
-                let expectation = &constraints.pattern_expectations[expectation_index.index()];
+                let expectation = &env.constraints.pattern_expectations[expectation_index.index()];
                 let expected = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -733,7 +698,7 @@ fn solve(
                 };
 
                 match unify(
-                    &mut UEnv::new(subs),
+                    &mut UEnv::new(env.subs),
                     actual,
                     expected,
                     mode,
@@ -745,11 +710,11 @@ fn solve(
                         lambda_sets_to_specialize,
                         extra_metadata: _,
                     } => {
-                        introduce(subs, rank, pools, &vars);
+                        env.introduce(rank, &vars);
 
                         if !must_implement_ability.is_empty() {
                             let new_problems = obligation_cache.check_obligations(
-                                subs,
+                                env.subs,
                                 abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(*region, category.clone(), actual),
@@ -757,21 +722,18 @@ fn solve(
                             problems.extend(new_problems);
                         }
                         compact_lambdas_and_check_obligations(
-                            arena,
-                            pools,
+                            env,
                             problems,
-                            subs,
                             abilities_store,
                             obligation_cache,
                             awaiting_specializations,
-                            derived_env,
                             lambda_sets_to_specialize,
                         );
 
                         state
                     }
                     Failure(vars, actual_type, expected_type, _bad_impls) => {
-                        introduce(subs, rank, pools, &vars);
+                        env.introduce(rank, &vars);
 
                         let problem = TypeError::BadPattern(
                             *region,
@@ -787,26 +749,26 @@ fn solve(
                 }
             }
             Let(index, pool_slice) => {
-                let let_con = &constraints.let_constraints[index.index()];
+                let let_con = &env.constraints.let_constraints[index.index()];
 
                 let offset = let_con.defs_and_ret_constraint.index();
-                let defs_constraint = &constraints.constraints[offset];
-                let ret_constraint = &constraints.constraints[offset + 1];
+                let defs_constraint = &env.constraints.constraints[offset];
+                let ret_constraint = &env.constraints.constraints[offset + 1];
 
-                let flex_vars = &constraints.variables[let_con.flex_vars.indices()];
-                let rigid_vars = &constraints.variables[let_con.rigid_vars.indices()];
+                let flex_vars = &env.constraints.variables[let_con.flex_vars.indices()];
+                let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
 
-                let pool_variables = &constraints.variables[pool_slice.indices()];
+                let pool_variables = &env.constraints.variables[pool_slice.indices()];
 
                 if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
                     debug_assert!(pool_variables.is_empty());
 
-                    introduce(subs, rank, pools, flex_vars);
+                    env.introduce(rank, flex_vars);
 
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     stack.push(Work::Constraint {
-                        scope: env,
+                        scope,
                         rank,
                         constraint: defs_constraint,
                     });
@@ -819,13 +781,13 @@ fn solve(
                     // Note that the LetConSimple gets the current env and rank,
                     // and not the env/rank from after solving the defs_constraint
                     stack.push(Work::LetConNoVariables {
-                        scope: env,
+                        scope,
                         rank,
                         let_con,
                         pool_variables,
                     });
                     stack.push(Work::Constraint {
-                        scope: env,
+                        scope,
                         rank,
                         constraint: defs_constraint,
                     });
@@ -842,21 +804,21 @@ fn solve(
                     };
 
                     // determine the next pool
-                    if binding_rank.into_usize() < pools.len() {
+                    if binding_rank.into_usize() < env.pools.len() {
                         // Nothing to do, we already accounted for the next rank, no need to
                         // adjust the pools
                     } else {
                         // we should be off by one at this point
-                        debug_assert_eq!(binding_rank.into_usize(), 1 + pools.len());
-                        pools.extend_to(binding_rank.into_usize());
+                        debug_assert_eq!(binding_rank.into_usize(), 1 + env.pools.len());
+                        env.pools.extend_to(binding_rank.into_usize());
                     }
 
-                    let pool: &mut Vec<Variable> = pools.get_mut(binding_rank);
+                    let pool: &mut Vec<Variable> = env.pools.get_mut(binding_rank);
 
                     // Introduce the variables of this binding, and extend the pool at our binding
                     // rank.
                     for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        subs.set_rank(var, binding_rank);
+                        env.subs.set_rank(var, binding_rank);
                     }
                     pool.reserve(rigid_vars.len() + flex_vars.len());
                     pool.extend(rigid_vars.iter());
@@ -872,13 +834,13 @@ fn solve(
                     // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
                     // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
                     stack.push(Work::LetConIntroducesVariables {
-                        scope: env,
+                        scope,
                         rank,
                         let_con,
                         pool_variables,
                     });
                     stack.push(Work::Constraint {
-                        scope: env,
+                        scope,
                         rank: binding_rank,
                         constraint: defs_constraint,
                     });
@@ -888,9 +850,8 @@ fn solve(
             }
             IsOpenType(type_index) => {
                 let actual = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -899,12 +860,12 @@ fn solve(
                     *type_index,
                 );
 
-                open_tag_union(subs, pools, actual);
+                open_tag_union(env, actual);
 
                 state
             }
             IncludesTag(index) => {
-                let includes_tag = &constraints.includes_tags[index.index()];
+                let includes_tag = &env.constraints.includes_tags[index.index()];
 
                 let roc_can::constraint::IncludesTag {
                     type_index,
@@ -914,12 +875,12 @@ fn solve(
                     region,
                 } = includes_tag;
 
-                let pattern_category = &constraints.pattern_categories[pattern_category.index()];
+                let pattern_category =
+                    &env.constraints.pattern_categories[pattern_category.index()];
 
                 let actual = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -928,7 +889,7 @@ fn solve(
                     *type_index,
                 );
 
-                let payload_types = constraints.variables[types.indices()]
+                let payload_types = env.constraints.variables[types.indices()]
                     .iter()
                     .map(|v| Type::Variable(*v))
                     .collect();
@@ -938,19 +899,18 @@ fn solve(
                     TypeExtension::Closed,
                 ));
                 let includes = type_to_var(
-                    subs,
+                    env,
                     rank,
                     problems,
                     abilities_store,
                     obligation_cache,
-                    pools,
                     &mut can_types,
                     aliases,
                     tag_ty,
                 );
 
                 match unify(
-                    &mut UEnv::new(subs),
+                    &mut UEnv::new(env.subs),
                     actual,
                     includes,
                     Mode::PRESENT,
@@ -962,11 +922,11 @@ fn solve(
                         lambda_sets_to_specialize,
                         extra_metadata: _,
                     } => {
-                        introduce(subs, rank, pools, &vars);
+                        env.introduce(rank, &vars);
 
                         if !must_implement_ability.is_empty() {
                             let new_problems = obligation_cache.check_obligations(
-                                subs,
+                                env.subs,
                                 abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(
@@ -978,21 +938,18 @@ fn solve(
                             problems.extend(new_problems);
                         }
                         compact_lambdas_and_check_obligations(
-                            arena,
-                            pools,
+                            env,
                             problems,
-                            subs,
                             abilities_store,
                             obligation_cache,
                             awaiting_specializations,
-                            derived_env,
                             lambda_sets_to_specialize,
                         );
 
                         state
                     }
                     Failure(vars, actual_type, expected_to_include_type, _bad_impls) => {
-                        introduce(subs, rank, pools, &vars);
+                        env.introduce(rank, &vars);
 
                         let problem = TypeError::BadPattern(
                             *region,
@@ -1021,8 +978,8 @@ fn solve(
                 let (real_var, real_region, branches_var, category_and_expected) = match eq {
                     Ok(eq) => {
                         let roc_can::constraint::Eq(real_var, expected, category, real_region) =
-                            constraints.eq[eq.index()];
-                        let expected = &constraints.expectations[expected.index()];
+                            env.constraints.eq[eq.index()];
+                        let expected = &env.constraints.expectations[expected.index()];
 
                         (
                             real_var,
@@ -1037,8 +994,8 @@ fn solve(
                             expected,
                             category,
                             real_region,
-                        ) = constraints.pattern_eq[peq.index()];
-                        let expected = &constraints.pattern_expectations[expected.index()];
+                        ) = env.constraints.pattern_eq[peq.index()];
+                        let expected = &env.constraints.pattern_expectations[expected.index()];
 
                         (
                             real_var,
@@ -1050,9 +1007,8 @@ fn solve(
                 };
 
                 let real_var = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -1062,9 +1018,8 @@ fn solve(
                 );
 
                 let branches_var = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -1080,16 +1035,16 @@ fn solve(
                     Polarity::OF_PATTERN
                 };
 
-                let real_content = subs.get_content_without_compacting(real_var);
-                let branches_content = subs.get_content_without_compacting(branches_var);
+                let real_content = env.subs.get_content_without_compacting(real_var);
+                let branches_content = env.subs.get_content_without_compacting(branches_var);
                 let already_have_error = matches!(
                     (real_content, branches_content),
                     (Content::Error, _) | (_, Content::Error)
                 );
 
-                let snapshot = subs.snapshot();
+                let snapshot = env.subs.snapshot();
                 let unify_cond_and_patterns_outcome = unify(
-                    &mut UEnv::new(subs),
+                    &mut UEnv::new(env.subs),
                     branches_var,
                     real_var,
                     Mode::EQ,
@@ -1106,25 +1061,22 @@ fn solve(
                         lambda_sets_to_specialize,
                         extra_metadata: _,
                     } => {
-                        subs.commit_snapshot(snapshot);
+                        env.subs.commit_snapshot(snapshot);
 
-                        introduce(subs, rank, pools, &vars);
+                        env.introduce(rank, &vars);
 
                         problems.extend(obligation_cache.check_obligations(
-                            subs,
+                            env.subs,
                             abilities_store,
                             must_implement_ability,
                             AbilityImplError::DoesNotImplement,
                         ));
                         compact_lambdas_and_check_obligations(
-                            arena,
-                            pools,
+                            env,
                             problems,
-                            subs,
                             abilities_store,
                             obligation_cache,
                             awaiting_specializations,
-                            derived_env,
                             lambda_sets_to_specialize,
                         );
 
@@ -1134,15 +1086,15 @@ fn solve(
                     }
                     Failure(..) => {
                         // Rollback and check for almost-equality.
-                        subs.rollback_to(snapshot);
+                        env.subs.rollback_to(snapshot);
 
-                        let almost_eq_snapshot = subs.snapshot();
+                        let almost_eq_snapshot = env.subs.snapshot();
                         // TODO: turn this on for bidirectional exhaustiveness checking
                         // open_tag_union(subs, real_var);
-                        open_tag_union(subs, pools, branches_var);
+                        open_tag_union(env, branches_var);
                         let almost_eq = matches!(
                             unify(
-                                &mut UEnv::new(subs),
+                                &mut UEnv::new(env.subs),
                                 real_var,
                                 branches_var,
                                 Mode::EQ,
@@ -1151,7 +1103,7 @@ fn solve(
                             Success { .. }
                         );
 
-                        subs.rollback_to(almost_eq_snapshot);
+                        env.subs.rollback_to(almost_eq_snapshot);
 
                         if almost_eq {
                             // Case 3: almost equal, check exhaustiveness.
@@ -1160,21 +1112,22 @@ fn solve(
                             // Case 4: incompatible types, report type error.
                             // Re-run first failed unification to get the type diff.
                             match unify(
-                                &mut UEnv::new(subs),
+                                &mut UEnv::new(env.subs),
                                 real_var,
                                 branches_var,
                                 Mode::EQ,
                                 cond_polarity,
                             ) {
                                 Failure(vars, actual_type, expected_type, _bad_impls) => {
-                                    introduce(subs, rank, pools, &vars);
+                                    env.introduce(rank, &vars);
 
                                     // Figure out the problem - it might be pattern or value
                                     // related.
                                     let problem = match category_and_expected {
                                         Ok((category, expected)) => {
-                                            let real_category =
-                                                constraints.categories[category.index()].clone();
+                                            let real_category = env.constraints.categories
+                                                [category.index()]
+                                            .clone();
                                             TypeError::BadExpr(
                                                 real_region,
                                                 real_category,
@@ -1184,7 +1137,7 @@ fn solve(
                                         }
 
                                         Err((category, expected)) => {
-                                            let real_category = constraints.pattern_categories
+                                            let real_category = env.constraints.pattern_categories
                                                 [category.index()]
                                             .clone();
                                             TypeError::BadPattern(
@@ -1205,7 +1158,7 @@ fn solve(
                     }
                 }
 
-                let sketched_rows = constraints.sketched_rows[sketched_rows.index()].clone();
+                let sketched_rows = env.constraints.sketched_rows[sketched_rows.index()].clone();
 
                 if should_check_exhaustiveness {
                     use roc_can::exhaustive::{check, ExhaustiveSummary};
@@ -1252,23 +1205,23 @@ fn solve(
                     // TODO: this can likely be removed after remodelling tag extension types
                     // (#4440).
                     if cond_source_is_likely_positive_value && has_unification_error {
-                        close_pattern_matched_tag_unions(subs, real_var);
+                        close_pattern_matched_tag_unions(env.subs, real_var);
                     }
 
                     if let Ok(ExhaustiveSummary {
                         errors,
                         exhaustive,
                         redundancies,
-                    }) = check(subs, real_var, sketched_rows, context)
+                    }) = check(env.subs, real_var, sketched_rows, context)
                     {
                         // Store information about whether the "when" is exhaustive, and
                         // which (if any) of its branches are redundant. Codegen may use
                         // this for branch-fixing and redundant elimination.
                         if !exhaustive {
-                            exhaustive_mark.set_non_exhaustive(subs);
+                            exhaustive_mark.set_non_exhaustive(env.subs);
                         }
                         for redundant_mark in redundancies {
-                            redundant_mark.set_redundant(subs);
+                            redundant_mark.set_redundant(env.subs);
                         }
 
                         // Store the errors.
@@ -1287,7 +1240,7 @@ fn solve(
                 specialization_id,
             }) => {
                 if let Ok(Resolved::Specialization(specialization)) = resolve_ability_specialization(
-                    subs,
+                    env.subs,
                     abilities_store,
                     member,
                     specialization_variable,
@@ -1301,8 +1254,8 @@ fn solve(
                 let Cycle {
                     def_names,
                     expr_regions,
-                } = &constraints.cycles[cycle.index()];
-                let symbols = &constraints.loc_symbols[def_names.indices()];
+                } = &env.constraints.cycles[cycle.index()];
+                let symbols = &env.constraints.loc_symbols[def_names.indices()];
 
                 // If the type of a symbol is not a function, that's an error.
                 // Roc is strict, so only functions can be mutually recursive.
@@ -1310,8 +1263,8 @@ fn solve(
                     use Content::*;
 
                     symbols.iter().any(|(s, _)| {
-                        let var = env.get_var_by_symbol(s).expect("Symbol not solved!");
-                        let (_, underlying_content) = chase_alias_content(subs, var);
+                        let var = scope.get_var_by_symbol(s).expect("Symbol not solved!");
+                        let (_, underlying_content) = chase_alias_content(env.subs, var);
 
                         !matches!(underlying_content, Error | Structure(FlatType::Func(..)))
                     })
@@ -1320,7 +1273,7 @@ fn solve(
                 if any_is_bad {
                     // expr regions are stored in loc_symbols (that turned out to be convenient).
                     // The symbol is just a dummy, and should not be used
-                    let expr_regions = &constraints.loc_symbols[expr_regions.indices()];
+                    let expr_regions = &env.constraints.loc_symbols[expr_regions.indices()];
 
                     let cycle = symbols
                         .iter()
@@ -1334,16 +1287,15 @@ fn solve(
 
                     problems.push(TypeError::CircularDef(cycle));
 
-                    cycle_mark.set_illegal(subs);
+                    cycle_mark.set_illegal(env.subs);
                 }
 
                 state
             }
             IngestedFile(type_index, file_path, bytes) => {
                 let actual = either_type_index_to_var(
-                    subs,
+                    env,
                     rank,
-                    pools,
                     problems,
                     abilities_store,
                     obligation_cache,
@@ -1352,21 +1304,21 @@ fn solve(
                     *type_index,
                 );
 
-                let snapshot = subs.snapshot();
+                let snapshot = env.subs.snapshot();
                 if let Success {
                     vars,
                     must_implement_ability,
                     lambda_sets_to_specialize,
                     extra_metadata: _,
                 } = unify(
-                    &mut UEnv::new(subs),
+                    &mut UEnv::new(env.subs),
                     actual,
                     Variable::LIST_U8,
                     Mode::EQ,
                     Polarity::OF_VALUE,
                 ) {
                     // List U8 always valid.
-                    introduce(subs, rank, pools, &vars);
+                    env.introduce(rank, &vars);
 
                     debug_assert!(
                         must_implement_ability.is_empty() && lambda_sets_to_specialize.is_empty(),
@@ -1375,11 +1327,11 @@ fn solve(
 
                     state
                 } else {
-                    subs.rollback_to(snapshot);
+                    env.subs.rollback_to(snapshot);
 
                     // We explicitly match on the last unify to get the type in the case it errors.
                     match unify(
-                        &mut UEnv::new(subs),
+                        &mut UEnv::new(env.subs),
                         actual,
                         Variable::STR,
                         Mode::EQ,
@@ -1391,7 +1343,7 @@ fn solve(
                             lambda_sets_to_specialize,
                             extra_metadata: _,
                         } => {
-                            introduce(subs, rank, pools, &vars);
+                            env.introduce(rank, &vars);
 
                             debug_assert!(
                                 must_implement_ability.is_empty() && lambda_sets_to_specialize.is_empty(),
@@ -1408,7 +1360,7 @@ fn solve(
                             state
                         }
                         Failure(vars, actual_type, _, _) => {
-                            introduce(subs, rank, pools, &vars);
+                            env.introduce(rank, &vars);
 
                             let problem = TypeError::IngestedFileUnsupportedType(
                                 file_path.clone(),
@@ -1437,31 +1389,24 @@ fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compact_lambdas_and_check_obligations(
-    arena: &Bump,
-    pools: &mut Pools,
+    env: &mut Env,
     problems: &mut Vec<TypeError>,
-    subs: &mut Subs,
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     awaiting_specialization: &mut AwaitingSpecializations,
-    derived_env: &DerivedEnv,
     lambda_sets_to_specialize: UlsOfVar,
 ) {
     let CompactionResult {
         obligations,
         awaiting_specialization: new_awaiting,
     } = compact_lambda_sets_of_vars(
-        subs,
-        derived_env,
-        arena,
-        pools,
+        env,
         lambda_sets_to_specialize,
         &SolvePhase { abilities_store },
     );
     problems.extend(obligation_cache.check_obligations(
-        subs,
+        env.subs,
         abilities_store,
         obligations,
         AbilityImplError::DoesNotImplement,
@@ -1469,39 +1414,44 @@ fn compact_lambdas_and_check_obligations(
     awaiting_specialization.union(new_awaiting);
 }
 
-fn open_tag_union(subs: &mut Subs, pools: &mut Pools, var: Variable) {
+fn open_tag_union(env: &mut Env, var: Variable) {
     let mut stack = vec![var];
     while let Some(var) = stack.pop() {
         use {Content::*, FlatType::*};
 
-        let desc = subs.get(var);
+        let desc = env.subs.get(var);
         match desc.content {
             Structure(TagUnion(tags, ext)) => {
-                if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext.var()) {
-                    let new_ext_var = register(subs, desc.rank, pools, Content::FlexVar(None));
+                if let Structure(EmptyTagUnion) = env.subs.get_content_without_compacting(ext.var())
+                {
+                    let new_ext_var = env.register(desc.rank, Content::FlexVar(None));
 
                     let new_union = Structure(TagUnion(tags, TagExt::Any(new_ext_var)));
-                    subs.set_content(var, new_union);
+                    env.subs.set_content(var, new_union);
                 }
 
                 // Also open up all nested tag unions.
                 let all_vars = tags.variables().into_iter();
-                stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
+                stack.extend(
+                    all_vars
+                        .flat_map(|slice| env.subs[slice])
+                        .map(|var| env.subs[var]),
+                );
             }
 
             Structure(Record(fields, _)) => {
                 // Open up all nested tag unions.
-                stack.extend(subs.get_subs_slice(fields.variables()));
+                stack.extend(env.subs.get_subs_slice(fields.variables()));
             }
 
             Structure(Tuple(elems, _)) => {
                 // Open up all nested tag unions.
-                stack.extend(subs.get_subs_slice(elems.variables()));
+                stack.extend(env.subs.get_subs_slice(elems.variables()));
             }
 
             Structure(Apply(Symbol::LIST_LIST, args)) => {
                 // Open up nested tag unions.
-                stack.extend(subs.get_subs_slice(args));
+                stack.extend(env.subs.get_subs_slice(args));
             }
 
             _ => {
@@ -1593,14 +1543,10 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
 
 /// If a symbol claims to specialize an ability member, check that its solved type in fact
 /// does specialize the ability, and record the specialization.
-#[allow(clippy::too_many_arguments)]
 // Aggressive but necessary - there aren't many usages.
 #[inline(always)]
 fn check_ability_specialization(
-    arena: &Bump,
-    subs: &mut Subs,
-    derived_env: &DerivedEnv,
-    pools: &mut Pools,
+    env: &mut Env,
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
@@ -1625,10 +1571,10 @@ fn check_ability_specialization(
         // We need to freshly instantiate the root signature so that all unifications are reflected
         // in the specialization type, but not the original signature type.
         let root_signature_var =
-            deep_copy_var_in(subs, Rank::toplevel(), pools, root_signature_var, arena);
-        let snapshot = subs.snapshot();
+            deep_copy_var_in(env, Rank::toplevel(), root_signature_var, env.arena);
+        let snapshot = env.subs.snapshot();
         let unified = unify_introduced_ability_specialization(
-            &mut UEnv::new(subs),
+            &mut UEnv::new(env.subs),
             root_signature_var,
             symbol_loc_var.value,
             Mode::EQ,
@@ -1651,8 +1597,8 @@ fn check_ability_specialization(
                         if opaque == impl_key.opaque {
                             // It was! All is good.
 
-                            subs.commit_snapshot(snapshot);
-                            introduce(subs, rank, pools, &vars);
+                            env.subs.commit_snapshot(snapshot);
+                            env.introduce(rank, &vars);
 
                             let specialization_lambda_sets = specialization_lambda_sets
                                 .into_iter()
@@ -1663,14 +1609,11 @@ fn check_ability_specialization(
                                 .collect();
 
                             compact_lambdas_and_check_obligations(
-                                arena,
-                                pools,
+                                env,
                                 problems,
-                                subs,
                                 abilities_store,
                                 obligation_cache,
                                 awaiting_specializations,
-                                derived_env,
                                 lambda_sets_to_specialize,
                             );
 
@@ -1683,10 +1626,11 @@ fn check_ability_specialization(
                             // error.
 
                             // Commit so that the bad signature and its error persists in subs.
-                            subs.commit_snapshot(snapshot);
+                            env.subs.commit_snapshot(snapshot);
 
-                            let _typ =
-                                subs.var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
+                            let _typ = env
+                                .subs
+                                .var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
 
                             let problem = TypeError::WrongSpecialization {
                                 region: symbol_loc_var.region,
@@ -1704,9 +1648,9 @@ fn check_ability_specialization(
                         // This is a specialization of a structural type - never allowed.
 
                         // Commit so that `var` persists in subs.
-                        subs.commit_snapshot(snapshot);
+                        env.subs.commit_snapshot(snapshot);
 
-                        let typ = subs.var_to_error_type(var, Polarity::OF_VALUE);
+                        let typ = env.subs.var_to_error_type(var, Polarity::OF_VALUE);
 
                         let problem = TypeError::StructuralSpecialization {
                             region: symbol_loc_var.region,
@@ -1726,12 +1670,14 @@ fn check_ability_specialization(
 
                         // Rollback the snapshot so we unlink the root signature with the specialization,
                         // so we can have two separate error types.
-                        subs.rollback_to(snapshot);
+                        env.subs.rollback_to(snapshot);
 
-                        let expected_type =
-                            subs.var_to_error_type(root_signature_var, Polarity::OF_VALUE);
-                        let actual_type =
-                            subs.var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
+                        let expected_type = env
+                            .subs
+                            .var_to_error_type(root_signature_var, Polarity::OF_VALUE);
+                        let actual_type = env
+                            .subs
+                            .var_to_error_type(symbol_loc_var.value, Polarity::OF_VALUE);
 
                         let reason = Reason::GeneralizedAbilityMemberSpecialization {
                             member_name: ability_member,
@@ -1753,8 +1699,8 @@ fn check_ability_specialization(
             }
 
             Failure(vars, expected_type, actual_type, unimplemented_abilities) => {
-                subs.commit_snapshot(snapshot);
-                introduce(subs, rank, pools, &vars);
+                env.subs.commit_snapshot(snapshot);
+                env.introduce(rank, &vars);
 
                 let reason = Reason::InvalidAbilityMemberSpecialization {
                     member_name: ability_member,
@@ -1782,16 +1728,13 @@ fn check_ability_specialization(
         // Get the lambda sets that are ready for specialization because this ability member
         // specialization was resolved, and compact them.
         let new_lambda_sets_to_specialize =
-            awaiting_specializations.remove_for_specialized(subs, impl_key);
+            awaiting_specializations.remove_for_specialized(env.subs, impl_key);
         compact_lambdas_and_check_obligations(
-            arena,
-            pools,
+            env,
             problems,
-            subs,
             abilities_store,
             obligation_cache,
             awaiting_specializations,
-            derived_env,
             new_lambda_sets_to_specialize,
         );
         debug_assert!(
@@ -1835,27 +1778,24 @@ impl<T> LocalDefVarsVec<T> {
 
 impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     fn from_def_types(
-        constraints: &Constraints,
+        env: &mut Env,
         rank: Rank,
-        pools: &mut Pools,
         problems: &mut Vec<TypeError>,
         abilities_store: &mut AbilitiesStore,
         obligation_cache: &mut ObligationCache,
         types: &mut Types,
         aliases: &mut Aliases,
-        subs: &mut Subs,
         def_types_slice: roc_can::constraint::DefTypes,
     ) -> Self {
-        let type_indices_slice = &constraints.type_slices[def_types_slice.types.indices()];
-        let loc_symbols_slice = &constraints.loc_symbols[def_types_slice.loc_symbols.indices()];
+        let type_indices_slice = &env.constraints.type_slices[def_types_slice.types.indices()];
+        let loc_symbols_slice = &env.constraints.loc_symbols[def_types_slice.loc_symbols.indices()];
 
         let mut local_def_vars = Self::with_length(type_indices_slice.len());
 
         for (&(symbol, region), typ_index) in (loc_symbols_slice.iter()).zip(type_indices_slice) {
             let var = either_type_index_to_var(
-                subs,
+                env,
                 rank,
-                pools,
                 problems,
                 abilities_store,
                 obligation_cache,
@@ -1872,22 +1812,21 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 }
 
 fn check_for_infinite_type(
-    subs: &mut Subs,
-    pools: &mut Pools,
+    env: &mut Env,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
     loc_var: Loc<Variable>,
 ) {
     let var = loc_var.value;
 
-    'next_occurs_check: while let Err((_, chain)) = subs.occurs(var) {
+    'next_occurs_check: while let Err((_, chain)) = env.subs.occurs(var) {
         // walk the chain till we find a tag union or lambda set, starting from the variable that
         // occurred recursively, which is always at the end of the chain.
         for &var in chain.iter().rev() {
-            match *subs.get_content_without_compacting(var) {
+            match *env.subs.get_content_without_compacting(var) {
                 Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                    let rec_var = subs.mark_tag_union_recursive(var, tags, ext_var);
-                    register_to_pools(subs, rec_var, pools);
+                    let rec_var = env.subs.mark_tag_union_recursive(var, tags, ext_var);
+                    env.register_existing_var(rec_var);
 
                     continue 'next_occurs_check;
                 }
@@ -1897,13 +1836,13 @@ fn check_for_infinite_type(
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {
-                    let rec_var = subs.mark_lambda_set_recursive(
+                    let rec_var = env.subs.mark_lambda_set_recursive(
                         var,
                         solved,
                         unspecialized,
                         ambient_function_var,
                     );
-                    register_to_pools(subs, rec_var, pools);
+                    env.register_existing_var(rec_var);
 
                     continue 'next_occurs_check;
                 }
@@ -1911,7 +1850,7 @@ fn check_for_infinite_type(
             }
         }
 
-        circular_error(subs, problems, symbol, &loc_var);
+        circular_error(env.subs, problems, symbol, &loc_var);
     }
 }
 
@@ -1936,13 +1875,10 @@ fn circular_error(
 /// Ensures that variables introduced at the `young_rank`, but that should be
 /// stuck at a lower level, are marked at that level and not generalized at the
 /// present `young_rank`. See [adjust_rank].
-fn generalize(
-    subs: &mut Subs,
-    young_mark: Mark,
-    visit_mark: Mark,
-    young_rank: Rank,
-    pools: &mut Pools,
-) {
+fn generalize(env: &mut Env, young_mark: Mark, visit_mark: Mark, young_rank: Rank) {
+    let subs = &mut env.subs;
+    let pools = &mut env.pools;
+
     let young_vars = std::mem::take(pools.get_mut(young_rank));
     let rank_table = pool_to_rank_table(subs, young_mark, young_rank, young_vars);
 
@@ -2369,63 +2305,4 @@ fn adjust_rank_content(
 
         RangedNumber(_) => group_rank,
     }
-}
-
-/// Introduce some variables to Pools at the given rank.
-/// Also, set each of their ranks in Subs to be the given rank.
-pub(crate) fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) {
-    let pool: &mut Vec<Variable> = pools.get_mut(rank);
-
-    for &var in vars.iter() {
-        subs.set_rank(var, rank);
-    }
-
-    pool.extend(vars);
-}
-
-#[inline(always)]
-pub(crate) fn register(
-    subs: &mut Subs,
-    rank: Rank,
-    pools: &mut Pools,
-    content: Content,
-) -> Variable {
-    let descriptor = Descriptor {
-        content,
-        rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
-
-    let var = subs.fresh(descriptor);
-
-    pools.get_mut(rank).push(var);
-
-    var
-}
-
-pub(crate) fn register_with_known_var(
-    subs: &mut Subs,
-    var: Variable,
-    rank: Rank,
-    pools: &mut Pools,
-    content: Content,
-) -> Variable {
-    let descriptor = Descriptor {
-        content,
-        rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
-
-    subs.set(var, descriptor);
-
-    pools.get_mut(rank).push(var);
-
-    var
-}
-
-#[inline(always)]
-fn register_to_pools(subs: &Subs, var: Variable, pools: &mut Pools) {
-    pools.get_mut(subs.get_rank(var)).push(var);
 }
