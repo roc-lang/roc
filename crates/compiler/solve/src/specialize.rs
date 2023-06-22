@@ -22,7 +22,7 @@ use roc_unify::unify::{unify, Mode, MustImplementConstraints};
 use crate::{
     ability::builtin_module_with_unlisted_ability_impl,
     deep_copy::deep_copy_var_in,
-    env::{DerivedEnv, Env},
+    env::{DerivedEnv, SolveEnv},
 };
 
 /// What phase in the compiler is reaching out to specialize lambda sets?
@@ -295,7 +295,7 @@ fn unique_unspecialized_lambda(subs: &Subs, c_a: Variable, uls: &[Uls]) -> Optio
 
 #[must_use]
 pub fn compact_lambda_sets_of_vars<P: Phase>(
-    env: &mut Env,
+    env: &mut SolveEnv,
     uls_of_var: UlsOfVar,
     phase: &P,
 ) -> CompactionResult {
@@ -464,7 +464,7 @@ enum OneCompactionResult {
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 fn compact_lambda_set<P: Phase>(
-    env: &mut Env,
+    env: &mut SolveEnv,
     resolved_concrete: Variable,
     this_lambda_set: Variable,
     phase: &P,

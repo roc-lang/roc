@@ -1,5 +1,5 @@
 /// How function kinds should be represented in the type system.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum FunctionKind {
     /// Function values are solved to lambda sets; lambda sets are the kind.
     LambdaSet,

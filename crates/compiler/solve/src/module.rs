@@ -1,3 +1,4 @@
+use crate::FunctionKind;
 use crate::{aliases::Aliases, solve};
 use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint, Constraints};
@@ -61,6 +62,8 @@ pub struct SolveConfig<'a> {
     /// All types introduced in the module. Canonicalized, but not necessarily yet associated with
     /// a variable substitution.
     pub types: Types,
+    /// How functions should be kinded.
+    pub function_kind: FunctionKind,
     /// Table of types introduced in this module that claim to derive an ability implementation.
     /// Due for checking and instantiation after the solver runs over the module.
     pub pending_derives: PendingDerives,

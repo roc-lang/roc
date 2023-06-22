@@ -19,6 +19,6 @@ mod pools;
 mod to_var;
 
 pub use aliases::Aliases;
-pub use env::{DerivedEnv, Env};
+pub use env::{DerivedEnv, SolveEnv};
 pub use kinds::FunctionKind;
 pub use pools::Pools;

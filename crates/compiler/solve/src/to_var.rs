@@ -22,7 +22,7 @@ use roc_unify::unify::{unify, Mode, Unified};
 use crate::{
     ability::{AbilityImplError, ObligationCache},
     deep_copy::deep_copy_var_in,
-    env::Env,
+    env::InferenceEnv,
     Aliases,
 };
 
@@ -42,7 +42,7 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
 }
 
 pub(crate) fn either_type_index_to_var(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     abilities_store: &mut AbilitiesStore,
@@ -82,7 +82,7 @@ pub(crate) fn either_type_index_to_var(
 }
 
 pub(crate) fn type_to_var(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     abilities_store: &mut AbilitiesStore,
@@ -126,7 +126,7 @@ enum RegisterVariable {
 
 impl RegisterVariable {
     fn from_type(
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         arena: &'_ bumpalo::Bump,
         types: &mut Types,
@@ -149,7 +149,7 @@ impl RegisterVariable {
                         reserved
                     } else {
                         // for any other rank, we need to copy; it takes care of adjusting the rank
-                        deep_copy_var_in(env, rank, reserved, arena)
+                        deep_copy_var_in(&mut env.as_solve_env(), rank, reserved, arena)
                     };
                     // Safety: the `destination` will become the source-of-truth for the type index, since it
                     // was not already transformed before (if it was, we'd be in the Variable branch!)
@@ -165,7 +165,7 @@ impl RegisterVariable {
 
     #[inline(always)]
     fn with_stack(
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         arena: &'_ bumpalo::Bump,
         types: &mut Types,
@@ -253,7 +253,7 @@ enum TypeToVar {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn type_to_var_help(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     abilities_store: &AbilitiesStore,
@@ -911,7 +911,7 @@ pub(crate) fn type_to_var_help(
 
 #[inline(always)]
 fn roc_result_to_var(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1090,7 +1090,7 @@ fn find_tag_name_run(slice: &[TagName], subs: &mut Subs) -> Option<SubsSlice<Tag
 
 #[inline(always)]
 fn register_tag_arguments(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1114,7 +1114,7 @@ fn register_tag_arguments(
 
 /// Assumes that the tags are sorted and there are no duplicates!
 fn insert_tags_fast_path(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1185,7 +1185,7 @@ fn insert_tags_fast_path(
 }
 
 fn insert_tags_slow_path(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1215,7 +1215,7 @@ fn insert_tags_slow_path(
 }
 
 fn type_to_union_tags(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1274,7 +1274,7 @@ fn type_to_union_tags(
 }
 
 fn create_union_lambda(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,

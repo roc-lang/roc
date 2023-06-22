@@ -4,7 +4,7 @@ use roc_derive::SharedDerivedModule;
 use roc_types::subs::{Content, Descriptor, Mark, OptVariable, Rank, Subs, Variable};
 use roc_unify::unify::Env as UEnv;
 
-use crate::Pools;
+use crate::{FunctionKind, Pools};
 
 pub struct DerivedEnv<'a> {
     pub derived_module: &'a SharedDerivedModule,
@@ -12,15 +12,38 @@ pub struct DerivedEnv<'a> {
     pub exposed_types: &'a ExposedByModule,
 }
 
-pub struct Env<'a> {
+/// Environment necessary for solving and specialization.
+pub struct SolveEnv<'a> {
     pub arena: &'a Bump,
-    pub constraints: &'a Constraints,
     pub derived_env: &'a DerivedEnv<'a>,
     pub subs: &'a mut Subs,
     pub pools: &'a mut Pools,
 }
 
-impl<'a> Env<'a> {
+/// Environment necessary for inference.
+pub struct InferenceEnv<'a> {
+    pub constraints: &'a Constraints,
+    pub function_kind: FunctionKind,
+    pub arena: &'a Bump,
+    pub derived_env: &'a DerivedEnv<'a>,
+    pub subs: &'a mut Subs,
+    pub pools: &'a mut Pools,
+}
+
+impl<'a> SolveEnv<'a> {
+    /// Introduce some variables to Pools at the given rank.
+    /// Also, set each of their ranks in Subs to be the given rank.
+    pub fn introduce(&mut self, rank: Rank, vars: &[Variable]) {
+        introduce(self.subs, self.pools, rank, vars);
+    }
+
+    /// Retrieves an environment for unification.
+    pub fn uenv(&mut self) -> UEnv {
+        UEnv::new(self.subs)
+    }
+}
+
+impl<'a> InferenceEnv<'a> {
     #[inline(always)]
     pub fn register(&mut self, rank: Rank, content: Content) -> Variable {
         let descriptor = Descriptor {
@@ -40,13 +63,7 @@ impl<'a> Env<'a> {
     /// Introduce some variables to Pools at the given rank.
     /// Also, set each of their ranks in Subs to be the given rank.
     pub fn introduce(&mut self, rank: Rank, vars: &[Variable]) {
-        let pool: &mut Vec<Variable> = self.pools.get_mut(rank);
-
-        for &var in vars.iter() {
-            self.subs.set_rank(var, rank);
-        }
-
-        pool.extend(vars);
+        introduce(self.subs, self.pools, rank, vars);
     }
 
     #[inline(always)]
@@ -78,4 +95,25 @@ impl<'a> Env<'a> {
     pub fn uenv(&mut self) -> UEnv {
         UEnv::new(self.subs)
     }
+
+    pub fn as_solve_env(&mut self) -> SolveEnv {
+        SolveEnv {
+            arena: self.arena,
+            derived_env: self.derived_env,
+            subs: self.subs,
+            pools: self.pools,
+        }
+    }
+}
+
+/// Introduce some variables to Pools at the given rank.
+/// Also, set each of their ranks in Subs to be the given rank.
+fn introduce(subs: &mut Subs, pools: &mut Pools, rank: Rank, vars: &[Variable]) {
+    let pool: &mut Vec<Variable> = pools.get_mut(rank);
+
+    for &var in vars.iter() {
+        subs.set_rank(var, rank);
+    }
+
+    pool.extend(vars);
 }
