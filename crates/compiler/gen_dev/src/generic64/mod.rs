@@ -2798,7 +2798,7 @@ impl<
                 ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
 
                 // mask out the tag id bits
-                ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
+                ASM::and_reg64_reg64_reg64(&mut self.buf, mask_reg, ptr_reg, mask_reg);
 
                 let mut offset = 0;
                 for field in &other_fields[..index as usize] {
@@ -2809,7 +2809,7 @@ impl<
                     &mut self.buf,
                     &mut self.storage_manager,
                     self.layout_interner,
-                    ptr_reg,
+                    mask_reg,
                     offset as i32,
                     element_layout,
                     *sym,
@@ -2824,15 +2824,22 @@ impl<
                     .load_to_general_reg(&mut self.buf, structure);
 
                 // mask out the tag id bits
-                if !union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
-                    let mask_symbol = self.debug_symbol("tag_id_mask");
-                    let mask_reg = self
+                let unmasked_reg = if union_layout
+                    .stores_tag_id_as_data(self.storage_manager.target_info)
+                {
+                    ptr_reg
+                } else {
+                    let umasked_symbol = self.debug_symbol("unmasked");
+                    let unmasked_reg = self
                         .storage_manager
-                        .claim_general_reg(&mut self.buf, &mask_symbol);
-                    ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
+                        .claim_general_reg(&mut self.buf, &umasked_symbol);
 
-                    ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
-                }
+                    ASM::mov_reg64_imm64(&mut self.buf, unmasked_reg, (!0b111) as _);
+
+                    ASM::and_reg64_reg64_reg64(&mut self.buf, unmasked_reg, ptr_reg, unmasked_reg);
+
+                    unmasked_reg
+                };
 
                 let mut offset = 0;
                 for field in &other_fields[..index as usize] {
@@ -2843,7 +2850,7 @@ impl<
                     &mut self.buf,
                     &mut self.storage_manager,
                     self.layout_interner,
-                    ptr_reg,
+                    unmasked_reg,
                     offset as i32,
                     element_layout,
                     *sym,
@@ -2911,14 +2918,14 @@ impl<
                 ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
 
                 // mask out the tag id bits
-                ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
+                ASM::and_reg64_reg64_reg64(&mut self.buf, mask_reg, ptr_reg, mask_reg);
 
                 let mut offset = 0;
                 for field in &other_fields[..index as usize] {
                     offset += self.layout_interner.stack_size(*field);
                 }
 
-                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, mask_reg, offset as i32);
             }
             UnionLayout::Recursive(tag_layouts) => {
                 let other_fields = tag_layouts[tag_id as usize];
@@ -2928,22 +2935,29 @@ impl<
                     .load_to_general_reg(&mut self.buf, structure);
 
                 // mask out the tag id bits
-                if !union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
-                    let mask_symbol = self.debug_symbol("tag_id_mask");
-                    let mask_reg = self
+                let unmasked_reg = if union_layout
+                    .stores_tag_id_as_data(self.storage_manager.target_info)
+                {
+                    ptr_reg
+                } else {
+                    let umasked_symbol = self.debug_symbol("unmasked");
+                    let unmasked_reg = self
                         .storage_manager
-                        .claim_general_reg(&mut self.buf, &mask_symbol);
-                    ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
+                        .claim_general_reg(&mut self.buf, &umasked_symbol);
 
-                    ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
-                }
+                    ASM::mov_reg64_imm64(&mut self.buf, unmasked_reg, (!0b111) as _);
+
+                    ASM::and_reg64_reg64_reg64(&mut self.buf, unmasked_reg, ptr_reg, unmasked_reg);
+
+                    unmasked_reg
+                };
 
                 let mut offset = 0;
                 for field in &other_fields[..index as usize] {
                     offset += self.layout_interner.stack_size(*field);
                 }
 
-                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, unmasked_reg, offset as i32);
             }
         }
     }
