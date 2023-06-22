@@ -144,14 +144,8 @@ fn build_eq<'a, 'ctx>(
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
     lhs_layout: LayoutRepr<'a>,
-    rhs_layout: LayoutRepr<'a>,
+    _rhs_layout: LayoutRepr<'a>,
 ) -> BasicValueEnum<'ctx> {
-    debug_assert_eq!(
-        lhs_layout, rhs_layout,
-        "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",
-        lhs_layout, rhs_layout
-    );
-
     match lhs_layout {
         LayoutRepr::Builtin(builtin) => build_eq_builtin(
             env,

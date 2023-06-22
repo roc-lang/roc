@@ -2211,45 +2211,46 @@ fn nullable_eval_cfold() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_switch() {
-    // exposed bug with passing the right symbol/layout down into switch branch generation
-    // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
+    crate::helpers::with_larger_debug_stack(||
+        // exposed bug with passing the right symbol/layout down into switch branch generation
+        // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
 
-            Expr : [ZAdd Expr Expr, Val I64, Var I64]
+                Expr : [ZAdd Expr Expr, Val I64, Var I64]
 
-            eval : Expr -> I64
-            eval = \e ->
-                when e is
-                    Var _ -> 0
-                    Val v -> v
-                    ZAdd l r -> eval l + eval r
+                eval : Expr -> I64
+                eval = \e ->
+                    when e is
+                        Var _ -> 0
+                        Val v -> v
+                        ZAdd l r -> eval l + eval r
 
-            constFolding : Expr -> Expr
-            constFolding = \e ->
-                when e is
-                    ZAdd e1 e2 ->
-                        when Pair e1 e2 is
-                            Pair (Val a) (Val b) -> Val (a+b)
-                            Pair (Val a) (ZAdd x (Val b)) -> ZAdd (Val (a+b)) x
-                            Pair _ _                     -> ZAdd e1 e2
-
-
-                    _ -> e
+                constFolding : Expr -> Expr
+                constFolding = \e ->
+                    when e is
+                        ZAdd e1 e2 ->
+                            when Pair e1 e2 is
+                                Pair (Val a) (Val b) -> Val (a+b)
+                                Pair (Val a) (ZAdd x (Val b)) -> ZAdd (Val (a+b)) x
+                                Pair _ _                     -> ZAdd e1 e2
 
 
-            expr : Expr
-            expr = ZAdd (Val 3) (ZAdd (Val 4) (Val 5))
+                        _ -> e
 
-            main : I64
-            main = eval (constFolding expr)
-            "#
-        ),
-        12,
-        i64
-    );
+
+                expr : Expr
+                expr = ZAdd (Val 3) (ZAdd (Val 4) (Val 5))
+
+                main : I64
+                main = eval (constFolding expr)
+                "#
+            ),
+            12,
+            i64
+        ));
 }
 
 #[test]
@@ -4522,8 +4523,8 @@ fn linked_list_trmc() {
                     Nil -> 0
                     Cons _ rest -> 1 + length rest
 
-            main : I64 
-            main = 
+            main : I64
+            main =
                 repeat "foo" 5
                     |> length
             "#
