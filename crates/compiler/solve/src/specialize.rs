@@ -17,7 +17,7 @@ use roc_types::{
     },
     types::{AliasKind, MemberImpl, Polarity, Uls},
 };
-use roc_unify::unify::{unify, Env as UEnv, Mode, MustImplementConstraints};
+use roc_unify::unify::{unify, Mode, MustImplementConstraints};
 
 use crate::{
     ability::builtin_module_with_unlisted_ability_impl,
@@ -574,7 +574,7 @@ fn compact_lambda_set<P: Phase>(
     // 3. Unify `t_f1 ~ t_f2`.
     trace_compact!(3iter_start. env.subs, this_lambda_set, t_f1, t_f2);
     let (vars, new_obligations, new_lambda_sets_to_specialize, _meta) = unify(
-        &mut UEnv::new(env.subs),
+        &mut env.uenv(),
         t_f1,
         t_f2,
         Mode::LAMBDA_SET_SPECIALIZATION,

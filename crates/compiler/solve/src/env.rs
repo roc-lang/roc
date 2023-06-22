@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use roc_can::{constraint::Constraints, module::ExposedByModule};
 use roc_derive::SharedDerivedModule;
 use roc_types::subs::{Content, Descriptor, Mark, OptVariable, Rank, Subs, Variable};
+use roc_unify::unify::Env as UEnv;
 
 use crate::Pools;
 
@@ -71,5 +72,10 @@ impl<'a> Env<'a> {
         self.pools.get_mut(rank).push(var);
 
         var
+    }
+
+    /// Retrieves an environment for unification.
+    pub fn uenv<'r>(&'r mut self) -> UEnv<'r> {
+        UEnv::new(self.subs)
     }
 }

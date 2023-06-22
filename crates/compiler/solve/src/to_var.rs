@@ -17,7 +17,7 @@ use roc_types::{
         Category, ExtImplicitOpenness, Polarity, TypeTag, Types,
     },
 };
-use roc_unify::unify::{unify, Env as UEnv, Mode, Unified};
+use roc_unify::unify::{unify, Mode, Unified};
 
 use crate::{
     ability::{AbilityImplError, ObligationCache},
@@ -862,7 +862,7 @@ pub(crate) fn type_to_var_help(
 
                 let category = Category::OpaqueArg;
                 match unify(
-                    &mut UEnv::new(env.subs),
+                    &mut env.uenv(),
                     var,
                     flex_ability,
                     Mode::EQ,

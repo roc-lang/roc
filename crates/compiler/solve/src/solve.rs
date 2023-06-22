@@ -14,7 +14,7 @@ use crate::Aliases;
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve};
+use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
@@ -30,8 +30,8 @@ use roc_types::subs::{
 };
 use roc_types::types::{Category, Polarity, Reason, RecordField, Type, TypeExtension, Types, Uls};
 use roc_unify::unify::{
-    unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
-    SpecializationLsetCollector, Unified::*,
+    unify, unify_introduced_ability_specialization, Mode, Obligated, SpecializationLsetCollector,
+    Unified::*,
 };
 
 mod scope;
@@ -484,7 +484,7 @@ fn solve(
                 );
 
                 match unify(
-                    &mut UEnv::new(env.subs),
+                    &mut env.uenv(),
                     actual,
                     expected,
                     Mode::EQ,
@@ -591,7 +591,7 @@ fn solve(
                         );
 
                         match unify(
-                            &mut UEnv::new(env.subs),
+                            &mut env.uenv(),
                             actual,
                             expected,
                             Mode::EQ,
@@ -698,7 +698,7 @@ fn solve(
                 };
 
                 match unify(
-                    &mut UEnv::new(env.subs),
+                    &mut env.uenv(),
                     actual,
                     expected,
                     mode,
@@ -910,7 +910,7 @@ fn solve(
                 );
 
                 match unify(
-                    &mut UEnv::new(env.subs),
+                    &mut env.uenv(),
                     actual,
                     includes,
                     Mode::PRESENT,
@@ -1044,7 +1044,7 @@ fn solve(
 
                 let snapshot = env.subs.snapshot();
                 let unify_cond_and_patterns_outcome = unify(
-                    &mut UEnv::new(env.subs),
+                    &mut env.uenv(),
                     branches_var,
                     real_var,
                     Mode::EQ,
@@ -1094,7 +1094,7 @@ fn solve(
                         open_tag_union(env, branches_var);
                         let almost_eq = matches!(
                             unify(
-                                &mut UEnv::new(env.subs),
+                                &mut env.uenv(),
                                 real_var,
                                 branches_var,
                                 Mode::EQ,
@@ -1112,7 +1112,7 @@ fn solve(
                             // Case 4: incompatible types, report type error.
                             // Re-run first failed unification to get the type diff.
                             match unify(
-                                &mut UEnv::new(env.subs),
+                                &mut env.uenv(),
                                 real_var,
                                 branches_var,
                                 Mode::EQ,
@@ -1311,7 +1311,7 @@ fn solve(
                     lambda_sets_to_specialize,
                     extra_metadata: _,
                 } = unify(
-                    &mut UEnv::new(env.subs),
+                    &mut env.uenv(),
                     actual,
                     Variable::LIST_U8,
                     Mode::EQ,
@@ -1331,7 +1331,7 @@ fn solve(
 
                     // We explicitly match on the last unify to get the type in the case it errors.
                     match unify(
-                        &mut UEnv::new(env.subs),
+                        &mut env.uenv(),
                         actual,
                         Variable::STR,
                         Mode::EQ,
@@ -1574,7 +1574,7 @@ fn check_ability_specialization(
             deep_copy_var_in(env, Rank::toplevel(), root_signature_var, env.arena);
         let snapshot = env.subs.snapshot();
         let unified = unify_introduced_ability_specialization(
-            &mut UEnv::new(env.subs),
+            &mut env.uenv(),
             root_signature_var,
             symbol_loc_var.value,
             Mode::EQ,
