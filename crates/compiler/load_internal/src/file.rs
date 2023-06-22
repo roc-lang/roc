@@ -56,7 +56,7 @@ use roc_region::all::{LineInfo, Loc, Region};
 #[cfg(not(target_family = "wasm"))]
 use roc_reporting::report::to_https_problem_report_string;
 use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
-use roc_solve::module::{extract_module_owned_implementations, SolveCtx, Solved, SolvedModule};
+use roc_solve::module::{extract_module_owned_implementations, SolveConfig, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
@@ -5121,7 +5121,7 @@ fn run_solve_solve(
     let (solve_output, solved_implementations, exposed_vars_by_symbol) = {
         let module_id = module.module_id;
 
-        let solve_ctx = SolveCtx {
+        let solve_config = SolveConfig {
             home: module_id,
             types,
             constraints: &constraints,
@@ -5132,7 +5132,7 @@ fn run_solve_solve(
         };
 
         let solve_output = roc_solve::module::run_solve(
-            solve_ctx,
+            solve_config,
             rigid_variables,
             subs,
             solve_aliases,

@@ -53,7 +53,7 @@ pub struct SolvedModule {
     pub exposed_types: ExposedTypesStorageSubs,
 }
 
-pub struct SolveCtx<'a> {
+pub struct SolveConfig<'a> {
     /// The module we are solving.
     pub home: ModuleId,
     pub constraints: &'a Constraints,
@@ -82,7 +82,7 @@ pub struct SolveOutput {
 }
 
 pub fn run_solve(
-    ctx: SolveCtx<'_>,
+    config: SolveConfig<'_>,
     rigid_variables: RigidVariables,
     mut subs: Subs,
     mut aliases: Aliases,
@@ -105,8 +105,13 @@ pub fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_scope) =
-        solve::run(ctx, &mut problems, subs, &mut aliases, &mut abilities_store);
+    let (solved_subs, solved_scope) = solve::run(
+        config,
+        &mut problems,
+        subs,
+        &mut aliases,
+        &mut abilities_store,
+    );
 
     SolveOutput {
         subs: solved_subs,

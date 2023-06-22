@@ -5,7 +5,7 @@ use crate::ability::{
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
 use crate::deep_copy::deep_copy_var_in;
-use crate::module::{SolveCtx, Solved};
+use crate::module::{SolveConfig, Solved};
 use crate::pools::Pools;
 use crate::specialize::{
     compact_lambda_sets_of_vars, AwaitingSpecializations, CompactionResult, DerivedEnv, SolvePhase,
@@ -95,13 +95,13 @@ struct State {
 }
 
 pub fn run(
-    ctx: SolveCtx,
+    config: SolveConfig,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
 ) -> (Solved<Subs>, Scope) {
-    let env = run_in_place(ctx, problems, &mut subs, aliases, abilities_store);
+    let env = run_in_place(config, problems, &mut subs, aliases, abilities_store);
 
     (Solved(subs), env)
 }
@@ -109,13 +109,13 @@ pub fn run(
 /// Modify an existing subs in-place instead
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 fn run_in_place(
-    ctx: SolveCtx,
+    config: SolveConfig,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
 ) -> Scope {
-    let SolveCtx {
+    let SolveConfig {
         home: _,
         constraints,
         root_constraint,
@@ -123,7 +123,7 @@ fn run_in_place(
         pending_derives,
         exposed_by_module,
         derived_module,
-    } = ctx;
+    } = config;
 
     let mut pools = Pools::default();
 
