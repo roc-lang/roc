@@ -4,7 +4,7 @@ use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
-use crate::module::Solved;
+use crate::module::{SolveCtx, Solved};
 use crate::specialize::{
     compact_lambda_sets_of_vars, AwaitingSpecializations, CompactionResult, DerivedEnv, SolvePhase,
 };
@@ -13,17 +13,14 @@ use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve, TypeOrVar};
 use roc_can::expected::{Expected, PExpected};
-use roc_can::expr::PendingDerives;
-use roc_can::module::ExposedByModule;
 use roc_collections::all::MutMap;
 use roc_collections::soa::{Index, Slice};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
-use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_problem::can::CycleEntry;
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
@@ -524,33 +521,14 @@ struct State {
     mark: Mark,
 }
 
-#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run(
-    home: ModuleId,
-    types: Types,
-    constraints: &Constraints,
+    ctx: SolveCtx,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     aliases: &mut Aliases,
-    constraint: &Constraint,
-    pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
-    exposed_by_module: &ExposedByModule,
-    derived_module: SharedDerivedModule,
 ) -> (Solved<Subs>, Env) {
-    let env = run_in_place(
-        home,
-        types,
-        constraints,
-        problems,
-        &mut subs,
-        aliases,
-        constraint,
-        pending_derives,
-        abilities_store,
-        exposed_by_module,
-        derived_module,
-    );
+    let env = run_in_place(ctx, problems, &mut subs, aliases, abilities_store);
 
     (Solved(subs), env)
 }
@@ -558,18 +536,22 @@ pub fn run(
 /// Modify an existing subs in-place instead
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 fn run_in_place(
-    _home: ModuleId, // TODO: remove me?
-    mut types: Types,
-    constraints: &Constraints,
+    ctx: SolveCtx,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
     aliases: &mut Aliases,
-    constraint: &Constraint,
-    pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
-    exposed_by_module: &ExposedByModule,
-    derived_module: SharedDerivedModule,
 ) -> Env {
+    let SolveCtx {
+        home: _,
+        constraints,
+        root_constraint,
+        mut types,
+        pending_derives,
+        exposed_by_module,
+        derived_module,
+    } = ctx;
+
     let mut pools = Pools::default();
 
     let state = State {
@@ -602,21 +584,25 @@ fn run_in_place(
         exposed_types: exposed_by_module,
     };
 
-    let state = solve(
-        &arena,
-        types,
+    let reified_ctx = ReifiedSolveCtx {
+        arena: &arena,
         constraints,
+        derived_env: &derived_env,
+    };
+
+    let state = solve(
+        reified_ctx,
+        types,
         state,
         rank,
         &mut pools,
         problems,
         aliases,
         subs,
-        constraint,
+        &root_constraint,
         abilities_store,
         &mut obligation_cache,
         &mut awaiting_specializations,
-        &derived_env,
     );
 
     state.env
@@ -659,11 +645,15 @@ enum Work<'a> {
     },
 }
 
-#[allow(clippy::too_many_arguments)]
+struct ReifiedSolveCtx<'a> {
+    arena: &'a Bump,
+    constraints: &'a Constraints,
+    derived_env: &'a DerivedEnv<'a>,
+}
+
 fn solve(
-    arena: &Bump,
+    ctx: ReifiedSolveCtx,
     mut can_types: Types,
-    constraints: &Constraints,
     mut state: State,
     rank: Rank,
     pools: &mut Pools,
@@ -674,8 +664,13 @@ fn solve(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
-    derived_env: &DerivedEnv,
 ) -> State {
+    let ReifiedSolveCtx {
+        arena,
+        constraints,
+        derived_env,
+    } = ctx;
+
     let initial = Work::Constraint {
         env: &Env::default(),
         rank,
