@@ -65,16 +65,20 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
             render: roc_reporting::report::RenderTarget::ColorTerminal,
             palette,
             threading: Threading::Single,
-            exec_mode: ExecutionMode::Executable,
+            exec_mode: ExecutionMode::ExecutableIfCheck,
         },
     );
 
     let mut loaded = match loaded {
         Ok(v) => v,
-        Err(LoadMonomorphizedError::ErrorModule(m)) => {
-            todo!(
-                "error while loading module: {:?}",
-                (m.can_problems, m.type_problems)
+        Err(LoadMonomorphizedError::ErrorModule(mut m)) => {
+            roc_build::program::report_problems_typechecked(&mut m);
+            return (
+                None,
+                Problems {
+                    errors: vec![],
+                    warnings: vec![],
+                },
             );
         }
         Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report))) => {

@@ -266,6 +266,10 @@ impl ReplState {
             self.add_past_def(ident, src);
         }
 
+        if std::env::var("JUPYTER_KERNEL").is_ok() {
+            opt_var_name = None;
+        }
+
         format_output(output, problems, opt_var_name, dimensions)
     }
 

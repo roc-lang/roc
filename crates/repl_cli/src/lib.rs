@@ -3,6 +3,8 @@ mod cli_gen;
 mod colors;
 pub mod repl_state;
 
+use std::io::Read;
+
 use colors::{BLUE, END_COL, PINK};
 use const_format::concatcp;
 use repl_state::ReplState;
@@ -26,6 +28,10 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
 pub const SHORT_INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n\n";
 
 pub fn main() -> i32 {
+    if std::env::var("JUPYTER_KERNEL").is_ok() {
+        return jupyter_kernel_main();
+    }
+
     use rustyline::error::ReadlineError;
     use rustyline::Editor;
 
@@ -75,4 +81,13 @@ pub fn main() -> i32 {
             }
         }
     }
+}
+
+fn jupyter_kernel_main() -> i32 {
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).unwrap();
+    let mut helper = ReplState::new();
+    let output = helper.eval_and_format(&buf, None);
+    println!("{}", output);
+    0
 }

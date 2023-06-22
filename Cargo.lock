@@ -3780,6 +3780,7 @@ name = "roc_repl_eval"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
