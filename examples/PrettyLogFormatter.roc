@@ -123,12 +123,10 @@ tag = \name, fields ->
         f0 <- Inspect.custom
         write f0 (Str.toUtf8 "(")
         |> write (Str.toUtf8 name)
-        |> indent
         |> \f1 ->
             f2, inspector <- List.walk fields f1
             write f2 (Str.toUtf8 " ")
             |> \x -> Inspect.apply inspector x
-        |> outdent
         |> write (Str.toUtf8 ")")
 
 tuple : List (Inspector PrettyLogFormatter) -> Inspector PrettyLogFormatter
@@ -151,6 +149,7 @@ tuple = \fields ->
     |> .0
     |> write (Str.toUtf8 "\n")
     |> outdent
+    |> writeIndent
     |> write (Str.toUtf8 ")")
 
 record : List { key : Str, value : Inspector PrettyLogFormatter } -> Inspector PrettyLogFormatter
