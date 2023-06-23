@@ -1,4 +1,5 @@
 # +set function_kind=erased
+# +emit:mono
 app "test" provides [main] to "./platform"
 
 f = \s ->
@@ -10,3 +11,5 @@ f = \s ->
 
 main = (f "") {}
 #       ^^^^ {} -?-> Str
+
+# -emit:mono

@@ -5,8 +5,7 @@ use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
     LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche,
-    OpaqueFunctionData, RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout,
-    WrappedVariant,
+    RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -3196,18 +3195,8 @@ fn generate_runtime_error_function<'a>(
 
             (args.into_bump_slice(), ret_layout)
         }
-        RawFunctionLayout::ErasedFunction(arg_layouts, closure_data, ret_layout) => {
-            let mut args = Vec::with_capacity_in(arg_layouts.len() + 1, env.arena);
-            for arg in arg_layouts {
-                args.push((*arg, env.unique_symbol()));
-            }
-            if let OpaqueFunctionData::Capturing { .. } = closure_data {
-                // TODO(erased-lambdas) we want a void* here, but is a boxed pointer always
-                // correct?
-                args.push((Layout::OPAQUE_PTR, Symbol::ARG_CLOSURE));
-            }
-
-            (args.into_bump_slice(), ret_layout)
+        RawFunctionLayout::ErasedFunction(..) => {
+            todo_lambda_erasure!()
         }
         RawFunctionLayout::ZeroArgumentThunk(ret_layout) => (&[] as &[_], ret_layout),
     };
@@ -4845,7 +4834,7 @@ pub fn with_hole<'a>(
                                 hole,
                             )
                         }
-                        RawFunctionLayout::ErasedFunction(_, _, _) => todo_lambda_erasure!(),
+                        RawFunctionLayout::ErasedFunction(_, _) => todo_lambda_erasure!(),
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
                     }
                 }

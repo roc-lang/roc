@@ -481,24 +481,10 @@ impl From<LayoutProblem> for RuntimeError {
     }
 }
 
-/// When we do not kind functions, we type-erase functions to opaque pointers.
-/// The erased function definition, however, continues to hold data about how the erased function
-/// behaves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum OpaqueFunctionData<'a> {
-    /// This function is not capturing, and needs no extra data regarding closures.
-    Null,
-    /// This function is capturing.
-    Capturing {
-        /// The concrete type of the closure data expected by a call to the function.
-        closure_data_layout: InLayout<'a>,
-    },
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RawFunctionLayout<'a> {
     Function(&'a [InLayout<'a>], LambdaSet<'a>, InLayout<'a>),
-    ErasedFunction(&'a [InLayout<'a>], OpaqueFunctionData<'a>, InLayout<'a>),
+    ErasedFunction(&'a [InLayout<'a>], InLayout<'a>),
     ZeroArgumentThunk(InLayout<'a>),
 }
 
@@ -620,13 +606,17 @@ impl<'a> RawFunctionLayout<'a> {
 
                 let fn_args = fn_args.into_bump_slice();
 
-                let lambda_set = cached!(
-                    LambdaSet::from_var(env, args, closure_var, ret_var),
-                    cache_criteria,
-                    env.subs
-                );
+                let closure_data = build_function_closure_data(env, args, closure_var, ret_var);
+                let closure_data = cached!(closure_data, cache_criteria, env.subs);
 
-                Cacheable(Ok(Self::Function(fn_args, lambda_set, ret)), cache_criteria)
+                let function_layout = match closure_data {
+                    ClosureDataKind::LambdaSet(lambda_set) => {
+                        Self::Function(fn_args, lambda_set, ret)
+                    }
+                    ClosureDataKind::Erased => Self::ErasedFunction(fn_args, ret),
+                };
+
+                Cacheable(Ok(function_layout), cache_criteria)
             }
             TagUnion(tags, ext) if tags.is_newtype_wrapper(env.subs) => {
                 debug_assert!(ext_var_is_empty_tag_union(env.subs, ext));
@@ -1356,6 +1346,27 @@ impl<'a> LambdaName<'a> {
     #[inline(always)]
     pub(crate) fn replace_name(&self, name: Symbol) -> Self {
         Self { name, ..*self }
+    }
+}
+
+/// Closure data for a function
+enum ClosureDataKind<'a> {
+    /// The function is compiled with lambda sets.
+    LambdaSet(LambdaSet<'a>),
+    /// The function is compiled as type-erased.
+    Erased,
+}
+
+fn build_function_closure_data<'a>(
+    env: &mut Env<'a, '_>,
+    args: VariableSubsSlice,
+    closure_var: Variable,
+    ret_var: Variable,
+) -> Cacheable<Result<ClosureDataKind<'a>, LayoutProblem>> {
+    match env.subs.get_content_without_compacting(closure_var) {
+        Content::ErasedLambda => cacheable(Ok(ClosureDataKind::Erased)),
+        _ => LambdaSet::from_var(env, args, closure_var, ret_var)
+            .map(|result| result.map(ClosureDataKind::LambdaSet)),
     }
 }
 
