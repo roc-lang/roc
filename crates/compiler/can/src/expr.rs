@@ -581,6 +581,12 @@ impl Refinements {
         self.0
             .get_or_insert(symbol, || (unrefined_var, refined_var));
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &Variable, &Variable)> {
+        self.0
+            .iter()
+            .map(|(symbol, (unrefined_var, refined_var))| (symbol, unrefined_var, refined_var))
+    }
 }
 
 #[derive(Clone, Debug)]
