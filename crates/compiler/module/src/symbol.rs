@@ -800,6 +800,7 @@ macro_rules! define_builtins {
         $(
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
+                    $(#[$ident_meta:meta])*
                     $ident_id:literal $ident_const:ident: $ident_name:literal
                     $(exposed_apply_type=$exposed_apply_type:literal)?
                     $(exposed_type=$exposed_type:literal)?
@@ -951,6 +952,7 @@ macro_rules! define_builtins {
         impl Symbol {
             $(
                 $(
+                    $(#[$ident_meta])*
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
                 )*
                 $(
@@ -1095,6 +1097,9 @@ define_builtins! {
         31 ATTR_INVALID: "#attr_invalid"
 
         32 CLONE: "#clone" // internal function that clones a value into a buffer
+
+        /// Internal name for a lambda that's been type-erased
+        33 ERASED_LAMBDA: "#Erased"
     }
     // Fake module for synthesizing and storing derived implementations
     1 DERIVED_SYNTH: "#Derived" => {
