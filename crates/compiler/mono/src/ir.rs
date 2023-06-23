@@ -7374,6 +7374,42 @@ fn to_opt_branches<'a>(
                             loc_expr = Loc::at(region, new_expr);
                         }
 
+                        for (&symbol, &unrefined_var, &refined_var) in
+                            when_branch.refinements.iter()
+                        {
+                            if let Some(refinement_branches) =
+                                refine_tag_union(env, unrefined_var, refined_var)
+                            {
+                                let when = roc_can::expr::Expr::When {
+                                    loc_cond: Box::new(Loc::at(
+                                        region,
+                                        roc_can::expr::Expr::Var(symbol, unrefined_var),
+                                    )),
+                                    cond_var: unrefined_var,
+                                    expr_var: refined_var,
+                                    region,
+                                    branches: refinement_branches,
+                                    branches_cond_var: unrefined_var,
+                                    exhaustive: ExhaustiveMark::known_exhaustive(),
+                                };
+                                let def = roc_can::def::Def {
+                                    annotation: None,
+                                    expr_var: refined_var,
+                                    loc_expr: Loc::at(region, when),
+                                    loc_pattern: Loc::at(
+                                        region,
+                                        roc_can::pattern::Pattern::Identifier(symbol),
+                                    ),
+                                    pattern_vars: std::iter::once((symbol, refined_var)).collect(),
+                                };
+                                let new_expr = roc_can::expr::Expr::LetNonRec(
+                                    Box::new(def),
+                                    Box::new(loc_expr),
+                                );
+                                loc_expr = Loc::at(region, new_expr);
+                            }
+                        }
+
                         loc_expr
                     } else {
                         // This pattern is degenerate; when it's reached we must emit a runtime
