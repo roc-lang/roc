@@ -1325,7 +1325,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 .new_build_load(element_type, ptr.into_pointer_value(), "ptr_load")
         }
 
-        PtrToStackValue => {
+        Alloca => {
             arguments!(initial_value);
 
             let ptr = entry_block_alloca_zerofill(env, initial_value.get_type(), "stack_value");

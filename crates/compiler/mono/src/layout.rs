@@ -674,7 +674,10 @@ pub(crate) enum LayoutWrapper<'a> {
 pub enum LayoutRepr<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [InLayout<'a>]),
+    // A (heap allocated) reference-counted value
     Boxed(InLayout<'a>),
+    // A pointer (heap or stack) without any reference counting
+    // Ptr is not user-facing. The compiler author must make sure that invariants are upheld
     Ptr(InLayout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),

@@ -7659,6 +7659,7 @@ fn substitute_in_expr<'a>(
             None => None,
         },
 
+        // currently only used for tail recursion modulo cons (TRMC)
         UnionFieldPtrAtIndex {
             structure,
             tag_id,

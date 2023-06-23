@@ -1979,8 +1979,8 @@ impl<'a> LowLevelCall<'a> {
                 );
             }
             PtrLoad => backend.expr_unbox(self.ret_symbol, self.arguments[0]),
-            PtrToStackValue => {
-                // PtrToStackValue : a -> Ptr a
+            Alloca => {
+                // Alloca : a -> Ptr a
                 let arg = self.arguments[0];
                 let arg_layout = backend.storage.symbol_layouts.get(&arg).unwrap();
 

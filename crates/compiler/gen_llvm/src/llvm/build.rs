@@ -1502,7 +1502,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
 
-                    union_field_at_index(
+                    union_field_ptr_at_index(
                         env,
                         layout_interner,
                         field_layouts,
@@ -1518,7 +1518,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
 
-                    union_field_at_index(
+                    union_field_ptr_at_index(
                         env,
                         layout_interner,
                         field_layouts,
@@ -1546,7 +1546,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
 
-                    union_field_at_index(
+                    union_field_ptr_at_index(
                         env,
                         layout_interner,
                         field_layouts,
@@ -1569,7 +1569,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
 
-                    union_field_at_index(
+                    union_field_ptr_at_index(
                         env,
                         layout_interner,
                         field_layouts,
@@ -2156,7 +2156,7 @@ fn lookup_at_index_ptr<'a, 'ctx>(
     struct_type: Option<StructType<'ctx>>,
     target_loaded_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let elem_ptr = union_field_at_index_help(
+    let elem_ptr = union_field_ptr_at_index_help(
         env,
         layout_interner,
         field_layouts,
@@ -2179,7 +2179,7 @@ fn lookup_at_index_ptr<'a, 'ctx>(
     cast_if_necessary_for_opaque_recursive_pointers(env.builder, result, target_loaded_type)
 }
 
-fn union_field_at_index_help<'a, 'ctx>(
+fn union_field_ptr_at_index_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     field_layouts: &'a [InLayout<'a>],
@@ -2213,7 +2213,7 @@ fn union_field_at_index_help<'a, 'ctx>(
         .unwrap()
 }
 
-fn union_field_at_index<'a, 'ctx>(
+fn union_field_ptr_at_index<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     field_layouts: &'a [InLayout<'a>],
@@ -2222,7 +2222,7 @@ fn union_field_at_index<'a, 'ctx>(
     value: PointerValue<'ctx>,
     target_loaded_type: BasicTypeEnum<'ctx>,
 ) -> PointerValue<'ctx> {
-    let result = union_field_at_index_help(
+    let result = union_field_ptr_at_index_help(
         env,
         layout_interner,
         field_layouts,

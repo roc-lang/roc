@@ -1605,7 +1605,7 @@ trait Backend<'a> {
                 self.build_ptr_load(*sym, args[0], *ret_layout);
             }
 
-            LowLevel::PtrToStackValue => {
+            LowLevel::Alloca => {
                 self.build_ptr_to_stack_value(*sym, args[0], arg_layouts[0]);
             }
 

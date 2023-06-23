@@ -102,16 +102,6 @@ impl<T: PartialEq> VecSet<T> {
     {
         self.elements.retain(f)
     }
-
-    pub fn keep_if_in_both(&mut self, other: &Self) {
-        self.elements.retain(|e| other.contains(e));
-    }
-
-    pub fn keep_if_in_either(&mut self, other: Self) {
-        for e in other.elements {
-            self.insert(e);
-        }
-    }
 }
 
 impl<A: Ord> Extend<A> for VecSet<A> {
