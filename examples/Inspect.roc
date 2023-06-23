@@ -46,8 +46,6 @@ Formatter has
     bool : Bool -> Inspector f | f has Formatter
     str : Str -> Inspector f | f has Formatter
 
-    # TODO: is there a clear/better way to make the following apis.
-    # Including the walk fn just makes this look verbose.
     list : list, ElemWalkFn state list elem, (elem -> Inspector f) -> Inspector f | f has Formatter
     set : set, ElemWalkFn state set elem, (elem -> Inspector f) -> Inspector f | f has Formatter
     dict : dict, KeyValWalkFn state dict key value, (key -> Inspector f), (value -> Inspector f) -> Inspector f | f has Formatter

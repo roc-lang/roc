@@ -4,23 +4,36 @@ app "inspect-logging"
         pf.Stdout,
         Inspect.{ Formatter, Inspector, Inspect },
         LogFormatter,
-        Person,
+        Community,
     ]
     provides [main] to pf
 
 main =
-    person = Person.new {
+    Community.empty
+    |> Community.addPerson {
         firstName: "John",
         lastName: "Smith",
         age: 27,
         hasBeard: Bool.true,
-        data: Dict.fromList [
-            ("test", Thing 7),
-            ("stuff", Stuff),
-        ],
+        favoriteColor: Blue,
     }
-
-    Inspect.inspect person
+    |> Community.addPerson {
+        firstName: "Debby",
+        lastName: "Johnson",
+        age: 47,
+        hasBeard: Bool.false,
+        favoriteColor: Green,
+    }
+    |> Community.addPerson {
+        firstName: "Jane",
+        lastName: "Doe",
+        age: 33,
+        hasBeard: Bool.false,
+        favoriteColor: RGB (255, 255, 0),
+    }
+    |> Community.addFriend 0 2
+    |> Community.addFriend 1 2
+    |> Inspect.inspect
     |> LogFormatter.toBytes
     |> Str.fromUtf8
     |> unwrapOrCrash
