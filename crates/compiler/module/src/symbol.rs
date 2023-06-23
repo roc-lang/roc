@@ -1097,9 +1097,6 @@ define_builtins! {
         31 ATTR_INVALID: "#attr_invalid"
 
         32 CLONE: "#clone" // internal function that clones a value into a buffer
-
-        /// Internal name for a lambda that's been type-erased
-        33 ERASED_LAMBDA: "#Erased"
     }
     // Fake module for synthesizing and storing derived implementations
     1 DERIVED_SYNTH: "#Derived" => {

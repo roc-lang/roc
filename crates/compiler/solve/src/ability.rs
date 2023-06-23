@@ -827,6 +827,12 @@ trait DerivableVisitor {
                         context: NotDerivableContext::NoContext,
                     })
                 }
+                ErasedLambda => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
+                }
                 Error => {
                     return Err(NotDerivable {
                         var,

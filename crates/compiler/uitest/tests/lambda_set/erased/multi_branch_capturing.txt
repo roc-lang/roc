@@ -1,15 +1,12 @@
 # +set function_kind=erased
-# +emit:mono
 app "test" provides [main] to "./platform"
 
 f = \s ->
   if Bool.true
   then \{} -> ""
-  #    ^^^^^^^^^ {}* -[[#Attr.#Erased(33)]]-> Str
+  #    ^^^^^^^^^ {}* -?-> Str
   else \{} -> s
-  #    ^^^^^^^^ {}* -[[#Attr.#Erased(33)]]-> Str
+  #    ^^^^^^^^ {}* -?-> Str
 
 main = (f "") {}
-#       ^^^^ {} -[[#Attr.#Erased(33)]]-> Str
-
-# -emit:mono
+#       ^^^^ {} -?-> Str

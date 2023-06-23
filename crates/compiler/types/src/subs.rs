@@ -887,6 +887,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             }
             write!(f, ", ^<{ambient_function_var:?}>)")
         }
+        Content::ErasedLambda => write!(f, "ErasedLambda"),
         Content::RangedNumber(range) => {
             write!(f, "RangedNumber( {range:?})")
         }
@@ -1234,7 +1235,7 @@ impl IllegalCycleMark {
 pub struct Variable(u32);
 
 macro_rules! define_const_var {
-    ($($(:pub)? $name:ident),* $(,)?) => {
+    ($($(#[$meta:meta])* $(:pub)? $name:ident),* $(,)?) => {
         #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
         enum ConstVariables {
             $( $name, )*
@@ -1242,7 +1243,7 @@ macro_rules! define_const_var {
         }
 
         impl Variable {
-            $( pub const $name: Variable = Variable(ConstVariables::$name as u32); )*
+            $( $(#[$meta])* pub const $name: Variable = Variable(ConstVariables::$name as u32); )*
 
             pub const NUM_RESERVED_VARS: usize = ConstVariables::FINAL_CONST_VAR as usize;
         }
@@ -1353,6 +1354,9 @@ define_const_var! {
     // The following are abound in derived abilities, so we cache them.
     :pub STR,
     :pub LIST_U8,
+
+    /// The erased lambda type.
+    :pub ERASED_LAMBDA,
 }
 
 impl Variable {
@@ -1722,9 +1726,6 @@ impl Subs {
     pub const AB_HASH: SubsSlice<Symbol>            = SubsSlice::new(3, 1);
     #[rustfmt::skip]
     pub const AB_EQ: SubsSlice<Symbol>              = SubsSlice::new(4, 1);
-    #[rustfmt::skip]
-    pub const LAMBDA_NAME_ERASED: SubsSlice<Symbol> = SubsSlice::new(5, 1);
-    pub const LAMBDA_NAME_ERASED_INDEX: SubsIndex<Symbol> = SubsIndex::new(5);
     // END INIT-SymbolSubsSlice
 
     pub fn new() -> Self {
@@ -1753,7 +1754,6 @@ impl Subs {
         symbol_names.push(Symbol::HASH_HASHER);
         symbol_names.push(Symbol::HASH_HASH_ABILITY);
         symbol_names.push(Symbol::BOOL_EQ);
-        symbol_names.push(Symbol::ERASED_LAMBDA);
         // END INIT-SymbolNames
 
         // IFTTT INIT-VariableSubsSlice
@@ -1825,6 +1825,8 @@ impl Subs {
             Variable::LIST_U8,
             Content::Structure(FlatType::Apply(Symbol::LIST_LIST, u8_slice)),
         );
+
+        subs.set_content(Variable::ERASED_LAMBDA, Content::ErasedLambda);
 
         subs
     }
@@ -2222,7 +2224,7 @@ impl Subs {
                 | Content::RecursionVar { .. }
                 | Content::RangedNumber(_)
                 | Content::Error => return false,
-                Content::LambdaSet(_) => return true,
+                Content::LambdaSet(_) | Content::ErasedLambda => return false,
                 Content::Structure(FlatType::Func(..)) => return true,
                 Content::Structure(_) => return false,
                 Content::Alias(_, _, real_var, _) => {
@@ -2386,7 +2388,10 @@ pub enum Content {
         structure: Variable,
         opt_name: Option<SubsIndex<Lowercase>>,
     },
+    /// A resolved set of lambdas. Compatible when functions are kinded as lambda set.
     LambdaSet(LambdaSet),
+    /// A type-erased lambda. Compatible when functions are not kinded.
+    ErasedLambda,
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable, AliasKind),
     RangedNumber(crate::num::NumericRange),
@@ -3614,6 +3619,7 @@ fn occurs(
 
                 occurs_union(subs, root_var, ctx, safe!(UnionLabels<Symbol>, solved))
             }
+            ErasedLambda => Ok(()),
             RangedNumber(_range_vars) => Ok(()),
         })();
 
@@ -3699,7 +3705,8 @@ fn explicit_substitute(
             | FlexAbleVar(_, _)
             | RigidAbleVar(_, _)
             | RecursionVar { .. }
-            | Error => in_var,
+            | Error
+            | ErasedLambda => in_var,
 
             Structure(flat_type) => {
                 match flat_type {
@@ -3880,7 +3887,7 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error | FlexVar(None) | FlexAbleVar(None, _) => taken_names,
+            Error | FlexVar(None) | FlexAbleVar(None, _) | ErasedLambda => taken_names,
 
             FlexVar(Some(name_index)) | FlexAbleVar(Some(name_index), _) => add_name(
                 subs,
@@ -4197,7 +4204,7 @@ fn content_to_err_type(
             ErrorType::Alias(symbol, err_args, Box::new(err_type), kind)
         }
 
-        LambdaSet(self::LambdaSet { .. }) => {
+        LambdaSet(..) | ErasedLambda => {
             // Don't print lambda sets since we don't expect them to be exposed to the user
             ErrorType::Error
         }
@@ -4807,6 +4814,7 @@ impl StorageSubs {
                 unspecialized: Self::offset_uls_slice(offsets, *unspecialized),
                 ambient_function: Self::offset_variable(offsets, *ambient_function_var),
             }),
+            ErasedLambda => ErasedLambda,
             RangedNumber(range) => RangedNumber(*range),
             Error => Content::Error,
         }
@@ -5174,7 +5182,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             copy
         }
 
-        FlexVar(None) | Error => copy,
+        FlexVar(None) | ErasedLambda | Error => copy,
 
         RecursionVar {
             opt_name,
@@ -5409,6 +5417,7 @@ fn is_registered(content: &Content) -> bool {
         | Content::FlexAbleVar(..)
         | Content::RigidAbleVar(..) => false,
         Content::Structure(FlatType::EmptyRecord | FlatType::EmptyTagUnion) => false,
+        Content::ErasedLambda => false,
 
         Content::Structure(_)
         | Content::RecursionVar { .. }
@@ -5806,6 +5815,12 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
+        ErasedLambda => {
+            env.target.set(copy, make_descriptor(ErasedLambda));
+
+            copy
+        }
+
         RangedNumber(range) => {
             let new_content = RangedNumber(range);
 
@@ -5880,7 +5895,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     }
                 })
             }
-            FlexVar(_) | FlexAbleVar(_, _) | Error => (),
+            FlexVar(_) | FlexAbleVar(_, _) | ErasedLambda | Error => (),
 
             RecursionVar { structure, .. } => {
                 stack.push(*structure);
@@ -6067,7 +6082,8 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
             | Content::RecursionVar {
                 structure: _,
                 opt_name: _,
-            } => {}
+            }
+            | Content::ErasedLambda => {}
         }
     }
 
@@ -6092,7 +6108,7 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
             //     are determined as illegal and reported during canonicalization, because you
             //     cannot have a tag union without a non-recursive variant.
             | Content::RecursionVar { .. } => {}
-            Content::LambdaSet(_) => {}
+            Content::LambdaSet(_) | Content::ErasedLambda => {}
             Content::Structure(structure) => match structure {
                 FlatType::Apply(_, args) => stack.extend(subs.get_subs_slice(*args)),
                 FlatType::Func(args, _, ret) => {

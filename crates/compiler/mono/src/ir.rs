@@ -9838,6 +9838,7 @@ pub fn find_lambda_sets_help(
                     stack.extend(subs.variables[subs_slice.indices()].iter());
                 }
             }
+            Content::ErasedLambda => {}
         }
     }
 

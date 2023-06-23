@@ -2356,6 +2356,8 @@ fn adjust_rank_content(
             rank
         }
 
+        ErasedLambda => group_rank,
+
         RangedNumber(_) => group_rank,
     }
 }

@@ -10,6 +10,7 @@ use roc_build::{
     },
 };
 use roc_collections::MutMap;
+use roc_error_macros::todo_lambda_erasure;
 use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, GlueProc, OptLevel};
 use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
@@ -321,6 +322,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.push(*var);
                 }
             }
+            ErasedLambda => todo_lambda_erasure!(),
             &RangedNumber(_) => {}
         }
     }

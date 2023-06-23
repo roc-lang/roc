@@ -523,6 +523,7 @@ impl<'a> RawFunctionLayout<'a> {
             LambdaSet(_) => {
                 internal_error!("lambda set should only appear under a function, where it's handled independently.");
             }
+            ErasedLambda => internal_error!("erased lambda type should only appear under a function, where it's handled independently"),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
 
@@ -2128,7 +2129,8 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
             | Content::RangedNumber(_)
-            | Content::Error => {}
+            | Content::Error
+            | Content::ErasedLambda => {}
         }
     }
     (max_depth_any_ctor, max_depth_only_lset, total)
@@ -2407,6 +2409,9 @@ impl<'a> Layout<'a> {
             }
             LambdaSet(_) => {
                 internal_error!("lambda set should only appear under a function, where it's handled independently.");
+            }
+            ErasedLambda => {
+                internal_error!("erased lambda type should only appear under a function, where it's handled independently.");
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
@@ -4456,7 +4461,7 @@ fn layout_from_num_content<'a>(
         Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
-        Structure(_) | RangedNumber(..) | LambdaSet(_) => {
+        Structure(_) | RangedNumber(..) | LambdaSet(_) | ErasedLambda => {
             panic!("Invalid Num.Num type application: {content:?}");
         }
         Error => Err(LayoutProblem::Erroneous),

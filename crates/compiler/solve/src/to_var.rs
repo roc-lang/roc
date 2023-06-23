@@ -70,7 +70,8 @@ pub(crate) fn either_type_index_to_var(
                     || matches!(
                         types[type_index],
                         TypeTag::EmptyRecord | TypeTag::EmptyTagUnion
-                    )
+                    ),
+                "different variable was returned for type index variable cell!"
             );
             var
         }
@@ -346,29 +347,29 @@ pub(crate) fn type_to_var_help(
                 name,
                 ambient_function,
             } => {
-                let union_lambdas = match env.function_kind {
+                match env.function_kind {
                     FunctionKind::LambdaSet => {
                         let captures = types.get_type_arguments(typ_index);
-                        create_union_lambda(env, rank, arena, types, name, captures, &mut stack)
+                        let union_lambdas = create_union_lambda(
+                            env, rank, arena, types, name, captures, &mut stack,
+                        );
+
+                        let content = Content::LambdaSet(subs::LambdaSet {
+                            solved: union_lambdas,
+                            // We may figure out the lambda set is recursive during solving, but it never
+                            // is to begin with.
+                            recursion_var: OptVariable::NONE,
+                            unspecialized: SubsSlice::default(),
+                            ambient_function,
+                        });
+
+                        env.register_with_known_var(destination, rank, content)
                     }
                     FunctionKind::Erased => {
-                        // NB we cannot use a constant variable for the erased lambda set (yet)
-                        // because we still need to link it to the ambient function. In the future,
-                        // perhaps we could.
-                        UnionLambdas::from_tag_name_index(Subs::LAMBDA_NAME_ERASED_INDEX)
+                        // TODO(erased-lambda): can we merge in with Variable::ERASED_LAMBDA instead?
+                        env.register_with_known_var(destination, rank, Content::ErasedLambda)
                     }
-                };
-
-                let content = Content::LambdaSet(subs::LambdaSet {
-                    solved: union_lambdas,
-                    // We may figure out the lambda set is recursive during solving, but it never
-                    // is to begin with.
-                    recursion_var: OptVariable::NONE,
-                    unspecialized: SubsSlice::default(),
-                    ambient_function,
-                });
-
-                env.register_with_known_var(destination, rank, content)
+                }
             }
             UnspecializedLambdaSet { unspecialized } => {
                 let unspecialized_slice = SubsSlice::extend_new(

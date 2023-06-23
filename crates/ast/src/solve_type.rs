@@ -1489,6 +1489,8 @@ fn adjust_rank_content(
             rank
         }
 
+        ErasedLambda => group_rank,
+
         RangedNumber(_vars) => group_rank,
     }
 }
@@ -1669,6 +1671,7 @@ fn instantiate_rigids_help(
             }
         }
 
+        ErasedLambda => {}
         RangedNumber(_vars) => {}
     }
 
@@ -1977,6 +1980,12 @@ fn deep_copy_var_help(
             });
 
             subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        ErasedLambda => {
+            subs.set(copy, make_descriptor(ErasedLambda));
 
             copy
         }
