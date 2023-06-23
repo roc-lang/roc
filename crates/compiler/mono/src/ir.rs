@@ -5,7 +5,8 @@ use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
     LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche,
-    RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    OpaqueFunctionData, RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout,
+    WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -21,7 +22,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_RUNTIME_ERROR_GEN,
 };
 use roc_derive::SharedDerivedModule;
-use roc_error_macros::{internal_error, todo_abilities};
+use roc_error_macros::{internal_error, todo_abilities, todo_lambda_erasure};
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -3195,6 +3196,19 @@ fn generate_runtime_error_function<'a>(
 
             (args.into_bump_slice(), ret_layout)
         }
+        RawFunctionLayout::ErasedFunction(arg_layouts, closure_data, ret_layout) => {
+            let mut args = Vec::with_capacity_in(arg_layouts.len() + 1, env.arena);
+            for arg in arg_layouts {
+                args.push((*arg, env.unique_symbol()));
+            }
+            if let OpaqueFunctionData::Capturing { .. } = closure_data {
+                // TODO(erased-lambdas) we want a void* here, but is a boxed pointer always
+                // correct?
+                args.push((Layout::OPAQUE_PTR, Symbol::ARG_CLOSURE));
+            }
+
+            (args.into_bump_slice(), ret_layout)
+        }
         RawFunctionLayout::ZeroArgumentThunk(ret_layout) => (&[] as &[_], ret_layout),
     };
 
@@ -3283,6 +3297,9 @@ fn generate_host_exposed_function<'a>(
             );
 
             (function_name, (top_level, proc))
+        }
+        RawFunctionLayout::ErasedFunction(..) => {
+            todo_lambda_erasure!()
         }
         RawFunctionLayout::ZeroArgumentThunk(result) => {
             let assigned = env.unique_symbol();
@@ -3697,6 +3714,9 @@ fn build_specialized_proc_from_var<'a>(
                 ret_layout,
             )
         }
+        RawFunctionLayout::ErasedFunction(..) => {
+            todo_lambda_erasure!()
+        }
         RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
             // a top-level constant 0-argument thunk
             build_specialized_proc(
@@ -3971,6 +3991,7 @@ impl<'a> ProcLayout<'a> {
                     lambda_set.extend_argument_list_for_named(arena, lambda_name, arguments);
                 ProcLayout::new(arena, arguments, lambda_name.niche(), result)
             }
+            RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
             RawFunctionLayout::ZeroArgumentThunk(result) => {
                 ProcLayout::new(arena, &[], Niche::NONE, result)
             }
@@ -4824,6 +4845,7 @@ pub fn with_hole<'a>(
                                 hole,
                             )
                         }
+                        RawFunctionLayout::ErasedFunction(_, _, _) => todo_lambda_erasure!(),
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
                     }
                 }
@@ -4925,6 +4947,7 @@ pub fn with_hole<'a>(
                                 hole,
                             )
                         }
+                        RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
                             internal_error!("should not be a thunk!")
                         }
@@ -5140,6 +5163,7 @@ pub fn with_hole<'a>(
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
+                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                 RawFunctionLayout::Function(_argument_layouts, lambda_set, _ret_layout) => {
                     let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
                     captured_symbols.sort();
@@ -5323,6 +5347,7 @@ pub fn with_hole<'a>(
                                         env.arena.alloc(result),
                                     );
                                 }
+                                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                                     unreachable!("calling a non-closure layout")
                                 }
@@ -5357,6 +5382,7 @@ pub fn with_hole<'a>(
                                         hole,
                                     );
                                 }
+                                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                                     unreachable!("calling a non-closure layout")
                                 }
@@ -5424,6 +5450,7 @@ pub fn with_hole<'a>(
                                         env.arena.alloc(result),
                                     );
                                 }
+                                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                                     unreachable!(
                                         "{:?} cannot be called in the source language",
@@ -5557,6 +5584,7 @@ pub fn with_hole<'a>(
                                 hole,
                             )
                         }
+                        RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
                     }
                 }};
@@ -6478,6 +6506,7 @@ fn tag_union_to_function<'a>(
                         hole,
                     )
                 }
+                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                 RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
             }
         }
@@ -7968,6 +7997,7 @@ fn specialize_symbol<'a>(
                             // data for a lambda set.
                             let layout = match raw {
                                 RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
+                                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                                 RawFunctionLayout::Function(_, lambda_set, _) => layout_cache
                                     .put_in_direct_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
                             };
@@ -8119,6 +8149,7 @@ fn specialize_symbol<'a>(
                         )
                     }
                 }
+                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
                     let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, ret_layout);
@@ -8367,6 +8398,7 @@ fn call_by_name<'a>(
                 )
             }
         }
+        Ok(RawFunctionLayout::ErasedFunction(..)) => todo_lambda_erasure!(),
         Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
             if procs.is_module_thunk(proc_name) {
                 // here we turn a call to a module thunk into  forcing of that thunk
@@ -8852,6 +8884,7 @@ fn call_specialized_proc<'a>(
                 // but now we need to remove it because the `match_on_lambda_set` will add it again
                 build_call(env, call, assigned, lambda_set.full_layout, hole)
             }
+            RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
             RawFunctionLayout::ZeroArgumentThunk(_) => {
                 unreachable!()
             }

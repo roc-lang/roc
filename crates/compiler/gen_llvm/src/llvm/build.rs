@@ -38,6 +38,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet,
@@ -5290,6 +5291,7 @@ fn expose_alias_to_host<'a>(
             )
         }
 
+        RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
         RawFunctionLayout::ZeroArgumentThunk(result) => {
             // Define only the return value size, since this is a thunk
             //

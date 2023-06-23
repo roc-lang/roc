@@ -9,7 +9,7 @@ use morphic_lib::{
     TypeDefBuilder, TypeId, TypeName, UpdateModeVar, ValueId,
 };
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
@@ -201,6 +201,7 @@ where
 
                             host_exposed_functions.push((bytes, hels.proc_layout.arguments));
                         }
+                        RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
                             let bytes = func_name_bytes_help(
                                 hels.symbol,

@@ -1,5 +1,6 @@
 # +set function_kind=erased
-interface Test exposes [main] imports []
+# +emit:mono
+app "test" provides [main] to "./platform"
 
 f = \s ->
   if Bool.true
@@ -8,5 +9,7 @@ f = \s ->
   else \{} -> s
   #    ^^^^^^^^ {}* -[[#Attr.#Erased(33)]]-> Str
 
-main = f ""
-#^^^^{-1} {}w_a -[[#Attr.#Erased(33)]]-> Str
+main = (f "") {}
+#       ^^^^ {} -[[#Attr.#Erased(33)]]-> Str
+
+# -emit:mono

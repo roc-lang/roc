@@ -128,6 +128,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
             &mut fd,
             program,
             inferred_program,
+            compiler_settings,
             can_options,
             mono_options,
             emit_options,
@@ -363,6 +364,7 @@ fn assemble_query_output(
     writer: &mut impl io::Write,
     program: Modules<'_>,
     inferred_program: InferredProgram,
+    compiler_settings: CompilerSettings,
     can_options: CanOptions,
     mono_options: MonoOptions,
     emit_options: EmitOptions,
@@ -411,6 +413,7 @@ fn assemble_query_output(
             test_module,
             other_modules,
             mono_options,
+            compiler_settings,
             can_options.allow_errors,
         )?;
     }

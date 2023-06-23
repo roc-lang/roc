@@ -481,9 +481,24 @@ impl From<LayoutProblem> for RuntimeError {
     }
 }
 
+/// When we do not kind functions, we type-erase functions to opaque pointers.
+/// The erased function definition, however, continues to hold data about how the erased function
+/// behaves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OpaqueFunctionData<'a> {
+    /// This function is not capturing, and needs no extra data regarding closures.
+    Null,
+    /// This function is capturing.
+    Capturing {
+        /// The concrete type of the closure data expected by a call to the function.
+        closure_data_layout: InLayout<'a>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RawFunctionLayout<'a> {
     Function(&'a [InLayout<'a>], LambdaSet<'a>, InLayout<'a>),
+    ErasedFunction(&'a [InLayout<'a>], OpaqueFunctionData<'a>, InLayout<'a>),
     ZeroArgumentThunk(InLayout<'a>),
 }
 
