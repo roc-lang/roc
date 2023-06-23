@@ -355,7 +355,7 @@ pub(crate) fn type_to_var_help(
                         // NB we cannot use a constant variable for the erased lambda set (yet)
                         // because we still need to link it to the ambient function. In the future,
                         // perhaps we could.
-                        UnionLambdas::from_slices(Subs::LAMBDA_NAME_ERASED, SubsSlice::empty())
+                        UnionLambdas::from_tag_name_index(Subs::LAMBDA_NAME_ERASED_INDEX)
                     }
                 };
 

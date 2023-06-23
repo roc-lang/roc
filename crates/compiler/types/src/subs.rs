@@ -1724,6 +1724,7 @@ impl Subs {
     pub const AB_EQ: SubsSlice<Symbol>              = SubsSlice::new(4, 1);
     #[rustfmt::skip]
     pub const LAMBDA_NAME_ERASED: SubsSlice<Symbol> = SubsSlice::new(5, 1);
+    pub const LAMBDA_NAME_ERASED_INDEX: SubsIndex<Symbol> = SubsIndex::new(5);
     // END INIT-SymbolSubsSlice
 
     pub fn new() -> Self {

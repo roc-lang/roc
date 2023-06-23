@@ -1926,7 +1926,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
             env,
             ctx,
             Content::LambdaSet(LambdaSet {
-                solved: UnionLabels::from_slices(Subs::LAMBDA_NAME_ERASED, SubsSlice::empty()),
+                solved: UnionLabels::from_tag_name_index(Subs::LAMBDA_NAME_ERASED_INDEX),
                 recursion_var: OptVariable::NONE,
                 unspecialized: SubsSlice::empty(),
                 ambient_function: ambient_function_var,
