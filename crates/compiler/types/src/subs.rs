@@ -587,15 +587,19 @@ impl<T> Clone for SubsSlice<T> {
 
 impl<T> Default for SubsSlice<T> {
     fn default() -> Self {
-        Self {
-            start: Default::default(),
-            length: Default::default(),
-            _marker: Default::default(),
-        }
+        Self::empty()
     }
 }
 
 impl<T> SubsSlice<T> {
+    pub fn empty() -> Self {
+        Self {
+            start: 0,
+            length: 0,
+            _marker: Default::default(),
+        }
+    }
+
     pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
         &slice[self.indices()]
     }
@@ -1694,25 +1698,33 @@ pub struct SubsSnapshot {
 }
 
 impl Subs {
+    // IFTTT INIT-TagNames
     pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
     pub const TAG_NAME_ERR: SubsIndex<TagName> = SubsIndex::new(0);
     pub const TAG_NAME_OK: SubsIndex<TagName> = SubsIndex::new(1);
     pub const TAG_NAME_INVALID_NUM_STR: SubsIndex<TagName> = SubsIndex::new(2);
     pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = SubsIndex::new(3);
     pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = SubsIndex::new(4);
+    // END INIT-TagNames
 
+    // IFTTT INIT-VariableSubsSlice
     pub const STR_SLICE: VariableSubsSlice = SubsSlice::new(0, 1);
+    // END INIT-VariableSubsSlice
 
+    // IFTTT INIT-SymbolSubsSlice
     #[rustfmt::skip]
-    pub const AB_ENCODING: SubsSlice<Symbol> = SubsSlice::new(0, 1);
+    pub const AB_ENCODING: SubsSlice<Symbol>        = SubsSlice::new(0, 1);
     #[rustfmt::skip]
-    pub const AB_DECODING: SubsSlice<Symbol> = SubsSlice::new(1, 1);
+    pub const AB_DECODING: SubsSlice<Symbol>        = SubsSlice::new(1, 1);
     #[rustfmt::skip]
-    pub const AB_HASHER: SubsSlice<Symbol>   = SubsSlice::new(2, 1);
+    pub const AB_HASHER: SubsSlice<Symbol>          = SubsSlice::new(2, 1);
     #[rustfmt::skip]
-    pub const AB_HASH: SubsSlice<Symbol>     = SubsSlice::new(3, 1);
+    pub const AB_HASH: SubsSlice<Symbol>            = SubsSlice::new(3, 1);
     #[rustfmt::skip]
-    pub const AB_EQ: SubsSlice<Symbol>       = SubsSlice::new(4, 1);
+    pub const AB_EQ: SubsSlice<Symbol>              = SubsSlice::new(4, 1);
+    #[rustfmt::skip]
+    pub const LAMBDA_NAME_ERASED: SubsSlice<Symbol> = SubsSlice::new(5, 1);
+    // END INIT-SymbolSubsSlice
 
     pub fn new() -> Self {
         Self::with_capacity(0)
@@ -1723,13 +1735,16 @@ impl Subs {
 
         let mut tag_names = Vec::with_capacity(32);
 
+        // IFTTT INIT-TagNames
         tag_names.push(TagName("Err".into()));
         tag_names.push(TagName("Ok".into()));
 
         tag_names.push(TagName("InvalidNumStr".into()));
         tag_names.push(TagName("BadUtf8".into()));
         tag_names.push(TagName("OutOfBounds".into()));
+        // END INIT-TagNames
 
+        // IFTTT INIT-SymbolNames
         let mut symbol_names = Vec::with_capacity(32);
 
         symbol_names.push(Symbol::ENCODE_ENCODING);
@@ -1737,13 +1752,16 @@ impl Subs {
         symbol_names.push(Symbol::HASH_HASHER);
         symbol_names.push(Symbol::HASH_HASH_ABILITY);
         symbol_names.push(Symbol::BOOL_EQ);
+        symbol_names.push(Symbol::ERASED_LAMBDA);
+        // END INIT-SymbolNames
+
+        // IFTTT INIT-VariableSubsSlice
+        let variables = vec![Variable::STR];
+        // END INIT-VariableSubsSlice
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
-            variables: vec![
-                // Used for STR_SLICE
-                Variable::STR,
-            ],
+            variables,
             tag_names,
             symbol_names,
             field_names: Vec::new(),

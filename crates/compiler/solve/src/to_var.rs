@@ -23,7 +23,7 @@ use crate::{
     ability::{AbilityImplError, ObligationCache},
     deep_copy::deep_copy_var_in,
     env::InferenceEnv,
-    Aliases,
+    Aliases, FunctionKind,
 };
 
 std::thread_local! {
@@ -346,9 +346,18 @@ pub(crate) fn type_to_var_help(
                 name,
                 ambient_function,
             } => {
-                let captures = types.get_type_arguments(typ_index);
-                let union_lambdas =
-                    create_union_lambda(env, rank, arena, types, name, captures, &mut stack);
+                let union_lambdas = match env.function_kind {
+                    FunctionKind::LambdaSet => {
+                        let captures = types.get_type_arguments(typ_index);
+                        create_union_lambda(env, rank, arena, types, name, captures, &mut stack)
+                    }
+                    FunctionKind::Erased => {
+                        // NB we cannot use a constant variable for the erased lambda set (yet)
+                        // because we still need to link it to the ambient function. In the future,
+                        // perhaps we could.
+                        UnionLambdas::from_slices(Subs::LAMBDA_NAME_ERASED, SubsSlice::empty())
+                    }
+                };
 
                 let content = Content::LambdaSet(subs::LambdaSet {
                     solved: union_lambdas,
