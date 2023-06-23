@@ -11,6 +11,7 @@ use libtest_mimic::{run, Arguments, Failed, Trial};
 use mono::MonoOptions;
 use regex::Regex;
 use roc_collections::VecMap;
+use roc_solve::FunctionKind;
 use test_solve_helpers::{
     infer_queries, Elaboration, InferOptions, InferredProgram, InferredQuery, MUTLILINE_MARKER,
 };
@@ -35,6 +36,10 @@ lazy_static! {
         .join("compiler")
         .join("uitest")
         .join("tests");
+
+    /// # +set <setting>
+    static ref RE_SETTING: Regex =
+        Regex::new(r#"# \+set (?P<setting>.*?)=(?P<value>.*)"#).unwrap();
 
     /// # +opt can:<opt>
     static ref RE_OPT_CAN: Regex =
@@ -94,6 +99,7 @@ fn into_test(path: PathBuf) -> io::Result<Trial> {
 fn run_test(path: PathBuf) -> Result<(), Failed> {
     let data = std::fs::read_to_string(&path)?;
     let TestCase {
+        compiler_settings,
         can_options,
         infer_options,
         emit_options,
@@ -109,6 +115,7 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
             .map(|(md, src)| (&**md, &**src)),
         infer_options,
         can_options.allow_errors,
+        compiler_settings.function_kind,
     )?;
 
     {
@@ -141,11 +148,24 @@ struct Modules<'a> {
 }
 
 struct TestCase<'a> {
+    compiler_settings: CompilerSettings,
     can_options: CanOptions,
     infer_options: InferOptions,
     mono_options: MonoOptions,
     emit_options: EmitOptions,
     program: Modules<'a>,
+}
+
+struct CompilerSettings {
+    function_kind: FunctionKind,
+}
+
+impl Default for CompilerSettings {
+    fn default() -> Self {
+        Self {
+            function_kind: FunctionKind::LambdaSet,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -166,6 +186,7 @@ impl<'a> TestCase<'a> {
             data = data[..drop_at].trim_end();
         }
 
+        let compiler_settings = Self::parse_compiler_settings(data)?;
         let can_options = Self::parse_can_options(data)?;
         let infer_options = Self::parse_infer_options(data)?;
         let mono_options = Self::parse_mono_options(data)?;
@@ -174,6 +195,7 @@ impl<'a> TestCase<'a> {
         let program = Self::parse_modules(data);
 
         Ok(TestCase {
+            compiler_settings,
             can_options,
             infer_options,
             mono_options,
@@ -227,6 +249,26 @@ impl<'a> TestCase<'a> {
             other_modules,
             test_module,
         }
+    }
+
+    fn parse_compiler_settings(data: &str) -> Result<CompilerSettings, Failed> {
+        let mut settings = CompilerSettings::default();
+
+        let found_settings = RE_SETTING.captures_iter(data);
+        for set in found_settings {
+            let setting = set.name("setting").unwrap().as_str();
+            let value = set.name("value").unwrap().as_str();
+            match setting.trim() {
+                "function_kind" => match value.trim() {
+                    "lambda_set" => settings.function_kind = FunctionKind::LambdaSet,
+                    "erased" => settings.function_kind = FunctionKind::Erased,
+                    other => return Err(format!("unknown function kind: {other:?}").into()),
+                },
+                other => return Err(format!("unknown compiler setting: {other:?}").into()),
+            }
+        }
+
+        Ok(settings)
     }
 
     fn parse_can_options(data: &str) -> Result<CanOptions, Failed> {

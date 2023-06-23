@@ -16,7 +16,7 @@ use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Loc;
 use roc_solve::module::SolveConfig;
-use roc_solve::{solve, Aliases};
+use roc_solve::{solve, Aliases, FunctionKind};
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Types;
@@ -49,6 +49,7 @@ pub fn infer_expr(
         pending_derives,
         exposed_by_module: &Default::default(),
         derived_module,
+        function_kind: FunctionKind::LambdaSet,
     };
 
     let (solved, _) = solve::run(config, problems, subs, aliases, abilities_store);

@@ -429,6 +429,7 @@ fn check_derived_typechecks_and_golden(
         constraints: &constraints,
         root_constraint: constr,
         types,
+        function_kind: FunctionKind::LambdaSet,
         pending_derives: Default::default(),
         exposed_by_module: &exposed_for_module.exposed_by_module,
         derived_module: Default::default(),
