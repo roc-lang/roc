@@ -1,6 +1,6 @@
 use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, Expr, IntValue, Output};
+use crate::expr::{canonicalize_expr, Expr, IntValue, Output, Refinements};
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound, NumBound,
     ParsedNumResult,
@@ -311,6 +311,7 @@ pub fn canonicalize_def_header_pattern<'a>(
             pattern,
             region,
             PermitShadows(false),
+            None,
         ),
     }
 }
@@ -368,6 +369,7 @@ pub fn canonicalize_pattern<'a>(
     pattern: &ast::Pattern<'a>,
     region: Region,
     permit_shadows: PermitShadows,
+    mut refinements: Option<&mut Refinements>,
 ) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
@@ -375,7 +377,12 @@ pub fn canonicalize_pattern<'a>(
     let can_pattern = match pattern {
         Identifier(name) => {
             match canonicalize_pattern_symbol(env, scope, output, region, permit_shadows, name) {
-                Ok(symbol) => Pattern::Identifier(symbol),
+                Ok(symbol) => {
+                    if let Some(refinements) = refinements {
+                        refinements.insert(symbol, var_store.fresh(), var_store.fresh());
+                    }
+                    Pattern::Identifier(symbol)
+                }
                 Err(pattern) => pattern,
             }
         }
@@ -414,6 +421,7 @@ pub fn canonicalize_pattern<'a>(
                     &loc_pattern.value,
                     loc_pattern.region,
                     permit_shadows,
+                    refinements.as_deref_mut(),
                 );
 
                 can_patterns.push((var_store.fresh(), can_pattern));
@@ -583,6 +591,7 @@ pub fn canonicalize_pattern<'a>(
                 sub_pattern,
                 region,
                 permit_shadows,
+                refinements,
             )
         }
 
@@ -601,6 +610,7 @@ pub fn canonicalize_pattern<'a>(
                     &loc_pattern.value,
                     loc_pattern.region,
                     permit_shadows,
+                    refinements.as_deref_mut(),
                 );
 
                 destructs.push(Loc {
@@ -676,6 +686,7 @@ pub fn canonicalize_pattern<'a>(
                             &loc_guard.value,
                             loc_guard.region,
                             permit_shadows,
+                            refinements.as_deref_mut(),
                         );
 
                         destructs.push(Loc {
@@ -819,6 +830,7 @@ pub fn canonicalize_pattern<'a>(
                             pattern,
                             loc_pattern.region,
                             permit_shadows,
+                            refinements.as_deref_mut(),
                         );
                         can_pats.push(pat);
                     }
@@ -844,6 +856,7 @@ pub fn canonicalize_pattern<'a>(
         }
 
         As(loc_pattern, pattern_as) => {
+            // TODO: expand `as`
             let can_subpattern = canonicalize_pattern(
                 env,
                 var_store,
@@ -853,6 +866,7 @@ pub fn canonicalize_pattern<'a>(
                 &loc_pattern.value,
                 loc_pattern.region,
                 permit_shadows,
+                refinements,
             );
 
             match canonicalize_pattern_symbol(

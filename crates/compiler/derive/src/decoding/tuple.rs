@@ -1,5 +1,6 @@
 use roc_can::expr::{
-    AnnotatedMark, ClosureData, Expr, Field, IntValue, Recursive, WhenBranch, WhenBranchPattern,
+    AnnotatedMark, ClosureData, Expr, Field, IntValue, Recursive, Refinements, WhenBranch,
+    WhenBranchPattern,
 };
 use roc_can::num::{IntBound, IntLitWidth};
 use roc_can::pattern::Pattern;
@@ -384,6 +385,7 @@ fn step_elem(
                                 value: Loc::at_zero(ok_branch_expr),
                                 guard: None,
                                 redundant: RedundantMark::known_non_redundant(),
+                                refinements: Refinements::default(),
                             },
                             // Err err -> Err err
                             WhenBranch {
@@ -410,6 +412,7 @@ fn step_elem(
                                 }),
                                 guard: None,
                                 redundant: RedundantMark::known_non_redundant(),
+                                refinements: Refinements::default(),
                             },
                         ];
 
@@ -482,6 +485,7 @@ fn step_elem(
                     value: Loc::at_zero(branch_body),
                     guard: None,
                     redundant: RedundantMark::known_non_redundant(),
+                    refinements: Refinements::default(),
                 };
 
                 let condition_expr = Expr::Call(
@@ -650,6 +654,7 @@ fn step_elem(
                 value: Loc::at_zero(keep),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),
+                refinements: Refinements::default(),
             }
         };
 
@@ -670,6 +675,7 @@ fn step_elem(
         }),
         guard: None,
         redundant: RedundantMark::known_non_redundant(),
+        refinements: Refinements::default(),
     };
 
     branches.push(default_branch);
@@ -837,6 +843,7 @@ fn finalizer(
             value: Loc::at_zero(body),
             guard: None,
             redundant: RedundantMark::known_non_redundant(),
+            refinements: Refinements::default(),
         };
 
         // Example: `_ -> Err TooShort`
@@ -861,6 +868,7 @@ fn finalizer(
             }),
             guard: None,
             redundant: RedundantMark::known_non_redundant(),
+            refinements: Refinements::default(),
         };
 
         body = Expr::When {

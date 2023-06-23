@@ -1,6 +1,8 @@
 use crate::annotation::IntroducedVariables;
 use crate::def::Def;
-use crate::expr::{AnnotatedMark, ClosureData, Declarations, Expr, Recursive, WhenBranchPattern};
+use crate::expr::{
+    AnnotatedMark, ClosureData, Declarations, Expr, Recursive, Refinements, WhenBranchPattern,
+};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecMap, VecSet};
@@ -499,6 +501,7 @@ fn build_effect_after(
             value: Loc::at_zero(force_inner_thunk_call),
             patterns: vec![pattern],
             redundant: RedundantMark::new(var_store),
+            refinements: Refinements::default(),
         }];
 
         Expr::When {
@@ -1297,6 +1300,7 @@ fn build_effect_loop_inner_body(
             value: Loc::at_zero(force_thunk2),
             guard: None,
             redundant: RedundantMark::new(var_store),
+            refinements: Refinements::default(),
         }
     };
 
@@ -1313,6 +1317,7 @@ fn build_effect_loop_inner_body(
             value: Loc::at_zero(Expr::Var(done_symbol, var_store.fresh())),
             guard: None,
             redundant: RedundantMark::new(var_store),
+            refinements: Refinements::default(),
         }
     };
 
