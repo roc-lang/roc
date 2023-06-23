@@ -1862,6 +1862,28 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     ))
 }
 
+fn is_erased_lambda(subs: &Subs, lambda_set: UnionLambdas) -> bool {
+    let labels = lambda_set.labels();
+    if labels.start == Subs::LAMBDA_NAME_ERASED.start
+        && labels.len() == Subs::LAMBDA_NAME_ERASED.len()
+    {
+        return true;
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        let content_has_erased = lambda_set
+            .iter_all()
+            .any(|(lambda, _)| subs[lambda] == Symbol::ERASED_LAMBDA);
+        assert!(
+            !content_has_erased,
+            "lambda set contains erased lambda, but it is not marked as erased!"
+        );
+    }
+
+    false
+}
+
 #[must_use]
 fn unify_lambda_set_help<M: MetaCollector>(
     env: &mut Env,
@@ -1897,6 +1919,20 @@ fn unify_lambda_set_help<M: MetaCollector>(
             .all(|v| is_recursion_var(env.subs, v)),
         "Recursion var is present, but it doesn't have a recursive content!"
     );
+
+    // Fast path: if either set is the erased lambda, they are both erased.
+    if is_erased_lambda(env.subs, solved1) || is_erased_lambda(env.subs, solved2) {
+        return merge(
+            env,
+            ctx,
+            Content::LambdaSet(LambdaSet {
+                solved: UnionLabels::from_slices(Subs::LAMBDA_NAME_ERASED, SubsSlice::empty()),
+                recursion_var: OptVariable::NONE,
+                unspecialized: SubsSlice::empty(),
+                ambient_function: ambient_function_var,
+            }),
+        );
+    }
 
     let (
         mut whole_outcome,
