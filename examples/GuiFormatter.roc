@@ -21,6 +21,7 @@ GuiFormatter := { nodes : List Elem }
          Formatter {
              init: init,
              list: list,
+             set: set,
              dict: dict,
              tag: tag,
              tuple: tuple,
@@ -47,17 +48,49 @@ GuiFormatter := { nodes : List Elem }
 init : {} -> GuiFormatter
 init = \{} -> @GuiFormatter { nodes: [] }
 
-list : List elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
-list = \content, toInspector ->
+list : list, Inspect.ElemWalkFn GuiFormatter list elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
+list = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     # Use a temporary buffer for the children nodes
     (@GuiFormatter { nodes }) =
         init {}
         |> \f1 ->
-            f2, elem <- List.walk content f1
+            f2, elem <- walkFn content f1
             elem
             |> toInspector
             |> Inspect.apply f2
+
+    addNode f0 (Col nodes)
+
+set : set, Inspect.ElemWalkFn GuiFormatter set elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
+set = \content, walkFn, toInspector ->
+    f0 <- Inspect.custom
+    # Use a temporary buffer for the children nodes
+    (@GuiFormatter { nodes }) =
+        init {}
+        |> \f1 ->
+            f2, elem <- walkFn content f1
+            elem
+            |> toInspector
+            |> Inspect.apply f2
+
+    addNode f0 (Col nodes)
+
+dict : dict, Inspect.KeyValWalkFn GuiFormatter dict key value, (key -> Inspector GuiFormatter), (value -> Inspector GuiFormatter) -> Inspector GuiFormatter
+dict = \d, walkFn, keyToInspector, valueToInspector ->
+    f0 <- Inspect.custom
+    # Use a temporary buffer for the children nodes
+    (@GuiFormatter { nodes }) =
+        init {}
+        |> \f1 ->
+            f2, key, value <- walkFn d f1
+            (@GuiFormatter { nodes: innerNodes }) =
+                init {}
+                |> \x -> Inspect.apply (keyToInspector key) x
+                |> addNode (Text ":")
+                |> \x -> Inspect.apply (valueToInspector value) x
+
+            addNode f2 (Row innerNodes)
 
     addNode f0 (Col nodes)
 
@@ -99,24 +132,6 @@ record = \fields ->
                 |> addNode (Text key)
                 |> addNode (Text ":")
                 |> \x -> Inspect.apply value x
-
-            addNode f2 (Row innerNodes)
-
-    addNode f0 (Col nodes)
-
-dict : dict, Inspect.DictWalkFn GuiFormatter dict key value, (key -> Inspector GuiFormatter), (value -> Inspector GuiFormatter) -> Inspector GuiFormatter
-dict = \d, walkFn, keyToInspector, valueToInspector ->
-    f0 <- Inspect.custom
-    # Use a temporary buffer for the children nodes
-    (@GuiFormatter { nodes }) =
-        init {}
-        |> \f1 ->
-            f2, key, value <- walkFn d f1
-            (@GuiFormatter { nodes: innerNodes }) =
-                init {}
-                |> \x -> Inspect.apply (keyToInspector key) x
-                |> addNode (Text ":")
-                |> \x -> Inspect.apply (valueToInspector value) x
 
             addNode f2 (Row innerNodes)
 

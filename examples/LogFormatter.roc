@@ -15,6 +15,7 @@ LogFormatter := { bytes : List U8 }
          Formatter {
              init: init,
              list: list,
+             set: set,
              dict: dict,
              tag: tag,
              tuple: tuple,
@@ -41,12 +42,12 @@ LogFormatter := { bytes : List U8 }
 init : {} -> LogFormatter
 init = \{} -> @LogFormatter { bytes: [] }
 
-list : List elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
-list = \content, toInspector ->
+list : list, Inspect.ElemWalkFn (LogFormatter, Bool) list elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
+list = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     write f0 (Str.toUtf8 "[")
     |> \f1 ->
-        (f2, prependSep), elem <- List.walk content (f1, Bool.false)
+        (f2, prependSep), elem <- walkFn content (f1, Bool.false)
         f3 =
             if prependSep then
                 write f2 (Str.toUtf8 ", ")
@@ -59,6 +60,44 @@ list = \content, toInspector ->
         |> \f4 -> (f4, Bool.true)
     |> .0
     |> write (Str.toUtf8 "]")
+
+set : set, Inspect.ElemWalkFn (LogFormatter, Bool) set elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
+set = \content, walkFn, toInspector ->
+    f0 <- Inspect.custom
+    write f0 (Str.toUtf8 "{")
+    |> \f1 ->
+        (f2, prependSep), elem <- walkFn content (f1, Bool.false)
+        f3 =
+            if prependSep then
+                write f2 (Str.toUtf8 ", ")
+            else
+                f2
+
+        elem
+        |> toInspector
+        |> Inspect.apply f3
+        |> \f4 -> (f4, Bool.true)
+    |> .0
+    |> write (Str.toUtf8 "}")
+
+dict : dict, Inspect.KeyValWalkFn (LogFormatter, Bool) dict key value, (key -> Inspector LogFormatter), (value -> Inspector LogFormatter) -> Inspector LogFormatter
+dict = \d, walkFn, keyToInspector, valueToInspector ->
+    f0 <- Inspect.custom
+    write f0 (Str.toUtf8 "{")
+    |> \f1 ->
+        (f2, prependSep), key, value <- walkFn d (f1, Bool.false)
+        f3 =
+            if prependSep then
+                write f2 (Str.toUtf8 ", ")
+            else
+                f2
+
+        Inspect.apply (keyToInspector key) f3
+        |> write (Str.toUtf8 ": ")
+        |> \x -> Inspect.apply (valueToInspector value) x
+        |> \f4 -> (f4, Bool.true)
+    |> .0
+    |> write (Str.toUtf8 "}")
 
 tag : Str, List (Inspector LogFormatter) -> Inspector LogFormatter
 tag = \name, fields ->
@@ -107,25 +146,6 @@ record = \fields ->
         write f3 (Str.toUtf8 key)
         |> write (Str.toUtf8 ": ")
         |> \x -> Inspect.apply value x
-        |> \f4 -> (f4, Bool.true)
-    |> .0
-    |> write (Str.toUtf8 "}")
-
-dict : dict, Inspect.DictWalkFn (LogFormatter, Bool) dict key value, (key -> Inspector LogFormatter), (value -> Inspector LogFormatter) -> Inspector LogFormatter
-dict = \d, walkFn, keyToInspector, valueToInspector ->
-    f0 <- Inspect.custom
-    write f0 (Str.toUtf8 "{")
-    |> \f1 ->
-        (f2, prependSep), key, value <- walkFn d (f1, Bool.false)
-        f3 =
-            if prependSep then
-                write f2 (Str.toUtf8 ", ")
-            else
-                f2
-
-        Inspect.apply (keyToInspector key) f3
-        |> write (Str.toUtf8 ": ")
-        |> \x -> Inspect.apply (valueToInspector value) x
         |> \f4 -> (f4, Bool.true)
     |> .0
     |> write (Str.toUtf8 "}")

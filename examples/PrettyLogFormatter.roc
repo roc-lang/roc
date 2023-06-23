@@ -15,6 +15,7 @@ PrettyLogFormatter := { bytes : List U8, indents : List U8 }
          Formatter {
              init: init,
              list: list,
+             set: set,
              dict: dict,
              tag: tag,
              tuple: tuple,
@@ -41,13 +42,13 @@ PrettyLogFormatter := { bytes : List U8, indents : List U8 }
 init : {} -> PrettyLogFormatter
 init = \{} -> @PrettyLogFormatter { bytes: [], indents: [] }
 
-list : List elem, (elem -> Inspector PrettyLogFormatter) -> Inspector PrettyLogFormatter
-list = \content, toInspector ->
+list : list, Inspect.ElemWalkFn (PrettyLogFormatter, Bool) list elem, (elem -> Inspector PrettyLogFormatter) -> Inspector PrettyLogFormatter
+list = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     write f0 (Str.toUtf8 "[\n")
     |> indent
     |> \f1 ->
-        (f2, prependSep), elem <- List.walk content (f1, Bool.false)
+        (f2, prependSep), elem <- walkFn content (f1, Bool.false)
         f3 =
             if prependSep then
                 write f2 (Str.toUtf8 ",\n")
@@ -64,6 +65,54 @@ list = \content, toInspector ->
     |> outdent
     |> writeIndent
     |> write (Str.toUtf8 "]")
+
+set : set, Inspect.ElemWalkFn (PrettyLogFormatter, Bool) set elem, (elem -> Inspector PrettyLogFormatter) -> Inspector PrettyLogFormatter
+set = \content, walkFn, toInspector ->
+    f0 <- Inspect.custom
+    write f0 (Str.toUtf8 "{\n")
+    |> indent
+    |> \f1 ->
+        (f2, prependSep), elem <- walkFn content (f1, Bool.false)
+        f3 =
+            if prependSep then
+                write f2 (Str.toUtf8 ",\n")
+            else
+                f2
+
+        elemInspector = toInspector elem
+        f3
+        |> writeIndent
+        |> \x -> Inspect.apply elemInspector x
+        |> \f4 -> (f4, Bool.true)
+    |> .0
+    |> write (Str.toUtf8 "\n")
+    |> outdent
+    |> writeIndent
+    |> write (Str.toUtf8 "}")
+
+dict : dict, Inspect.KeyValWalkFn (PrettyLogFormatter, Bool) dict key value, (key -> Inspector PrettyLogFormatter), (value -> Inspector PrettyLogFormatter) -> Inspector PrettyLogFormatter
+dict = \d, walkFn, keyToInspector, valueToInspector ->
+    f0 <- Inspect.custom
+    write f0 (Str.toUtf8 "{\n")
+    |> indent
+    |> \f1 ->
+        (f2, prependSep), key, value <- walkFn d (f1, Bool.false)
+        f3 =
+            if prependSep then
+                write f2 (Str.toUtf8 ",\n")
+            else
+                f2
+
+        writeIndent f3
+        |> \x -> Inspect.apply (keyToInspector key) x
+        |> write (Str.toUtf8 ": ")
+        |> \x -> Inspect.apply (valueToInspector value) x
+        |> \f4 -> (f4, Bool.true)
+    |> .0
+    |> write (Str.toUtf8 "\n")
+    |> outdent
+    |> writeIndent
+    |> write (Str.toUtf8 "}")
 
 tag : Str, List (Inspector PrettyLogFormatter) -> Inspector PrettyLogFormatter
 tag = \name, fields ->
@@ -121,30 +170,6 @@ record = \fields ->
         |> write (Str.toUtf8 key)
         |> write (Str.toUtf8 ": ")
         |> \x -> Inspect.apply value x
-        |> \f4 -> (f4, Bool.true)
-    |> .0
-    |> write (Str.toUtf8 "\n")
-    |> outdent
-    |> writeIndent
-    |> write (Str.toUtf8 "}")
-
-dict : dict, Inspect.DictWalkFn (PrettyLogFormatter, Bool) dict key value, (key -> Inspector PrettyLogFormatter), (value -> Inspector PrettyLogFormatter) -> Inspector PrettyLogFormatter
-dict = \d, walkFn, keyToInspector, valueToInspector ->
-    f0 <- Inspect.custom
-    write f0 (Str.toUtf8 "{\n")
-    |> indent
-    |> \f1 ->
-        (f2, prependSep), key, value <- walkFn d (f1, Bool.false)
-        f3 =
-            if prependSep then
-                write f2 (Str.toUtf8 ",\n")
-            else
-                f2
-
-        writeIndent f3
-        |> \x -> Inspect.apply (keyToInspector key) x
-        |> write (Str.toUtf8 ": ")
-        |> \x -> Inspect.apply (valueToInspector value) x
         |> \f4 -> (f4, Bool.true)
     |> .0
     |> write (Str.toUtf8 "\n")

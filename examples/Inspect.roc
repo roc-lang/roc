@@ -3,6 +3,7 @@ interface Inspect
         Formatter,
         init,
         list,
+        set,
         dict,
         tag,
         tuple,
@@ -28,26 +29,28 @@ interface Inspect
         Inspect,
         inspect,
         toInspector,
-        DictWalkFn,
+        KeyValWalkFn,
+        ElemWalkFn,
     ]
     imports []
 
-DictWalkFn state dict key value : dict, state, (state, key, value -> state) -> state
+KeyValWalkFn state container key value : container, state, (state, key, value -> state) -> state
+ElemWalkFn state container elem : container, state, (state, elem -> state) -> state
 
 Formatter has
     init : {} -> f | f has Formatter
 
-    list : List elem, (elem -> Inspector f) -> Inspector f | f has Formatter
     tag : Str, List (Inspector f) -> Inspector f | f has Formatter
     tuple : List (Inspector f) -> Inspector f | f has Formatter
     record : List { key : Str, value : Inspector f } -> Inspector f | f has Formatter
     bool : Bool -> Inspector f | f has Formatter
     str : Str -> Inspector f | f has Formatter
 
-    # I am not yet sold on this function. Is there a better api.
-    # Specifying the walk function makes this feel very verbose.
-    # This is needed to make dicts special so that can print like giant records instead of lists of tuples.
-    dict : dict, DictWalkFn state dict key value, (key -> Inspector f), (value -> Inspector f) -> Inspector f | f has Formatter
+    # TODO: is there a clear/better way to make the following apis.
+    # Including the walk fn just makes this look verbose.
+    list : list, ElemWalkFn state list elem, (elem -> Inspector f) -> Inspector f | f has Formatter
+    set : set, ElemWalkFn state set elem, (elem -> Inspector f) -> Inspector f | f has Formatter
+    dict : dict, KeyValWalkFn state dict key value, (key -> Inspector f), (value -> Inspector f) -> Inspector f | f has Formatter
 
     u8 : U8 -> Inspector f | f has Formatter
     i8 : I8 -> Inspector f | f has Formatter
