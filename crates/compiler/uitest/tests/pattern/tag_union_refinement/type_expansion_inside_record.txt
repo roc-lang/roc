@@ -1,0 +1,9 @@
+app "test" provides [expandError] to "./platform"
+
+expandError : { type: [Io], message: Str } -> { type: [Io, Net], message: Str }
+expandError = \e ->
+#^^^^^^^^^^^{-1} { message : Str, type : [Io] } -[[expandError(0)]]-> { message : Str, type : [Io, Net]* }
+    when e is
+    #    ^ { message : Str, type : [Io] }
+        { type, message } -> { type, message }
+    #                          ^^^^ [Io, Net]*

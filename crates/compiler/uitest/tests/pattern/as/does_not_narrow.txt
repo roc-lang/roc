@@ -9,6 +9,6 @@ drop = \_ -> {}
 main = when input is
     #       ^^^^^ [A Str, B Str]
     A _ as a -> drop a
-    #                ^ [A Str, B Str]
+    #                ^ [A Str, B Str]w_a
     B _ as b -> drop b
-    #                ^ [A Str, B Str]
+    #                ^ [A Str, B Str]w_a

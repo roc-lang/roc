@@ -5,6 +5,9 @@ extern crate indoc;
 
 extern crate bumpalo;
 
+// NOTE: New solving tests should go in crates/compiler/uitest, not here.
+// (https://github.com/roc-lang/roc/pull/5559#discussion_r1232947635)
+
 #[cfg(test)]
 mod solve_expr {
     use roc_load::LoadedModule;
