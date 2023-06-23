@@ -456,6 +456,7 @@ pub fn walk_when_branch<V: Visitor>(
         value,
         guard,
         redundant: _,
+        refinements: _,
     } = branch;
 
     patterns.iter().for_each(|pat| {

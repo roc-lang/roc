@@ -572,9 +572,21 @@ pub struct WhenBranchPattern {
     pub degenerate: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct Refinements(VecMap<Symbol, (Variable, Variable)>);
+
+impl Refinements {
+    #[inline]
+    pub fn insert(&mut self, symbol: Symbol, unrefined_var: Variable, refined_var: Variable) {
+        self.0
+            .get_or_insert(symbol, || (unrefined_var, refined_var));
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WhenBranch {
     pub patterns: Vec<WhenBranchPattern>,
+    pub refinements: Refinements,
     pub value: Loc<Expr>,
     pub guard: Option<Loc<Expr>>,
     /// Whether this branch is redundant in the `when` it appears in
@@ -1472,6 +1484,7 @@ fn canonicalize_closure_body<'a>(
             &loc_pattern.value,
             loc_pattern.region,
             PermitShadows(false),
+            None,
         );
 
         can_args.push((
@@ -1631,6 +1644,7 @@ fn canonicalize_when_branch<'a>(
     let mut patterns = Vec::with_capacity(branch.patterns.len());
     let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
 
+    let mut refinements = Refinements::default();
     for (i, loc_pattern) in branch.patterns.iter().enumerate() {
         let permit_shadows = PermitShadows(i > 0); // patterns can shadow symbols defined in the first pattern.
 
@@ -1643,6 +1657,7 @@ fn canonicalize_when_branch<'a>(
             &loc_pattern.value,
             loc_pattern.region,
             permit_shadows,
+            Some(&mut refinements),
         );
 
         multi_pattern_variables.add_pattern(&can_pattern);
@@ -1719,6 +1734,7 @@ fn canonicalize_when_branch<'a>(
             value,
             guard,
             redundant: RedundantMark::new(var_store),
+            refinements,
         },
         references,
     )
@@ -1982,6 +1998,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                     value,
                     guard,
                     redundant: RedundantMark::new(var_store),
+                    refinements: branch.refinements,
                 };
 
                 new_branches.push(new_branch);

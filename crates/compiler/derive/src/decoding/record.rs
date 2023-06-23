@@ -1,5 +1,5 @@
 use roc_can::expr::{
-    AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch, WhenBranchPattern,
+    AnnotatedMark, ClosureData, Expr, Field, Recursive, Refinements, WhenBranch, WhenBranchPattern,
 };
 
 use roc_can::pattern::Pattern;
@@ -288,6 +288,7 @@ pub(super) fn step_field(
                 value: Loc::at_zero(keep),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),
+                refinements: Refinements::default(),
             }
         };
 
@@ -308,6 +309,7 @@ pub(super) fn step_field(
         }),
         guard: None,
         redundant: RedundantMark::known_non_redundant(),
+        refinements: Refinements::default(),
     };
 
     branches.push(default_branch);
@@ -923,6 +925,7 @@ pub(super) fn finalizer(
             value: Loc::at_zero(body),
             guard: None,
             redundant: RedundantMark::known_non_redundant(),
+            refinements: Refinements::default(),
         };
 
         // Example: `_ -> Err TooShort`
@@ -947,6 +950,7 @@ pub(super) fn finalizer(
             }),
             guard: None,
             redundant: RedundantMark::known_non_redundant(),
+            refinements: Refinements::default(),
         };
 
         // when
