@@ -312,6 +312,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                          value,
                          guard,
                          redundant,
+                         refinements,
                      }| crate::expr::WhenBranch {
                         patterns: patterns
                             .iter()
@@ -329,6 +330,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                         value: value.map(|e| go_help!(e)),
                         guard: guard.as_ref().map(|le| le.map(|e| go_help!(e))),
                         redundant: *redundant,
+                        refinements: refinements.clone(),
                     },
                 )
                 .collect(),

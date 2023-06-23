@@ -11,7 +11,9 @@ use crate::layout::{
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_can::abilities::SpecializationId;
-use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup, WhenBranch, WhenBranchPattern};
+use roc_can::expr::{
+    AnnotatedMark, ClosureData, ExpectLookup, Refinements, WhenBranch, WhenBranchPattern,
+};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
@@ -25,7 +27,7 @@ use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities, todo_lambda_erasure};
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
-use roc_module::ident::{self, ForeignSymbol, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
@@ -2849,7 +2851,6 @@ fn pattern_to_when(
     body: Loc<roc_can::expr::Expr>,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
-    use roc_can::expr::{WhenBranch, WhenBranchPattern};
     use roc_can::pattern::Pattern::{self, *};
 
     match &pattern.value {
@@ -2909,6 +2910,9 @@ fn pattern_to_when(
                     guard: None,
                     // If this type-checked, it's non-redundant
                     redundant: RedundantMark::known_non_redundant(),
+                    // This branch isn't allowed to be refined because it
+                    // wasn't originally from a `when` expression
+                    refinements: Refinements::default(),
                 }],
                 branches_cond_var: pattern_var,
                 // If this type-checked, it's exhaustive
@@ -6991,6 +6995,8 @@ fn refine_tag_union(
                         }),
                         guard: None,
                         redundant: RedundantMark::known_non_redundant(),
+                        // We've already done the refinements!
+                        refinements: Refinements::default(),
                     };
                 }
             }
@@ -7012,6 +7018,7 @@ fn refine_tag_union(
                 }),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),
+                refinements: Refinements::default(),
             }
         })
         .collect();
