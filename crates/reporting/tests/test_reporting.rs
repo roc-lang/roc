@@ -258,7 +258,7 @@ mod test_reporting {
             subs.rigid_var(var.value, "*".into());
         }
 
-        let mut solve_aliases = roc_solve::solve::Aliases::default();
+        let mut solve_aliases = roc_solve::Aliases::default();
 
         for (name, alias) in output.aliases {
             solve_aliases.insert(&mut types, name, alias);
@@ -271,7 +271,7 @@ mod test_reporting {
             &mut unify_problems,
             types,
             &constraints,
-            &constraint,
+            constraint,
             // Use `new_report_problem_as` in order to get proper derives.
             // TODO: remove the non-new reporting test infra.
             PendingDerives::default(),

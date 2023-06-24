@@ -56,7 +56,7 @@ use roc_region::all::{LineInfo, Loc, Region};
 #[cfg(not(target_family = "wasm"))]
 use roc_reporting::report::to_https_problem_report_string;
 use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
-use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
+use roc_solve::module::{extract_module_owned_implementations, SolveConfig, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
@@ -5061,6 +5061,14 @@ fn import_variable_for_symbol(
     }
 }
 
+struct SolveResult {
+    solved: Solved<Subs>,
+    solved_implementations: ResolvedImplementations,
+    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    problems: Vec<TypeError>,
+    abilities_store: AbilitiesStore,
+}
+
 #[allow(clippy::complexity)]
 fn run_solve_solve(
     exposed_for_module: ExposedForModule,
@@ -5071,13 +5079,7 @@ fn run_solve_solve(
     var_store: VarStore,
     module: Module,
     derived_module: SharedDerivedModule,
-) -> (
-    Solved<Subs>,
-    ResolvedImplementations,
-    Vec<(Symbol, Variable)>,
-    Vec<TypeError>,
-    AbilitiesStore,
-) {
+) -> SolveResult {
     let Module {
         exposed_symbols,
         aliases,
@@ -5111,30 +5113,34 @@ fn run_solve_solve(
         &import_variables,
     );
 
-    let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
+    let mut solve_aliases = roc_solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
         solve_aliases.insert(&mut types, *name, alias.clone());
     }
 
-    let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solve_output, solved_implementations, exposed_vars_by_symbol) = {
         let module_id = module.module_id;
 
-        let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
-            module_id,
+        let solve_config = SolveConfig {
+            home: module_id,
             types,
-            &constraints,
-            actual_constraint,
+            constraints: &constraints,
+            root_constraint: actual_constraint,
+            pending_derives,
+            exposed_by_module: &exposed_for_module.exposed_by_module,
+            derived_module,
+        };
+
+        let solve_output = roc_solve::module::run_solve(
+            solve_config,
             rigid_variables,
             subs,
             solve_aliases,
             abilities_store,
-            pending_derives,
-            &exposed_for_module.exposed_by_module,
-            derived_module,
         );
 
         let solved_implementations =
-            extract_module_owned_implementations(module_id, &abilities_store);
+            extract_module_owned_implementations(module_id, &solve_output.resolved_abilities_store);
 
         let is_specialization_symbol = |sym| {
             solved_implementations
@@ -5147,7 +5153,8 @@ fn run_solve_solve(
 
         // Expose anything that is explicitly exposed by the header, or is a specialization of an
         // ability.
-        let exposed_vars_by_symbol: Vec<_> = solved_env
+        let exposed_vars_by_symbol: Vec<_> = solve_output
+            .scope
             .vars_by_symbol()
             .filter(|(k, _)| {
                 exposed_symbols.contains(k)
@@ -5156,22 +5163,23 @@ fn run_solve_solve(
             })
             .collect();
 
-        (
-            solved_subs,
-            solved_implementations,
-            exposed_vars_by_symbol,
-            problems,
-            abilities_store,
-        )
+        (solve_output, solved_implementations, exposed_vars_by_symbol)
     };
 
-    (
-        solved_subs,
+    let roc_solve::module::SolveOutput {
+        subs,
+        scope: _,
+        errors,
+        resolved_abilities_store,
+    } = solve_output;
+
+    SolveResult {
+        solved: subs,
         solved_implementations,
         exposed_vars_by_symbol,
-        problems,
-        abilities_store,
-    )
+        problems: errors,
+        abilities_store: resolved_abilities_store,
+    }
 }
 
 fn run_solve<'a>(
@@ -5201,7 +5209,7 @@ fn run_solve<'a>(
     let loc_dbgs = std::mem::take(&mut module.loc_dbgs);
     let module = module;
 
-    let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
+    let solve_result = {
         if module_id.is_builtin() {
             match cached_types.lock().remove(&module_id) {
                 None => run_solve_solve(
@@ -5219,13 +5227,13 @@ fn run_solve<'a>(
                     exposed_vars_by_symbol,
                     abilities,
                     solved_implementations,
-                }) => (
-                    Solved(subs),
+                }) => SolveResult {
+                    solved: Solved(subs),
                     solved_implementations,
                     exposed_vars_by_symbol,
-                    vec![],
-                    abilities,
-                ),
+                    problems: vec![],
+                    abilities_store: abilities,
+                },
             }
         } else {
             run_solve_solve(
@@ -5241,7 +5249,14 @@ fn run_solve<'a>(
         }
     };
 
-    let mut solved_subs = solved_subs;
+    let SolveResult {
+        solved: mut solved_subs,
+        solved_implementations,
+        exposed_vars_by_symbol,
+        problems,
+        abilities_store,
+    } = solve_result;
+
     let exposed_types = roc_solve::module::exposed_types_storage_subs(
         module_id,
         &mut solved_subs,
