@@ -1,6 +1,4 @@
-# Getting Started
-
-<!-- I want to use Roc, show me where to get the things I need -->
+# Installing Roc
 
 ## Installation
 
@@ -12,9 +10,13 @@
 
 ## Nightly Builds
 
+<!-- direct download links to builds go here -->
+
 ## Roc CLI
 
-- Develop `roc dev`
+<!-- brief description on how to use the cli -->
+- Script `roc myApp.roc`
+- Develop `roc dev` 
 - Test `roc test`
 - Run `roc run`
 - Build `roc build`
@@ -23,9 +25,24 @@
 
 ## Package Management
 
-- URL Packages
+<!-- 
+
+explain package manager design is still a work in progress 
+the plan is to create a centralised index
+- ergonomicly integration
+- a fact that every language will have one
+
+in the meantime you can use package URLs
+-->
 
 ## Editor Support
+
+<!--
+explain that the high level design is a work in progress
+- Design goals for editor - we want Roc to ship with an awesome editor
+- Beginners learning to get up an running with an editor
+- Want it to run really fast etc
+-->
 
 - Language Server
 - Neo(Vim)

@@ -48,6 +48,7 @@ view = \page, htmlContent ->
                 text htmlContent,
             ],
             footer [] [
+                # <!-- TODO FOOTER - Lanugage link to source code -->
                 text "This site is powered by ",
                 a [href "https://www.netlify.com"] [ text "Netlify"],
                 text ". Made by people who like to make nice things. © Roc 2023",
@@ -64,10 +65,12 @@ viewNavbar =
                 rocLogo
             ],
             div [id "top-bar-links"] [
-                a [href "/discover_page.html"] [text "discover"],
-                a [href "/learn_roc_page.html"] [text "learn"],
-                a [href "/contributing_page.html"] [text "contribute"],
-                a [href "/getting_started_page.html"] [text "getting started"],
+                a [href "/tutorial_page.html"] [text "tutorial"],
+                a [href "/install_page.html"] [text "install"],
+                a [href "#todo-link-to-examples-site"] [text "examples"],
+                a [href "/community_page.html"] [text "community"],
+                a [href "/sponsor_page.html"] [text "sponsor"],
+                a [href "/docs_page.html"] [text "docs"],
             ],
         ],
     ]

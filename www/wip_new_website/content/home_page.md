@@ -4,30 +4,43 @@ The purpose of the Home page is to function as the first point of contact for al
 This page contains minimal content, so that visitors are able to quickly scan the page. It should not be cluttered or overwhelming. It should reflect Roc's goals (fast, friendly, functional) and values (welcoming community).
 -->
 
-# Roc lang
-
-<!-- Explain Why Roc exists -->
+# Roc lang{#page-title}
 
 - fast
 - friendly
 - functional
 
+<!-- These are only a minimal summary, link to the relevant section in design_goals.md  -->
+
 ## Try Roc
 
 <!-- WebREPL goes here, first impression -->
 
-## [Discover Roc](/discover_page.html)
+## Use cases (Roc applications)
 
-<!-- I'm totally new to Roc, looks interesting, show me more -->
+<!-- move to home page -->
 
-## [Learn Roc](/learn_roc_page.html)
+- Tools & Scripts
+- Web (coming soon) <!-- richard starting on this -->
+- Networking & Servers (coming soon)
+- Graphical (coming soon)
+- Scientific (coming soon)
+- Embedded (coming soon)
 
-<!-- I need to know more about Roc, show me where to find information   -->
+## Roc Platforms/Applications (vs libraries)
 
-## [Contribute to Roc](contributing_page.html)
+<!-- 
+move to home page
+explain as this is one of the most unique features of Roc 
+-->
 
-<!-- I think the language and community are great, show me how to support Roc -->
+## Talks and Publications
 
-## [Getting Started](/getting_started_page.html)
+<!-- move to end of home page -->
 
-<!-- I want to use Roc, show me where to get the things I need -->
+- Roc at Handmade Seattle - November 12, 2021 (very low-level explanation of how Roc's compiler makes programs run fast)
+- Outperforming Imperative with Pure Functional Languages - October 1, 2021 (about Roc's runtime performance and optimizer)
+- A taste of Roc - September 23, 2021 (syntax, application examples)
+- Roc at the Philly ETE conference - May 6, 2021 (platforms and applications)
+- Roc on Zig Showtime - April 24, 2021 (making a platform)
+- Roc at the Berlin FP Meetup - September 1, 2020 (overall vision for the language)
