@@ -603,6 +603,7 @@ fn trmc_candidates_help<'a>(
 
 #[derive(Clone)]
 pub(crate) struct TrmcEnv<'a> {
+    lambda_name: LambdaName<'a>,
     /// Current hole to fill
     hole_symbol: Symbol,
     /// Pointer to the first constructor ("the head of the list")
@@ -669,6 +670,18 @@ impl<'a> TrmcEnv<'a> {
             CallType::Foreign { .. } | CallType::LowLevel { .. } | CallType::HigherOrder(_) => {
                 false
             }
+        }
+    }
+
+    fn is_tail_recursive_call(
+        lambda_name: LambdaName,
+        symbol: Symbol,
+        expr: &Expr<'a>,
+        next: &Stmt<'a>,
+    ) -> Option<Call<'a>> {
+        match next {
+            Stmt::Ret(s) if *s == symbol => Self::is_recursive_expr(expr, lambda_name),
+            _ => None,
         }
     }
 
@@ -747,6 +760,7 @@ impl<'a> TrmcEnv<'a> {
         let trmc_calls = trmc_calls.confirmed().map(|s| (s, None)).collect();
 
         let mut this = Self {
+            lambda_name: proc.name,
             hole_symbol,
             head_symbol,
             joinpoint_id,
@@ -819,6 +833,20 @@ impl<'a> TrmcEnv<'a> {
                     *opt_call = Some(call.clone());
 
                     return self.walk_stmt(env, next);
+                }
+
+                if let Some(call) =
+                    Self::is_tail_recursive_call(self.lambda_name, *symbol, expr, next)
+                {
+                    // turn the call into a jump. Just re-use the existing hole
+                    let mut arguments = Vec::new_in(arena);
+                    arguments.extend(call.arguments);
+                    arguments.push(self.hole_symbol);
+                    arguments.push(self.head_symbol);
+
+                    let jump = Stmt::Jump(self.joinpoint_id, arguments.into_bump_slice());
+
+                    return jump;
                 }
 
                 if let Some(cons_info) = Self::is_terminal_constructor(stmt) {
