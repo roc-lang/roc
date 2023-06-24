@@ -10,7 +10,7 @@ use crate::layout::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::{MutMap, VecMap, VecSet};
+use roc_collections::{MutMap, VecMap};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
@@ -405,40 +405,80 @@ fn insert_jumps<'a>(
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 struct TrmcCandidateSet {
-    /// Recursive calls for which we have found a TRMC opportunity
-    confirmed: VecSet<Symbol>,
-    /// Recursive calls that are (still) considered for TRMC
-    active: VecSet<Symbol>,
-    /// Recursive calls that are used in such a way that makes TRMC impossible
-    invalid: VecSet<Symbol>,
+    interner: arrayvec::ArrayVec<Symbol, 64>,
+    confirmed: u64,
+    active: u64,
+    invalid: u64,
 }
 
 impl TrmcCandidateSet {
-    fn insert(&mut self, call: Symbol) {
-        // there really is no way it could have been inserted already
-        debug_assert!(!self.invalid.contains(&call));
+    fn confirmed(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.interner
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| (self.confirmed & (1 << i) != 0).then_some(*s))
+    }
 
-        self.active.insert(call);
+    fn active(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.interner
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| (self.active & (1 << i) != 0).then_some(*s))
+    }
+
+    fn position(&self, symbol: Symbol) -> Option<usize> {
+        self.interner.iter().position(|s| *s == symbol)
+    }
+
+    fn insert(&mut self, symbol: Symbol) {
+        // there really is no way it could have been inserted already
+        debug_assert!(self.position(symbol).is_none());
+
+        let index = self.interner.len();
+        self.interner.push(symbol);
+
+        self.active |= 1 << index;
     }
 
     fn retain<F>(&mut self, keep: F)
     where
         F: Fn(&Symbol) -> bool,
     {
-        for c in self.active.iter() {
-            if !keep(c) {
-                self.invalid.insert(*c);
+        for (i, s) in self.interner.iter().enumerate() {
+            if !keep(s) {
+                let mask = 1 << i;
+
+                self.active &= !mask;
+                self.confirmed &= !mask;
+
+                self.invalid |= mask;
             }
         }
+    }
 
-        self.active.retain(|k| !self.invalid.contains(k));
-        debug_assert!(!self.confirmed.iter().any(|x| self.invalid.contains(x)));
+    fn confirm(&mut self, symbol: Symbol) {
+        match self.position(symbol) {
+            None => debug_assert_eq!(0, 1, "confirm of invalid symbol"),
+            Some(index) => {
+                let mask = 1 << index;
+
+                debug_assert_eq!(self.invalid & mask, 0);
+                debug_assert_ne!(self.active & mask, 0);
+
+                self.active &= !mask;
+                self.confirmed |= mask;
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.confirmed == 0
     }
 }
 
-fn trmc_candidates<'a, I>(interner: &'_ I, proc: &'_ Proc<'a>) -> VecSet<Symbol>
+fn trmc_candidates<'a, I>(interner: &'_ I, proc: &'_ Proc<'a>) -> TrmcCandidateSet
 where
     I: LayoutInterner<'a>,
 {
@@ -447,18 +487,18 @@ where
         proc.is_self_recursive,
         crate::ir::SelfRecursive::SelfRecursive(_)
     ) {
-        return VecSet::default();
+        return TrmcCandidateSet::default();
     }
 
     // and return a recursive tag union
     if !matches!(interner.get_repr(proc.ret_layout), LayoutRepr::Union(union_layout) if union_layout.is_recursive())
     {
-        return VecSet::default();
+        return TrmcCandidateSet::default();
     }
 
     let mut candidate_set = TrmcCandidateSet::default();
     trmc_candidates_help(proc.name, &proc.body, &mut candidate_set);
-    candidate_set.confirmed
+    candidate_set
 }
 
 fn trmc_candidates_help<'a>(
@@ -470,15 +510,12 @@ fn trmc_candidates_help<'a>(
     if let Some(cons_info) = TrmcEnv::is_terminal_constructor(stmt) {
         // the tag application must directly use the result of the recursive call
         let recursive_call = candidates
-            .active
-            .iter()
-            .copied()
+            .active()
             .find(|call| cons_info.arguments.contains(call));
 
         // if we find a usage, this is a confirmed TRMC call
         if let Some(recursive_call) = recursive_call {
-            candidates.active.remove(&recursive_call);
-            candidates.confirmed.insert(recursive_call);
+            candidates.confirm(recursive_call);
 
             return;
         }
@@ -657,11 +694,7 @@ impl<'a> TrmcEnv<'a> {
         )
     }
 
-    pub fn init<'i>(
-        env: &mut Env<'a, 'i>,
-        proc: &Proc<'a>,
-        trmc_calls: VecSet<Symbol>,
-    ) -> Proc<'a> {
+    fn init<'i>(env: &mut Env<'a, 'i>, proc: &Proc<'a>, trmc_calls: TrmcCandidateSet) -> Proc<'a> {
         let arena = env.arena;
         let return_layout = proc.ret_layout;
 
@@ -711,7 +744,7 @@ impl<'a> TrmcEnv<'a> {
 
         let jump_stmt = Stmt::Jump(joinpoint_id, jump_arguments.into_bump_slice());
 
-        let trmc_calls = trmc_calls.iter().map(|s| (*s, None)).collect();
+        let trmc_calls = trmc_calls.confirmed().map(|s| (s, None)).collect();
 
         let mut this = Self {
             hole_symbol,
