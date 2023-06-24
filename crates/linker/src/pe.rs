@@ -444,6 +444,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                         "__fixsfti",
                         "__fixunsdfti",
                         "__fixunssfti",
+                        "__lshrti3",
                         "memcpy_decision",
                     ]
                     .contains(&name.as_str());
