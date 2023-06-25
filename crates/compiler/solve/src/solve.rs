@@ -486,11 +486,7 @@ fn solve(
                 );
 
                 match unify(
-<<<<<<< HEAD
                     &mut env.uenv(),
-=======
-                    &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                     actual,
                     expected,
                     Mode::EQ,
@@ -601,11 +597,7 @@ fn solve(
                         );
 
                         match unify(
-<<<<<<< HEAD
                             &mut env.uenv(),
-=======
-                            &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                             actual,
                             expected,
                             Mode::EQ,
@@ -712,11 +704,7 @@ fn solve(
                 };
 
                 match unify(
-<<<<<<< HEAD
                     &mut env.uenv(),
-=======
-                    &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                     actual,
                     expected,
                     mode,
@@ -928,11 +916,7 @@ fn solve(
                 );
 
                 match unify(
-<<<<<<< HEAD
                     &mut env.uenv(),
-=======
-                    &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                     actual,
                     includes,
                     Mode::PRESENT,
@@ -1066,11 +1050,7 @@ fn solve(
 
                 let snapshot = env.subs.snapshot();
                 let unify_cond_and_patterns_outcome = unify(
-<<<<<<< HEAD
                     &mut env.uenv(),
-=======
-                    &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                     branches_var,
                     real_var,
                     Mode::EQ,
@@ -1120,11 +1100,7 @@ fn solve(
                         open_tag_union(env, branches_var);
                         let almost_eq = matches!(
                             unify(
-<<<<<<< HEAD
                                 &mut env.uenv(),
-=======
-                                &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                                 real_var,
                                 branches_var,
                                 Mode::EQ,
@@ -1142,11 +1118,7 @@ fn solve(
                             // Case 4: incompatible types, report type error.
                             // Re-run first failed unification to get the type diff.
                             match unify(
-<<<<<<< HEAD
                                 &mut env.uenv(),
-=======
-                                &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                                 real_var,
                                 branches_var,
                                 Mode::EQ,
@@ -1345,11 +1317,7 @@ fn solve(
                     lambda_sets_to_specialize,
                     extra_metadata: _,
                 } = unify(
-<<<<<<< HEAD
                     &mut env.uenv(),
-=======
-                    &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                     actual,
                     Variable::LIST_U8,
                     Mode::EQ,
@@ -1369,11 +1337,7 @@ fn solve(
 
                     // We explicitly match on the last unify to get the type in the case it errors.
                     match unify(
-<<<<<<< HEAD
                         &mut env.uenv(),
-=======
-                        &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
                         actual,
                         Variable::STR,
                         Mode::EQ,
@@ -1624,11 +1588,7 @@ fn check_ability_specialization(
         };
         let snapshot = env.subs.snapshot();
         let unified = unify_introduced_ability_specialization(
-<<<<<<< HEAD
             &mut env.uenv(),
-=======
-            &mut UEnv::new(env.subs),
->>>>>>> e28273793 (Shove more into a common env)
             root_signature_var,
             symbol_loc_var.value,
             Mode::EQ,
