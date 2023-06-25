@@ -10,7 +10,7 @@ use std::collections::hash_map::Entry;
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::ident::ModuleName;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -265,6 +265,7 @@ impl<'a> LastSeenMap<'a> {
 
         match call_type {
             CallType::ByName { .. } => {}
+            CallType::ByPointer { .. } => {}
             CallType::LowLevel { .. } => {}
             CallType::HigherOrder { .. } => {}
             CallType::Foreign { .. } => {}
@@ -727,6 +728,10 @@ trait Backend<'a> {
                         // Now that the arguments are needed, load them if they are literals.
                         self.load_literal_symbols(arguments);
                         self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
+                    }
+
+                    CallType::ByPointer { .. } => {
+                        todo_lambda_erasure!()
                     }
 
                     CallType::LowLevel { op: lowlevel, .. } => {

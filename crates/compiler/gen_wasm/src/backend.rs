@@ -3,7 +3,7 @@ use bumpalo::collections::{String, Vec};
 
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
@@ -1315,6 +1315,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     ret_layout,
                     ret_storage,
                 )
+            }
+
+            CallType::ByPointer { .. } => {
+                todo_lambda_erasure!()
             }
 
             CallType::LowLevel { op: lowlevel, .. } => {

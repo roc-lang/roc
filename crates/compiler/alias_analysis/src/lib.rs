@@ -789,6 +789,9 @@ fn call_spec<'a>(
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
         }
+        ByPointer { .. } => {
+            todo_lambda_erasure!()
+        }
         Foreign {
             foreign_symbol: _,
             ret_layout,

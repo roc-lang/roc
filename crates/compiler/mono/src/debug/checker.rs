@@ -10,8 +10,8 @@ use crate::{
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{
-        Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
-        UnionLayout,
+        Builtin, FunctionPointer, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner,
+        TagIdIntType, UnionLayout,
     },
 };
 
@@ -639,6 +639,23 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     self.call_spec_ids.insert(*specialization_id, self.line)
                 {
                     self.problem(ProblemKind::DuplicateCallSpecId { old_call_line });
+                }
+                Some(*ret_layout)
+            }
+            CallType::ByPointer {
+                pointer,
+                ret_layout,
+                arg_layouts,
+            } => {
+                let expected_layout =
+                    self.interner
+                        .insert_direct_no_semantic(LayoutRepr::FunctionPointer(FunctionPointer {
+                            args: arg_layouts,
+                            ret: *ret_layout,
+                        }));
+                self.check_sym_layout(*pointer, expected_layout, UseKind::SwitchCond);
+                for (arg, wanted_layout) in arguments.iter().zip(arg_layouts.iter()) {
+                    self.check_sym_layout(*arg, *wanted_layout, UseKind::CallArg);
                 }
                 Some(*ret_layout)
             }

@@ -9,6 +9,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_collections::ReferenceMatrix;
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
@@ -560,6 +561,10 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_params(arguments, ps);
             }
 
+            ByPointer { .. } => {
+                todo_lambda_erasure!()
+            }
+
             LowLevel { op, .. } => {
                 debug_assert!(!op.is_higher_order());
 
@@ -1055,6 +1060,9 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
     match call.call_type {
         ByName { name, .. } => {
             info.keys.push(name.name());
+        }
+        ByPointer { .. } => {
+            todo_lambda_erasure!()
         }
         Foreign { .. } => {}
         LowLevel { .. } => {}

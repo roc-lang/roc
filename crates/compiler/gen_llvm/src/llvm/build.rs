@@ -939,6 +939,10 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
             )
         }
 
+        CallType::ByPointer { .. } => {
+            todo_lambda_erasure!()
+        }
+
         CallType::LowLevel { op, update_mode } => {
             let bytes = update_mode.to_bytes();
             let update_var = UpdateModeVar(&bytes);

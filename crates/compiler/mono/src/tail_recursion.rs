@@ -670,6 +670,7 @@ impl<'a> TrmcEnv<'a> {
                 // because we do not allow polymorphic recursion, this is the only constraint
                 name == lambda_name
             }
+            CallType::ByPointer { .. } => false,
             CallType::Foreign { .. } | CallType::LowLevel { .. } | CallType::HigherOrder(_) => {
                 false
             }

@@ -5452,25 +5452,21 @@ pub fn with_hole<'a>(
                                         env.arena.alloc(result),
                                     );
                                 }
-                                RawFunctionLayout::ErasedFunction(..) => {
-                                    // What we want here is
-                                    //   f = compile(loc_expr)
-                                    //   joinpoint join result:
-                                    //      <hole>
-                                    //   if (f.value) {
-                                    //      f = cast(f, (..params, void*) -> ret);
-                                    //      result = f ..args
-                                    //      jump join result
-                                    //   } else {
-                                    //      f = cast(f, (..params) -> ret);
-                                    //      result = f ..args
-                                    //      jump join result
-                                    //   }
-                                    todo_lambda_erasure!(
-                                        "{:?} :: {:?}",
+                                RawFunctionLayout::ErasedFunction(arg_layouts, ret_layout) => {
+                                    let hole_layout =
+                                        layout_cache.from_var(env.arena, fn_var, env.subs).unwrap();
+                                    result = erased::call_erased_function(
+                                        env,
+                                        layout_cache,
+                                        procs,
                                         loc_expr.value,
-                                        full_layout
-                                    )
+                                        fn_var,
+                                        (arg_layouts, ret_layout),
+                                        arg_symbols,
+                                        assigned,
+                                        hole,
+                                        hole_layout,
+                                    );
                                 }
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                                     unreachable!(
