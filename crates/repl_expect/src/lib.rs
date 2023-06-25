@@ -93,6 +93,7 @@ pub fn get_values<'a>(
 mod test {
     use indoc::indoc;
     use pretty_assertions::assert_eq;
+    use roc_error_macros::internal_error;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
     use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
     use roc_packaging::cache::RocCacheDir;
@@ -136,9 +137,9 @@ mod test {
         ) {
             Ok(m) => m,
             Err(LoadMonomorphizedError::ErrorModule(m)) => {
-                panic!("{:?}", (m.can_problems, m.type_problems))
+                internal_error!("{:?}", (m.can_problems, m.type_problems))
             }
-            Err(e) => panic!("{e:?}"),
+            Err(e) => internal_error!("{e:?}"),
         };
 
         let mut loaded = loaded;
