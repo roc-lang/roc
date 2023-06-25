@@ -8424,7 +8424,40 @@ fn call_by_name<'a>(
                 )
             }
         }
-        Ok(RawFunctionLayout::ErasedFunction(..)) => todo_lambda_erasure!(),
+        Ok(RawFunctionLayout::ErasedFunction(arg_layouts, ret_layout)) => {
+            // TODO(erased-lambdas) call-by-name should never apply here
+            let arena = env.arena;
+            let arg_symbols = Vec::from_iter_in(
+                loc_args.iter().map(|(arg_var, arg_expr)| {
+                    possible_reuse_symbol_or_specialize(
+                        env,
+                        procs,
+                        layout_cache,
+                        &arg_expr.value,
+                        *arg_var,
+                    )
+                }),
+                arena,
+            )
+            .into_bump_slice();
+
+            let result = erased::call_erased_function(
+                env,
+                layout_cache,
+                procs,
+                roc_can::expr::Expr::Var(proc_name, fn_var),
+                fn_var,
+                (arg_layouts, ret_layout),
+                arg_symbols,
+                assigned,
+                hole,
+                // TODO is this right??
+                ret_layout,
+            );
+
+            let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+            assign_to_symbols(env, procs, layout_cache, iter, result)
+        }
         Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
             if procs.is_module_thunk(proc_name) {
                 // here we turn a call to a module thunk into  forcing of that thunk
