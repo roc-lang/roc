@@ -327,7 +327,7 @@ fn run_expect_fx<'a, W: std::io::Write>(
                 try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
             if let Err((msg, _)) = result {
-                panic!("roc panic {}", msg);
+                internal_error!("roc panic {}", msg);
             }
 
             if sequence.count_failures() > 0 {
@@ -518,7 +518,7 @@ fn render_dbg_failure<'a>(
     let data = expectations.get_mut(&module_id).unwrap();
 
     let current = match data.dbgs.get(&dbg_symbol) {
-        None => panic!("region {failure_region:?} not in list of dbgs"),
+        None => internal_error!("region {failure_region:?} not in list of dbgs"),
         Some(current) => current,
     };
     let failure_region = current.region;
@@ -565,7 +565,7 @@ fn render_expect_failure<'a>(
     let data = expectations.get_mut(&module_id).unwrap();
 
     let current = match data.expectations.get(&failure_region) {
-        None => panic!("region {failure_region:?} not in list of expects"),
+        None => internal_error!("region {failure_region:?} not in list of expects"),
         Some(current) => current,
     };
 
@@ -638,7 +638,7 @@ impl ExpectSequence {
                 0 => std::hint::spin_loop(),
                 1 => break ChildProcessMsg::Expect,
                 2 => break ChildProcessMsg::Dbg,
-                n => panic!("invalid atomic value set by the child: {:#x}", n),
+                n => internal_error!("invalid atomic value set by the child: {:#x}", n),
             }
         }
     }
@@ -815,7 +815,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     if let Err(errors) = env.module.verify() {
         let path = std::env::temp_dir().join("test.ll");
         env.module.print_to_file(&path).unwrap();
-        panic!(
+        internal_error!(
             "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `{:?}`",
             errors.to_string(), path,
         );

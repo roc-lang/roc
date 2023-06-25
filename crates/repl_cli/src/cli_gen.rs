@@ -3,6 +3,7 @@ use inkwell::context::Context;
 use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
+use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
@@ -263,7 +264,7 @@ fn mono_module_to_dylib<'a>(
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
-        panic!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
+        internal_error!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
     }
 
     module_pass.run_on(env.module);
@@ -273,10 +274,7 @@ fn mono_module_to_dylib<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!(
-            "Errors defining module:\n{}\n\nUncomment things nearby to see more details.",
-            errors.to_string()
-        );
+        internal_error!("Errors defining module:\n{}", errors.to_string());
     }
 
     llvm_module_to_dylib(env.module, &target, opt_level)
