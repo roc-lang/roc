@@ -2,8 +2,8 @@ use crate::llvm::build::{BuilderExt, Env};
 use crate::llvm::memcpy::build_memcpy;
 use bumpalo::collections::Vec as AVec;
 use inkwell::context::Context;
-use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
-use inkwell::values::PointerValue;
+use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, PointerType, StructType};
+use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{
@@ -12,6 +12,7 @@ use roc_mono::layout::{
 };
 use roc_target::TargetInfo;
 
+use super::build::load_roc_value;
 use super::struct_::RocStruct;
 
 pub fn basic_type_from_layout<'a, 'ctx, 'env>(
@@ -248,6 +249,136 @@ fn alignment_type(context: &Context, alignment: u32) -> BasicTypeEnum {
         8 => context.i64_type().into(),
         16 => context.i128_type().into(),
         _ => unimplemented!("weird alignment: {alignment}"),
+    }
+}
+
+pub(crate) struct BetterUnion<'a> {
+    layout: UnionLayout<'a>,
+}
+
+impl<'a> BetterUnion<'a> {
+    // pub const TAG_ID_INDEX: u32 = 2;
+    pub const TAG_DATA_INDEX: u32 = 1;
+    // pub const TAG_ALIGNMENT_INDEX: u32 = 0;
+
+    pub(crate) fn new(layout: UnionLayout<'a>) -> Self {
+        Self { layout }
+    }
+
+    fn struct_type_at<'ctx>(
+        &self,
+        env: &Env<'a, 'ctx, '_>,
+        layout_interner: &STLayoutInterner<'a>,
+        tag_id: usize,
+    ) -> StructType<'ctx> {
+        let fields = self.layout.fields_at(tag_id as _);
+
+        let data_align = self.layout.allocation_alignment_bytes(layout_interner);
+        let alignment_array_type = alignment_type(env.context, data_align)
+            .array_type(0)
+            .as_basic_type_enum();
+
+        let field_types = AVec::from_iter_in(
+            fields.iter().map(|l| {
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*l))
+            }),
+            env.arena,
+        );
+
+        if self.layout.stores_tag_id_as_data(env.target_info) {
+            let tag_type = match self.layout.tag_id_layout() {
+                Layout::U8 => TagType::I8,
+                Layout::U16 => TagType::I16,
+                _ => unreachable!(),
+            };
+
+            let field_types = &[
+                alignment_array_type,
+                env.context.struct_type(&field_types, false).into(),
+                match tag_type {
+                    TagType::I8 => env.context.i8_type().into(),
+                    TagType::I16 => env.context.i16_type().into(),
+                },
+            ];
+
+            env.context.struct_type(field_types, false)
+        } else {
+            let field_types = &[
+                alignment_array_type,
+                env.context.struct_type(&field_types, false).into(),
+            ];
+
+            env.context.struct_type(field_types, false)
+        }
+    }
+
+    pub(crate) fn field_ptr_at_index<'ctx>(
+        &self,
+        env: &Env<'a, 'ctx, '_>,
+        layout_interner: &STLayoutInterner<'a>,
+        ptr: PointerValue<'ctx>,
+        tag_id: usize,
+        index: u64,
+        output_type: PointerType<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let ptr = if self.layout.stores_tag_id_in_pointer(env.target_info) {
+            crate::llvm::build::tag_pointer_clear_tag_id(env, ptr)
+        } else {
+            ptr
+        };
+
+        let struct_type = self.struct_type_at(env, layout_interner, tag_id);
+
+        let ptr = env.builder.build_pointer_cast(
+            ptr,
+            struct_type.ptr_type(Default::default()),
+            "cast_to_constructor",
+        );
+
+        let ordered_indexes = &[
+            env.context.i64_type().const_zero(),
+            env.context
+                .i32_type()
+                .const_int(Self::TAG_DATA_INDEX as _, false),
+            env.context.i32_type().const_int(index as _, false),
+        ];
+
+        let field_ptr = unsafe {
+            env.builder
+                .new_build_in_bounds_gep(struct_type, ptr, ordered_indexes, "tag_field")
+        };
+
+        // remove when llvm drops typed pointers
+        if field_ptr.get_type() != output_type {
+            env.builder
+                .build_pointer_cast(field_ptr, output_type, "cast_recursive_pointer")
+        } else {
+            field_ptr
+        }
+    }
+
+    pub(crate) fn field_at_index<'ctx>(
+        &self,
+        env: &Env<'a, 'ctx, '_>,
+        layout_interner: &STLayoutInterner<'a>,
+        ptr: PointerValue<'ctx>,
+        tag_id: usize,
+        index: u64,
+        element_layout: InLayout<'a>,
+    ) -> BasicValueEnum<'ctx> {
+        // by default, RecursivePointer does not get converted to the right basic type
+        let naive_repr = layout_interner.get_repr(element_layout);
+        let repr = match naive_repr {
+            LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(self.layout),
+            other => other,
+        };
+
+        let element_type = basic_type_from_layout(env, layout_interner, repr);
+        let ptr_type = element_type.ptr_type(AddressSpace::default());
+        let indexed_ptr =
+            self.field_ptr_at_index(env, layout_interner, ptr, tag_id, index, ptr_type);
+
+        load_roc_value(env, layout_interner, repr, indexed_ptr, "get_tag_field")
     }
 }
 

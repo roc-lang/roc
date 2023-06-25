@@ -2,6 +2,7 @@ use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build_list::{self, allocate_list, empty_polymorphic_list};
 use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
+    BetterUnion,
 };
 use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
 use crate::llvm::memcpy::build_memcpy;
@@ -1377,107 +1378,22 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         "load_element",
                     )
                 }
-                UnionLayout::Recursive(tag_layouts) => {
+                UnionLayout::Recursive(_)
+                | UnionLayout::NonNullableUnwrapped(_)
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NullableUnwrapped { .. } => {
                     debug_assert!(argument.is_pointer_value());
 
-                    let field_layouts = tag_layouts[*tag_id as usize];
-
-                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    let target_loaded_type = basic_type_from_layout(
+                    let field = BetterUnion::new(*union_layout).field_at_index(
                         env,
                         layout_interner,
-                        layout_interner.get_repr(layout),
-                    );
-
-                    lookup_at_index_ptr(
-                        env,
-                        layout_interner,
-                        field_layouts,
-                        *index as usize,
-                        ptr,
-                        None,
-                        target_loaded_type,
-                    )
-                }
-                UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout = LayoutRepr::struct_(field_layouts);
-
-                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
-                    let target_loaded_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(layout),
-                    );
-
-                    lookup_at_index_ptr(
-                        env,
-                        layout_interner,
-                        field_layouts,
-                        *index as usize,
                         argument.into_pointer_value(),
-                        Some(struct_type.into_struct_type()),
-                        target_loaded_type,
-                    )
-                }
-                UnionLayout::NullableWrapped {
-                    nullable_id,
-                    other_tags,
-                } => {
-                    debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id, *nullable_id);
-
-                    let tag_index = if *tag_id < *nullable_id {
-                        *tag_id
-                    } else {
-                        tag_id - 1
-                    };
-
-                    let field_layouts = other_tags[tag_index as usize];
-
-                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    let target_loaded_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(layout),
+                        *tag_id as usize,
+                        *index,
+                        layout,
                     );
 
-                    lookup_at_index_ptr(
-                        env,
-                        layout_interner,
-                        field_layouts,
-                        *index as usize,
-                        ptr,
-                        None,
-                        target_loaded_type,
-                    )
-                }
-                UnionLayout::NullableUnwrapped {
-                    nullable_id,
-                    other_fields,
-                } => {
-                    debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id != 0, *nullable_id);
-
-                    let field_layouts = other_fields;
-                    let struct_layout = LayoutRepr::struct_(field_layouts);
-
-                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
-                    let target_loaded_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(layout),
-                    );
-
-                    lookup_at_index_ptr(
-                        env,
-                        layout_interner,
-                        field_layouts,
-                        // the tag id is not stored
-                        *index as usize,
-                        argument.into_pointer_value(),
-                        Some(struct_type.into_struct_type()),
-                        target_loaded_type,
-                    )
+                    field
                 }
             }
         }
@@ -1491,95 +1407,22 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             // cast the argument bytes into the desired shape for this tag
             let argument = scope.load_symbol(structure);
             let ret_repr = layout_interner.get_repr(layout);
+            let element_type = basic_type_from_layout(env, layout_interner, ret_repr);
 
             let pointer_value = match union_layout {
                 UnionLayout::NonRecursive(_) => unreachable!(),
-                UnionLayout::Recursive(tag_layouts) => {
-                    debug_assert!(argument.is_pointer_value());
-
-                    let field_layouts = tag_layouts[*tag_id as usize];
-
-                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
-
-                    union_field_ptr_at_index(
+                UnionLayout::Recursive(_)
+                | UnionLayout::NonNullableUnwrapped(_)
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NullableUnwrapped { .. } => BetterUnion::new(*union_layout)
+                    .field_ptr_at_index(
                         env,
                         layout_interner,
-                        field_layouts,
-                        None,
-                        *index as usize,
-                        ptr,
-                        target_loaded_type,
-                    )
-                }
-                UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout = LayoutRepr::struct_(field_layouts);
-
-                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
-
-                    union_field_ptr_at_index(
-                        env,
-                        layout_interner,
-                        field_layouts,
-                        Some(struct_type.into_struct_type()),
-                        *index as usize,
                         argument.into_pointer_value(),
-                        target_loaded_type,
-                    )
-                }
-                UnionLayout::NullableWrapped {
-                    nullable_id,
-                    other_tags,
-                } => {
-                    debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id, *nullable_id);
-
-                    let tag_index = if *tag_id < *nullable_id {
-                        *tag_id
-                    } else {
-                        tag_id - 1
-                    };
-
-                    let field_layouts = other_tags[tag_index as usize];
-
-                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
-
-                    union_field_ptr_at_index(
-                        env,
-                        layout_interner,
-                        field_layouts,
-                        None,
-                        *index as usize,
-                        ptr,
-                        target_loaded_type,
-                    )
-                }
-                UnionLayout::NullableUnwrapped {
-                    nullable_id,
-                    other_fields,
-                } => {
-                    debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id != 0, *nullable_id);
-
-                    let field_layouts = other_fields;
-                    let struct_layout = LayoutRepr::struct_(field_layouts);
-
-                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
-                    let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
-
-                    union_field_ptr_at_index(
-                        env,
-                        layout_interner,
-                        field_layouts,
-                        Some(struct_type.into_struct_type()),
-                        // the tag id is not stored
-                        *index as usize,
-                        argument.into_pointer_value(),
-                        target_loaded_type,
-                    )
-                }
+                        *tag_id as usize,
+                        *index,
+                        element_type.into_pointer_type(),
+                    ),
             };
 
             pointer_value.into()
@@ -1709,7 +1552,7 @@ fn build_tag_field_value<'a, 'ctx>(
             .build_pointer_cast(
                 value.into_pointer_value(),
                 env.context.i64_type().ptr_type(AddressSpace::default()),
-                "cast_recursive_pointer",
+                "cast_recursive_pointerx",
             )
             .into()
     } else if layout_interner.is_passed_by_reference(tag_field_layout) {
@@ -2145,98 +1988,6 @@ pub fn get_tag_id<'a, 'ctx>(
                 .into_int_value()
         }
     }
-}
-
-fn lookup_at_index_ptr<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
-    field_layouts: &[InLayout<'a>],
-    index: usize,
-    value: PointerValue<'ctx>,
-    struct_type: Option<StructType<'ctx>>,
-    target_loaded_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let elem_ptr = union_field_ptr_at_index_help(
-        env,
-        layout_interner,
-        field_layouts,
-        struct_type,
-        index,
-        value,
-    );
-
-    let field_layout = field_layouts[index];
-    let result = load_roc_value(
-        env,
-        layout_interner,
-        layout_interner.get_repr(field_layout),
-        elem_ptr,
-        "load_at_index_ptr_old",
-    );
-
-    // A recursive pointer in the loaded structure is stored as a `i64*`, but the loaded layout
-    // might want a more precise structure. As such, cast it to the refined type if needed.
-    cast_if_necessary_for_opaque_recursive_pointers(env.builder, result, target_loaded_type)
-}
-
-fn union_field_ptr_at_index_help<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
-    field_layouts: &'a [InLayout<'a>],
-    opt_struct_type: Option<StructType<'ctx>>,
-    index: usize,
-    value: PointerValue<'ctx>,
-) -> PointerValue<'ctx> {
-    let builder = env.builder;
-
-    let struct_type = match opt_struct_type {
-        Some(st) => st,
-        None => {
-            let struct_layout = LayoutRepr::struct_(field_layouts);
-            basic_type_from_layout(env, layout_interner, struct_layout).into_struct_type()
-        }
-    };
-
-    let data_ptr = env.builder.build_pointer_cast(
-        value,
-        struct_type.ptr_type(AddressSpace::default()),
-        "cast_lookup_at_index_ptr",
-    );
-
-    builder
-        .new_build_struct_gep(
-            struct_type,
-            data_ptr,
-            index as u32,
-            "at_index_struct_gep_data",
-        )
-        .unwrap()
-}
-
-fn union_field_ptr_at_index<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
-    field_layouts: &'a [InLayout<'a>],
-    opt_struct_type: Option<StructType<'ctx>>,
-    index: usize,
-    value: PointerValue<'ctx>,
-    target_loaded_type: BasicTypeEnum<'ctx>,
-) -> PointerValue<'ctx> {
-    let result = union_field_ptr_at_index_help(
-        env,
-        layout_interner,
-        field_layouts,
-        opt_struct_type,
-        index,
-        value,
-    );
-
-    // A recursive pointer in the loaded structure is stored as a `i64*`, but the loaded layout
-    // might want a more precise structure. As such, cast it to the refined type if needed.
-    let from_value: BasicValueEnum = result.into();
-    let to_type: BasicTypeEnum = target_loaded_type;
-    cast_if_necessary_for_opaque_recursive_pointers(env.builder, from_value, to_type)
-        .into_pointer_value()
 }
 
 pub fn reserve_with_refcount<'a, 'ctx>(

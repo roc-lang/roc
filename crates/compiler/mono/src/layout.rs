@@ -842,6 +842,38 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
+    pub fn fields_at(&self, tag_id: TagIdIntType) -> &'a [InLayout<'a>] {
+        let constructor = tag_id as usize;
+
+        match self {
+            UnionLayout::NonRecursive(tags) => tags[constructor],
+            UnionLayout::Recursive(tags) => tags[constructor],
+            UnionLayout::NonNullableUnwrapped(fields) => {
+                debug_assert_eq!(constructor, 0);
+
+                fields
+            }
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => match constructor.cmp(&(*nullable_id as usize)) {
+                std::cmp::Ordering::Less => other_tags[constructor],
+                std::cmp::Ordering::Equal => &[],
+                std::cmp::Ordering::Greater => other_tags[constructor - 1],
+            },
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                if constructor == *nullable_id as usize {
+                    &[]
+                } else {
+                    other_fields
+                }
+            }
+        }
+    }
+
     pub fn layout_at<I>(self, interner: &mut I, tag_id: TagIdIntType, index: usize) -> InLayout<'a>
     where
         I: LayoutInterner<'a>,
