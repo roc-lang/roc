@@ -43,6 +43,7 @@ use pattern::{from_can_pattern, store_pattern, Pattern};
 pub use literal::{ListLiteralElement, Literal};
 
 mod decision_tree;
+mod erased;
 mod literal;
 mod pattern;
 
@@ -1682,6 +1683,13 @@ impl<'a> Call<'a> {
 
                 alloc.text("CallByName ").append(alloc.intersperse(it, " "))
             }
+            CallType::ByPointer { pointer, .. } => {
+                let it = std::iter::once(pointer)
+                    .chain(arguments.iter().copied())
+                    .map(|s| symbol_to_doc(alloc, s, pretty));
+
+                alloc.text("CallByPtr ").append(alloc.intersperse(it, " "))
+            }
             LowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
@@ -1758,6 +1766,11 @@ pub enum CallType<'a> {
         ret_layout: InLayout<'a>,
         arg_layouts: &'a [InLayout<'a>],
         specialization_id: CallSpecId,
+    },
+    ByPointer {
+        pointer: Symbol,
+        ret_layout: InLayout<'a>,
+        arg_layouts: &'a [InLayout<'a>],
     },
     Foreign {
         foreign_symbol: ForeignSymbol,
@@ -5439,7 +5452,26 @@ pub fn with_hole<'a>(
                                         env.arena.alloc(result),
                                     );
                                 }
-                                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
+                                RawFunctionLayout::ErasedFunction(..) => {
+                                    // What we want here is
+                                    //   f = compile(loc_expr)
+                                    //   joinpoint join result:
+                                    //      <hole>
+                                    //   if (f.value) {
+                                    //      f = cast(f, (..params, void*) -> ret);
+                                    //      result = f ..args
+                                    //      jump join result
+                                    //   } else {
+                                    //      f = cast(f, (..params) -> ret);
+                                    //      result = f ..args
+                                    //      jump join result
+                                    //   }
+                                    todo_lambda_erasure!(
+                                        "{:?} :: {:?}",
+                                        loc_expr.value,
+                                        full_layout
+                                    )
+                                }
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                                     unreachable!(
                                         "{:?} cannot be called in the source language",
@@ -7519,6 +7551,15 @@ fn substitute_in_call<'a>(
             arg_layouts,
             ret_layout: *ret_layout,
             specialization_id: *specialization_id,
+        }),
+        CallType::ByPointer {
+            pointer,
+            arg_layouts,
+            ret_layout,
+        } => substitute(subs, *pointer).map(|new| CallType::ByPointer {
+            pointer: new,
+            arg_layouts,
+            ret_layout: *ret_layout,
         }),
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,

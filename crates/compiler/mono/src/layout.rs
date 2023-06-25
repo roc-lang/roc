@@ -690,8 +690,8 @@ pub enum LayoutRepr<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FunctionPointer<'a> {
-    args: &'a [InLayout<'a>],
-    ret: InLayout<'a>,
+    pub args: &'a [InLayout<'a>],
+    pub ret: InLayout<'a>,
 }
 
 impl<'a> FunctionPointer<'a> {
