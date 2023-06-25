@@ -684,6 +684,45 @@ pub enum LayoutRepr<'a> {
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
     RecursivePointer(InLayout<'a>),
+    /// Only used for erased functions.
+    FunctionPointer(FunctionPointer<'a>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FunctionPointer<'a> {
+    args: &'a [InLayout<'a>],
+    ret: InLayout<'a>,
+}
+
+impl<'a> FunctionPointer<'a> {
+    pub fn to_doc<'b, D, A, I>(
+        self,
+        alloc: &'b D,
+        interner: &I,
+        seen_rec: &mut SeenRecPtrs<'a>,
+        parens: Parens,
+    ) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+        I: LayoutInterner<'a>,
+    {
+        let Self { args, ret } = self;
+
+        let args = args
+            .iter()
+            .map(|arg| interner.to_doc(*arg, alloc, seen_rec, parens));
+        let args = alloc.intersperse(args, alloc.text(", "));
+        let ret = interner.to_doc(ret, alloc, seen_rec, parens);
+
+        alloc
+            .text("FunPtr(")
+            .append(args)
+            .append(alloc.text(" -> "))
+            .append(ret)
+            .append(")")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -2605,6 +2644,7 @@ impl<'a> LayoutRepr<'a> {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
+            FunctionPointer(..) => true,
         }
     }
 
@@ -2690,8 +2730,9 @@ impl<'a> LayoutRepr<'a> {
             LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .stack_size_without_alignment(interner),
-            RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Ptr(_) => interner.target_info().ptr_width() as u32,
+            RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
+                interner.target_info().ptr_width() as u32
+            }
         }
     }
 
@@ -2743,8 +2784,9 @@ impl<'a> LayoutRepr<'a> {
                 .get_repr(lambda_set.runtime_representation())
                 .alignment_bytes(interner),
             Builtin(builtin) => builtin.alignment_bytes(interner.target_info()),
-            RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Ptr(_) => interner.target_info().ptr_width() as u32,
+            RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
+                interner.target_info().ptr_width() as u32
+            }
         }
     }
 
@@ -2766,6 +2808,7 @@ impl<'a> LayoutRepr<'a> {
                 unreachable!("should be looked up to get an actual layout")
             }
             Ptr(inner) => interner.get_repr(*inner).alignment_bytes(interner),
+            FunctionPointer(_) => ptr_width,
         }
     }
 
@@ -2839,6 +2882,7 @@ impl<'a> LayoutRepr<'a> {
                 // author must make sure that invariants are upheld
                 false
             }
+            FunctionPointer(_) => false,
         }
     }
 
@@ -2899,6 +2943,9 @@ impl<'a> LayoutRepr<'a> {
                 }
                 RecursivePointer(_) => {
                     /* do nothing, we've already generated for this type through the Union(_) */
+                }
+                FunctionPointer(_) => {
+                    // drop through
                 }
             }
         }

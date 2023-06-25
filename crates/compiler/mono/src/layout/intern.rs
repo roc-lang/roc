@@ -354,6 +354,7 @@ pub trait LayoutInterner<'a>: Sized {
                 .text("Ptr(")
                 .append(self.to_doc(inner, alloc, seen_rec, parens))
                 .append(")"),
+            FunctionPointer(fp) => fp.to_doc(alloc, self, seen_rec, parens),
         }
     }
 
@@ -1076,7 +1077,9 @@ mod reify {
     use bumpalo::{collections::Vec, Bump};
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, LayoutWrapper, UnionLayout};
+    use crate::layout::{
+        Builtin, FunctionPointer, LambdaSet, Layout, LayoutRepr, LayoutWrapper, UnionLayout,
+    };
 
     use super::{InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
@@ -1120,6 +1123,12 @@ mod reify {
                 // If the layout is not void at its point then it has already been solved as
                 // another recursive union's layout, do not change it.
                 LayoutRepr::RecursivePointer(if l == Layout::VOID { slot } else { l })
+            }
+            LayoutRepr::FunctionPointer(FunctionPointer { args, ret }) => {
+                LayoutRepr::FunctionPointer(FunctionPointer {
+                    args: reify_layout_slice(arena, interner, slot, args),
+                    ret: reify_layout(arena, interner, slot, ret),
+                })
             }
         }
     }
@@ -1447,6 +1456,11 @@ pub mod dbg_deep {
                 LayoutRepr::RecursivePointer(rp) => {
                     f.debug_tuple("RecursivePointer").field(&rp.0).finish()
                 }
+                LayoutRepr::FunctionPointer(fp) => f
+                    .debug_struct("FunctionPointer")
+                    .field("args", &fp.args)
+                    .field("ret", &fp.ret)
+                    .finish(),
             }
         }
     }
@@ -1620,6 +1634,11 @@ pub mod dbg_stable {
                 LayoutRepr::RecursivePointer(rp) => {
                     f.debug_tuple("RecursivePointer").field(&rp.0).finish()
                 }
+                LayoutRepr::FunctionPointer(fp) => f
+                    .debug_struct("FunctionPointer")
+                    .field("args", &fp.args)
+                    .field("ret", &fp.ret)
+                    .finish(),
             }
         }
     }

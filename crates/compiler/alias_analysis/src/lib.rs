@@ -1632,6 +1632,8 @@ fn layout_spec_help<'a>(
             }
             _ => internal_error!("somehow, a non-recursive layout is under a recursive pointer"),
         },
+
+        FunctionPointer(_) => todo_lambda_erasure!(),
     }
 }
 

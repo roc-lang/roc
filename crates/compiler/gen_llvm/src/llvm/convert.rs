@@ -6,6 +6,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::PointerValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_error_macros::todo_lambda_erasure;
 use roc_mono::layout::{
     round_up_to_alignment, Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner,
     UnionLayout,
@@ -47,6 +48,8 @@ pub fn basic_type_from_layout<'a, 'ctx>(
             .i64_type()
             .ptr_type(AddressSpace::default())
             .as_basic_type_enum(),
+
+        FunctionPointer(_) => todo_lambda_erasure!(),
 
         Builtin(builtin) => basic_type_from_builtin(env, &builtin),
     }

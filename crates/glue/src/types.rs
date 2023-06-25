@@ -2100,6 +2100,7 @@ fn tag_union_type_from_layout<'a>(
             // been turned into an error earlier in the process.
             unreachable!();
         }
+        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
     }
 }
 

@@ -4527,5 +4527,6 @@ macro_rules! pointer_layouts {
                     | UnionLayout::NullableWrapped { .. }
                     | UnionLayout::NullableUnwrapped { .. },
             )
+            | LayoutRepr::FunctionPointer(_)
     };
 }

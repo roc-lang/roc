@@ -188,7 +188,8 @@ pub fn refcount_generic<'a>(
     match layout_interner.get_repr(layout) {
         LayoutRepr::Builtin(
             Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
-        ) => {
+        )
+        | LayoutRepr::FunctionPointer(_) => {
             // Generate a dummy function that immediately returns Unit
             // Some higher-order Zig builtins *always* call an RC function on List elements.
             rc_return_stmt(root, ident_ids, ctx)

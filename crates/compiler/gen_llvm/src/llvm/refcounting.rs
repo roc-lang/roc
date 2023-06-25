@@ -16,6 +16,7 @@ use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, InstructionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
@@ -624,6 +625,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
             mode,
             lambda_set.runtime_representation(),
         ),
+        FunctionPointer(_) => todo_lambda_erasure!(),
     }
 }
 
