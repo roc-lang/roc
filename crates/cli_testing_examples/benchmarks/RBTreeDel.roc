@@ -26,7 +26,6 @@ main =
 
         Err GetIntError ->
             Task.putLine "Error: Failed to get Integer from stdin."
-            
 
 boom : Str -> a
 boom = \_ -> boom ""

@@ -163,6 +163,9 @@ impl<'a> LastSeenMap<'a> {
                     Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
+                    Expr::UnionFieldPtrAtIndex { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
                     Expr::Array { elems, .. } => {
                         for elem in *elems {
                             if let ListLiteralElement::Symbol(sym) = elem {
@@ -793,6 +796,14 @@ trait Backend<'a> {
                 index,
             } => {
                 self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
+            }
+            Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => {
+                self.load_union_field_ptr_at_index(sym, structure, *tag_id, *index, union_layout);
             }
             Expr::GetTagId {
                 structure,
@@ -1581,14 +1592,23 @@ trait Backend<'a> {
 
                 self.build_ptr_cast(sym, &args[0])
             }
-            LowLevel::PtrWrite => {
-                let element_layout = match self.interner().get_repr(*ret_layout) {
-                    LayoutRepr::Boxed(boxed) => boxed,
+            LowLevel::PtrStore => {
+                let element_layout = match self.interner().get_repr(arg_layouts[0]) {
+                    LayoutRepr::Ptr(inner) => inner,
+                    LayoutRepr::Boxed(inner) => inner,
                     _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 
-                self.build_ptr_write(*sym, args[0], args[1], element_layout);
+                self.build_ptr_store(*sym, args[0], args[1], element_layout);
             }
+            LowLevel::PtrLoad => {
+                self.build_ptr_load(*sym, args[0], *ret_layout);
+            }
+
+            LowLevel::Alloca => {
+                self.build_ptr_to_stack_value(*sym, args[0], arg_layouts[0]);
+            }
+
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DECREF_RC_PTR.to_string(),
@@ -2217,10 +2237,19 @@ trait Backend<'a> {
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
-    fn build_ptr_write(
+    fn build_ptr_store(
         &mut self,
         sym: Symbol,
         ptr: Symbol,
+        value: Symbol,
+        element_layout: InLayout<'a>,
+    );
+
+    fn build_ptr_load(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>);
+
+    fn build_ptr_to_stack_value(
+        &mut self,
+        sym: Symbol,
         value: Symbol,
         element_layout: InLayout<'a>,
     );
@@ -2294,6 +2323,16 @@ trait Backend<'a> {
 
     /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
     fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    );
+
+    /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
+    fn load_union_field_ptr_at_index(
         &mut self,
         sym: &Symbol,
         structure: &Symbol,

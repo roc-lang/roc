@@ -20,12 +20,12 @@ procedure Encode.24 (Encode.99, Encode.107, Encode.101):
     ret Encode.111;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.118 : List U8 = CallByName TotallyNotJson.264 Encode.99 Encode.101 Encode.107;
-    ret Encode.118;
+    let Encode.113 : List U8 = CallByName TotallyNotJson.264 Encode.99 Encode.101 Encode.107;
+    ret Encode.113;
 
 procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.123 : List U8 = CallByName TotallyNotJson.182 Encode.99 Encode.101 Encode.107;
-    ret Encode.123;
+    let Encode.118 : List U8 = CallByName TotallyNotJson.182 Encode.99 Encode.101 Encode.107;
+    ret Encode.118;
 
 procedure Encode.26 (Encode.105, Encode.106):
     let Encode.109 : List U8 = Array [];
@@ -136,23 +136,7 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.598 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.598;
 
-procedure List.80 (List.647, List.648, List.649, List.650, List.651):
-    joinpoint List.553 List.439 List.440 List.441 List.442 List.443:
-        let List.555 : Int1 = CallByName Num.22 List.442 List.443;
-        if List.555 then
-            let List.562 : Str = CallByName List.66 List.439 List.442;
-            inc List.562;
-            let List.556 : {List U8, U64} = CallByName List.145 List.440 List.562 List.441;
-            let List.559 : U64 = 1i64;
-            let List.558 : U64 = CallByName Num.19 List.442 List.559;
-            jump List.553 List.439 List.556 List.441 List.558 List.443;
-        else
-            dec List.439;
-            ret List.440;
-    in
-    jump List.553 List.647 List.648 List.649 List.650 List.651;
-
-procedure List.80 (List.664, List.665, List.666, List.667, List.668):
+procedure List.80 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
     joinpoint List.573 List.439 List.440 List.441 List.442 List.443:
         let List.575 : Int1 = CallByName Num.22 List.442 List.443;
         if List.575 then
@@ -165,9 +149,9 @@ procedure List.80 (List.664, List.665, List.666, List.667, List.668):
             dec List.439;
             ret List.440;
     in
-    jump List.573 List.664 List.665 List.666 List.667 List.668;
+    jump List.573 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
 
-procedure List.80 (List.691, List.692, List.693, List.694, List.695):
+procedure List.80 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_gen.20):
     joinpoint List.626 List.439 List.440 List.441 List.442 List.443:
         let List.628 : Int1 = CallByName Num.22 List.442 List.443;
         if List.628 then
@@ -191,7 +175,23 @@ procedure List.80 (List.691, List.692, List.693, List.694, List.695):
             let List.627 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.440;
             ret List.627;
     in
-    jump List.626 List.691 List.692 List.693 List.694 List.695;
+    jump List.626 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20;
+
+procedure List.80 (#Derived_gen.6, #Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.10):
+    joinpoint List.553 List.439 List.440 List.441 List.442 List.443:
+        let List.555 : Int1 = CallByName Num.22 List.442 List.443;
+        if List.555 then
+            let List.562 : Str = CallByName List.66 List.439 List.442;
+            inc List.562;
+            let List.556 : {List U8, U64} = CallByName List.145 List.440 List.562 List.441;
+            let List.559 : U64 = 1i64;
+            let List.558 : U64 = CallByName Num.19 List.442 List.559;
+            jump List.553 List.439 List.556 List.441 List.558 List.443;
+        else
+            dec List.439;
+            ret List.440;
+    in
+    jump List.553 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10;
 
 procedure List.93 (List.436, List.437, List.438):
     let List.551 : U64 = 0i64;
@@ -262,8 +262,8 @@ procedure Test.5 (Test.6, Test.7, Test.4):
     if Test.25 then
         let Test.26 : Str = "A";
         let Test.29 : Str = StructAtIndex 0 Test.4;
-        let #Derived_gen.0 : Str = StructAtIndex 1 Test.4;
-        dec #Derived_gen.0;
+        let #Derived_gen.24 : Str = StructAtIndex 1 Test.4;
+        dec #Derived_gen.24;
         let Test.28 : Str = CallByName TotallyNotJson.25 Test.29;
         let Test.27 : List Str = Array [Test.28];
         let Test.19 : {Str, List Str} = CallByName TotallyNotJson.32 Test.26 Test.27;
@@ -271,8 +271,8 @@ procedure Test.5 (Test.6, Test.7, Test.4):
     else
         let Test.21 : Str = "B";
         let Test.24 : Str = StructAtIndex 1 Test.4;
-        let #Derived_gen.1 : Str = StructAtIndex 0 Test.4;
-        dec #Derived_gen.1;
+        let #Derived_gen.25 : Str = StructAtIndex 0 Test.4;
+        dec #Derived_gen.25;
         let Test.23 : Str = CallByName TotallyNotJson.25 Test.24;
         let Test.22 : List Str = Array [Test.23];
         let Test.19 : {Str, List Str} = CallByName TotallyNotJson.32 Test.21 Test.22;

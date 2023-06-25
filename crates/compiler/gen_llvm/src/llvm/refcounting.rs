@@ -537,6 +537,12 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
             Some(function)
         }
 
+        Ptr(_inner) => {
+            debug_assert_eq!(true, false);
+
+            None
+        }
+
         Union(variant) => {
             use UnionLayout::*;
 

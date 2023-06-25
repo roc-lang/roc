@@ -2085,6 +2085,7 @@ fn tag_union_type_from_layout<'a>(
                 },
             }
         }
+        LayoutRepr::Ptr(_) => unreachable!("Ptr values are never publicly exposed"),
         LayoutRepr::Boxed(elem_layout) => {
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(env, union_tags, subs, layout, &[elem_layout], types);

@@ -23,7 +23,7 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{
     AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
 };
-use inkwell::values::BasicValueEnum::{self};
+use inkwell::values::BasicValueEnum;
 use inkwell::values::{
     BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PointerValue,
     StructValue,
@@ -1165,7 +1165,12 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             env.builder.position_at_end(check_if_null);
 
             env.builder.build_conditional_branch(
-                env.builder.build_is_null(tag_ptr, "is_tag_null"),
+                // have llvm optimizations clean this up
+                if layout_interner.is_nullable(layout) {
+                    env.builder.build_is_null(tag_ptr, "is_tag_null")
+                } else {
+                    env.context.bool_type().const_int(false as _, false)
+                },
                 cont_block,
                 check_if_unique,
             );
@@ -1246,7 +1251,12 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             env.builder.position_at_end(check_if_null);
 
             env.builder.build_conditional_branch(
-                env.builder.build_is_null(tag_ptr, "is_tag_null"),
+                // have llvm optimizations clean this up
+                if layout_interner.is_nullable(layout) {
+                    env.builder.build_is_null(tag_ptr, "is_tag_null")
+                } else {
+                    env.context.bool_type().const_int(false as _, false)
+                },
                 cont_block,
                 check_if_unique,
             );
@@ -1379,12 +1389,13 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner.get_repr(layout),
                     );
 
-                    lookup_at_index_ptr2(
+                    lookup_at_index_ptr(
                         env,
                         layout_interner,
                         field_layouts,
                         *index as usize,
                         ptr,
+                        None,
                         target_loaded_type,
                     )
                 }
@@ -1404,7 +1415,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         field_layouts,
                         *index as usize,
                         argument.into_pointer_value(),
-                        struct_type.into_struct_type(),
+                        Some(struct_type.into_struct_type()),
                         target_loaded_type,
                     )
                 }
@@ -1430,12 +1441,13 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner.get_repr(layout),
                     );
 
-                    lookup_at_index_ptr2(
+                    lookup_at_index_ptr(
                         env,
                         layout_interner,
                         field_layouts,
                         *index as usize,
                         ptr,
+                        None,
                         target_loaded_type,
                     )
                 }
@@ -1463,11 +1475,114 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         // the tag id is not stored
                         *index as usize,
                         argument.into_pointer_value(),
-                        struct_type.into_struct_type(),
+                        Some(struct_type.into_struct_type()),
                         target_loaded_type,
                     )
                 }
             }
+        }
+
+        UnionFieldPtrAtIndex {
+            tag_id,
+            structure,
+            index,
+            union_layout,
+        } => {
+            // cast the argument bytes into the desired shape for this tag
+            let argument = scope.load_symbol(structure);
+            let ret_repr = layout_interner.get_repr(layout);
+
+            let pointer_value = match union_layout {
+                UnionLayout::NonRecursive(_) => unreachable!(),
+                UnionLayout::Recursive(tag_layouts) => {
+                    debug_assert!(argument.is_pointer_value());
+
+                    let field_layouts = tag_layouts[*tag_id as usize];
+
+                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
+                    let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
+
+                    union_field_ptr_at_index(
+                        env,
+                        layout_interner,
+                        field_layouts,
+                        None,
+                        *index as usize,
+                        ptr,
+                        target_loaded_type,
+                    )
+                }
+                UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                    let struct_layout = LayoutRepr::struct_(field_layouts);
+
+                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
+                    let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
+
+                    union_field_ptr_at_index(
+                        env,
+                        layout_interner,
+                        field_layouts,
+                        Some(struct_type.into_struct_type()),
+                        *index as usize,
+                        argument.into_pointer_value(),
+                        target_loaded_type,
+                    )
+                }
+                UnionLayout::NullableWrapped {
+                    nullable_id,
+                    other_tags,
+                } => {
+                    debug_assert!(argument.is_pointer_value());
+                    debug_assert_ne!(*tag_id, *nullable_id);
+
+                    let tag_index = if *tag_id < *nullable_id {
+                        *tag_id
+                    } else {
+                        tag_id - 1
+                    };
+
+                    let field_layouts = other_tags[tag_index as usize];
+
+                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
+                    let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
+
+                    union_field_ptr_at_index(
+                        env,
+                        layout_interner,
+                        field_layouts,
+                        None,
+                        *index as usize,
+                        ptr,
+                        target_loaded_type,
+                    )
+                }
+                UnionLayout::NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                } => {
+                    debug_assert!(argument.is_pointer_value());
+                    debug_assert_ne!(*tag_id != 0, *nullable_id);
+
+                    let field_layouts = other_fields;
+                    let struct_layout = LayoutRepr::struct_(field_layouts);
+
+                    let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
+                    let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
+
+                    union_field_ptr_at_index(
+                        env,
+                        layout_interner,
+                        field_layouts,
+                        Some(struct_type.into_struct_type()),
+                        // the tag id is not stored
+                        *index as usize,
+                        argument.into_pointer_value(),
+                        target_loaded_type,
+                    )
+                }
+            };
+
+            pointer_value.into()
         }
 
         GetTagId {
@@ -1816,15 +1931,22 @@ fn tag_pointer_set_tag_id<'ctx>(
     // we only have 3 bits, so can encode only 0..7 (or on 32-bit targets, 2 bits to encode 0..3)
     debug_assert!((tag_id as u32) < env.target_info.ptr_width() as u32);
 
-    let ptr_int = env.ptr_int();
+    let tag_id_intval = env.ptr_int().const_int(tag_id as u64, false);
 
-    let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
+    let cast_pointer = env.builder.build_pointer_cast(
+        pointer,
+        env.context.i8_type().ptr_type(AddressSpace::default()),
+        "cast_to_i8_ptr",
+    );
 
-    let tag_id_intval = ptr_int.const_int(tag_id as u64, false);
-    let combined = env.builder.build_or(as_int, tag_id_intval, "store_tag_id");
+    // NOTE: assumes the lower bits of `cast_pointer` are all 0
+    let indexed_pointer = unsafe {
+        env.builder
+            .build_in_bounds_gep(cast_pointer, &[tag_id_intval], "indexed_pointer")
+    };
 
     env.builder
-        .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
+        .build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
 }
 
 pub fn tag_pointer_tag_id_bits_and_mask(target_info: TargetInfo) -> (u64, u64) {
@@ -1854,22 +1976,28 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     pointer: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    let ptr_int = env.ptr_int();
+    let (_, tag_id_bits_mask) = tag_pointer_tag_id_bits_and_mask(env.target_info);
 
-    let (tag_id_bits_mask, _) = tag_pointer_tag_id_bits_and_mask(env.target_info);
+    let as_int = env
+        .builder
+        .build_ptr_to_int(pointer, env.ptr_int(), "to_int");
 
-    let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
+    let mask = env.ptr_int().const_int(tag_id_bits_mask, false);
 
-    let mask = {
-        let a = env.ptr_int().const_all_ones();
-        let tag_id_bits = env.ptr_int().const_int(tag_id_bits_mask, false);
-        env.builder.build_left_shift(a, tag_id_bits, "make_mask")
-    };
+    let current_tag_id = env.builder.build_and(as_int, mask, "masked");
 
-    let masked = env.builder.build_and(as_int, mask, "masked");
+    let index = env.builder.build_int_neg(current_tag_id, "index");
+
+    let cast_pointer = env.builder.build_pointer_cast(
+        pointer,
+        env.context.i8_type().ptr_type(AddressSpace::default()),
+        "cast_to_i8_ptr",
+    );
+
+    let indexed_pointer = unsafe { env.builder.build_gep(cast_pointer, &[index], "new_ptr") };
 
     env.builder
-        .build_int_to_ptr(masked, pointer.get_type(), "to_ptr")
+        .build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
 }
 
 fn allocate_tag<'a, 'ctx>(
@@ -2025,20 +2153,17 @@ fn lookup_at_index_ptr<'a, 'ctx>(
     field_layouts: &[InLayout<'a>],
     index: usize,
     value: PointerValue<'ctx>,
-    struct_type: StructType<'ctx>,
+    struct_type: Option<StructType<'ctx>>,
     target_loaded_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let ptr = env.builder.build_pointer_cast(
+    let elem_ptr = union_field_ptr_at_index_help(
+        env,
+        layout_interner,
+        field_layouts,
+        struct_type,
+        index,
         value,
-        struct_type.ptr_type(AddressSpace::default()),
-        "cast_lookup_at_index_ptr",
     );
-
-    let elem_ptr = builder
-        .new_build_struct_gep(struct_type, ptr, index as u32, "at_index_struct_gep")
-        .unwrap();
 
     let field_layout = field_layouts[index];
     let result = load_roc_value(
@@ -2054,19 +2179,23 @@ fn lookup_at_index_ptr<'a, 'ctx>(
     cast_if_necessary_for_opaque_recursive_pointers(env.builder, result, target_loaded_type)
 }
 
-fn lookup_at_index_ptr2<'a, 'ctx>(
+fn union_field_ptr_at_index_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     field_layouts: &'a [InLayout<'a>],
+    opt_struct_type: Option<StructType<'ctx>>,
     index: usize,
     value: PointerValue<'ctx>,
-    target_loaded_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+) -> PointerValue<'ctx> {
     let builder = env.builder;
 
-    let struct_layout = LayoutRepr::struct_(field_layouts);
-    let struct_type =
-        basic_type_from_layout(env, layout_interner, struct_layout).into_struct_type();
+    let struct_type = match opt_struct_type {
+        Some(st) => st,
+        None => {
+            let struct_layout = LayoutRepr::struct_(field_layouts);
+            basic_type_from_layout(env, layout_interner, struct_layout).into_struct_type()
+        }
+    };
 
     let data_ptr = env.builder.build_pointer_cast(
         value,
@@ -2074,27 +2203,40 @@ fn lookup_at_index_ptr2<'a, 'ctx>(
         "cast_lookup_at_index_ptr",
     );
 
-    let elem_ptr = builder
+    builder
         .new_build_struct_gep(
             struct_type,
             data_ptr,
             index as u32,
             "at_index_struct_gep_data",
         )
-        .unwrap();
+        .unwrap()
+}
 
-    let field_layout = field_layouts[index];
-    let result = load_roc_value(
+fn union_field_ptr_at_index<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    field_layouts: &'a [InLayout<'a>],
+    opt_struct_type: Option<StructType<'ctx>>,
+    index: usize,
+    value: PointerValue<'ctx>,
+    target_loaded_type: BasicTypeEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let result = union_field_ptr_at_index_help(
         env,
         layout_interner,
-        layout_interner.get_repr(field_layout),
-        elem_ptr,
-        "load_at_index_ptr",
+        field_layouts,
+        opt_struct_type,
+        index,
+        value,
     );
 
     // A recursive pointer in the loaded structure is stored as a `i64*`, but the loaded layout
     // might want a more precise structure. As such, cast it to the refined type if needed.
-    cast_if_necessary_for_opaque_recursive_pointers(env.builder, result, target_loaded_type)
+    let from_value: BasicValueEnum = result.into();
+    let to_type: BasicTypeEnum = target_loaded_type;
+    cast_if_necessary_for_opaque_recursive_pointers(env.builder, from_value, to_type)
+        .into_pointer_value()
 }
 
 pub fn reserve_with_refcount<'a, 'ctx>(
@@ -3071,7 +3213,7 @@ pub fn cast_if_necessary_for_opaque_recursive_pointers<'ctx>(
     to_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     if from_value.get_type() != to_type
-        // Only perform the cast if the target types are transumatble.
+        // Only perform the cast if the target types are transmutable.
         && equivalent_type_constructors(&from_value.get_type(), &to_type)
     {
         complex_bitcast(
