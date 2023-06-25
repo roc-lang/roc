@@ -176,6 +176,7 @@ impl<'a> LastSeenMap<'a> {
                     Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
                         self.set_last_seen(*symbol, stmt);
                     }
+                    Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}
                 }
@@ -843,6 +844,17 @@ trait Backend<'a> {
             }
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
+            }
+            Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+            Expr::Reuse {
+                tag_layout,
+                tag_id,
+                symbol: reused,
+                arguments,
+                ..
+            } => {
+                self.load_literal_symbols(arguments);
+                self.tag(sym, arguments, tag_layout, *tag_id, Some(*reused));
             }
             Expr::Reset { symbol, .. } => {
                 let layout = *self.layout_map().get(symbol).unwrap();

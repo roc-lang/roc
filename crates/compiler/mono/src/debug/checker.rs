@@ -70,6 +70,9 @@ pub enum ProblemKind<'a> {
         proc_layout: ProcLayout<'a>,
         similar: Vec<ProcLayout<'a>>,
     },
+    PtrToUndefinedProc {
+        symbol: Symbol,
+    },
     DuplicateCallSpecId {
         old_call_line: usize,
     },
@@ -463,6 +466,49 @@ impl<'a, 'r> Ctx<'a, 'r> {
             Expr::EmptyArray => {
                 // TODO don't know what the element layout is
                 None
+            }
+            &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
+                let inner = layout;
+                Some(
+                    ctx.interner
+                        .insert_direct_no_semantic(LayoutRepr::Boxed(inner)),
+                )
+            }),
+            &Expr::ExprUnbox { symbol } => self.with_sym_layout(symbol, |ctx, def_line, layout| {
+                let layout = ctx.resolve(layout);
+                match ctx.interner.get_repr(layout) {
+                    LayoutRepr::Boxed(inner) => Some(inner),
+                    _ => {
+                        ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
+                        None
+                    }
+                }
+            }),
+            &Expr::FunctionPointer { lambda_name } => {
+                let lambda_symbol = lambda_name.name();
+                if !self.procs.iter().any(|((name, proc), _)| {
+                    *name == lambda_symbol && proc.niche == lambda_name.niche()
+                }) {
+                    self.problem(ProblemKind::PtrToUndefinedProc {
+                        symbol: lambda_symbol,
+                    });
+                }
+                Some(Layout::OPAQUE_PTR)
+            }
+            &Expr::Reuse {
+                symbol,
+                update_tag_id: _,
+                update_mode: _,
+                tag_layout,
+                tag_id: _,
+                arguments: _,
+            } => {
+                let union = self
+                    .interner
+                    .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
+                self.check_sym_layout(symbol, union, UseKind::TagReuse);
+                // TODO also check update arguments
+                Some(union)
             }
             &Expr::Reset {
                 symbol,

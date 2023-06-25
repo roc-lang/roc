@@ -229,8 +229,11 @@ fn specialize_drops_stmt<'a, 'i>(
                         }
                     }
                     Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
-                    RuntimeErrorFunction(_) | GetTagId { .. } | EmptyArray | NullPointer => { /* do nothing */
-                    }
+                    RuntimeErrorFunction(_)
+                    | FunctionPointer { .. }
+                    | GetTagId { .. }
+                    | EmptyArray
+                    | NullPointer => { /* do nothing */ }
                 }
 
                 // now store the let binding for later

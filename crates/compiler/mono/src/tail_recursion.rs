@@ -1097,7 +1097,7 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
             Some(ru) => ru.symbol == needle || arguments.contains(&needle),
         },
         Expr::Struct(fields) => fields.contains(&needle),
-        Expr::NullPointer => false,
+        Expr::NullPointer | Expr::FunctionPointer { .. } => false,
         Expr::StructAtIndex { structure, .. }
         | Expr::GetTagId { structure, .. }
         | Expr::UnionAtIndex { structure, .. }

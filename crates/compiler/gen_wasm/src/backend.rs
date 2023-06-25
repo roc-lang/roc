@@ -1136,6 +1136,20 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 storage,
             ),
 
+            Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
+
+            Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
+
+            Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+
+            Expr::Reuse {
+                tag_layout,
+                tag_id,
+                arguments,
+                symbol: reused,
+                ..
+            } => self.expr_tag(tag_layout, *tag_id, arguments, sym, storage, Some(*reused)),
+
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
             Expr::ResetRef { symbol: arg, .. } => self.expr_resetref(*arg, sym, storage),

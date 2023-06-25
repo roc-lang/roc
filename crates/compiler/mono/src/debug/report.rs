@@ -265,6 +265,15 @@ where
             };
             stack(f, [no_spec_doc, similar_doc])
         }
+        ProblemKind::PtrToUndefinedProc { symbol } => {
+            title = "PROC SPECIALIZATION NOT DEFINED";
+            docs_before = vec![];
+            f.concat([
+                f.reflow("The proc "),
+                format_symbol(f, interns, symbol),
+                f.reflow(" is not defined"),
+            ])
+        }
         ProblemKind::DuplicateCallSpecId { old_call_line } => {
             title = "DUPLICATE CALL SPEC ID";
             docs_before = vec![(old_call_line, f.reflow("This call has a specialization ID"))];

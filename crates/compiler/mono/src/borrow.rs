@@ -719,7 +719,7 @@ impl<'a> BorrowInfState<'a> {
 
             Call(call) => self.collect_call(interner, param_map, z, call),
 
-            Literal(_) | NullPointer | RuntimeErrorFunction(_) => {}
+            Literal(_) | NullPointer | RuntimeErrorFunction(_) | FunctionPointer { .. } => {}
 
             StructAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is

@@ -1521,6 +1521,7 @@ fn expr_spec<'a>(
             let value = with_new_heap_cell(builder, block, union_data)?;
             builder.add_make_named(block, MOD_APP, type_name, value)
         }
+        FunctionPointer { .. } => todo_lambda_erasure!(),
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(env, builder, interner, interner.get_repr(layout))?;
 

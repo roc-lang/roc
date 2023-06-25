@@ -1885,6 +1885,28 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
+    ExprBox {
+        symbol: Symbol,
+    },
+
+    ExprUnbox {
+        symbol: Symbol,
+    },
+
+    /// Returns a pointer to the given function.
+    FunctionPointer {
+        lambda_name: LambdaName<'a>,
+    },
+
+    Reuse {
+        symbol: Symbol,
+        update_tag_id: bool,
+        update_mode: UpdateModeId,
+        // normal Tag fields
+        tag_layout: UnionLayout<'a>,
+        tag_id: TagIdIntType,
+        arguments: &'a [Symbol],
+    },
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,
@@ -2065,6 +2087,18 @@ impl<'a> Expr<'a> {
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
+
+            ExprBox { symbol, .. } => alloc
+                .text("Box ")
+                .append(symbol_to_doc(alloc, *symbol, pretty)),
+
+            ExprUnbox { symbol, .. } => alloc
+                .text("Unbox ")
+                .append(symbol_to_doc(alloc, *symbol, pretty)),
+
+            FunctionPointer { lambda_name } => alloc
+                .text("FunctionPointer ")
+                .append(symbol_to_doc(alloc, lambda_name.name(), pretty)),
 
             UnionAtIndex {
                 tag_id,
@@ -7705,6 +7739,16 @@ fn substitute_in_expr<'a>(
                 None
             }
         }
+
+        ExprBox { symbol } => {
+            substitute(subs, *symbol).map(|new_symbol| ExprBox { symbol: new_symbol })
+        }
+
+        ExprUnbox { symbol } => {
+            substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
+        }
+
+        FunctionPointer { .. } => None,
 
         StructAtIndex {
             index,
