@@ -3444,8 +3444,7 @@ fn to_provides_report<'a>(
     use roc_parse::parser::EProvides;
 
     match *parse_problem {
-        EProvides::ListEnd(pos) | // TODO: give this its own error message
-        EProvides::Identifier(pos) => {
+        EProvides::ListEnd(pos) | EProvides::Open(pos) | EProvides::Identifier(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -3495,6 +3494,51 @@ fn to_provides_report<'a>(
         }
 
         EProvides::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+
+        EProvides::ListStart(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("provides"),
+                    alloc.reflow(" keyword next, like"),
+                ]),
+                alloc.parser_suggestion("provides [main] to pf").indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD PROVIDES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EProvides::PackageName(_, pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a package header, but got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I am expecting a package name next, like "),
+                    alloc.parser_suggestion("\"roc/core\""),
+                    alloc.reflow(". Package names must be quoted."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID PACKAGE NAME".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }

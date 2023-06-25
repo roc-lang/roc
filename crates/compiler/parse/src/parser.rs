@@ -145,7 +145,7 @@ pub enum EProvides<'a> {
     ListStart(Position),
     ListEnd(Position),
     Identifier(Position),
-    Package(EPackageName<'a>, Position),
+    PackageName(EPackageName<'a>, Position),
     Space(BadInputError, Position),
 }
 

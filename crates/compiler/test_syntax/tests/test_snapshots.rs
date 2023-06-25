@@ -136,7 +136,7 @@ mod test_snapshots {
                                 let kind = parts.next().unwrap();
                                 println!("{:?} {:?} {:?}", pass_or_fail, test_name, kind);
                                 assert!(parts.next().is_none());
-                                assert!(kind == "expr" || kind == "moduledefs" || kind == "full");
+                                assert!(["expr", "moduledefs", "full", "header"].contains(&kind));
                                 (pass_or_fail, test_name, kind)
                             };
                             let line = format!("        {}/{}.{},", pass_or_fail, test_name, kind);
@@ -217,6 +217,7 @@ mod test_snapshots {
         fail/pattern_in_parens_end_comma.expr,
         fail/pattern_in_parens_indent_open.expr,
         fail/pattern_in_parens_open.expr,
+        fail/provides_bare_symbol.header,
         fail/record_type_end.expr,
         fail/record_type_keyword_field_name.expr,
         fail/record_type_missing_comma.expr,

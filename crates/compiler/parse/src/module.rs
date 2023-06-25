@@ -221,7 +221,7 @@ fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
             |_, pos| EProvides::Identifier(pos),
             map!(lowercase_ident(), To::ExistingPackage)
         ),
-        specialize(EProvides::Package, map!(package_name(), To::NewPackage))
+        specialize(EProvides::PackageName, map!(package_name(), To::NewPackage))
     ]
 }
 
