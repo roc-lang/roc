@@ -1,8 +1,8 @@
 app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }    
     imports [
-        pf.Html.{ html, head, body, footer, script, div, main, text, nav, a, link, meta },
-        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, src },
+        pf.Html.{ html, head, body, footer, p, div, main, text, nav, a, link, meta },
+        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset },
     ]
     provides [transformFileContent] to pf
 
@@ -49,14 +49,20 @@ view = \page, htmlContent ->
             main [] [
                 text htmlContent,
             ],
-            footer [] [
+            footer [
+                id "footer"
+            ] [
+                p [] [
+                    a [href "https://github.com/roc-lang/roc"] [text "source code repository"],
+                ],
                 # <!-- TODO FOOTER - Lanugage link to source code -->
                 text "This site is powered by ",
                 a [href "https://www.netlify.com"] [ text "Netlify"],
                 text ". Made by people who like to make nice things. © Roc 2023",
             ]
         ],
-        script [src "/site.js"] [],
+        # TODO - add site.js if needed
+        # script [src "/site.js"] [],
     ]
 
 viewNavbar : Html.Node

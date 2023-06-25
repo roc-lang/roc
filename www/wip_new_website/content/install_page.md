@@ -10,7 +10,9 @@
 
 ## Nightly Builds
 
-<!-- direct download links to builds go here -->
+<!-- direct download links to builds should go here -->
+
+[nightly builds](https://github.com/roc-lang/roc/releases)
 
 ## Roc CLI
 
