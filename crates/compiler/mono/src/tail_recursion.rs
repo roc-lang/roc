@@ -191,22 +191,16 @@ fn insert_jumps<'a>(
         }
 
         Let(symbol, expr, layout, cont) => {
-            let opt_cont = insert_jumps(
+            let cont = insert_jumps(
                 arena,
                 cont,
                 goal_id,
                 needle,
                 needle_arguments,
                 needle_result,
-            );
+            )?;
 
-            if opt_cont.is_some() {
-                let cont = opt_cont.unwrap_or(cont);
-
-                Some(arena.alloc(Let(*symbol, expr.clone(), *layout, cont)))
-            } else {
-                None
-            }
+            Some(arena.alloc(Let(*symbol, expr.clone(), *layout, cont)))
         }
 
         Join {
@@ -266,20 +260,17 @@ fn insert_jumps<'a>(
 
             let opt_branches = Vec::from_iter_in(
                 branches.iter().map(|(label, info, branch)| {
-                    match insert_jumps(
+                    let branch = insert_jumps(
                         arena,
                         branch,
                         goal_id,
                         needle,
                         needle_arguments,
                         needle_result,
-                    ) {
-                        None => None,
-                        Some(branch) => {
-                            did_change = true;
-                            Some((*label, info.clone(), branch.clone()))
-                        }
-                    }
+                    )?;
+
+                    did_change = true;
+                    Some((*label, info.clone(), branch.clone()))
                 }),
                 arena,
             );
@@ -291,17 +282,12 @@ fn insert_jumps<'a>(
                 );
 
                 let branches = if did_change {
-                    let new = Vec::from_iter_in(
-                        opt_branches.into_iter().zip(branches.iter()).map(
-                            |(opt_branch, branch)| match opt_branch {
-                                None => branch.clone(),
-                                Some(new_branch) => new_branch,
-                            },
-                        ),
-                        arena,
-                    );
+                    let it = opt_branches
+                        .into_iter()
+                        .zip(branches.iter())
+                        .map(|(opt_branch, branch)| opt_branch.unwrap_or_else(|| branch.clone()));
 
-                    new.into_bump_slice()
+                    Vec::from_iter_in(it, arena).into_bump_slice()
                 } else {
                     branches
                 };
@@ -317,39 +303,44 @@ fn insert_jumps<'a>(
                 None
             }
         }
+
         Refcounting(modify, cont) => {
-            match insert_jumps(
+            let cont = insert_jumps(
                 arena,
                 cont,
                 goal_id,
                 needle,
                 needle_arguments,
                 needle_result,
-            ) {
-                Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
-                None => None,
-            }
+            )?;
+
+            let refcounting = Refcounting(*modify, cont);
+
+            Some(arena.alloc(refcounting))
         }
 
         Dbg {
             symbol,
             variable,
             remainder,
-        } => match insert_jumps(
-            arena,
-            remainder,
-            goal_id,
-            needle,
-            needle_arguments,
-            needle_result,
-        ) {
-            Some(cont) => Some(arena.alloc(Dbg {
+        } => {
+            let cont = insert_jumps(
+                arena,
+                remainder,
+                goal_id,
+                needle,
+                needle_arguments,
+                needle_result,
+            )?;
+
+            let dbg = Dbg {
                 symbol: *symbol,
                 variable: *variable,
                 remainder: cont,
-            })),
-            None => None,
-        },
+            };
+
+            Some(arena.alloc(dbg))
+        }
 
         Expect {
             condition,
@@ -357,23 +348,26 @@ fn insert_jumps<'a>(
             lookups,
             variables,
             remainder,
-        } => match insert_jumps(
-            arena,
-            remainder,
-            goal_id,
-            needle,
-            needle_arguments,
-            needle_result,
-        ) {
-            Some(cont) => Some(arena.alloc(Expect {
+        } => {
+            let cont = insert_jumps(
+                arena,
+                remainder,
+                goal_id,
+                needle,
+                needle_arguments,
+                needle_result,
+            )?;
+
+            let expect = Expect {
                 condition: *condition,
                 region: *region,
                 lookups,
                 variables,
                 remainder: cont,
-            })),
-            None => None,
-        },
+            };
+
+            Some(arena.alloc(expect))
+        }
 
         ExpectFx {
             condition,
@@ -381,23 +375,26 @@ fn insert_jumps<'a>(
             lookups,
             variables,
             remainder,
-        } => match insert_jumps(
-            arena,
-            remainder,
-            goal_id,
-            needle,
-            needle_arguments,
-            needle_result,
-        ) {
-            Some(cont) => Some(arena.alloc(ExpectFx {
+        } => {
+            let cont = insert_jumps(
+                arena,
+                remainder,
+                goal_id,
+                needle,
+                needle_arguments,
+                needle_result,
+            )?;
+
+            let expect_fx = ExpectFx {
                 condition: *condition,
                 region: *region,
                 lookups,
                 variables,
                 remainder: cont,
-            })),
-            None => None,
-        },
+            };
+
+            Some(arena.alloc(expect_fx))
+        }
 
         Ret(_) => None,
         Jump(_, _) => None,
