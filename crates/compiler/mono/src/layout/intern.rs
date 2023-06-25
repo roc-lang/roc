@@ -75,11 +75,12 @@ cache_interned_layouts! {
     15, DEC,  pub, nosema!(LayoutRepr::DEC)
     16, STR,  pub, nosema!(LayoutRepr::STR)
     17, OPAQUE_PTR,  pub, nosema!(LayoutRepr::OPAQUE_PTR)
-    18, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
-    19, STR_PTR, pub, nosema!(LayoutRepr::Ptr(Layout::STR))
-    20, LIST_U8, pub, nosema!(LayoutRepr::Builtin(crate::layout::Builtin::List(Layout::U8)))
+    18, ERASED, pub, nosema!(LayoutRepr::ERASED)
+    19, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
+    20, STR_PTR, pub, nosema!(LayoutRepr::Ptr(Layout::STR))
+    21, LIST_U8, pub, nosema!(LayoutRepr::Builtin(crate::layout::Builtin::List(Layout::U8)))
 
-    ; 21
+    ; 22
 }
 
 macro_rules! impl_to_from_int_width {

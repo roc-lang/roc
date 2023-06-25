@@ -4,7 +4,7 @@ use roc_types::subs::Variable;
 
 use crate::{
     borrow::Ownership,
-    layout::{FunctionPointer, InLayout, Layout, LayoutCache, LayoutRepr},
+    layout::{ErasedIndex, FunctionPointer, InLayout, Layout, LayoutCache, LayoutRepr},
 };
 
 use super::{
@@ -14,31 +14,11 @@ use super::{
 const ERASED_FUNCTION_FIELD_LAYOUTS: &[InLayout] =
     &[Layout::OPAQUE_PTR, Layout::OPAQUE_PTR, Layout::OPAQUE_PTR];
 
-/// The layout of an erased function is
-///
-/// ```
-/// {
-///     value: void*,
-///     callee: void*,
-///     refcounter: void*,
-/// }
-/// ```
-fn erased_function_layout<'a>(layout_cache: &mut LayoutCache<'a>) -> InLayout<'a> {
-    layout_cache.put_in_direct_no_semantic(LayoutRepr::Struct(ERASED_FUNCTION_FIELD_LAYOUTS))
-}
-
-#[repr(u8)]
-enum ErasedFunctionIndex {
-    Value = 0,
-    Callee = 1,
-    RefCounter = 2,
-}
-
 fn index_erased_function<'a>(
     arena: &'a Bump,
     assign_to: Symbol,
     erased_function: Symbol,
-    index: ErasedFunctionIndex,
+    index: ErasedIndex,
 ) -> impl FnOnce(Stmt<'a>) -> Stmt<'a> {
     move |rest| {
         Stmt::Let(
@@ -172,11 +152,11 @@ pub fn call_erased_function<'a>(
 
     // f_value = f.value
     let f_value = env.unique_symbol();
-    let let_f_value = index_erased_function(arena, f_value, f, ErasedFunctionIndex::Value);
+    let let_f_value = index_erased_function(arena, f_value, f, ErasedIndex::Value);
 
     // f_callee = f.callee
     let f_callee = env.unique_symbol();
-    let let_f_callee = index_erased_function(arena, f_callee, f, ErasedFunctionIndex::Callee);
+    let let_f_callee = index_erased_function(arena, f_callee, f, ErasedIndex::Callee);
 
     let mut build_closure_data_branch = |env: &mut Env, pass_closure| {
         // f_callee = cast(f_callee, (..params) -> ret);

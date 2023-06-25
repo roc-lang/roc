@@ -2581,6 +2581,14 @@ impl<'a> Layout<'a> {
     }
 }
 
+/// Index into an [Erased layout][Layout::ERASED].
+#[repr(u8)]
+pub(crate) enum ErasedIndex {
+    Value = 0,
+    Callee = 1,
+    RefCounter = 2,
+}
+
 impl<'a> LayoutRepr<'a> {
     pub const UNIT: Self = LayoutRepr::struct_(&[]);
     pub const BOOL: Self = LayoutRepr::Builtin(Builtin::Bool);
@@ -2599,6 +2607,14 @@ impl<'a> LayoutRepr<'a> {
     pub const DEC: Self = LayoutRepr::Builtin(Builtin::Decimal);
     pub const STR: Self = LayoutRepr::Builtin(Builtin::Str);
     pub const OPAQUE_PTR: Self = LayoutRepr::Ptr(Layout::VOID);
+    pub const ERASED: Self = Self::struct_(&[
+        // .value
+        Layout::OPAQUE_PTR,
+        // .callee
+        Layout::OPAQUE_PTR,
+        // .refcounter
+        Layout::OPAQUE_PTR,
+    ]);
 
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
         Self::Struct(field_layouts)
@@ -3297,14 +3313,15 @@ fn layout_from_flat_type<'a>(
             } else {
                 let mut criteria = CACHEABLE;
 
-                let lambda_set = cached!(
-                    LambdaSet::from_var(env, args, closure_var, ret_var),
-                    criteria,
-                    env.subs
-                );
-                let lambda_set = lambda_set.full_layout;
+                let closure_data = build_function_closure_data(env, args, closure_var, ret_var);
+                let closure_data = cached!(closure_data, criteria, env.subs);
 
-                Cacheable(Ok(lambda_set), criteria)
+                match closure_data {
+                    ClosureDataKind::LambdaSet(lambda_set) => {
+                        Cacheable(Ok(lambda_set.full_layout), criteria)
+                    }
+                    ClosureDataKind::Erased => Cacheable(Ok(Layout::ERASED), criteria),
+                }
             }
         }
         Record(fields, ext_var) => {
