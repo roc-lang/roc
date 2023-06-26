@@ -2223,7 +2223,7 @@ fn single_tag_payload_fields<'a, 'b>(
 ) -> (String, RocSingleTagPayload) {
     let layout = env.layout_cache.interner.get(in_layout);
     // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
-    // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
+    // so we shouldn't need to separately check that. However, we still do a debug_assert
     // anyway just so we have some warning in case that relationship somehow didn't hold!
     debug_assert_eq!(
         env.glue_procs_by_layout.get(&layout).is_some(),
