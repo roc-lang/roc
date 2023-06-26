@@ -225,7 +225,7 @@ fn build_transform_caller_help<'a, 'ctx>(
 
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
-    let attr = env.context.create_enum_attribute(kind_id, 1);
+    let attr = env.context.create_enum_attribute(kind_id, 0);
     function_value.add_attribute(AttributeLoc::Function, attr);
 
     let entry = env.context.append_basic_block(function_value, "entry");
@@ -408,7 +408,7 @@ fn build_rc_wrapper<'a, 'ctx>(
 
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
+            let attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, attr);
 
             let entry = env.context.append_basic_block(function_value, "entry");
@@ -497,7 +497,7 @@ pub fn build_eq_wrapper<'a, 'ctx>(
 
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
+            let attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, attr);
 
             let entry = env.context.append_basic_block(function_value, "entry");
@@ -598,7 +598,7 @@ pub fn build_compare_wrapper<'a, 'ctx>(
 
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
+            let attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, attr);
 
             let entry = env.context.append_basic_block(function_value, "entry");
