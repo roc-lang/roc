@@ -1315,7 +1315,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             FirstTagIsNull ->
                 """
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                enum discriminant_\(name) {
+                pub enum discriminant_\(name) {
                     \(nullTag) = 0,
                     \(nonNullTag) = 1,
                 }
@@ -1324,7 +1324,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             SecondTagIsNull ->
                 """
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                enum discriminant_\(name) {
+                pub enum discriminant_\(name) {
                     \(nonNullTag) = 0,
                     \(nullTag) = 1,
                 }
