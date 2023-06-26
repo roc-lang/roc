@@ -1,10 +1,10 @@
-mod test_glue;
+use roc_app;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
 
-    let outer = test_glue::mainForHost();
+    let outer = roc_app::mainForHost();
 
     // Verify that `inner` has all the expected traits.
     {

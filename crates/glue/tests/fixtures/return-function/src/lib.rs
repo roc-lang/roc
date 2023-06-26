@@ -1,8 +1,8 @@
-mod test_glue;
+use roc_app;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let record = test_glue::mainForHost();
+    let record = roc_app::mainForHost();
     let answer1 = record.f.force_thunk(42i64, 1);
     let answer2 = record.g.force_thunk(42i64, 1);
 
