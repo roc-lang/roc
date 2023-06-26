@@ -1357,6 +1357,13 @@ pub struct LambdaName<'a> {
 }
 
 impl<'a> LambdaName<'a> {
+    pub(crate) fn from_captures(symbol: Symbol, captures: &'a [InLayout<'a>]) -> Self {
+        Self {
+            name: symbol,
+            niche: Niche(NichePriv::Captures(captures)),
+        }
+    }
+
     #[inline(always)]
     pub fn name(&self) -> Symbol {
         self.name

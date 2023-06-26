@@ -8219,7 +8219,14 @@ fn specialize_symbol<'a>(
                         )
                     }
                 }
-                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
+                RawFunctionLayout::ErasedFunction(..) => erased::build_erased_function(
+                    env,
+                    layout_cache,
+                    original,
+                    captured,
+                    assign_to,
+                    result,
+                ),
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
                     let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, ret_layout);

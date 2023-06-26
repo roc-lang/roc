@@ -283,7 +283,7 @@ pub fn call_erased_function<'a>(
 pub fn build_erased_function<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
-    lambda_name: LambdaName<'a>,
+    lambda_symbol: Symbol,
     captures: CapturedSymbols<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
@@ -310,6 +310,35 @@ pub fn build_erased_function<'a>(
         env.arena.alloc(result),
     );
 
+    struct ResolvedCaptures<'a> {
+        layouts: &'a [InLayout<'a>],
+        symbols: &'a [Symbol],
+    }
+
+    let resolved_captures;
+    let lambda_name;
+    match captures {
+        CapturedSymbols::None => {
+            resolved_captures = None;
+            lambda_name = LambdaName::from_captures(lambda_symbol, &[]);
+        }
+        CapturedSymbols::Captured(captures) => {
+            let layouts = {
+                let layouts = captures
+                    .iter()
+                    .map(|(_, var)| layout_cache.from_var(env.arena, *var, env.subs).unwrap());
+                env.arena.alloc_slice_fill_iter(layouts)
+            };
+            let symbols = {
+                let symbols = captures.iter().map(|(sym, _)| *sym);
+                env.arena.alloc_slice_fill_iter(symbols)
+            };
+
+            resolved_captures = Some(ResolvedCaptures { layouts, symbols });
+            lambda_name = LambdaName::from_captures(lambda_symbol, layouts);
+        }
+    };
+
     // callee = Expr::FunctionPointer(f)
     let result = Stmt::Let(
         callee,
@@ -319,8 +348,8 @@ pub fn build_erased_function<'a>(
     );
 
     // value = Expr::Box({s})
-    match captures {
-        CapturedSymbols::None => {
+    match resolved_captures {
+        None => {
             // value = nullptr
             // <hole>
             Stmt::Let(
@@ -330,24 +359,15 @@ pub fn build_erased_function<'a>(
                 env.arena.alloc(result),
             )
         }
-        CapturedSymbols::Captured(captures) => {
+        Some(ResolvedCaptures { layouts, symbols }) => {
             // captures = {...captures}
             // captures = Box(captures)
             // value = Cast(captures, void*)
             // <hole>
 
             let stack_captures = env.unique_symbol();
-            let stack_captures_layout = {
-                let layouts = captures
-                    .iter()
-                    .map(|(_, var)| layout_cache.from_var(env.arena, *var, env.subs).unwrap());
-                let layouts = env.arena.alloc_slice_fill_iter(layouts);
-                layout_cache.put_in_direct_no_semantic(LayoutRepr::Struct(layouts))
-            };
-            let stack_captures_symbols = {
-                let symbols = captures.iter().map(|(sym, _)| *sym);
-                env.arena.alloc_slice_fill_iter(symbols)
-            };
+            let stack_captures_layout =
+                layout_cache.put_in_direct_no_semantic(LayoutRepr::Struct(layouts));
 
             let boxed_captures = env.unique_symbol();
             let boxed_captures_layout =
@@ -355,7 +375,7 @@ pub fn build_erased_function<'a>(
 
             let result = Stmt::Let(
                 stack_captures,
-                Expr::Struct(stack_captures_symbols),
+                Expr::Struct(symbols),
                 stack_captures_layout,
                 env.arena.alloc(result),
             );
