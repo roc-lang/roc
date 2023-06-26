@@ -1427,7 +1427,7 @@ impl<'a> DropSpecializationEnvironment<'a> {
         }
     }
 
-    fn create_symbol<'i>(&self, ident_ids: &'i mut IdentIds, debug_name: &str) -> Symbol {
+    fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
         let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.home, ident_id)
     }

@@ -501,9 +501,9 @@ where
     candidate_set
 }
 
-fn trmc_candidates_help<'a>(
+fn trmc_candidates_help(
     function_name: LambdaName,
-    stmt: &'_ Stmt<'a>,
+    stmt: &'_ Stmt<'_>,
     candidates: &mut TrmcCandidateSet,
 ) {
     // if this stmt is the literal tail tag application and return, then this is a TRMC opportunity

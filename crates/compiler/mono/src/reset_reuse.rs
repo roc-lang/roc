@@ -1404,8 +1404,8 @@ fn drop_unused_reuse_tokens<'a>(
     })
 }
 
-fn get_reuse_layout_info<'a, 'i>(
-    layout_interner: &'i STLayoutInterner<'a>,
+fn get_reuse_layout_info<'a>(
+    layout_interner: &STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
 ) -> TokenLayout {
     let (size, alignment) = union_layout.data_size_and_alignment(layout_interner);

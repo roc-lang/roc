@@ -1832,7 +1832,7 @@ fn throw_on_overflow<'ctx>(
         .unwrap()
 }
 
-fn throw_because_overflow<'ctx>(env: &Env<'_, 'ctx, '_>, message: &str) {
+fn throw_because_overflow(env: &Env<'_, '_, '_>, message: &str) {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
