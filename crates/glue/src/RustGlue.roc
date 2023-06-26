@@ -37,7 +37,7 @@ makeGlue = \typesByArch ->
     |> List.concat staticFiles
     |> Ok
 
-## These are always included, and don't depend on the specifices of the app.
+## These are always included, and don't depend on the specifics of the app.
 staticFiles : List File
 staticFiles =
     [
