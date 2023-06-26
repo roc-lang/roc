@@ -227,7 +227,7 @@ pub fn update_str_expr(
         Expr2::Str(old_pool_str) => Either::OldPoolStr(*old_pool_str),
         other => UnexpectedASTNodeSnafu {
             required_node_type: "SmallStr or Str",
-            encountered_node_type: format!("{:?}", other),
+            encountered_node_type: format!("{other:?}"),
         }
         .fail()?,
     };

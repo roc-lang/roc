@@ -351,7 +351,7 @@ trait Backend<'a> {
         // the functions from the generates #help module (refcounting, equality) is always suffixed
         // with 1. That is fine, they are always unique anyway.
         if ident_string.contains("#help") {
-            format!("{}_{}_1", module_string, ident_string)
+            format!("{module_string}_{ident_string}_1")
         } else {
             format!("{}_{}_{}", module_string, ident_string, state.finish())
         }

@@ -126,7 +126,7 @@ fn index_struct_value<'a, 'ctx>(
         argument,
         index as _,
         env.arena
-            .alloc(format!("struct_field_access_record_{}", index)),
+            .alloc(format!("struct_field_access_record_{index}")),
     );
 
     let field_layout = field_layouts[index as usize];

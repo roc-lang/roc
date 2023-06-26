@@ -3164,7 +3164,7 @@ mod tests {
                     UsesZR => "xzr".to_owned(),
                     UsesSP => "sp".to_owned(),
                 },
-                _ => format!("{}", self),
+                _ => format!("{self}"),
             }
         }
     }

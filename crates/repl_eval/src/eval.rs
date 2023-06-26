@@ -1457,6 +1457,6 @@ fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_>
     use std::fmt::Write;
 
     let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
-    write!(string, "{}", num).unwrap();
+    write!(string, "{num}").unwrap();
     Expr::Num(string.into_bump_str())
 }

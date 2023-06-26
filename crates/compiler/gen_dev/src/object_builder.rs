@@ -605,7 +605,7 @@ fn build_proc<'a, B: Backend<'a>>(
         let elfreloc = match reloc {
             Relocation::LocalData { offset, data } => {
                 let data_symbol = write::Symbol {
-                    name: format!("{}.data{}", fn_name, local_data_index)
+                    name: format!("{fn_name}.data{local_data_index}")
                         .as_bytes()
                         .to_vec(),
                     value: 0,

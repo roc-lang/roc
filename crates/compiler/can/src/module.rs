@@ -347,9 +347,7 @@ pub fn canonicalize_module_defs<'a>(
             // the symbol should already be added to the scope when this module is canonicalized
             debug_assert!(
                 scope.contains_alias(symbol) || scope.abilities_store.is_ability(symbol),
-                "The {:?} is not a type alias or ability known in {:?}",
-                symbol,
-                home
+                "The {symbol:?} is not a type alias or ability known in {home:?}"
             );
 
             // but now we know this symbol by a different identifier, so we still need to add it to

@@ -123,10 +123,10 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
         ))) => {
-            println!("{}", report);
+            println!("{report}");
             panic!();
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     };
 
     use roc_load::MonomorphizedModule;
@@ -201,7 +201,7 @@ fn verify_procedures<'a>(
 
     let result = procs_string.join("\n");
 
-    let path = format!("generated/{}.txt", test_name);
+    let path = format!("generated/{test_name}.txt");
     std::fs::create_dir_all("generated").unwrap();
     std::fs::write(&path, result).unwrap();
 

@@ -222,16 +222,16 @@ pub(crate) fn synthesize_member_impl<'a>(
     ability_member: Symbol,
 ) -> (Symbol, Loc<Pattern>, &'a Loc<ast::Expr<'a>>) {
     // @Opaq
-    let at_opaque = env.arena.alloc_str(&format!("@{}", opaque_name));
+    let at_opaque = env.arena.alloc_str(&format!("@{opaque_name}"));
 
     let (impl_name, def_body): (String, ast::Expr<'a>) = match ability_member {
         Symbol::ENCODE_TO_ENCODER => (
-            format!("#{}_toEncoder", opaque_name),
+            format!("#{opaque_name}_toEncoder"),
             to_encoder(env, at_opaque),
         ),
-        Symbol::DECODE_DECODER => (format!("#{}_decoder", opaque_name), decoder(env, at_opaque)),
-        Symbol::HASH_HASH => (format!("#{}_hash", opaque_name), hash(env, at_opaque)),
-        Symbol::BOOL_IS_EQ => (format!("#{}_isEq", opaque_name), is_eq(env, at_opaque)),
+        Symbol::DECODE_DECODER => (format!("#{opaque_name}_decoder"), decoder(env, at_opaque)),
+        Symbol::HASH_HASH => (format!("#{opaque_name}_hash"), hash(env, at_opaque)),
+        Symbol::BOOL_IS_EQ => (format!("#{opaque_name}_isEq"), is_eq(env, at_opaque)),
         other => internal_error!("{:?} is not a derivable ability member!", other),
     };
 

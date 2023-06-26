@@ -628,7 +628,7 @@ impl Parse<()> for RefType {
             0x6f => Ok(Self::Extern),
             _ => Err(ParseError {
                 offset: *cursor - 1,
-                message: format!("Invalid RefType 0x{:2x}", byte),
+                message: format!("Invalid RefType 0x{byte:2x}"),
             }),
         }
     }
@@ -973,7 +973,7 @@ impl Parse<()> for ConstExpr {
             }
             _ => Err(ParseError {
                 offset: *cursor,
-                message: format!("Unsupported opcode {:?} in constant expression.", opcode),
+                message: format!("Unsupported opcode {opcode:?} in constant expression."),
             }),
         };
 
@@ -1522,7 +1522,7 @@ impl Parse<()> for DataMode {
         } else {
             Err(ParseError {
                 offset: *cursor - 1,
-                message: format!("Data section: invalid DataMode variant 0x{:x}", variant_id),
+                message: format!("Data section: invalid DataMode variant 0x{variant_id:x}"),
             })
         }
     }
@@ -1574,7 +1574,7 @@ impl<'a> DataSection<'a> {
         let mut cursor = 0;
         for _ in 0..self.count {
             let mode =
-                DataMode::parse((), &self.bytes, &mut cursor).map_err(|e| format!("{:?}", e))?;
+                DataMode::parse((), &self.bytes, &mut cursor).map_err(|e| format!("{e:?}"))?;
             let start = match mode {
                 DataMode::Active {
                     offset: ConstExpr::I32(addr),
@@ -1583,12 +1583,12 @@ impl<'a> DataSection<'a> {
                     continue;
                 }
             };
-            let len32 = u32::parse((), &self.bytes, &mut cursor).map_err(|e| format!("{:?}", e))?;
+            let len32 = u32::parse((), &self.bytes, &mut cursor).map_err(|e| format!("{e:?}"))?;
             let len = len32 as usize;
             let mut target_slice = &mut memory[start..][..len];
             target_slice
                 .write(&self.bytes[cursor..][..len])
-                .map_err(|e| format!("{:?}", e))?;
+                .map_err(|e| format!("{e:?}"))?;
             cursor += len;
         }
         Ok(())
@@ -1859,7 +1859,7 @@ impl<'a> Debug for NameSection<'a> {
         writeln!(f, "NameSection")?;
 
         for (index, name) in self.function_names.iter() {
-            writeln!(f, "  {:4}: {}", index, name)?;
+            writeln!(f, "  {index:4}: {name}")?;
         }
 
         Ok(())

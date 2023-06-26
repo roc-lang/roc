@@ -161,7 +161,7 @@ impl<'a> WasiDispatcher<'a> {
                 if fd < self.files.len() {
                     success_code
                 } else {
-                    println!("WASI warning: file descriptor {} does not exist", fd);
+                    println!("WASI warning: file descriptor {fd} does not exist");
                     Some(Value::I32(Errno::Badf as i32))
                 }
             }
@@ -291,8 +291,7 @@ impl<'a> WasiDispatcher<'a> {
                 if negative_length_count > 0 {
                     // Let's see if we ever get this message. If not, we can remove this negative-length stuff.
                     eprintln!(
-                        "WASI DEV INFO: found {} negative-length iovecs.",
-                        negative_length_count
+                        "WASI DEV INFO: found {negative_length_count} negative-length iovecs."
                     );
                 }
 
@@ -331,7 +330,7 @@ impl<'a> WasiDispatcher<'a> {
             "sock_recv" => todo!("WASI {}({:?})", function_name, arguments),
             "sock_send" => todo!("WASI {}({:?})", function_name, arguments),
             "sock_shutdown" => todo!("WASI {}({:?})", function_name, arguments),
-            _ => panic!("Unknown WASI function {}({:?})", function_name, arguments),
+            _ => panic!("Unknown WASI function {function_name}({arguments:?})"),
         }
     }
 }

@@ -322,10 +322,7 @@ impl<'a> CodeBuilder<'a> {
             self.add_insertion(pushed_at, SETLOCAL, local_id.0);
         } else {
             if DEBUG_SETTINGS.instructions {
-                println!(
-                    "{:?} has been popped implicitly. Leaving it on the stack.",
-                    symbol
-                );
+                println!("{symbol:?} has been popped implicitly. Leaving it on the stack.");
             }
             self.add_insertion(pushed_at, TEELOCAL, local_id.0);
         }
@@ -501,9 +498,7 @@ impl<'a> CodeBuilder<'a> {
 
         debug_assert!(
             stack_size >= pops,
-            "Wasm value stack underflow. Tried to pop {} but only {} available",
-            pops,
-            stack_size
+            "Wasm value stack underflow. Tried to pop {pops} but only {stack_size} available"
         );
 
         let new_len = stack_size - pops;
@@ -517,11 +512,7 @@ impl<'a> CodeBuilder<'a> {
     /// Plain instruction without any immediates
     fn inst(&mut self, opcode: OpCode, pops: usize, push: bool) {
         self.inst_base(opcode, pops, push);
-        log_instruction!(
-            "{:10}\t\t{:?}",
-            format!("{:?}", opcode),
-            self.vm_block_stack
-        );
+        log_instruction!("{:10}\t\t{:?}", format!("{opcode:?}"), self.vm_block_stack);
     }
 
     /// Block instruction
@@ -538,7 +529,7 @@ impl<'a> CodeBuilder<'a> {
             value_stack: Vec::with_capacity_in(8, self.arena),
         });
 
-        log_instruction!("{:10}\t{:?}", format!("{:?}", opcode), &self.vm_block_stack);
+        log_instruction!("{:10}\t{:?}", format!("{opcode:?}"), &self.vm_block_stack);
     }
 
     fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
@@ -546,7 +537,7 @@ impl<'a> CodeBuilder<'a> {
         self.code.encode_u32(immediate);
         log_instruction!(
             "{:10}\t{}\t{:?}",
-            format!("{:?}", opcode),
+            format!("{opcode:?}"),
             immediate,
             self.vm_block_stack
         );
@@ -558,7 +549,7 @@ impl<'a> CodeBuilder<'a> {
         self.code.encode_u32(offset);
         log_instruction!(
             "{:10} {:?} {}\t{:?}",
-            format!("{:?}", opcode),
+            format!("{opcode:?}"),
             align,
             offset,
             self.vm_block_stack
@@ -654,7 +645,7 @@ impl<'a> CodeBuilder<'a> {
 
         log_instruction!(
             "{:10}\t{}\t{:?}",
-            format!("{:?}", CALL),
+            format!("{CALL:?}"),
             function_index,
             self.vm_block_stack
         );
@@ -725,7 +716,7 @@ impl<'a> CodeBuilder<'a> {
     {
         log_instruction!(
             "{:10}\t{}\t{:?}",
-            format!("{:?}", opcode),
+            format!("{opcode:?}"),
             x,
             self.vm_block_stack
         );

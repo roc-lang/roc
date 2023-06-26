@@ -313,7 +313,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if let Ok(sym_index) = self.module.linking.find_internal_symbol(START) {
             let fn_index = match self.module.linking.symbol_table[sym_index] {
                 SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
-                _ => panic!("linker symbol `{}` is not a function", START),
+                _ => panic!("linker symbol `{START}` is not a function"),
             };
             self.module.export.append(Export {
                 name: START,
@@ -463,7 +463,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if DEBUG_SETTINGS.storage_map {
             println!("\nStorage:");
             for (sym, storage) in self.storage.symbol_storage_map.iter() {
-                println!("{:?} => {:?}", sym, storage);
+                println!("{sym:?} => {storage:?}");
             }
         }
     }
@@ -1424,7 +1424,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .host_lookup
             .iter()
             .find(|(fn_name, _)| *fn_name == name)
-            .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
+            .unwrap_or_else(|| panic!("The Roc app tries to call `{name}` but I can't find it!"));
 
         self.called_fns.set(*fn_index as usize, true);
 
@@ -1614,7 +1614,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     ListLiteralElement::Literal(lit) => {
                         // This has no Symbol but our storage methods expect one.
                         // Let's just pretend it was defined in a `Let`.
-                        let debug_name = format!("{:?}_{}", sym, i);
+                        let debug_name = format!("{sym:?}_{i}");
                         let elem_sym = self.create_symbol(&debug_name);
                         let expr = Expr::Literal(*lit);
 

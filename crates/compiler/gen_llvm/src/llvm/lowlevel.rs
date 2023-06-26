@@ -2892,6 +2892,6 @@ fn load_symbol_and_lambda_set<'a, 'ctx>(
     let (ptr, layout) = scope.load_symbol_and_layout(symbol);
     match layout_interner.get_repr(layout) {
         LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
-        other => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
+        other => panic!("Not a lambda set: {other:?}, {ptr:?}"),
     }
 }

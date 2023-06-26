@@ -31,7 +31,7 @@ impl Env<'_> {
                 let name = if i == 1 {
                     hint.clone()
                 } else {
-                    format!("{}{}", hint, i)
+                    format!("{hint}{i}")
                 };
                 if self.derived_ident_ids.get_id(&name).is_none() {
                     break name;
@@ -151,7 +151,7 @@ impl Env<'_> {
                                         == self.subs.get_root_key_without_compacting(lambda_set)
                                 });
                             debug_assert!(belongs_to_specialized_lambda_sets,
-                                "Did not expect derivers to need to specialize unspecialized lambda sets, but we got one: {:?} for {:?}", lambda_set, spec_var)
+                                "Did not expect derivers to need to specialize unspecialized lambda sets, but we got one: {lambda_set:?} for {spec_var:?}")
                         }
                     }
                 }

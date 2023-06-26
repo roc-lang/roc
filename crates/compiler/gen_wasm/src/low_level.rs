@@ -2063,8 +2063,7 @@ impl<'a> LowLevelCall<'a> {
             .runtime_representation(backend.storage.symbol_layouts[&self.arguments[1]]);
         debug_assert_eq!(
             arg_layout_raw, other_arg_layout,
-            "Cannot do `==` comparison on different types: {:?} vs {:?}",
-            arg_layout, other_arg_layout
+            "Cannot do `==` comparison on different types: {arg_layout:?} vs {other_arg_layout:?}"
         );
 
         let invert_result = matches!(self.lowlevel, LowLevel::NotEq);
@@ -2502,7 +2501,7 @@ pub fn call_higher_order_lowlevel<'a>(
             }
         }
     };
-    let wrapper_sym = backend.create_symbol(&format!("#wrap#{:?}", fn_name));
+    let wrapper_sym = backend.create_symbol(&format!("#wrap#{fn_name:?}"));
     let wrapper_layout = {
         let mut wrapper_arg_layouts: Vec<InLayout<'a>> =
             Vec::with_capacity_in(argument_layouts.len() + 1, backend.env.arena);

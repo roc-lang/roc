@@ -671,27 +671,19 @@ pub fn expr_to_expr2<'a>(
         // operator desugaring should have removed them!
         bad_expr @ SpaceBefore(_, _) => {
             panic!(
-                "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
+                "A SpaceBefore did not get removed during operator desugaring somehow: {bad_expr:#?}"
             );
         }
         bad_expr @ SpaceAfter(_, _) => {
             panic!(
-                "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
+                "A SpaceAfter did not get removed during operator desugaring somehow: {bad_expr:#?}"
             );
         }
         bad_expr @ BinOps { .. } => {
-            panic!(
-                "A binary operator chain did not get desugared somehow: {:#?}",
-                bad_expr
-            );
+            panic!("A binary operator chain did not get desugared somehow: {bad_expr:#?}");
         }
         bad_expr @ UnaryOp(_, _) => {
-            panic!(
-                "A unary operator did not get desugared somehow: {:#?}",
-                bad_expr
-            );
+            panic!("A unary operator did not get desugared somehow: {bad_expr:#?}");
         }
 
         rest => todo!("not yet implemented {:?}", rest),

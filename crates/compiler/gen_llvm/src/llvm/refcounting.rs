@@ -132,7 +132,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let block = env.builder.get_insert_block().expect("to be in a function");
         let di_location = env.builder.get_current_debug_location().unwrap();
 
-        let fn_name = &format!("decrement_refcounted_ptr_{}", alignment);
+        let fn_name = &format!("decrement_refcounted_ptr_{alignment}");
 
         let function = match env.module.get_function(fn_name) {
             Some(function_value) => function_value,
@@ -1398,7 +1398,7 @@ pub fn build_reset<'a, 'ctx>(
     let union_layout_repr = LayoutRepr::Union(union_layout);
     let layout_id = layout_ids.get(Symbol::DEC, &union_layout_repr);
     let fn_name = layout_id.to_symbol_string(Symbol::DEC, &env.interns);
-    let fn_name = format!("{}_reset", fn_name);
+    let fn_name = format!("{fn_name}_reset");
 
     let dec_function = build_rec_union(env, layout_interner, layout_ids, Mode::Dec, union_layout);
 

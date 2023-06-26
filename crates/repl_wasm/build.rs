@@ -14,8 +14,8 @@ const OBJECT_EXTENSION: &str = "obj";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    let source_path = format!("src/{}.c", PLATFORM_FILENAME);
-    println!("cargo:rerun-if-changed={}", source_path);
+    let source_path = format!("src/{PLATFORM_FILENAME}.c");
+    println!("cargo:rerun-if-changed={source_path}");
 
     // Zig can produce *either* an object containing relocations OR an object containing libc code
     // But we want both, so we have to compile twice with different flags, then link them
@@ -51,9 +51,9 @@ fn main() {
     // (and thus deleted) before the Zig process is done using it!
     let _ = builtins_host_tempfile;
 
-    assert!(output.status.success(), "{:#?}", output);
-    assert!(output.stdout.is_empty(), "{:#?}", output);
-    assert!(output.stderr.is_empty(), "{:#?}", output);
+    assert!(output.status.success(), "{output:#?}");
+    assert!(output.stdout.is_empty(), "{output:#?}");
+    assert!(output.stderr.is_empty(), "{output:#?}");
 }
 
 fn zig_executable() -> String {

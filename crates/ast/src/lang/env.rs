@@ -102,8 +102,7 @@ impl<'a> Env<'a> {
     ) -> Result<Symbol, RuntimeError> {
         debug_assert!(
             !module_name.is_empty(),
-            "Called env.qualified_lookup with an unqualified ident: {:?}",
-            ident
+            "Called env.qualified_lookup with an unqualified ident: {ident:?}"
         );
 
         let module_name: ModuleName = module_name.into();

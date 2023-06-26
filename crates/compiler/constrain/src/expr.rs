@@ -1044,8 +1044,7 @@ pub fn constrain_expr(
 
                     debug_assert!(
                         intersection.is_empty(),
-                        "Two patterns introduce the same symbols - that's a bug!\n{:?}",
-                        intersection
+                        "Two patterns introduce the same symbols - that's a bug!\n{intersection:?}"
                     );
                 }
 

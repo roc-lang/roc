@@ -1069,8 +1069,7 @@ fn canonicalize_value_defs<'a>(
             debug_assert_eq!(env.home, s.module_id());
             debug_assert!(
                 !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
-                "{:?}",
-                s
+                "{s:?}"
             );
 
             symbol_to_index.push((s.ident_id(), def_index as u32));
@@ -1838,7 +1837,7 @@ pub(crate) fn sort_can_defs(
             );
 
             let declaration = if def_ordering.references.get_row_col(index, index) {
-                debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
+                debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {def:?} now, that's a bug!");
 
                 if is_initial
                     && !def

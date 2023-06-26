@@ -85,7 +85,7 @@ where
 
     // Dump the generated module to a file (this is mainly for debugging the test itself)
     if std::env::var("DEBUG_WASM_INTERP_TEST").is_ok() {
-        let filename = format!("/tmp/{:?}.wasm", op);
+        let filename = format!("/tmp/{op:?}.wasm");
         println!("\nDumping test module to {}\n", &filename);
         let mut outfile_buf = Vec::new_in(&arena);
         module.serialize(&mut outfile_buf);

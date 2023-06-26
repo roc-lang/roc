@@ -24,7 +24,7 @@ trait CopyEnv {
             if descriptor.copy.into_variable().is_some() {
                 descriptor.copy = OptVariable::NONE;
             } else {
-                debug_assert!(false, "{:?} marked as copied but it wasn't", var);
+                debug_assert!(false, "{var:?} marked as copied but it wasn't");
             }
         })
     }
@@ -1320,7 +1320,7 @@ mod test {
                     FlexVar(Some(name)) => {
                         assert_eq!(subs[*name].as_str(), "a");
                     }
-                    it => panic!("{:?}", it),
+                    it => panic!("{it:?}"),
                 }
                 assert_eq!(var, variant_var);
                 assert!(matches!(
@@ -1337,7 +1337,7 @@ mod test {
                     FlexVar(Some(name)) => {
                         assert_eq!(subs[*name].as_str(), "b");
                     }
-                    it => panic!("{:?}", it),
+                    it => panic!("{it:?}"),
                 }
 
                 match arg.value {
@@ -1355,10 +1355,10 @@ mod test {
                         assert_eq!(name.0.as_str(), "G");
                         assert_eq!(arguments.len(), 0);
                     }
-                    e => panic!("{:?}", e),
+                    e => panic!("{e:?}"),
                 }
             }
-            e => panic!("{:?}", e),
+            e => panic!("{e:?}"),
         }
     }
 
@@ -1403,7 +1403,7 @@ mod test {
                     FlexVar(Some(name)) => {
                         assert_eq!(target[*name].as_str(), "a");
                     }
-                    it => panic!("{:?}", it),
+                    it => panic!("{it:?}"),
                 }
                 assert_eq!(var, variant_var);
                 assert!(matches!(
@@ -1418,7 +1418,7 @@ mod test {
                     FlexVar(Some(name)) => {
                         assert_eq!(target[*name].as_str(), "b");
                     }
-                    it => panic!("{:?}", it),
+                    it => panic!("{it:?}"),
                 }
 
                 match arg.value {
@@ -1436,10 +1436,10 @@ mod test {
                         assert_eq!(name.0.as_str(), "G");
                         assert_eq!(arguments.len(), 0);
                     }
-                    e => panic!("{:?}", e),
+                    e => panic!("{e:?}"),
                 }
             }
-            e => panic!("{:?}", e),
+            e => panic!("{e:?}"),
         }
     }
 

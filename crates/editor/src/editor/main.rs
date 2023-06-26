@@ -92,7 +92,7 @@ fn run_event_loop(project_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>>
             )
         })
         .unwrap_or_else(|err| {
-            panic!("Failed to request device: `{}`", err);
+            panic!("Failed to request device: `{err}`");
         })
         .await
     });
@@ -125,7 +125,7 @@ fn run_event_loop(project_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>>
     let code_arena = Bump::new();
 
     let (file_path_buf, code_str) = read_main_roc_file(project_path_opt);
-    println!("Loading file {:?}...", file_path_buf);
+    println!("Loading file {file_path_buf:?}...");
 
     let file_path = Path::new(&file_path_buf);
     let loaded_module = load_module(
@@ -237,7 +237,7 @@ fn run_event_loop(project_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>>
                 if let Err(e) = input_outcome_res {
                     print_err(&e)
                 } else if let Ok(InputOutcome::Ignored) = input_outcome_res {
-                    println!("\nInput '{}' ignored!", ch);
+                    println!("\nInput '{ch}' ignored!");
                 } else {
                     window.request_redraw()
                 }
@@ -507,10 +507,7 @@ fn read_main_roc_file(project_path_opt: Option<&Path>) -> (PathBuf, String) {
 
         let dir_items = ls(project_path, &ls_config)
             .unwrap_or_else(|err| {
-                panic!(
-                    "Failed to list items in project directory; error: {:?}",
-                    err
-                )
+                panic!("Failed to list items in project directory; error: {err:?}")
             })
             .items;
 
@@ -574,15 +571,13 @@ fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
 fn create_roc_file_if_not_exists(project_dir_path: &Path, roc_file_path: &Path) -> String {
     if !roc_file_path.exists() {
         let mut roc_file = File::create(roc_file_path).unwrap_or_else(|err| {
-            panic!("No roc file path was passed to the editor, so I wanted to create a new roc project with the file {:?}, but it failed: {}", roc_file_path, err)
+            panic!("No roc file path was passed to the editor, so I wanted to create a new roc project with the file {roc_file_path:?}, but it failed: {err}")
         });
 
-        write!(roc_file, "{}", HELLO_WORLD).unwrap_or_else(|err| {
+        write!(roc_file, "{HELLO_WORLD}").unwrap_or_else(|err| {
             panic!(
-                r#"No roc file path was passed to the editor, so I created a new roc project with the file {:?}
-                I wanted to write roc hello world to that file, but it failed: {:?}"#,
-                roc_file_path,
-                err
+                r#"No roc file path was passed to the editor, so I created a new roc project with the file {roc_file_path:?}
+                I wanted to write roc hello world to that file, but it failed: {err:?}"#
             )
         });
 
@@ -590,8 +585,7 @@ fn create_roc_file_if_not_exists(project_dir_path: &Path, roc_file_path: &Path) 
     } else {
         std::fs::read_to_string(roc_file_path).unwrap_or_else(|err| {
             panic!(
-                "I detected an existing {:?} inside {:?}, but I failed to read from it: {}",
-                roc_file_path, project_dir_path, err
+                "I detected an existing {roc_file_path:?} inside {project_dir_path:?}, but I failed to read from it: {err}"
             )
         })
     }
@@ -613,10 +607,7 @@ fn copy_roc_platform_if_not_exists(
     } else if !project_platform_path.exists() {
         copy(orig_platform_path, project_dir_path, &CopyOptions::new()).unwrap_or_else(|err|{
             panic!(r#"No roc file path was passed to the editor, so I wanted to create a new roc project and roc projects require a platform,
-            I tried to copy the platform at {:?} to {:?} but it failed: {}"#,
-            orig_platform_path,
-            project_platform_path,
-            err
+            I tried to copy the platform at {orig_platform_path:?} to {project_platform_path:?} but it failed: {err}"#
         )
         });
     }
