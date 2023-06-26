@@ -173,7 +173,7 @@ mod glue_cli_run {
         args: I,
     ) -> Out {
         let platform_module_path = platform_dir.join("platform.roc");
-        let glue_dir = platform_dir.join("src").join("test_glue");
+        let glue_dir = platform_dir.join("test_glue");
         let fixture_templates_dir = platform_dir
             .parent()
             .unwrap()
