@@ -1599,12 +1599,8 @@ impl<
                     HelperOp::Eq,
                 );
 
-                let fn_name = self.lambda_name_to_string(
-                    LambdaName::no_niche(eq_symbol),
-                    [*arg_layout, *arg_layout].into_iter(),
-                    None,
-                    Layout::U8,
-                );
+                let fn_name =
+                    self.lambda_name_to_string(LambdaName::no_niche(eq_symbol), None, Layout::U8);
 
                 self.helper_proc_symbols.extend(eq_linker_data);
 
@@ -1986,7 +1982,6 @@ impl<
 
                 let caller_string = self.lambda_name_to_string(
                     LambdaName::no_niche(caller_proc.proc_symbol),
-                    std::iter::empty(),
                     None,
                     Layout::UNIT,
                 );

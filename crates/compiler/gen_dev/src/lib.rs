@@ -318,39 +318,15 @@ trait Backend<'a> {
         &mut Vec<'a, CallerProc<'a>>,
     );
 
-    fn lambda_name_to_string<'b, I>(
+    fn lambda_name_to_string(
         &self,
         name: LambdaName,
-        arguments: I,
         _lambda_set: Option<InLayout>,
         result: InLayout,
-    ) -> String
-    where
-        I: Iterator<Item = InLayout<'b>>,
-    {
-        use std::fmt::Write;
-        use std::hash::{BuildHasher, Hash, Hasher};
-
+    ) -> String {
         let symbol = name.name();
-
-        let mut buf = String::with_capacity(1024);
-
-        for a in arguments {
-            write!(buf, "{:?}", self.interner().dbg_stable(a)).expect("capacity");
-        }
-
-        // lambda set should not matter; it should already be added as an argument
-        // but the niche of the lambda name may be the only thing differentiating two different
-        // implementations of a function with the same symbol
-        write!(buf, "{:?}", name.niche().dbg_stable(self.interner())).expect("capacity");
-
-        write!(buf, "{:?}", self.interner().dbg_stable(result)).expect("capacity");
-
-        // NOTE: due to randomness, this will not be consistent between runs
-        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
-        buf.hash(&mut state);
-
         let interns = self.interns();
+
         let ident_string = symbol.as_str(interns);
         let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
 
@@ -359,7 +335,8 @@ trait Backend<'a> {
         if ident_string.contains("#help") {
             format!("{}_{}_1", module_string, ident_string)
         } else {
-            format!("{}_{}_{}", module_string, ident_string, state.finish())
+            // Instead of wasting time hashing or looking at arguments, just use the InLayout index directly here.
+            format!("{}_{}_{}", module_string, ident_string, result.index())
         }
     }
 
@@ -392,16 +369,11 @@ trait Backend<'a> {
     }
 
     fn increment_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
-        let box_layout = self
-            .interner_mut()
-            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
-
         let element_increment = self.debug_symbol("element_increment");
         let element_increment_symbol = self.build_indirect_inc(layout);
 
         let element_increment_string = self.lambda_name_to_string(
             LambdaName::no_niche(element_increment_symbol),
-            [box_layout].into_iter(),
             None,
             Layout::UNIT,
         );
@@ -412,16 +384,11 @@ trait Backend<'a> {
     }
 
     fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
-        let box_layout = self
-            .interner_mut()
-            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
-
         let element_decrement = self.debug_symbol("element_decrement");
         let element_decrement_symbol = self.build_indirect_dec(layout);
 
         let element_decrement_string = self.lambda_name_to_string(
             LambdaName::no_niche(element_decrement_symbol),
-            [box_layout].into_iter(),
             None,
             Layout::UNIT,
         );
@@ -462,12 +429,8 @@ trait Backend<'a> {
         proc: Proc<'a>,
         layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
-        let proc_name = self.lambda_name_to_string(
-            proc.name,
-            proc.args.iter().map(|t| t.0),
-            proc.closure_data_layout,
-            proc.ret_layout,
-        );
+        let proc_name =
+            self.lambda_name_to_string(proc.name, proc.closure_data_layout, proc.ret_layout);
 
         let body = self.env().arena.alloc(proc.body);
 
@@ -723,12 +686,7 @@ trait Backend<'a> {
                             );
                         }
 
-                        let fn_name = self.lambda_name_to_string(
-                            *func_sym,
-                            arg_layouts.iter().copied(),
-                            None,
-                            *ret_layout,
-                        );
+                        let fn_name = self.lambda_name_to_string(*func_sym, None, *ret_layout);
 
                         // Now that the arguments are needed, load them if they are literals.
                         self.load_literal_symbols(arguments);
@@ -1893,12 +1851,7 @@ trait Backend<'a> {
             }
             Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
                 // TODO: This is probably simple enough to be worth inlining.
-                let fn_name = self.lambda_name_to_string(
-                    func_name,
-                    arg_layouts.iter().copied(),
-                    None,
-                    *ret_layout,
-                );
+                let fn_name = self.lambda_name_to_string(func_name, None, *ret_layout);
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
@@ -1925,24 +1878,14 @@ trait Backend<'a> {
             }
             Symbol::STR_IS_VALID_SCALAR => {
                 // just call the function
-                let fn_name = self.lambda_name_to_string(
-                    func_name,
-                    arg_layouts.iter().copied(),
-                    None,
-                    *ret_layout,
-                );
+                let fn_name = self.lambda_name_to_string(func_name, None, *ret_layout);
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             _other => {
                 // just call the function
-                let fn_name = self.lambda_name_to_string(
-                    func_name,
-                    arg_layouts.iter().copied(),
-                    None,
-                    *ret_layout,
-                );
+                let fn_name = self.lambda_name_to_string(func_name, None, *ret_layout);
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)

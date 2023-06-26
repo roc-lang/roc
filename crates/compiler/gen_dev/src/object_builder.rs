@@ -343,12 +343,7 @@ fn build_object<'a, B: Backend<'a>>(
     for ((sym, layout), proc) in helper_symbols_and_layouts.into_iter().zip(helper_procs) {
         debug_assert_eq!(sym, proc.name.name());
 
-        let fn_name = backend.lambda_name_to_string(
-            LambdaName::no_niche(sym),
-            layout.arguments.iter().copied(),
-            None,
-            layout.result,
-        );
+        let fn_name = backend.lambda_name_to_string(LambdaName::no_niche(sym), None, layout.result);
 
         if let Some(proc_id) = output.symbol_id(fn_name.as_bytes()) {
             if let SymbolSection::Section(section_id) = output.symbol(proc_id).section {
@@ -559,12 +554,7 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
         Exposed::Exposed => layout_ids
             .get_toplevel(sym, &layout)
             .to_exposed_symbol_string(sym, backend.interns()),
-        Exposed::NotExposed => backend.lambda_name_to_string(
-            proc.name,
-            layout.arguments.iter().copied(),
-            None,
-            layout.result,
-        ),
+        Exposed::NotExposed => backend.lambda_name_to_string(proc.name, None, layout.result),
     };
 
     let proc_symbol = Symbol {
