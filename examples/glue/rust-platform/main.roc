@@ -1,17 +1,30 @@
 platform "echo-in-rust"
-    requires {} { main : _ }
+    requires {} {main : U64}
     exposes []
     packages {}
     imports []
     provides [mainForHost]
 
-# mainForHost : [StdoutWrite Str (({} -> Op) as Fx0), StderrWrite Str (({} -> Op) as Fx1), Done] as Op
-mainForHost : [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done] as Op
-mainForHost = main
+Op : [
+    StdoutLine Str ({} -> Op),
+    StdinLine (Str -> Op),
+    None,
+]
 
-# mainForHost : { x: Str, y: {} -> Str }
-# mainForHost =
-#     y = "foo"
-#
-#     when main is
-#         _ -> { x: "bar", y: \{} -> y }
+Task ok err : (Result ok err -> Op) -> Op
+
+stdoutLine : Str -> Task {} *
+stdoutLine = \line ->
+     \toNext ->
+        StdoutLine line \{} -> toNext (Ok {})
+
+# stdinLine : Task Str *
+# stdinLine =
+#      \toNext ->
+#         StdinLine \line -> toNext (Ok line)
+
+mainForHost : Task {} []
+mainForHost =
+    _ = main
+
+    stdoutLine "foo"

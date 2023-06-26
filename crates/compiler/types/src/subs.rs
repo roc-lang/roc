@@ -2166,7 +2166,7 @@ impl Subs {
     pub fn get_lambda_set(&self, lambda_set: Variable) -> LambdaSet {
         match self.get_content_without_compacting(lambda_set) {
             Content::LambdaSet(lambda_set) => *lambda_set,
-            _ => internal_error!("not a lambda set"),
+            other => internal_error!("not a lambda set: {other:?}"),
         }
     }
 
