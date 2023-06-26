@@ -61,7 +61,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             builder.build_pointer_cast(data_ptr, refcount_ptr_type, "as_usize_ptr");
 
         // get a pointer to index -1
-        let index_intvalue = refcount_type.const_int(-1_i64 as u64, false);
+        let index_intvalue = env.context.i32_type().const_int(-1_i64 as u64, false);
         let refcount_ptr = unsafe {
             builder.new_build_in_bounds_gep(
                 env.ptr_int(),
