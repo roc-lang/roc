@@ -3910,21 +3910,21 @@ impl<
         } else {
             match (source, target) {
                 // -- CASTING UP --
-                (I8 | U8, U16 | U32 | U64) => {
+                (I8 | U8, U16 | U32 | U64) | (U8, I16 | I32 | I64) => {
                     // zero  out the register
                     ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
 
                     // move the 8-bit integer
                     ASM::mov_reg_reg(buf, RegisterWidth::W8, dst_reg, src_reg);
                 }
-                (U16, U32 | U64) => {
+                (I16 | U16, U32 | U64) | (U16, I32 | I64) => {
                     // zero  out the register
                     ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
 
                     // move the 16-bit integer
                     ASM::mov_reg_reg(buf, RegisterWidth::W16, dst_reg, src_reg);
                 }
-                (U32, U64) => {
+                (I32 | U32, U64) | (U32, I64) => {
                     // zero  out the register
                     ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg);
 
