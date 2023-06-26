@@ -1422,6 +1422,38 @@ fn expr_spec<'a>(
                 builder.add_get_tuple_field(block, variant_id, index)
             }
         },
+        UnionFieldPtrAtIndex {
+            index,
+            tag_id,
+            structure,
+            union_layout,
+        } => {
+            let index = (*index) as u32;
+            let tag_value_id = env.symbols[structure];
+
+            let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
+            let type_name = TypeName(&type_name_bytes);
+
+            // unwrap the named wrapper
+            let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
+
+            // now we have a tuple (cell, union { ... }); decompose
+            let heap_cell = builder.add_get_tuple_field(block, union_id, TAG_CELL_INDEX)?;
+            let union_data = builder.add_get_tuple_field(block, union_id, TAG_DATA_INDEX)?;
+
+            // we're reading from this value, so touch the heap cell
+            builder.add_touch(block, heap_cell)?;
+
+            // next, unwrap the union at the tag id that we've got
+            let variant_id = builder.add_unwrap_union(block, union_data, *tag_id as u32)?;
+
+            let value = builder.add_get_tuple_field(block, variant_id, index)?;
+
+            // construct the box. Here the heap_cell of the tag is re-used, I'm hoping that that
+            // conveys to morphic that we're borrowing into the existing tag?!
+            builder.add_make_tuple(block, &[heap_cell, value])
+        }
+
         StructAtIndex {
             index, structure, ..
         } => {
@@ -1589,13 +1621,14 @@ fn layout_spec_help<'a>(
             }
         }
 
-        Boxed(inner_layout) => {
+        Ptr(inner_layout) | Boxed(inner_layout) => {
             let inner_type =
                 layout_spec_help(env, builder, interner, interner.get_repr(inner_layout))?;
             let cell_type = builder.add_heap_cell_type();
 
             builder.add_tuple_type(&[cell_type, inner_type])
         }
+
         // TODO(recursive-layouts): update once we have recursive pointer loops
         RecursivePointer(union_layout) => match interner.get_repr(union_layout) {
             LayoutRepr::Union(union_layout) => {

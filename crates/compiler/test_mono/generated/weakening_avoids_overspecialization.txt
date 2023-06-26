@@ -53,7 +53,7 @@ procedure List.72 (#Attr.2, #Attr.3, #Attr.4):
     let List.527 : List U8 = lowlevel ListSublist #Attr.2 #Attr.3 #Attr.4;
     ret List.527;
 
-procedure List.80 (List.571, List.572, List.573, List.574, List.575):
+procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
     joinpoint List.545 List.439 List.440 List.441 List.442 List.443:
         let List.547 : Int1 = CallByName Num.22 List.442 List.443;
         if List.547 then
@@ -77,7 +77,7 @@ procedure List.80 (List.571, List.572, List.573, List.574, List.575):
             let List.546 : [C U64, C U64] = TagId(1) List.440;
             ret List.546;
     in
-    jump List.545 List.571 List.572 List.573 List.574 List.575;
+    jump List.545 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure List.93 (List.436, List.437, List.438):
     let List.543 : U64 = 0i64;

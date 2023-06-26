@@ -23,7 +23,6 @@ main =
 
         Err GetIntError ->
             Task.putLine "Error: Failed to get Integer from stdin."
-            
 
 nest : (I64, Expr -> IO Expr), I64, Expr -> IO Expr
 nest = \f, n, e -> Task.loop { s: n, f, m: n, x: e } nestHelp

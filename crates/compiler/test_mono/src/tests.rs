@@ -146,7 +146,9 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
-    assert!(allow_type_errors || type_problems.is_empty());
+    if !(allow_type_errors || type_problems.is_empty()) {
+        panic!("mono test has type problems:\n\n{:#?}", type_problems);
+    }
 
     let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
 
@@ -2873,11 +2875,11 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
         LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
 
         main =
-            base : LinkedList 
+            base : LinkedList
             base = Nil
 
             walker : LinkedList, Chain -> LinkedList
-            walker = \rest, first -> Cons { first, rest } 
+            walker = \rest, first -> Cons { first, rest }
 
             list : List Chain
             list = []
@@ -3004,7 +3006,7 @@ fn rb_tree_fbip() {
                 if k < kx
                     then Node Red (ins l k v) kx vx r
                 else
-                    if k > kx 
+                    if k > kx
                         then Node Red l kx vx (ins r k v)
                         else Node Red l k v r
         "#
@@ -3017,10 +3019,10 @@ fn specialize_after_match() {
         r#"
         app "test" provides [main] to "./platform"
 
-        main = 
+        main =
             listA : LinkedList Str
             listA = Nil
-            
+
             listB : LinkedList Str
             listB = Nil
 
@@ -3033,13 +3035,13 @@ fn specialize_after_match() {
             Nil -> linkedListLength listB
             Cons a aa -> when listB is
                 Nil -> linkedListLength listA
-                Cons b bb -> 
+                Cons b bb ->
                     lengthA = (linkedListLength aa) + 1
                     lengthB = linkedListLength listB
                     if lengthA > lengthB
                         then lengthA
                         else lengthB
-        
+
         linkedListLength : LinkedList a -> Nat
         linkedListLength = \list -> when list is
             Nil -> 0
@@ -3088,7 +3090,7 @@ fn drop_specialize_after_jump() {
             v = "value"
             t = { left: { left: v, right: v }, right: v }
             tupleItem t
-        
+
         tupleItem = \t ->
             true = Bool.true
             l = t.left
@@ -3143,6 +3145,74 @@ fn dbg_str_followed_by_number() {
         main =
             dbg ""
             42
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_reverse() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        reverse : LinkedList a -> LinkedList a
+        reverse = \list -> reverseHelp Nil list
+
+        reverseHelp : LinkedList a, LinkedList a -> LinkedList a
+        reverseHelp = \accum, list ->
+            when list is
+                Nil -> accum
+                Cons first rest -> reverseHelp (Cons first accum) rest
+
+        main : LinkedList I64
+        main = reverse (Cons 42 Nil)
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_map() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        map : (a -> b), LinkedList a -> LinkedList b
+        map = \f, list ->
+            when list is
+                Nil -> Nil
+                Cons x xs -> Cons (f x) (map f xs)
+
+        main : LinkedList I64
+        main = map (\x -> x + 1i64) (Cons 42 Nil)
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_filter() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        filter : LinkedList a, (a -> Bool) -> LinkedList a
+        filter = \list, predicate ->
+            when list is
+                Nil -> Nil
+                Cons x xs ->
+                    if predicate x then
+                        Cons x (filter xs predicate)
+                    else
+                        filter xs predicate
+
+
+        main : LinkedList I64
+        main = filter (Cons 1 (Cons 2 Nil)) Num.isEven
         "#
     )
 }

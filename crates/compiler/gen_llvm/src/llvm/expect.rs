@@ -390,6 +390,10 @@ fn build_clone<'a, 'ctx>(
             )
         }
 
+        LayoutRepr::Ptr(_) => {
+            unreachable!("for internal use only")
+        }
+
         LayoutRepr::RecursivePointer(rec_layout) => {
             let layout = rec_layout;
 

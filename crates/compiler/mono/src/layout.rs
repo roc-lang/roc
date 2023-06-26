@@ -674,7 +674,11 @@ pub(crate) enum LayoutWrapper<'a> {
 pub enum LayoutRepr<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [InLayout<'a>]),
+    // A (heap allocated) reference-counted value
     Boxed(InLayout<'a>),
+    // A pointer (heap or stack) without any reference counting
+    // Ptr is not user-facing. The compiler author must make sure that invariants are upheld
+    Ptr(InLayout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
     RecursivePointer(InLayout<'a>),
@@ -1104,6 +1108,18 @@ impl<'a> UnionLayout<'a> {
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::NullableWrapped { .. }
             | UnionLayout::NullableUnwrapped { .. } => interner.target_info().ptr_width() as u32,
+        }
+    }
+
+    pub fn is_recursive(&self) -> bool {
+        use UnionLayout::*;
+
+        match self {
+            NonRecursive(_) => false,
+            Recursive(_)
+            | NonNullableUnwrapped(_)
+            | NullableWrapped { .. }
+            | NullableUnwrapped { .. } => true,
         }
     }
 }
@@ -2555,7 +2571,7 @@ impl<'a> LayoutRepr<'a> {
             LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .safe_to_memcpy(interner),
-            Boxed(_) | RecursivePointer(_) => {
+            Boxed(_) | Ptr(_) | RecursivePointer(_) => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
@@ -2646,6 +2662,7 @@ impl<'a> LayoutRepr<'a> {
                 .stack_size_without_alignment(interner),
             RecursivePointer(_) => interner.target_info().ptr_width() as u32,
             Boxed(_) => interner.target_info().ptr_width() as u32,
+            Ptr(_) => interner.target_info().ptr_width() as u32,
         }
     }
 
@@ -2699,6 +2716,7 @@ impl<'a> LayoutRepr<'a> {
             Builtin(builtin) => builtin.alignment_bytes(interner.target_info()),
             RecursivePointer(_) => interner.target_info().ptr_width() as u32,
             Boxed(_) => interner.target_info().ptr_width() as u32,
+            Ptr(_) => interner.target_info().ptr_width() as u32,
         }
     }
 
@@ -2723,6 +2741,7 @@ impl<'a> LayoutRepr<'a> {
                 ptr_width,
                 interner.get_repr(*inner).alignment_bytes(interner),
             ),
+            Ptr(inner) => interner.get_repr(*inner).alignment_bytes(interner),
         }
     }
 
@@ -2738,6 +2757,22 @@ impl<'a> LayoutRepr<'a> {
             RecursivePointer(_) => true,
 
             Builtin(List(_)) | Builtin(Str) => true,
+
+            _ => false,
+        }
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        use LayoutRepr::*;
+
+        match self {
+            Union(union_layout) => match union_layout {
+                UnionLayout::NonRecursive(_) => false,
+                UnionLayout::Recursive(_) => false,
+                UnionLayout::NonNullableUnwrapped(_) => false,
+                UnionLayout::NullableWrapped { .. } => true,
+                UnionLayout::NullableUnwrapped { .. } => true,
+            },
 
             _ => false,
         }
@@ -2776,6 +2811,11 @@ impl<'a> LayoutRepr<'a> {
                 .contains_refcounted(interner),
             RecursivePointer(_) => true,
             Boxed(_) => true,
+            Ptr(_) => {
+                // we never consider pointers for refcounting. Ptr is not user-facing. The compiler
+                // author must make sure that invariants are upheld
+                false
+            }
         }
     }
 
@@ -2831,7 +2871,7 @@ impl<'a> LayoutRepr<'a> {
                     }
                 },
                 LambdaSet(_) => return true,
-                Boxed(_) => {
+                Boxed(_) | Ptr(_) => {
                     // If there's any layer of indirection (behind a pointer), then it doesn't vary!
                 }
                 RecursivePointer(_) => {

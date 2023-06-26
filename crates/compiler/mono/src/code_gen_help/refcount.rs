@@ -239,6 +239,9 @@ pub fn refcount_generic<'a>(
             inner_layout,
             structure,
         ),
+        LayoutRepr::Ptr(_) => {
+            unreachable!("We should never call a refcounting helper on a Ptr layout directly")
+        }
     }
 }
 

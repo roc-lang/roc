@@ -826,7 +826,7 @@ impl<
 
                 self.copy_to_stack_offset(buf, size, from_offset, to_offset)
             }
-            LayoutRepr::RecursivePointer(_) | LayoutRepr::Boxed(_) | LayoutRepr::Union(_) => {
+            pointer_layouts!() => {
                 // like a 64-bit integer
                 debug_assert_eq!(to_offset % 8, 0);
                 let reg = self.load_to_general_reg(buf, sym);

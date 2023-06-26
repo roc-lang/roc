@@ -10,6 +10,7 @@ use std::{collections::HashMap, hash::BuildHasherDefault};
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
@@ -271,9 +272,10 @@ impl<'v> RefcountEnvironment<'v> {
     */
     fn consume_rc_symbol(&mut self, symbol: Symbol) -> Ownership {
         // Consume the symbol by setting it to borrowed (if it was owned before), and return the previous ownership.
-        self.symbols_ownership
-            .insert(symbol, Ownership::Borrowed)
-            .expect("Expected symbol to be in environment")
+        match self.symbols_ownership.insert(symbol, Ownership::Borrowed) {
+            Some(ownership) => ownership,
+            None => internal_error!("Expected symbol {symbol:?} to be in environment"),
+        }
     }
 
     /**
@@ -344,17 +346,16 @@ impl<'v> RefcountEnvironment<'v> {
         // A groupby or something similar would be nice here.
         let mut symbol_usage = MutMap::default();
         for symbol in symbols {
-            match {
-                self.symbols_rc_types
-                    .get(&symbol)
-                    .expect("Expected symbol to be in the map")
-            } {
+            match self.symbols_rc_types.get(&symbol) {
                 // If the symbol is reference counted, we need to increment the usage count.
-                VarRcType::ReferenceCounted => {
+                Some(VarRcType::ReferenceCounted) => {
                     *symbol_usage.entry(symbol).or_default() += 1;
                 }
                 // If the symbol is not reference counted, we don't need to do anything.
-                VarRcType::NotReferenceCounted => continue,
+                Some(VarRcType::NotReferenceCounted) => continue,
+                None => {
+                    internal_error!("symbol {symbol:?} does not have an rc type")
+                }
             }
         }
         symbol_usage
@@ -543,15 +544,16 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         .iter()
                         .filter(|(_, o)| o.is_owned())
                     {
-                        let error = "All symbols defined in the current environment should be in the environment of the branches.";
                         let consumed =
                             branch_envs
                                 .iter()
                                 .any(|branch_env: &&RefcountEnvironment<'v>| {
-                                    matches!(
-                                        branch_env.get_symbol_ownership(symbol).expect(error),
-                                        Ownership::Borrowed
-                                    )
+                                    match branch_env.get_symbol_ownership(symbol) {
+                                        None => internal_error!(
+                                            "symbol {symbol:?} in the current env should be in the branch's env"
+                                        ),
+                                        Some(ownership) => matches!(ownership, Ownership::Borrowed),
+                                    }
                                 });
                         if consumed {
                             // If the symbol is currently owned, and not in a some branches, it must be consumed in all branches
@@ -889,6 +891,7 @@ fn insert_refcount_operations_binding<'a>(
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
+        | Expr::UnionFieldPtrAtIndex { structure, .. }
         | Expr::ExprUnbox { symbol: structure } => {
             // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
             // But we do want to make sure to decrement this item if it is the last reference.
@@ -902,6 +905,7 @@ fn insert_refcount_operations_binding<'a>(
                 match expr {
                     Expr::StructAtIndex { .. }
                     | Expr::UnionAtIndex { .. }
+                    | Expr::UnionFieldPtrAtIndex { .. }
                     | Expr::ExprUnbox { .. } => insert_inc_stmt(arena, *binding, 1, new_stmt),
                     // No usage of an element of a reference counted symbol. No need to increment.
                     Expr::GetTagId { .. } => new_stmt,

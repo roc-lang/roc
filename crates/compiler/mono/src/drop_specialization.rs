@@ -211,7 +211,18 @@ fn specialize_drops_stmt<'a, 'i>(
                     // TODO perhaps we need the union_layout later as well? if so, create a new function/map to store it.
                     environment.add_union_child(*structure, *binding, *tag_id, *index);
                     // Generated code might know the tag of the union without switching on it.
-                    // So if we unionAtIndex, we must know the tag and we can use it to specialize the drop.
+                    // So if we UnionAtIndex, we must know the tag and we can use it to specialize the drop.
+                    environment.symbol_tag.insert(*structure, *tag_id);
+                    alloc_let_with_continuation!(environment)
+                }
+                Expr::UnionFieldPtrAtIndex {
+                    structure,
+                    tag_id,
+                    union_layout: _,
+                    index: _,
+                } => {
+                    // Generated code might know the tag of the union without switching on it.
+                    // So if we UnionFieldPtrAtIndex, we must know the tag and we can use it to specialize the drop.
                     environment.symbol_tag.insert(*structure, *tag_id);
                     alloc_let_with_continuation!(environment)
                 }
@@ -1666,8 +1677,13 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
             unreachable!("These lowlevel operations are turned into mono Expr's")
         }
 
-        PtrCast | PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
-        | RefCountDecDataPtr | RefCountIsUnique => {
+        // only inserted for internal purposes. RC should not touch it
+        PtrStore => RC::NoRc,
+        PtrLoad => RC::NoRc,
+        Alloca => RC::NoRc,
+
+        PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr | RefCountDecDataPtr
+        | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
         }
     }
