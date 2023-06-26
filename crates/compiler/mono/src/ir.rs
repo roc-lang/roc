@@ -4027,7 +4027,17 @@ impl<'a> ProcLayout<'a> {
                     lambda_set.extend_argument_list_for_named(arena, lambda_name, arguments);
                 ProcLayout::new(arena, arguments, lambda_name.niche(), result)
             }
-            RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
+            RawFunctionLayout::ErasedFunction(arguments, result) => {
+                let arguments = if lambda_name.no_captures() {
+                    arguments
+                } else {
+                    let mut extended_args = Vec::with_capacity_in(arguments.len(), arena);
+                    extended_args.extend(arguments.iter().chain(&[Layout::OPAQUE_PTR]).copied());
+                    extended_args.into_bump_slice()
+                };
+
+                ProcLayout::new(arena, arguments, lambda_name.niche(), result)
+            }
             RawFunctionLayout::ZeroArgumentThunk(result) => {
                 ProcLayout::new(arena, &[], Niche::NONE, result)
             }
@@ -8219,14 +8229,31 @@ fn specialize_symbol<'a>(
                         )
                     }
                 }
-                RawFunctionLayout::ErasedFunction(..) => erased::build_erased_function(
-                    env,
-                    layout_cache,
-                    original,
-                    captured,
-                    assign_to,
-                    result,
-                ),
+                RawFunctionLayout::ErasedFunction(..) => {
+                    let erased_lambda =
+                        erased::ResolvedErasedLambda::new(env, layout_cache, original, captured);
+                    let lambda_name = erased_lambda.lambda_name();
+
+                    let proc_layout =
+                        ProcLayout::from_raw_named(env.arena, lambda_name, res_layout);
+
+                    procs.insert_passed_by_name(
+                        env,
+                        arg_var,
+                        lambda_name,
+                        proc_layout,
+                        layout_cache,
+                    );
+
+                    erased::build_erased_function(
+                        env,
+                        layout_cache,
+                        erased_lambda,
+                        captured,
+                        assign_to,
+                        result,
+                    )
+                }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
                     let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, ret_layout);

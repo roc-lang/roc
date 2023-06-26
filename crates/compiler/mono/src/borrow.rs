@@ -1041,6 +1041,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
 
         PtrStore => arena.alloc_slice_copy(&[owned, owned]),
         PtrLoad => arena.alloc_slice_copy(&[owned]),
+        PtrCast => arena.alloc_slice_copy(&[owned]),
         Alloca => arena.alloc_slice_copy(&[owned]),
 
         PtrClearTagId | PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr

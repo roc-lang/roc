@@ -1598,6 +1598,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         // only inserted for internal purposes. RC should not touch it
         PtrStore => RC::NoRc,
         PtrLoad => RC::NoRc,
+        PtrCast => RC::NoRc,
         Alloca => RC::NoRc,
 
         PtrClearTagId | PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr

@@ -10,7 +10,7 @@ use std::{collections::HashMap, hash::BuildHasherDefault};
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, MutMap, MutSet};
-use roc_error_macros::{internal_error, todo_lambda_erasure};
+use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
@@ -946,8 +946,13 @@ fn insert_refcount_operations_binding<'a>(
 
                     inc_owned!(arguments.iter().copied(), new_let)
                 }
+                // A normal Roc function call, but we don't actually know where its target is.
+                // As such, we assume that it takes all parameters as owned, as will the function
+                // itself.
                 CallType::ByPointer { .. } => {
-                    todo_lambda_erasure!()
+                    let new_let = new_let!(stmt);
+
+                    inc_owned!(arguments.iter().copied(), new_let)
                 }
                 CallType::Foreign { .. } => {
                     // Foreign functions should be responsible for their own memory management.

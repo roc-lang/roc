@@ -283,7 +283,7 @@ pub fn call_erased_function<'a>(
 pub fn build_erased_function<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
-    lambda_symbol: Symbol,
+    resolved_lambda: ResolvedErasedLambda<'a>,
     captures: CapturedSymbols<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
@@ -310,34 +310,10 @@ pub fn build_erased_function<'a>(
         env.arena.alloc(result),
     );
 
-    struct ResolvedCaptures<'a> {
-        layouts: &'a [InLayout<'a>],
-        symbols: &'a [Symbol],
-    }
-
-    let resolved_captures;
-    let lambda_name;
-    match captures {
-        CapturedSymbols::None => {
-            resolved_captures = None;
-            lambda_name = LambdaName::from_captures(lambda_symbol, &[]);
-        }
-        CapturedSymbols::Captured(captures) => {
-            let layouts = {
-                let layouts = captures
-                    .iter()
-                    .map(|(_, var)| layout_cache.from_var(env.arena, *var, env.subs).unwrap());
-                env.arena.alloc_slice_fill_iter(layouts)
-            };
-            let symbols = {
-                let symbols = captures.iter().map(|(sym, _)| *sym);
-                env.arena.alloc_slice_fill_iter(symbols)
-            };
-
-            resolved_captures = Some(ResolvedCaptures { layouts, symbols });
-            lambda_name = LambdaName::from_captures(lambda_symbol, layouts);
-        }
-    };
+    let ResolvedErasedLambda {
+        captures,
+        lambda_name,
+    } = resolved_lambda;
 
     // callee = Expr::FunctionPointer(f)
     let result = Stmt::Let(
@@ -348,7 +324,7 @@ pub fn build_erased_function<'a>(
     );
 
     // value = Expr::Box({s})
-    match resolved_captures {
+    match captures {
         None => {
             // value = nullptr
             // <hole>
@@ -359,7 +335,7 @@ pub fn build_erased_function<'a>(
                 env.arena.alloc(result),
             )
         }
-        Some(ResolvedCaptures { layouts, symbols }) => {
+        Some(ResolvedErasedCaptures { layouts, symbols }) => {
             // captures = {...captures}
             // captures = Box(captures)
             // value = Cast(captures, void*)
@@ -404,5 +380,57 @@ pub fn build_erased_function<'a>(
 
             result
         }
+    }
+}
+
+struct ResolvedErasedCaptures<'a> {
+    layouts: &'a [InLayout<'a>],
+    symbols: &'a [Symbol],
+}
+
+pub struct ResolvedErasedLambda<'a> {
+    captures: Option<ResolvedErasedCaptures<'a>>,
+    lambda_name: LambdaName<'a>,
+}
+
+impl<'a> ResolvedErasedLambda<'a> {
+    pub fn new(
+        env: &Env<'a, '_>,
+        layout_cache: &mut LayoutCache<'a>,
+        lambda_symbol: Symbol,
+        captures: CapturedSymbols<'a>,
+    ) -> Self {
+        let resolved_captures;
+        let lambda_name;
+        match captures {
+            CapturedSymbols::None => {
+                resolved_captures = None;
+                lambda_name = LambdaName::from_captures(lambda_symbol, &[]);
+            }
+            CapturedSymbols::Captured(captures) => {
+                let layouts = {
+                    let layouts = captures
+                        .iter()
+                        .map(|(_, var)| layout_cache.from_var(env.arena, *var, env.subs).unwrap());
+                    env.arena.alloc_slice_fill_iter(layouts)
+                };
+                let symbols = {
+                    let symbols = captures.iter().map(|(sym, _)| *sym);
+                    env.arena.alloc_slice_fill_iter(symbols)
+                };
+
+                resolved_captures = Some(ResolvedErasedCaptures { layouts, symbols });
+                lambda_name = LambdaName::from_captures(lambda_symbol, layouts);
+            }
+        };
+
+        Self {
+            captures: resolved_captures,
+            lambda_name,
+        }
+    }
+
+    pub fn lambda_name(&self) -> LambdaName<'a> {
+        self.lambda_name
     }
 }
