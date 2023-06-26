@@ -263,7 +263,13 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.push(ext);
                     stack.extend(var_slice!(fields.variables()));
                 }
-                Tuple(_, _) => todo!(),
+                Tuple(elems, ext) => {
+                    let elems = *elems;
+                    let ext = *ext;
+
+                    stack.push(ext);
+                    stack.extend(var_slice!(elems.variables()));
+                }
                 TagUnion(tags, ext) => {
                     let tags = *tags;
                     let ext = *ext;
