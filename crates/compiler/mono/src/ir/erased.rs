@@ -349,9 +349,15 @@ pub fn build_erased_function<'a>(
                 layout_cache.put_in_direct_no_semantic(LayoutRepr::Boxed(stack_captures_layout));
 
             let result = Stmt::Let(
-                stack_captures,
-                Expr::Struct(symbols),
-                stack_captures_layout,
+                value,
+                Expr::Call(Call {
+                    call_type: CallType::LowLevel {
+                        op: LowLevel::PtrCast,
+                        update_mode: UpdateModeId::BACKEND_DUMMY,
+                    },
+                    arguments: env.arena.alloc([boxed_captures]),
+                }),
+                Layout::OPAQUE_PTR,
                 env.arena.alloc(result),
             );
 
@@ -365,15 +371,9 @@ pub fn build_erased_function<'a>(
             );
 
             let result = Stmt::Let(
-                value,
-                Expr::Call(Call {
-                    call_type: CallType::LowLevel {
-                        op: LowLevel::PtrCast,
-                        update_mode: UpdateModeId::BACKEND_DUMMY,
-                    },
-                    arguments: env.arena.alloc([boxed_captures]),
-                }),
-                Layout::OPAQUE_PTR,
+                stack_captures,
+                Expr::Struct(symbols),
+                stack_captures_layout,
                 env.arena.alloc(result),
             );
 
