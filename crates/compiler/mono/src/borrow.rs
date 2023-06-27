@@ -1047,8 +1047,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         PtrLoad => arena.alloc_slice_copy(&[owned]),
         Alloca => arena.alloc_slice_copy(&[owned]),
 
-        PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr | RefCountDecDataPtr
-        | RefCountIsUnique => {
+        PtrClearTagId | PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", op);
         }
     }

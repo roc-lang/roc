@@ -1325,6 +1325,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 .new_build_load(element_type, ptr.into_pointer_value(), "ptr_load")
         }
 
+        PtrClearTagId => {
+            arguments!(ptr);
+
+            tag_pointer_clear_tag_id(env, ptr.into_pointer_value()).into()
+        }
+
         Alloca => {
             arguments!(initial_value);
 

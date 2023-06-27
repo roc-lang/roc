@@ -510,6 +510,12 @@ fn apply_refcount_operation(
             builder.add_recursive_touch(block, argument)?;
         }
         ModifyRc::DecRef(symbol) => {
+            // this is almost certainly suboptimal, but not incorrect
+            let argument = env.symbols[symbol];
+            builder.add_recursive_touch(block, argument)?;
+        }
+        ModifyRc::Free(symbol) => {
+            // this is almost certainly suboptimal, but not incorrect
             let argument = env.symbols[symbol];
             builder.add_recursive_touch(block, argument)?;
         }
