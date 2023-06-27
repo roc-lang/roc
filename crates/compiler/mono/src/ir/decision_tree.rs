@@ -5,8 +5,8 @@ use crate::ir::{
     GuardStmtSpec, JoinPointId, Literal, Param, Procs, Stmt,
 };
 use crate::layout::{
-    Builtin, InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, TagIdIntType,
-    UnionLayout,
+    Builtin, InLayout, Layout, LayoutCache, LayoutInterner, LayoutRepr, TLLayoutInterner,
+    TagIdIntType, UnionLayout,
 };
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
@@ -109,6 +109,7 @@ enum Test<'a> {
         arguments: Vec<(Pattern<'a>, InLayout<'a>)>,
     },
     IsInt([u8; 16], IntWidth),
+    // stores the f64 bits; u64 so that this type can impl Hash
     IsFloat(u64, FloatWidth),
     IsDecimal([u8; 16]),
     IsStr(Box<str>),
@@ -131,7 +132,7 @@ impl<'a> Test<'a> {
                 // llvm does not like switching on 128-bit values
                 !matches!(int_width, IntWidth::U128 | IntWidth::I128)
             }
-            Test::IsFloat(_, _) => true,
+            Test::IsFloat(_, _) => false,
             Test::IsDecimal(_) => false,
             Test::IsStr(_) => false,
             Test::IsBit(_) => true,
@@ -1014,13 +1015,7 @@ fn to_relevant_branch_help<'a>(
                     // the test matches the constructor of this pattern
                     match layout {
                         UnionLayout::NonRecursive([[arg]])
-                            if matches!(
-                                interner.get(*arg),
-                                Layout::Struct {
-                                    field_layouts: [_],
-                                    ..
-                                }
-                            ) =>
+                            if matches!(interner.get_repr(*arg), LayoutRepr::Struct([_],)) =>
                         {
                             // a one-element record equivalent
                             // Theory: Unbox doesn't have any value for us
@@ -1580,7 +1575,7 @@ fn path_to_expr_help<'a>(
                 let index = *index;
 
                 match layout_interner.chase_recursive(layout) {
-                    Layout::Union(union_layout) => {
+                    LayoutRepr::Union(union_layout) => {
                         let inner_expr = Expr::UnionAtIndex {
                             tag_id: *tag_id,
                             structure: symbol,
@@ -1600,7 +1595,7 @@ fn path_to_expr_help<'a>(
                         layout = inner_layout;
                     }
 
-                    Layout::Struct { field_layouts, .. } => {
+                    LayoutRepr::Struct(field_layouts) => {
                         debug_assert!(field_layouts.len() > 1);
 
                         let inner_expr = Expr::StructAtIndex {
@@ -1632,8 +1627,8 @@ fn path_to_expr_help<'a>(
             PathInstruction::ListIndex { index } => {
                 let list_sym = symbol;
 
-                match layout_interner.get(layout) {
-                    Layout::Builtin(Builtin::List(elem_layout)) => {
+                match layout_interner.get_repr(layout) {
+                    LayoutRepr::Builtin(Builtin::List(elem_layout)) => {
                         let (index_sym, new_stores) = build_list_index_probe(env, list_sym, index);
 
                         stores.extend(new_stores);
@@ -1680,7 +1675,7 @@ fn test_to_comparison<'a>(
             debug_assert!(union.alternatives.len() > 1);
 
             match layout_interner.chase_recursive(test_layout) {
-                Layout::Union(union_layout) => {
+                LayoutRepr::Union(union_layout) => {
                     let lhs = Expr::Literal(Literal::Int((tag_id as i128).to_ne_bytes()));
 
                     let rhs = Expr::GetTagId {
@@ -1769,8 +1764,8 @@ fn test_to_comparison<'a>(
             let list_layout = test_layout;
             let list_sym = rhs_symbol;
 
-            match layout_interner.get(list_layout) {
-                Layout::Builtin(Builtin::List(_elem_layout)) => {
+            match layout_interner.get_repr(list_layout) {
+                LayoutRepr::Builtin(Builtin::List(_elem_layout)) => {
                     let real_len_expr = Expr::Call(Call {
                         call_type: CallType::LowLevel {
                             op: LowLevel::ListLen,
@@ -2257,7 +2252,7 @@ fn decide_to_branching<'a>(
 
                 let tag = match test {
                     Test::IsInt(v, _) => i128::from_ne_bytes(v) as u64,
-                    Test::IsFloat(v, _) => v,
+                    Test::IsFloat(_, _) => unreachable!("floats cannot be switched on"),
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
                     Test::IsCtor { tag_id, .. } => tag_id as u64,
@@ -2316,7 +2311,7 @@ fn decide_to_branching<'a>(
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
             let inner_cond_layout_raw = layout_cache.interner.chase_recursive(inner_cond_layout);
-            let mut switch = if let Layout::Union(union_layout) = inner_cond_layout_raw {
+            let mut switch = if let LayoutRepr::Union(union_layout) = inner_cond_layout_raw {
                 let tag_id_symbol = env.unique_symbol();
 
                 let temp = Stmt::Switch {
@@ -2338,7 +2333,7 @@ fn decide_to_branching<'a>(
                     union_layout.tag_id_layout(),
                     env.arena.alloc(temp),
                 )
-            } else if let Layout::Builtin(Builtin::List(_)) = inner_cond_layout_raw {
+            } else if let LayoutRepr::Builtin(Builtin::List(_)) = inner_cond_layout_raw {
                 let len_symbol = env.unique_symbol();
 
                 let switch = Stmt::Switch {
@@ -2396,8 +2391,8 @@ fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, InLayout<'a>
         expr = Expr::RunLowLevel(
             LowLevel::And,
             arena.alloc([
-                (test, Layout::Builtin(Builtin::Int1)),
-                (expr, Layout::Builtin(Builtin::Int1)),
+                (test, LayoutRepr::Builtin(Builtin::Int1)),
+                (expr, LayoutRepr::Builtin(Builtin::Int1)),
             ]),
         );
     }

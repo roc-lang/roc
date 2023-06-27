@@ -10,6 +10,7 @@ use std::{collections::HashMap, hash::BuildHasherDefault};
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
@@ -31,12 +32,6 @@ pub fn insert_inc_dec_operations<'a>(
     layout_interner: &STLayoutInterner<'a>,
     procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
-    // Create a SymbolRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
-    let mut symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
-    for proc_symbol in procedures.keys().map(|(symbol, _layout)| *symbol) {
-        symbol_rc_types_env.insert_proc_symbol(proc_symbol);
-    }
-
     // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
     // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
     // Thus, these rc operations are performed on the caller of the wrapper instead, and we skip rc on the lowlevel.
@@ -47,9 +42,7 @@ pub fn insert_inc_dec_operations<'a>(
             LowLevelWrapperType::from_symbol(*symbol),
             LowLevelWrapperType::NotALowLevelWrapper
         ) {
-            // Clone the symbol_rc_types_env and insert the symbols in the current procedure.
-            // As the symbols should be limited in scope for the current proc.
-            let symbol_rc_types_env = symbol_rc_types_env.clone();
+            let symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
             insert_inc_dec_operations_proc(arena, symbol_rc_types_env, proc);
         }
     }
@@ -125,15 +118,6 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
             symbols_rc_type: SymbolRcTypes::default(),
             layout_interner,
         }
-    }
-
-    /**
-    Insert the reference count type of top level functions.
-    As functions are not reference counted, they can be marked as such.
-    */
-    fn insert_proc_symbol(&mut self, proc_symbol: Symbol) {
-        self.symbols_rc_type
-            .insert(proc_symbol, VarRcType::NotReferenceCounted);
     }
 
     /**
@@ -288,9 +272,10 @@ impl<'v> RefcountEnvironment<'v> {
     */
     fn consume_rc_symbol(&mut self, symbol: Symbol) -> Ownership {
         // Consume the symbol by setting it to borrowed (if it was owned before), and return the previous ownership.
-        self.symbols_ownership
-            .insert(symbol, Ownership::Borrowed)
-            .expect("Expected symbol to be in environment")
+        match self.symbols_ownership.insert(symbol, Ownership::Borrowed) {
+            Some(ownership) => ownership,
+            None => internal_error!("Expected symbol {symbol:?} to be in environment"),
+        }
     }
 
     /**
@@ -361,17 +346,16 @@ impl<'v> RefcountEnvironment<'v> {
         // A groupby or something similar would be nice here.
         let mut symbol_usage = MutMap::default();
         for symbol in symbols {
-            match {
-                self.symbols_rc_types
-                    .get(&symbol)
-                    .expect("Expected symbol to be in the map")
-            } {
+            match self.symbols_rc_types.get(&symbol) {
                 // If the symbol is reference counted, we need to increment the usage count.
-                VarRcType::ReferenceCounted => {
+                Some(VarRcType::ReferenceCounted) => {
                     *symbol_usage.entry(symbol).or_default() += 1;
                 }
                 // If the symbol is not reference counted, we don't need to do anything.
-                VarRcType::NotReferenceCounted => continue,
+                Some(VarRcType::NotReferenceCounted) => continue,
+                None => {
+                    internal_error!("symbol {symbol:?} does not have an rc type")
+                }
             }
         }
         symbol_usage
@@ -560,15 +544,16 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         .iter()
                         .filter(|(_, o)| o.is_owned())
                     {
-                        let error = "All symbols defined in the current environment should be in the environment of the branches.";
                         let consumed =
                             branch_envs
                                 .iter()
                                 .any(|branch_env: &&RefcountEnvironment<'v>| {
-                                    matches!(
-                                        branch_env.get_symbol_ownership(symbol).expect(error),
-                                        Ownership::Borrowed
-                                    )
+                                    match branch_env.get_symbol_ownership(symbol) {
+                                        None => internal_error!(
+                                            "symbol {symbol:?} in the current env should be in the branch's env"
+                                        ),
+                                        Some(ownership) => matches!(ownership, Ownership::Borrowed),
+                                    }
                                 });
                         if consumed {
                             // If the symbol is currently owned, and not in a some branches, it must be consumed in all branches
@@ -648,20 +633,20 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
-            let new_expect = arena.alloc(Stmt::Expect {
+            let newer_remainder = consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages(lookups.iter().copied()),
+                new_remainder,
+            );
+
+            arena.alloc(Stmt::Expect {
                 condition: *condition,
                 region: *region,
                 lookups,
                 variables,
-                remainder: new_remainder,
-            });
-
-            consume_and_insert_inc_stmts(
-                arena,
-                environment,
-                environment.owned_usages(lookups.iter().copied()),
-                new_expect,
-            )
+                remainder: newer_remainder,
+            })
         }
         Stmt::ExpectFx {
             condition,
@@ -672,20 +657,20 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
-            let new_expectfx = arena.alloc(Stmt::ExpectFx {
+            let newer_remainder = consume_and_insert_dec_stmts(
+                arena,
+                environment,
+                environment.borrowed_usages(lookups.iter().copied()),
+                new_remainder,
+            );
+
+            arena.alloc(Stmt::ExpectFx {
                 condition: *condition,
                 region: *region,
                 lookups,
                 variables,
-                remainder: new_remainder,
-            });
-
-            consume_and_insert_inc_stmts(
-                arena,
-                environment,
-                environment.owned_usages(lookups.iter().copied()),
-                new_expectfx,
-            )
+                remainder: newer_remainder,
+            })
         }
         Stmt::Dbg {
             symbol,
@@ -694,20 +679,18 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         } => {
             let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
 
-            let new_debug = arena.alloc(Stmt::Dbg {
-                symbol: *symbol,
-                variable: *variable,
-                remainder: new_remainder,
-            });
-
-            // TODO this assumes the debug statement to consume the variable. I'm not sure if that is (always) the case.
-            // But the old inc_dec pass passes variables
-            consume_and_insert_inc_stmts(
+            let newer_remainder = consume_and_insert_dec_stmts(
                 arena,
                 environment,
-                environment.owned_usages([*symbol]),
-                new_debug,
-            )
+                environment.borrowed_usages([*symbol]),
+                new_remainder,
+            );
+
+            arena.alloc(Stmt::Dbg {
+                symbol: *symbol,
+                variable: *variable,
+                remainder: newer_remainder,
+            })
         }
         Stmt::Join {
             id: joinpoint_id,
@@ -908,6 +891,7 @@ fn insert_refcount_operations_binding<'a>(
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
+        | Expr::UnionFieldPtrAtIndex { structure, .. }
         | Expr::ExprUnbox { symbol: structure } => {
             // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
             // But we do want to make sure to decrement this item if it is the last reference.
@@ -921,6 +905,7 @@ fn insert_refcount_operations_binding<'a>(
                 match expr {
                     Expr::StructAtIndex { .. }
                     | Expr::UnionAtIndex { .. }
+                    | Expr::UnionFieldPtrAtIndex { .. }
                     | Expr::ExprUnbox { .. } => insert_inc_stmt(arena, *binding, 1, new_stmt),
                     // No usage of an element of a reference counted symbol. No need to increment.
                     Expr::GetTagId { .. } => new_stmt,

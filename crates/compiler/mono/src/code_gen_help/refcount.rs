@@ -12,7 +12,8 @@ use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
+    UnionLayout,
 };
 
 use super::{CodeGenHelp, Context, HelperOp};
@@ -74,9 +75,9 @@ pub fn refcount_stmt<'a>(
         }
 
         ModifyRc::DecRef(structure) => {
-            match layout_interner.get(layout) {
+            match layout_interner.get_repr(layout) {
                 // Str has no children, so Dec is the same as DecRef.
-                Layout::Builtin(Builtin::Str) => {
+                LayoutRepr::Builtin(Builtin::Str) => {
                     ctx.op = HelperOp::Dec;
                     refcount_stmt(
                         root,
@@ -90,8 +91,8 @@ pub fn refcount_stmt<'a>(
                 }
 
                 // Struct and non-recursive Unions are stack-only, so DecRef is a no-op
-                Layout::Struct { .. } => following,
-                Layout::Union(UnionLayout::NonRecursive(_)) => following,
+                LayoutRepr::Struct { .. } => following,
+                LayoutRepr::Union(UnionLayout::NonRecursive(_)) => following,
 
                 // Inline the refcounting code instead of making a function. Don't iterate fields,
                 // and replace any return statements with jumps to the `following` statement.
@@ -120,6 +121,59 @@ pub fn refcount_stmt<'a>(
     }
 }
 
+pub fn refcount_indirect<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    element_layout: InLayout<'a>,
+    structure: Symbol,
+) -> Stmt<'a> {
+    let arena = root.arena;
+
+    let unit = root.create_symbol(ident_ids, "unit");
+    let unboxed = root.create_symbol(ident_ids, "unboxed");
+
+    let indirect_op = ctx.op;
+    let direct_op = match ctx.op {
+        HelperOp::IndirectInc => HelperOp::Inc,
+        HelperOp::IndirectDec => HelperOp::Dec,
+        _ => unreachable!(),
+    };
+
+    // we've done the indirection, the inner value shoud be inc- or decremented directly
+    ctx.op = direct_op;
+
+    let mod_args = refcount_args(root, ctx, unboxed);
+    let opt_mod_expr =
+        root.call_specialized_op(ident_ids, ctx, layout_interner, element_layout, mod_args);
+
+    // set the op back to indirect ; this is important for correct layout generation
+    ctx.op = indirect_op;
+
+    if let Some(mod_expr) = opt_mod_expr {
+        Stmt::Let(
+            unboxed,
+            Expr::ExprUnbox { symbol: structure },
+            element_layout,
+            arena.alloc(
+                //
+                Stmt::Let(
+                    unit,
+                    mod_expr,
+                    Layout::UNIT,
+                    arena.alloc(
+                        //
+                        Stmt::Ret(unit),
+                    ),
+                ),
+            ),
+        )
+    } else {
+        rc_return_stmt(root, ident_ids, ctx)
+    }
+}
+
 pub fn refcount_generic<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -128,14 +182,16 @@ pub fn refcount_generic<'a>(
     layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-    match layout_interner.get(layout) {
-        Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
+    match layout_interner.get_repr(layout) {
+        LayoutRepr::Builtin(
+            Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
+        ) => {
             // Generate a dummy function that immediately returns Unit
             // Some higher-order Zig builtins *always* call an RC function on List elements.
             rc_return_stmt(root, ident_ids, ctx)
         }
-        Layout::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
-        Layout::Builtin(Builtin::List(elem_layout)) => refcount_list(
+        LayoutRepr::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
+        LayoutRepr::Builtin(Builtin::List(elem_layout)) => refcount_list(
             root,
             ident_ids,
             ctx,
@@ -143,7 +199,7 @@ pub fn refcount_generic<'a>(
             elem_layout,
             structure,
         ),
-        Layout::Struct { field_layouts, .. } => refcount_struct(
+        LayoutRepr::Struct(field_layouts) => refcount_struct(
             root,
             ident_ids,
             ctx,
@@ -151,7 +207,7 @@ pub fn refcount_generic<'a>(
             field_layouts,
             structure,
         ),
-        Layout::Union(union_layout) => refcount_union(
+        LayoutRepr::Union(union_layout) => refcount_union(
             root,
             ident_ids,
             ctx,
@@ -160,7 +216,7 @@ pub fn refcount_generic<'a>(
             union_layout,
             structure,
         ),
-        Layout::LambdaSet(lambda_set) => {
+        LayoutRepr::LambdaSet(lambda_set) => {
             let runtime_layout = lambda_set.representation;
             refcount_generic(
                 root,
@@ -171,10 +227,10 @@ pub fn refcount_generic<'a>(
                 structure,
             )
         }
-        Layout::RecursivePointer(_) => unreachable!(
+        LayoutRepr::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
         ),
-        Layout::Boxed(inner_layout) => refcount_boxed(
+        LayoutRepr::Boxed(inner_layout) => refcount_boxed(
             root,
             ident_ids,
             ctx,
@@ -183,6 +239,9 @@ pub fn refcount_generic<'a>(
             inner_layout,
             structure,
         ),
+        LayoutRepr::Ptr(_) => {
+            unreachable!("We should never call a refcounting helper on a Ptr layout directly")
+        }
     }
 }
 
@@ -245,15 +304,16 @@ pub fn refcount_reset_proc_body<'a>(
     let is_unique = root.create_symbol(ident_ids, "is_unique");
     let addr = root.create_symbol(ident_ids, "addr");
 
-    let union_layout = match layout_interner.get(layout) {
-        Layout::Union(u) => u,
+    let union_layout = match layout_interner.get_repr(layout) {
+        LayoutRepr::Union(u) => u,
         _ => unimplemented!("Reset is only implemented for UnionLayout"),
     };
 
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
+    let recursion_ptr =
+        layout_interner.insert_direct_no_semantic(LayoutRepr::RecursivePointer(layout));
 
     // Reset structure is unique. Decrement its children and return a pointer to the allocation.
     let then_stmt = {
@@ -427,44 +487,49 @@ pub fn refcount_resetref_proc_body<'a>(
     let is_unique = root.create_symbol(ident_ids, "is_unique");
     let addr = root.create_symbol(ident_ids, "addr");
 
-    let union_layout = match layout_interner.get(layout) {
-        Layout::Union(u) => u,
-        _ => unimplemented!("Reset is only implemented for UnionLayout"),
+    let union_layout = match layout_interner.get_repr(layout) {
+        LayoutRepr::Union(u) => u,
+        _ => unimplemented!("Resetref is only implemented for UnionLayout"),
     };
 
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
-    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
+    let recursion_ptr =
+        layout_interner.insert_direct_no_semantic(LayoutRepr::RecursivePointer(layout));
 
     // Reset structure is unique. Return a pointer to the allocation.
     let then_stmt = Stmt::Ret(addr);
 
     // Reset structure is not unique. Decrement it and return a NULL pointer.
     let else_stmt = {
-        let decrement_unit = root.create_symbol(ident_ids, "decrement_unit");
-        let decrement_expr = root
-            .call_specialized_op(
-                ident_ids,
-                ctx,
-                layout_interner,
-                layout,
-                root.arena.alloc([structure]),
-            )
-            .unwrap();
-        let decrement_stmt = |next| Stmt::Let(decrement_unit, decrement_expr, LAYOUT_UNIT, next);
+        // Set up the context for a decref.
+        let jp_decref = JoinPointId(root.create_symbol(ident_ids, "jp_decref"));
+        ctx.op = HelperOp::DecRef(jp_decref);
+
+        // Generate the decref code.
+        let rc_stmt = refcount_generic(root, ident_ids, ctx, layout_interner, layout, structure);
 
         // Null pointer with union layout
         let null = root.create_symbol(ident_ids, "null");
         let null_stmt = |next| Stmt::Let(null, Expr::NullPointer, layout, next);
 
-        decrement_stmt(root.arena.alloc(
-            //
-            null_stmt(root.arena.alloc(
+        // Inline the refcounting code instead of making a function. Don't iterate fields,
+        // and replace any return statements with jumps to the `following` statement.
+        let join = Stmt::Join {
+            id: jp_decref,
+            parameters: &[],
+            body: root.arena.alloc(root.arena.alloc(
                 //
-                Stmt::Ret(null),
+                null_stmt(root.arena.alloc(
+                    //
+                    Stmt::Ret(null),
+                )),
             )),
-        ))
+            remainder: root.arena.alloc(rc_stmt),
+        };
+
+        root.arena.alloc(join)
     };
 
     let if_stmt = Stmt::if_then_else(
@@ -663,11 +728,17 @@ fn rc_ptr_from_data_ptr_help<'a>(
     }
 }
 
+enum Pointer {
+    ToData(Symbol),
+    #[allow(unused)]
+    ToRefcount(Symbol),
+}
+
 fn modify_refcount<'a>(
     root: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    data_ptr: Symbol,
+    ptr: Pointer,
     alignment: u32,
     following: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -675,28 +746,39 @@ fn modify_refcount<'a>(
     let zig_call_result = root.create_symbol(ident_ids, "zig_call_result");
     match ctx.op {
         HelperOp::Inc => {
+            let (op, ptr) = match ptr {
+                Pointer::ToData(s) => (LowLevel::RefCountIncDataPtr, s),
+                Pointer::ToRefcount(s) => (LowLevel::RefCountIncRcPtr, s),
+            };
+
             let zig_call_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
-                    op: LowLevel::RefCountIncDataPtr,
+                    op,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([data_ptr, Symbol::ARG_2]),
+                arguments: root.arena.alloc([ptr, Symbol::ARG_2]),
             });
             Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following)
         }
 
         HelperOp::Dec | HelperOp::DecRef(_) => {
             debug_assert!(alignment >= root.target_info.ptr_width() as u32);
+
+            let (op, ptr) = match ptr {
+                Pointer::ToData(s) => (LowLevel::RefCountDecDataPtr, s),
+                Pointer::ToRefcount(s) => (LowLevel::RefCountDecRcPtr, s),
+            };
+
             let alignment_sym = root.create_symbol(ident_ids, "alignment");
             let alignment_expr = Expr::Literal(Literal::Int((alignment as i128).to_ne_bytes()));
             let alignment_stmt = |next| Stmt::Let(alignment_sym, alignment_expr, LAYOUT_U32, next);
 
             let zig_call_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
-                    op: LowLevel::RefCountDecDataPtr,
+                    op,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([data_ptr, alignment_sym]),
+                arguments: root.arena.alloc([ptr, alignment_sym]),
             });
             let zig_call_stmt = Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following);
 
@@ -716,11 +798,10 @@ fn refcount_str<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
 ) -> Stmt<'a> {
+    let arena = root.arena;
     let string = Symbol::ARG_1;
     let layout_isize = root.layout_isize;
-    let field_layouts = root
-        .arena
-        .alloc([Layout::OPAQUE_PTR, layout_isize, layout_isize]);
+    let field_layouts = arena.alloc([Layout::OPAQUE_PTR, layout_isize, layout_isize]);
 
     // Get the last word as a signed int
     let last_word = root.create_symbol(ident_ids, "last_word");
@@ -738,57 +819,154 @@ fn refcount_str<'a>(
 
     // is_big_str = (last_word >= 0);
     // Treat last word as isize so that the small string flag is the same as the sign bit
+    // (assuming a little-endian target, where the sign bit is in the last byte of the word)
     let is_big_str = root.create_symbol(ident_ids, "is_big_str");
-    let is_big_str_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::NumGte,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: root.arena.alloc([last_word, zero]),
-    });
-    let is_big_str_stmt = |next| Stmt::Let(is_big_str, is_big_str_expr, LAYOUT_BOOL, next);
+    let is_big_str_stmt = |next| {
+        let_lowlevel(
+            arena,
+            LAYOUT_BOOL,
+            is_big_str,
+            NumGte,
+            &[last_word, zero],
+            next,
+        )
+    };
 
-    // Get the pointer to the string elements
-    let elements = root.create_symbol(ident_ids, "characters");
-    let elements_expr = Expr::StructAtIndex {
+    //
+    // Check for seamless slice
+    //
+
+    // Get the length field as a signed int
+    let length = root.create_symbol(ident_ids, "length");
+    let length_expr = Expr::StructAtIndex {
+        index: 1,
+        field_layouts,
+        structure: string,
+    };
+    let length_stmt = |next| Stmt::Let(length, length_expr, layout_isize, next);
+
+    let alignment = root.target_info.ptr_width() as u32;
+
+    // let is_slice = lowlevel NumLt length zero
+    let is_slice = root.create_symbol(ident_ids, "is_slice");
+    let is_slice_stmt =
+        |next| let_lowlevel(arena, LAYOUT_BOOL, is_slice, NumLt, &[length, zero], next);
+
+    //
+    // Branch on seamless slice vs "real" string
+    //
+
+    let return_unit = arena.alloc(rc_return_stmt(root, ident_ids, ctx));
+
+    let one = root.create_symbol(ident_ids, "one");
+    let one_expr = Expr::Literal(Literal::Int(1i128.to_ne_bytes()));
+    let one_stmt = |next| Stmt::Let(one, one_expr, layout_isize, next);
+
+    let data_ptr_int = root.create_symbol(ident_ids, "data_ptr_int");
+    let data_ptr_int_stmt = |next| {
+        let_lowlevel(
+            arena,
+            layout_isize,
+            data_ptr_int,
+            PtrCast,
+            &[last_word],
+            next,
+        )
+    };
+
+    let data_ptr = root.create_symbol(ident_ids, "data_ptr");
+    let data_ptr_stmt = |next| {
+        let_lowlevel(
+            arena,
+            layout_isize,
+            data_ptr,
+            NumShiftLeftBy,
+            &[data_ptr_int, one],
+            next,
+        )
+    };
+
+    // when the string is a slice, the capacity field is a pointer to the refcount
+    let slice_branch = one_stmt(arena.alloc(
+        //
+        data_ptr_int_stmt(arena.alloc(
+            //
+            data_ptr_stmt(arena.alloc(
+                //
+                modify_refcount(
+                    root,
+                    ident_ids,
+                    ctx,
+                    Pointer::ToData(data_ptr),
+                    alignment,
+                    return_unit,
+                ),
+            )),
+        )),
+    ));
+
+    // Characters pointer for a real string
+    let string_chars = root.create_symbol(ident_ids, "string_chars");
+    let string_chars_expr = Expr::StructAtIndex {
         index: 0,
         field_layouts,
         structure: string,
     };
-    let elements_stmt = |next| Stmt::Let(elements, elements_expr, layout_isize, next);
+    let string_chars_stmt = |next| Stmt::Let(string_chars, string_chars_expr, layout_isize, next);
 
-    // A pointer to the refcount value itself
-    let alignment = root.target_info.ptr_width() as u32;
-
-    let ret_unit_stmt = rc_return_stmt(root, ident_ids, ctx);
-    let mod_rc_stmt = modify_refcount(
+    let modify_refcount_stmt = modify_refcount(
         root,
         ident_ids,
         ctx,
-        elements,
+        Pointer::ToData(string_chars),
         alignment,
-        root.arena.alloc(ret_unit_stmt),
+        return_unit,
     );
 
-    // Generate an `if` to skip small strings but modify big strings
-    let then_branch = elements_stmt(root.arena.alloc(mod_rc_stmt));
+    let string_branch = arena.alloc(
+        //
+        string_chars_stmt(arena.alloc(
+            //
+            modify_refcount_stmt,
+        )),
+    );
 
-    let if_stmt = Stmt::if_then_else(
+    let if_slice = Stmt::if_then_else(
+        root.arena,
+        is_slice,
+        Layout::UNIT,
+        slice_branch,
+        string_branch,
+    );
+
+    //
+    // JoinPoint for slice vs list
+    //
+
+    let modify_stmt = length_stmt(arena.alloc(
+        //
+        is_slice_stmt(arena.alloc(
+            //
+            if_slice,
+        )),
+    ));
+
+    let if_big_stmt = Stmt::if_then_else(
         root.arena,
         is_big_str,
         Layout::UNIT,
-        then_branch,
+        modify_stmt,
         root.arena.alloc(rc_return_stmt(root, ident_ids, ctx)),
     );
 
     // Combine the statements in sequence
-    last_word_stmt(root.arena.alloc(
+    last_word_stmt(arena.alloc(
         //
-        zero_stmt(root.arena.alloc(
+        zero_stmt(arena.alloc(
             //
-            is_big_str_stmt(root.arena.alloc(
+            is_big_str_stmt(arena.alloc(
                 //
-                if_stmt,
+                if_big_stmt,
             )),
         )),
     ))
@@ -806,7 +984,7 @@ fn refcount_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_layout = layout_interner.insert(Layout::Boxed(elem_layout));
+    let box_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(elem_layout));
 
     //
     // Check if the list is empty
@@ -815,34 +993,109 @@ fn refcount_list<'a>(
     let len = root.create_symbol(ident_ids, "len");
     let len_stmt = |next| let_lowlevel(arena, layout_isize, len, ListLen, &[structure], next);
 
-    // Zero
+    // let zero = 0
     let zero = root.create_symbol(ident_ids, "zero");
     let zero_expr = Expr::Literal(Literal::Int(0i128.to_ne_bytes()));
     let zero_stmt = |next| Stmt::Let(zero, zero_expr, layout_isize, next);
 
     // let is_empty = lowlevel Eq len zero
     let is_empty = root.create_symbol(ident_ids, "is_empty");
-    let is_empty_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::Eq,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: root.arena.alloc([len, zero]),
-    });
-    let is_empty_stmt = |next| Stmt::Let(is_empty, is_empty_expr, LAYOUT_BOOL, next);
+    let is_empty_stmt = |next| let_lowlevel(arena, LAYOUT_BOOL, is_empty, Eq, &[len, zero], next);
 
-    // get elements pointer
-    let elements = root.create_symbol(ident_ids, "elements");
-    let elements_expr = Expr::StructAtIndex {
-        index: 0,
-        field_layouts: arena.alloc([box_layout, layout_isize, layout_isize]),
+    //
+    // Check for seamless slice
+    //
+
+    // let capacity = StructAtIndex 2 structure
+    let capacity = root.create_symbol(ident_ids, "capacity");
+    let list_field_layouts = arena.alloc([box_layout, layout_isize, layout_isize]);
+    let capacity_expr = Expr::StructAtIndex {
+        index: 2,
+        field_layouts: list_field_layouts,
         structure,
     };
-    let elements_stmt = |next| Stmt::Let(elements, elements_expr, box_layout, next);
+    let capacity_stmt = |next| Stmt::Let(capacity, capacity_expr, layout_isize, next);
+
+    // let is_slice = lowlevel NumLt capacity zero
+    let is_slice = root.create_symbol(ident_ids, "is_slice");
+    let is_slice_stmt =
+        |next| let_lowlevel(arena, LAYOUT_BOOL, is_slice, NumLt, &[capacity, zero], next);
+
+    //
+    // Branch on slice vs list
+    //
+
+    // let first_element = StructAtIndex 0 structure
+    let first_element = root.create_symbol(ident_ids, "first_element");
+    let first_element_expr = Expr::StructAtIndex {
+        index: 0,
+        field_layouts: list_field_layouts,
+        structure,
+    };
+    let first_element_stmt = |next| Stmt::Let(first_element, first_element_expr, box_layout, next);
+
+    let jp_elements = JoinPointId(root.create_symbol(ident_ids, "jp_elements"));
+    let data_pointer = root.create_symbol(ident_ids, "data_pointer");
+    let param_data_pointer = Param {
+        symbol: data_pointer,
+        ownership: Ownership::Owned,
+        layout: Layout::OPAQUE_PTR,
+    };
+
+    let first_element_pointer = root.create_symbol(ident_ids, "first_element_pointer");
+    let param_first_element_pointer = Param {
+        symbol: first_element_pointer,
+        ownership: Ownership::Owned,
+        layout: Layout::OPAQUE_PTR,
+    };
+
+    // one = 1
+    let one = root.create_symbol(ident_ids, "one");
+    let one_expr = Expr::Literal(Literal::Int(1i128.to_ne_bytes()));
+    let one_stmt = |next| Stmt::Let(one, one_expr, layout_isize, next);
+
+    let slice_data_pointer = root.create_symbol(ident_ids, "slice_data_pointer");
+    let slice_data_pointer_stmt = move |next| {
+        one_stmt(arena.alloc(
+            //
+            let_lowlevel(
+                arena,
+                layout_isize,
+                slice_data_pointer,
+                LowLevel::NumShiftLeftBy,
+                &[capacity, one],
+                arena.alloc(next),
+            ),
+        ))
+    };
+
+    let slice_branch = slice_data_pointer_stmt(
+        //
+        Stmt::Jump(
+            jp_elements,
+            arena.alloc([slice_data_pointer, first_element]),
+        ),
+    );
+
+    let list_branch = arena.alloc(
+        //
+        Stmt::Jump(jp_elements, arena.alloc([first_element, first_element])),
+    );
+
+    let switch_slice_list = arena.alloc(first_element_stmt(arena.alloc(
+        //
+        Stmt::if_then_else(
+            root.arena,
+            is_slice,
+            Layout::UNIT,
+            slice_branch,
+            arena.alloc(list_branch),
+        ),
+    )));
 
     //
     // modify refcount of the list and its elements
-    // (elements first, to avoid use-after-free for Dec)
+    // (elements first, to avoid use-after-free for when decrementing)
     //
 
     let alignment = Ord::max(
@@ -850,18 +1103,15 @@ fn refcount_list<'a>(
         layout_interner.alignment_bytes(elem_layout),
     );
 
-    let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
-    let modify_list = modify_refcount(
-        root,
-        ident_ids,
-        ctx,
-        elements,
-        alignment,
-        arena.alloc(ret_stmt),
-    );
+    let ret_stmt = arena.alloc(rc_return_stmt(root, ident_ids, ctx));
+    let mut modify_refcount_stmt =
+        |ptr| modify_refcount(root, ident_ids, ctx, ptr, alignment, ret_stmt);
 
+    let modify_list = modify_refcount_stmt(Pointer::ToData(data_pointer));
+
+    let is_relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
     let modify_elems_and_list =
-        if layout_interner.get(elem_layout).is_refcounted() && ctx.op.is_dec() {
+        if is_relevant_op && layout_interner.get_repr(elem_layout).is_refcounted() {
             refcount_list_elems(
                 root,
                 ident_ids,
@@ -871,7 +1121,7 @@ fn refcount_list<'a>(
                 LAYOUT_UNIT,
                 box_layout,
                 len,
-                elements,
+                first_element_pointer,
                 modify_list,
             )
         } else {
@@ -879,18 +1129,32 @@ fn refcount_list<'a>(
         };
 
     //
+    // JoinPoint for slice vs list
+    //
+
+    let joinpoint_elems = Stmt::Join {
+        id: jp_elements,
+        parameters: arena.alloc([param_data_pointer, param_first_element_pointer]),
+        body: arena.alloc(modify_elems_and_list),
+        remainder: arena.alloc(switch_slice_list),
+    };
+
+    //
     // Do nothing if the list is empty
     //
 
-    let non_empty_branch = root.arena.alloc(
+    let non_empty_branch = arena.alloc(
         //
-        elements_stmt(root.arena.alloc(
+        capacity_stmt(arena.alloc(
             //
-            modify_elems_and_list,
+            is_slice_stmt(arena.alloc(
+                //
+                joinpoint_elems,
+            )),
         )),
     );
 
-    let if_stmt = Stmt::if_then_else(
+    let if_empty_stmt = Stmt::if_then_else(
         root.arena,
         is_empty,
         Layout::UNIT,
@@ -904,7 +1168,7 @@ fn refcount_list<'a>(
             //
             is_empty_stmt(arena.alloc(
                 //
-                if_stmt,
+                if_empty_stmt,
             )),
         )),
     ))
@@ -963,8 +1227,8 @@ fn refcount_list_elems<'a>(
     //
 
     let elems_loop = JoinPointId(root.create_symbol(ident_ids, "elems_loop"));
-    let addr = root.create_symbol(ident_ids, "addr");
 
+    let addr = root.create_symbol(ident_ids, "addr");
     let param_addr = Param {
         symbol: addr,
         ownership: Ownership::Owned,
@@ -998,13 +1262,15 @@ fn refcount_list_elems<'a>(
     //
     // Next loop iteration
     //
+
     let next_addr = root.create_symbol(ident_ids, "next_addr");
     let next_addr_stmt = |next| {
+        //
         let_lowlevel(
             arena,
             layout_isize,
             next_addr,
-            NumAdd,
+            NumAddSaturated,
             &[addr, elem_size],
             next,
         )
@@ -1017,28 +1283,25 @@ fn refcount_list_elems<'a>(
     let is_end = root.create_symbol(ident_ids, "is_end");
     let is_end_stmt = |next| let_lowlevel(arena, LAYOUT_BOOL, is_end, NumGte, &[addr, end], next);
 
-    let if_end_of_list = Stmt::Switch {
-        cond_symbol: is_end,
-        cond_layout: LAYOUT_BOOL,
+    let if_end_of_list = Stmt::if_then_else(
+        arena,
+        is_end,
         ret_layout,
-        branches: root.arena.alloc([(1, BranchInfo::None, following)]),
-        default_branch: (
-            BranchInfo::None,
-            arena.alloc(box_stmt(arena.alloc(
+        following,
+        arena.alloc(box_stmt(arena.alloc(
+            //
+            elem_stmt(arena.alloc(
                 //
-                elem_stmt(arena.alloc(
+                mod_elem_stmt(arena.alloc(
                     //
-                    mod_elem_stmt(arena.alloc(
+                    next_addr_stmt(arena.alloc(
                         //
-                        next_addr_stmt(arena.alloc(
-                            //
-                            Stmt::Jump(elems_loop, arena.alloc([next_addr])),
-                        )),
+                        Stmt::Jump(elems_loop, arena.alloc([next_addr])),
                     )),
                 )),
-            ))),
-        ),
-    };
+            )),
+        ))),
+    );
 
     let joinpoint_loop = Stmt::Join {
         id: elems_loop,
@@ -1052,7 +1315,7 @@ fn refcount_list_elems<'a>(
         ),
         remainder: root
             .arena
-            .alloc(Stmt::Jump(elems_loop, arena.alloc([start]))),
+            .alloc(Stmt::Jump(elems_loop, arena.alloc([start, end]))),
     };
 
     start_stmt(arena.alloc(
@@ -1280,24 +1543,28 @@ fn refcount_union_nonrec<'a>(
 
     let continuation = rc_return_stmt(root, ident_ids, ctx);
 
-    let switch_stmt = refcount_union_contents(
-        root,
-        ident_ids,
-        ctx,
-        layout_interner,
-        union_layout,
-        tag_layouts,
-        None,
-        structure,
-        tag_id_sym,
-        tag_id_layout,
-        continuation,
-    );
+    if tag_layouts.is_empty() {
+        continuation
+    } else {
+        let switch_stmt = refcount_union_contents(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            union_layout,
+            tag_layouts,
+            None,
+            structure,
+            tag_id_sym,
+            tag_id_layout,
+            continuation,
+        );
 
-    tag_id_stmt(root.arena.alloc(
-        //
-        switch_stmt,
-    ))
+        tag_id_stmt(root.arena.alloc(
+            //
+            switch_stmt,
+        ))
+    }
 }
 
 fn refcount_union_contents<'a>(
@@ -1423,15 +1690,14 @@ fn refcount_union_rec<'a>(
     };
 
     let rc_structure_stmt = {
-        let alignment = Layout::Union(union_layout)
-            .allocation_alignment_bytes(layout_interner, root.target_info);
+        let alignment = LayoutRepr::Union(union_layout).allocation_alignment_bytes(layout_interner);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
 
         modify_refcount(
             root,
             ident_ids,
             ctx,
-            structure,
+            Pointer::ToData(structure),
             alignment,
             root.arena.alloc(ret_stmt),
         )
@@ -1480,7 +1746,7 @@ fn refcount_union_tailrec<'a>(
     let tailrec_loop = JoinPointId(root.create_symbol(ident_ids, "tailrec_loop"));
     let current = root.create_symbol(ident_ids, "current");
     let next_ptr = root.create_symbol(ident_ids, "next_ptr");
-    let layout = layout_interner.insert(Layout::Union(union_layout));
+    let layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
 
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1529,7 +1795,7 @@ fn refcount_union_tailrec<'a>(
             root,
             ident_ids,
             ctx,
-            current,
+            Pointer::ToData(current),
             alignment,
             root.arena.alloc(loop_or_exit_based_on_next_addr),
         )
@@ -1625,7 +1891,7 @@ fn refcount_union_tailrec<'a>(
         let jump_with_null_ptr = Stmt::Let(
             null_pointer,
             Expr::NullPointer,
-            layout_interner.insert(Layout::Union(union_layout)),
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout)),
             root.arena.alloc(Stmt::Jump(
                 jp_modify_union,
                 root.arena.alloc([null_pointer]),
@@ -1669,7 +1935,7 @@ fn refcount_union_tailrec<'a>(
     ));
 
     let loop_init = Stmt::Jump(tailrec_loop, root.arena.alloc([initial_structure]));
-    let union_layout = layout_interner.insert(Layout::Union(union_layout));
+    let union_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
     let loop_param = Param {
         symbol: current,
         ownership: Ownership::Borrowed,
@@ -1751,7 +2017,7 @@ fn refcount_boxed<'a>(
         root,
         ident_ids,
         ctx,
-        outer,
+        Pointer::ToData(outer),
         alignment,
         arena.alloc(ret_stmt),
     );

@@ -1,10 +1,10 @@
-mod test_glue;
+use roc_app;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
 
-    let outer = test_glue::mainForHost();
+    let outer = roc_app::mainForHost();
 
     // Verify that `inner` has all the expected traits.
     {
@@ -71,11 +71,6 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         }
         _ => todo!(),
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
 }
 
 #[no_mangle]

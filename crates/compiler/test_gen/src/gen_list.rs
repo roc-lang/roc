@@ -7,7 +7,6 @@ use crate::helpers::dev::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
 
-#[allow(unused_imports)]
 use crate::helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
 #[allow(unused_imports)]
@@ -121,7 +120,7 @@ fn bool_list_concat() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bool_list_literal_repeat() {
     assert_evals_to!(
         indoc!(
@@ -198,7 +197,7 @@ fn list_append_basic() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_take_first() {
     assert_evals_to!(
         "List.takeFirst [1, 2, 3] 2",
@@ -223,7 +222,7 @@ fn list_take_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_take_last() {
     assert_evals_to!(
         "List.takeLast [1, 2, 3] 2",
@@ -248,7 +247,7 @@ fn list_take_last() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sublist() {
     assert_evals_to!(
         "List.sublist [1, 2, 3] { start: 0 , len: 2 } ",
@@ -288,7 +287,7 @@ fn list_sublist() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_try_ok() {
     assert_evals_to!(
         // No transformation
@@ -318,7 +317,7 @@ fn list_map_try_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_try_err() {
     use core::convert::Infallible;
 
@@ -345,28 +344,29 @@ fn list_map_try_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_split() {
     assert_evals_to!(
         r#"
-               list = List.split [1, 2, 3] 0
-               list.before
-            "#,
+        list = List.split [1, 2, 3] 0
+        list.before
+        "#,
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
         r#"
-               list = List.split [1, 2, 3] 0
-               list.others
-            "#,
+        list = List.split [1, 2, 3] 0
+        list.others
+        "#,
         RocList::from_slice(&[1, 2, 3]),
         RocList<i64>
     );
-
     assert_evals_to!(
-        "List.split [1, 2, 3] 1",
-        (RocList::from_slice(&[1]), RocList::from_slice(&[2, 3]),),
+        r#"
+        List.split [1, 2, 3] 1
+        "#,
+        (RocList::from_slice(&[1]), RocList::from_slice(&[2, 3])),
         (RocList<i64>, RocList<i64>,)
     );
     assert_evals_to!(
@@ -396,7 +396,7 @@ fn list_split() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_split_first() {
     assert_evals_to!(
         r#"
@@ -429,7 +429,7 @@ fn list_split_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_split_last() {
     assert_evals_to!(
         r#"
@@ -462,7 +462,7 @@ fn list_split_last() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop() {
     assert_evals_to!(
         "List.drop [1,2,3] 2",
@@ -482,7 +482,7 @@ fn list_drop() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_at() {
     assert_evals_to!(
         "List.dropAt [1, 2, 3] 0",
@@ -507,7 +507,7 @@ fn list_drop_at() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_intersperse() {
     assert_evals_to!(
         indoc!(
@@ -530,7 +530,7 @@ fn list_intersperse() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_at_shared() {
     assert_evals_to!(
         indoc!(
@@ -552,7 +552,7 @@ fn list_drop_at_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
@@ -569,7 +569,7 @@ fn list_drop_if_empty_list_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -586,7 +586,7 @@ fn list_drop_if_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -600,7 +600,7 @@ fn list_drop_if_always_false_for_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_always_true_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -614,7 +614,7 @@ fn list_drop_if_always_true_for_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_geq3() {
     assert_evals_to!(
         indoc!(
@@ -628,7 +628,7 @@ fn list_drop_if_geq3() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_if_string_eq() {
     assert_evals_to!(
         indoc!(
@@ -642,7 +642,7 @@ fn list_drop_if_string_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_last() {
     assert_evals_to!(
         "List.dropLast [1, 2, 3]",
@@ -662,7 +662,7 @@ fn list_drop_last() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_last_mutable() {
     assert_evals_to!(
         indoc!(
@@ -684,7 +684,7 @@ fn list_drop_last_mutable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_first() {
     assert_evals_to!(
         "List.dropFirst [1, 2, 3]",
@@ -704,7 +704,7 @@ fn list_drop_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_swap() {
     assert_evals_to!(
         "List.swap [] 0 1",
@@ -809,7 +809,7 @@ fn list_prepend() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend_str() {
     assert_evals_to!(
         indoc!(
@@ -849,7 +849,7 @@ fn list_prepend_big_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_empty_all_inline() {
     assert_evals_to!(
         indoc!(
@@ -877,7 +877,7 @@ fn list_walk_backwards_empty_all_inline() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_with_str() {
     assert_evals_to!(
         r#"List.walkBackwards ["x", "y", "z"] "<" Str.concat"#,
@@ -893,7 +893,7 @@ fn list_walk_backwards_with_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_with_record() {
     assert_evals_to!(
         indoc!(
@@ -921,7 +921,7 @@ fn list_walk_backwards_with_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_with_str() {
     assert_evals_to!(
         r#"List.walk ["x", "y", "z"] "<" Str.concat"#,
@@ -937,13 +937,13 @@ fn list_walk_with_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_subtraction() {
     assert_evals_to!(r#"List.walk [1, 2] 1 Num.sub"#, (1 - 1) - 2, i64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_until_sum() {
     assert_evals_to!(
         r#"List.walkUntil [1, 2] 0 \a,b -> Continue (a + b)"#,
@@ -953,7 +953,7 @@ fn list_walk_until_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_implements_position() {
     assert_evals_to!(
         r#"
@@ -981,7 +981,7 @@ fn list_walk_implements_position() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_until_even_prefix_sum() {
     assert_evals_to!(
         r#"
@@ -999,13 +999,13 @@ fn list_walk_until_even_prefix_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_from_sum() {
     assert_evals_to!(r#"List.walkFrom [1, 2, 3] 1 0 Num.add"#, 5, i64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_if_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
@@ -1023,7 +1023,7 @@ fn list_keep_if_empty_list_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_if_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1042,7 +1042,7 @@ fn list_keep_if_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_if_always_true_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1064,7 +1064,7 @@ fn list_keep_if_always_true_for_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1082,7 +1082,7 @@ fn list_keep_if_always_false_for_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_if_one() {
     assert_evals_to!(
         indoc!(
@@ -1100,7 +1100,7 @@ fn list_keep_if_one() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_if_str_is_hello() {
     assert_evals_to!(
         indoc!(
@@ -1114,7 +1114,7 @@ fn list_keep_if_str_is_hello() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_count_if_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1128,7 +1128,7 @@ fn list_count_if_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_count_if_always_true_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1150,7 +1150,7 @@ fn list_count_if_always_true_for_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_count_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1168,7 +1168,7 @@ fn list_count_if_always_false_for_non_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_count_if_condition() {
     assert_evals_to!(
         indoc!(
@@ -1186,7 +1186,7 @@ fn list_count_if_condition() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_count_if_str() {
     assert_evals_to!(
         indoc!(
@@ -1350,7 +1350,7 @@ fn list_map_closure_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_closure_float() {
     assert_evals_to!(
         indoc!(
@@ -1367,6 +1367,23 @@ fn list_map_closure_float() {
         ),
         RocList::from_slice(&[1.23]),
         RocList<f64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_map_closure_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            one : Str
+            one = "one "
+
+            List.map ["pear", "apple"] (\x -> Str.concat one x)
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from("one pear"), RocStr::from("one apple")]),
+        RocList<RocStr>
     );
 }
 
@@ -1468,7 +1485,7 @@ fn list_map2_different_lengths() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_empty_list() {
     assert_evals_to!(
         "List.join []",
@@ -1478,17 +1495,17 @@ fn list_join_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_one_list() {
     assert_evals_to!(
-        "List.join [[1, 2, 3]]",
+        indoc!("List.walk [[1, 2, 3]] [] List.concat",),
         RocList::from_slice(&[1, 2, 3]),
         RocList<i64>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_two_non_empty_lists() {
     assert_evals_to!(
         "List.join [[1, 2, 3] , [4 ,5, 6]]",
@@ -1498,7 +1515,7 @@ fn list_join_two_non_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_two_non_empty_lists_of_float() {
     assert_evals_to!(
         "List.join [[1.2, 1.1], [2.1, 2.2]]",
@@ -1508,7 +1525,7 @@ fn list_join_two_non_empty_lists_of_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_to_big_list() {
     assert_evals_to!(
         indoc!(
@@ -1534,7 +1551,7 @@ fn list_join_to_big_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_defined_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1552,7 +1569,7 @@ fn list_join_defined_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_all_empty_lists() {
     assert_evals_to!(
         "List.join [[], [], []]",
@@ -1562,7 +1579,7 @@ fn list_join_all_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_one_empty_list() {
     assert_evals_to!(
         "List.join [[1.2, 1.1], []]",
@@ -1572,14 +1589,23 @@ fn list_join_one_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_single() {
     assert_evals_to!("List.single 1", RocList::from_slice(&[1]), RocList<i64>);
-    assert_evals_to!("List.single 5.6", RocList::from_slice(&[5.6]), RocList<f64>);
+    assert_evals_to!(
+        "List.single 5.6f32",
+        RocList::from_slice(&[5.6]),
+        RocList<f32>
+    );
+    assert_evals_to!(
+        "List.single 5.6f64",
+        RocList::from_slice(&[5.6]),
+        RocList<f64>
+    );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_repeat() {
     assert_evals_to!(
         "List.repeat 1 5",
@@ -1620,7 +1646,7 @@ fn list_repeat() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_reverse() {
     assert_evals_to!(
         "List.reverse [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]",
@@ -1636,7 +1662,7 @@ fn list_reverse() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_reverse_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
@@ -1654,7 +1680,7 @@ fn list_reverse_empty_list_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_reverse_empty_list() {
     assert_evals_to!(
         "List.reverse []",
@@ -1732,7 +1758,7 @@ fn list_concat_two_non_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_bigger_non_empty_lists() {
     assert_evals_to!(
         "List.concat [1.1, 2.2] [3.3, 4.4, 5.5]",
@@ -1863,19 +1889,19 @@ fn fn_int_list_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_list_is_empty() {
     assert_evals_to!("List.isEmpty [12, 9, 6, 3]", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_is_empty() {
     assert_evals_to!("List.isEmpty []", true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn first_int_list() {
     assert_evals_to!(
         indoc!(
@@ -1903,7 +1929,7 @@ fn first_str_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn first_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1948,7 +1974,7 @@ fn last_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn last_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1962,7 +1988,7 @@ fn last_wildcard_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn last_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1979,7 +2005,7 @@ fn last_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn get_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1996,7 +2022,7 @@ fn get_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn get_wildcard_empty_list() {
     // NOTE: by default, the return type is `Result [] [NotFound]`, which is actually represented
     // as just `[NotFound]`. Casting that to `RocResult<(), ()>` is invalid! But accepting any `()`
@@ -2118,7 +2144,7 @@ fn replace_unique_get_large_value() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn replace_shared_int_list() {
     assert_evals_to!(
         indoc!(
@@ -2147,7 +2173,7 @@ fn replace_shared_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn get_set_unique_int_list_i64() {
     assert_evals_to!(
         indoc!(
@@ -2161,7 +2187,7 @@ fn get_set_unique_int_list_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn get_set_unique_int_list_i8() {
     assert_evals_to!(
         indoc!(
@@ -2175,7 +2201,7 @@ fn get_set_unique_int_list_i8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn set_unique_int_list() {
     assert_evals_to!(
         "List.set [12, 9, 7, 1, 5] 2 33",
@@ -2195,7 +2221,7 @@ fn set_unique_list_oob() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn set_shared_int_list() {
     assert_evals_to!(
         indoc!(
@@ -2223,7 +2249,7 @@ fn set_shared_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn set_shared_list_oob() {
     assert_evals_to!(
         indoc!(
@@ -2323,7 +2349,7 @@ fn gen_duplicate() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_swap() {
     assert_evals_to!(
         indoc!(
@@ -2352,7 +2378,7 @@ fn gen_swap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_quicksort() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
@@ -2426,7 +2452,7 @@ fn gen_quicksort() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn quicksort() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
@@ -2502,7 +2528,7 @@ fn quicksort() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn quicksort_singleton() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
@@ -2653,7 +2679,7 @@ fn list_pass_to_set() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_wrap_in_tag() {
     assert_evals_to!(
         indoc!(
@@ -2671,7 +2697,7 @@ fn list_wrap_in_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_contains_int() {
     assert_evals_to!(indoc!("List.contains [1,2,3] 1"), true, bool);
 
@@ -2681,7 +2707,7 @@ fn list_contains_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_contains_str() {
     assert_evals_to!(indoc!(r#"List.contains ["foo", "bar"] "bar""#), true, bool);
 
@@ -2716,7 +2742,7 @@ fn list_manual_range() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_min() {
     assert_evals_to!(
         indoc!(
@@ -2741,7 +2767,7 @@ fn list_min() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_max() {
     assert_evals_to!(
         indoc!(
@@ -2766,7 +2792,7 @@ fn list_max() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sum() {
     assert_evals_to!("List.sum []", 0, i64);
     assert_evals_to!("List.sum [1, 2, 3]", 6, i64);
@@ -2774,7 +2800,7 @@ fn list_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_product() {
     assert_evals_to!("List.product []", 1, i64);
     assert_evals_to!("List.product [1, 2, 3]", 6, i64);
@@ -2782,7 +2808,7 @@ fn list_product() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_void() {
     assert_evals_to!(
         "List.keepOks [] (\\x -> x)",
@@ -2798,7 +2824,7 @@ fn list_keep_void() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_oks() {
     assert_evals_to!(
         "List.keepOks [Ok {}, Ok {}] (\\x -> x)",
@@ -2823,7 +2849,7 @@ fn list_keep_oks() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_keep_errs() {
     assert_evals_to!(
         "List.keepErrs [Err {}, Err {}] (\\x -> x)",
@@ -2853,7 +2879,7 @@ fn list_keep_errs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map_with_index() {
     assert_evals_to!(
         "List.mapWithIndex [0,0,0] (\\x, index -> Num.intCast index + x)",
@@ -2933,7 +2959,7 @@ fn list_sort_desc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_any() {
     assert_evals_to!("List.any [] (\\e -> e > 3)", false, bool);
     assert_evals_to!("List.any [1, 2, 3] (\\e -> e > 3)", false, bool);
@@ -2941,7 +2967,7 @@ fn list_any() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_any_empty_with_unknown_element_type() {
     assert_evals_to!("List.any [] (\\_ -> Bool.true)", false, bool);
 }
@@ -2988,7 +3014,7 @@ fn lists_with_incompatible_type_param_in_if() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn map_with_index_multi_record() {
     // see https://github.com/roc-lang/roc/issues/1700
     assert_evals_to!(
@@ -3003,7 +3029,7 @@ fn map_with_index_multi_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_of_function_type() {
     // see https://github.com/roc-lang/roc/issues/1732
     assert_evals_to!(
@@ -3032,7 +3058,7 @@ fn empty_list_of_function_type() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_map() {
     assert_evals_to!(
         indoc!(
@@ -3052,7 +3078,7 @@ fn list_join_map() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_map_empty() {
     assert_evals_to!(
         indoc!(
@@ -3066,7 +3092,7 @@ fn list_join_map_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_find() {
     assert_evals_to!(
         indoc!(
@@ -3094,7 +3120,7 @@ fn list_find() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_find_not_found() {
     assert_evals_to!(
         indoc!(
@@ -3122,7 +3148,7 @@ fn list_find_not_found() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_find_empty_typed_list() {
     assert_evals_to!(
         indoc!(
@@ -3150,7 +3176,7 @@ fn list_find_empty_typed_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_find_empty_layout() {
     assert_evals_to!(
         indoc!(
@@ -3206,7 +3232,7 @@ fn list_find_index() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_find_index_not_found() {
     assert_evals_to!(
         indoc!(
@@ -3234,7 +3260,7 @@ fn list_find_index_not_found() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_find_index_empty_typed_list() {
     assert_evals_to!(
         indoc!(
@@ -3262,7 +3288,7 @@ fn list_find_index_empty_typed_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_ends_with_empty() {
     assert_evals_to!(
         indoc!(
@@ -3296,7 +3322,7 @@ fn list_ends_with_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_ends_with_nonempty() {
     assert_evals_to!(
         indoc!(
@@ -3340,7 +3366,7 @@ fn list_ends_with_nonempty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_starts_with_empty() {
     assert_evals_to!(
         indoc!(
@@ -3374,7 +3400,7 @@ fn list_starts_with_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_starts_with_nonempty() {
     assert_evals_to!(
         indoc!(
@@ -3418,7 +3444,7 @@ fn list_starts_with_nonempty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn monomorphized_lists() {
     assert_evals_to!(
         indoc!(
@@ -3515,7 +3541,7 @@ fn reserve_unchanged() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn release_excess_capacity() {
     assert_evals_to!(
         indoc!(
@@ -3531,7 +3557,7 @@ fn release_excess_capacity() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn release_excess_capacity_with_len() {
     assert_evals_to!(
         indoc!(
@@ -3547,7 +3573,7 @@ fn release_excess_capacity_with_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn release_excess_capacity_empty() {
     assert_evals_to!(
         indoc!(
@@ -3562,7 +3588,7 @@ fn release_excess_capacity_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn call_function_in_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -3578,7 +3604,7 @@ fn call_function_in_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn call_function_in_empty_list_unbound() {
     assert_evals_to!(
         indoc!(
@@ -3593,7 +3619,7 @@ fn call_function_in_empty_list_unbound() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
     assert_evals_to!(
         indoc!(
@@ -3625,7 +3651,7 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_3530_uninitialized_capacity_in_list_literal() {
     assert_evals_to!(
         indoc!(
@@ -3640,7 +3666,7 @@ fn issue_3530_uninitialized_capacity_in_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_infer_usage() {
     assert_evals_to!(
         indoc!(
@@ -3660,7 +3686,7 @@ fn list_infer_usage() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_implements_position() {
     assert_evals_to!(
         r#"
@@ -3688,7 +3714,7 @@ fn list_walk_backwards_implements_position() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_until_sum() {
     assert_evals_to!(
         r#"List.walkBackwardsUntil [1, 2] 0 \a,b -> Continue (a + b)"#,
@@ -3698,7 +3724,7 @@ fn list_walk_backwards_until_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_until_even_prefix_sum() {
     assert_evals_to!(
         r#"
@@ -3716,7 +3742,7 @@ fn list_walk_backwards_until_even_prefix_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_from_until_sum() {
     assert_evals_to!(
         r#"List.walkFromUntil [1, 2, 3, 4] 2 0 \a,b -> Continue (a + b)"#,
@@ -3726,7 +3752,7 @@ fn list_walk_from_until_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn concat_unique_to_nonunique_overlapping_issue_4697() {
     assert_evals_to!(
         r#"
@@ -3747,7 +3773,7 @@ fn concat_unique_to_nonunique_overlapping_issue_4697() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_from_even_prefix_sum() {
     assert_evals_to!(
         r#"
@@ -3790,6 +3816,11 @@ mod pattern_match {
     #[cfg(feature = "gen-wasm")]
     use crate::helpers::wasm::assert_evals_to;
 
+    #[cfg(feature = "gen-dev")]
+    use crate::helpers::dev::assert_evals_to;
+
+    use crate::helpers::with_larger_debug_stack;
+
     use super::RocList;
 
     #[test]
@@ -3827,62 +3858,66 @@ mod pattern_match {
 
     #[test]
     fn ranged_matches_head() {
-        assert_evals_to!(
-            r#"
-            helper = \l -> when l is
-                [] -> 1u8
-                [A] -> 2u8
-                [A, A, ..] -> 3u8
-                [A, B, ..] -> 4u8
-                [B, ..] -> 5u8
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                r#"
+                helper = \l -> when l is
+                    [] -> 1u8
+                    [A] -> 2u8
+                    [A, A, ..] -> 3u8
+                    [A, B, ..] -> 4u8
+                    [B, ..] -> 5u8
 
-            [
-                helper [],
-                helper [A],
-                helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
-                helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
-                helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
-            ]
-            "#,
-            RocList::from_slice(&[
-                1, //
-                2, //
-                3, 3, 3, 3, //
-                4, 4, 4, 4, //
-                5, 5, 5, 5, //
-            ]),
-            RocList<u8>
-        )
+                [
+                    helper [],
+                    helper [A],
+                    helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
+                    helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
+                    helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
+                ]
+                "#,
+                RocList::from_slice(&[
+                    1, //
+                    2, //
+                    3, 3, 3, 3, //
+                    4, 4, 4, 4, //
+                    5, 5, 5, 5, //
+                ]),
+                RocList<u8>
+            )
+        });
     }
 
     #[test]
     fn ranged_matches_tail() {
-        assert_evals_to!(
-            r#"
-            helper = \l -> when l is
-                [] -> 1u8
-                [A] -> 2u8
-                [.., A, A] -> 3u8
-                [.., B, A] -> 4u8
-                [.., B] -> 5u8
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                r#"
+                helper = \l -> when l is
+                    [] -> 1u8
+                    [A] -> 2u8
+                    [.., A, A] -> 3u8
+                    [.., B, A] -> 4u8
+                    [.., B] -> 5u8
 
-            [
-                helper [],
-                helper [A],
-                helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
-                helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
-                helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
-            ]
-            "#,
-            RocList::from_slice(&[
-                1, //
-                2, //
-                3, 3, 3, 3, //
-                4, 4, 4, 4, //
-                5, 5, 5, 5, //
-            ]),
-            RocList<u8>
-        )
+                [
+                    helper [],
+                    helper [A],
+                    helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
+                    helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
+                    helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
+                ]
+                "#,
+                RocList::from_slice(&[
+                    1, //
+                    2, //
+                    3, 3, 3, 3, //
+                    4, 4, 4, 4, //
+                    5, 5, 5, 5, //
+                ]),
+                RocList<u8>
+            )
+        })
     }
 
     #[test]

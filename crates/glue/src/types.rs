@@ -16,7 +16,7 @@ use roc_mono::{
     ir::LambdaSetId,
     layout::{
         cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
-        InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
+        InLayout, Layout, LayoutCache, LayoutInterner, LayoutRepr, TLLayoutInterner, UnionLayout,
     },
 };
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
@@ -1171,7 +1171,6 @@ struct Env<'a> {
     enum_names: Enums,
     pending_recursive_types: VecMap<TypeId, Variable>,
     known_recursive_types: VecMap<Variable, TypeId>,
-    target: TargetInfo,
 }
 
 impl<'a> Env<'a> {
@@ -1194,7 +1193,6 @@ impl<'a> Env<'a> {
             glue_procs_by_layout,
             lambda_set_ids: Default::default(),
             layout_cache: LayoutCache::new(layout_interner, target),
-            target,
         }
     }
 
@@ -1383,8 +1381,8 @@ fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tags, var, types, layout, Some(rec_root))
         }
-        Content::Structure(FlatType::Apply(symbol, _)) => match env.layout_cache.get_in(layout) {
-            Layout::Builtin(builtin) => {
+        Content::Structure(FlatType::Apply(symbol, _)) => match env.layout_cache.get_repr(layout) {
+            LayoutRepr::Builtin(builtin) => {
                 add_builtin_type(env, builtin, var, opt_name, types, layout)
             }
             _ => {
@@ -1430,11 +1428,11 @@ fn add_type_help<'a>(
         }
         Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
-                match env.layout_cache.get_in(layout) {
-                    Layout::Builtin(builtin) => {
+                match env.layout_cache.get_repr(layout) {
+                    LayoutRepr::Builtin(builtin) => {
                         add_builtin_type(env, builtin, var, opt_name, types, layout)
                     }
-                    Layout::Union(union_layout) if *name == Symbol::BOOL_BOOL => {
+                    LayoutRepr::Union(union_layout) if *name == Symbol::BOOL_BOOL => {
                         if cfg!(debug_assertions) {
                             match union_layout {
                                 UnionLayout::NonRecursive(tag_layouts) => {
@@ -1451,7 +1449,7 @@ fn add_type_help<'a>(
 
                         types.add_anonymous(&env.layout_cache.interner, RocType::Bool, layout)
                     }
-                    Layout::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
+                    LayoutRepr::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
                         match union_layout {
                             UnionLayout::NonRecursive(tags) => {
                                 // Result should always have exactly two tags: Ok and Err
@@ -1489,12 +1487,12 @@ fn add_type_help<'a>(
                             }
                         }
                     }
-                    Layout::Struct { .. } if *name == Symbol::RESULT_RESULT => {
+                    LayoutRepr::Struct { .. } if *name == Symbol::RESULT_RESULT => {
                         // can happen if one or both of a and b in `Result.Result a b` are the
                         // empty tag union `[]`
                         add_type_help(env, layout, *real_var, opt_name, types)
                     }
-                    Layout::Struct { .. } if *name == Symbol::DICT_DICT => {
+                    LayoutRepr::Struct { .. } if *name == Symbol::DICT_DICT => {
                         let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
 
                         let key_var = type_vars[0];
@@ -1520,7 +1518,7 @@ fn add_type_help<'a>(
 
                         type_id
                     }
-                    Layout::Struct { .. } if *name == Symbol::SET_SET => {
+                    LayoutRepr::Struct { .. } if *name == Symbol::SET_SET => {
                         let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
 
                         let key_var = type_vars[0];
@@ -1685,11 +1683,11 @@ fn add_builtin_type<'a>(
             Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                env.layout_cache.get_in(elem_layout),
+                env.layout_cache.get_repr(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
-                    Layout::Struct { field_layouts, .. },
+                    LayoutRepr::Struct(field_layouts),
                     Content::Structure(FlatType::Apply(Symbol::LIST_LIST, args_subs_slice)),
                 ) => {
                     let (key_var, val_var) = {
@@ -1735,11 +1733,11 @@ fn add_builtin_type<'a>(
             Alias(Symbol::SET_SET, _alias_vars, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                env.layout_cache.get_in(elem_layout),
+                env.layout_cache.get_repr(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
-                    Layout::Struct { field_layouts, .. },
+                    LayoutRepr::Struct(field_layouts),
                     Alias(Symbol::DICT_DICT, alias_args, _alias_var, AliasKind::Opaque),
                 ) => {
                     let dict_type_vars = env.subs.get_subs_slice(alias_args.type_variables());
@@ -1831,7 +1829,6 @@ where
             *layout1,
             label2,
             *layout2,
-            env.layout_cache.target_info,
         )
     });
 
@@ -1840,7 +1837,10 @@ where
     let layout = env.layout_cache.interner.get(in_layout);
     let struct_fields = match env.glue_procs_by_layout.get(&layout) {
         Some(&glue_procs) => {
-            debug_assert!(layout.has_varying_stack_size(&env.layout_cache.interner, arena));
+            debug_assert!(env
+                .layout_cache
+                .interner
+                .has_varying_stack_size(in_layout, arena));
 
             let fields: Vec<(String, TypeId, Accessors)> = sortables
                 .into_iter()
@@ -1908,7 +1908,7 @@ fn tag_union_type_from_layout<'a>(
 ) -> RocTagUnion {
     let subs = env.subs;
 
-    match env.layout_cache.get_in(layout) {
+    match env.layout_cache.get_repr(layout) {
         _ if union_tags.is_newtype_wrapper(subs)
             && matches!(
                 subs.get_content_without_compacting(var),
@@ -1929,7 +1929,7 @@ fn tag_union_type_from_layout<'a>(
                 payload,
             }
         }
-        Layout::Union(union_layout) => {
+        LayoutRepr::Union(union_layout) => {
             use UnionLayout::*;
 
             match union_layout {
@@ -1943,7 +1943,7 @@ fn tag_union_type_from_layout<'a>(
                         .stack_size()
                         .max(1);
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     RocTagUnion::NonRecursive {
@@ -1961,7 +1961,7 @@ fn tag_union_type_from_layout<'a>(
                     let discriminant_size =
                         Discriminant::from_number_of_tags(tags.len()).stack_size();
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     RocTagUnion::Recursive {
@@ -1999,7 +1999,7 @@ fn tag_union_type_from_layout<'a>(
                     let discriminant_size =
                         Discriminant::from_number_of_tags(other_tags.len()).stack_size();
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     // nullable_id refers to the index of the tag that is represented at runtime as NULL.
@@ -2053,10 +2053,10 @@ fn tag_union_type_from_layout<'a>(
                 }
             }
         }
-        Layout::Builtin(Builtin::Int(int_width)) => {
+        LayoutRepr::Builtin(Builtin::Int(int_width)) => {
             add_int_enumeration(union_tags, subs, &name, int_width)
         }
-        Layout::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct(field_layouts) => {
             let (tag_name, payload) =
                 single_tag_payload_fields(env, union_tags, subs, layout, field_layouts, types);
 
@@ -2066,13 +2066,13 @@ fn tag_union_type_from_layout<'a>(
                 payload,
             }
         }
-        Layout::Builtin(Builtin::Bool) => {
+        LayoutRepr::Builtin(Builtin::Bool) => {
             // This isn't actually a Bool, but rather a 2-tag union with no payloads
             // (so it has the same layout as a Bool, but actually isn't one; if it were
             // a real Bool, it would have been handled elsewhere already!)
             add_int_enumeration(union_tags, subs, &name, IntWidth::U8)
         }
-        Layout::Builtin(builtin) => {
+        LayoutRepr::Builtin(builtin) => {
             let type_id = add_builtin_type(env, builtin, var, opt_name, types, layout);
             let (tag_name, _) = single_tag_payload(union_tags, subs);
 
@@ -2085,7 +2085,8 @@ fn tag_union_type_from_layout<'a>(
                 },
             }
         }
-        Layout::Boxed(elem_layout) => {
+        LayoutRepr::Ptr(_) => unreachable!("Ptr values are never publicly exposed"),
+        LayoutRepr::Boxed(elem_layout) => {
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(env, union_tags, subs, layout, &[elem_layout], types);
 
@@ -2095,7 +2096,7 @@ fn tag_union_type_from_layout<'a>(
                 payload: payload_fields,
             }
         }
-        Layout::LambdaSet(lambda_set) => tag_union_type_from_layout(
+        LayoutRepr::LambdaSet(lambda_set) => tag_union_type_from_layout(
             env,
             opt_name,
             name,
@@ -2104,7 +2105,7 @@ fn tag_union_type_from_layout<'a>(
             types,
             lambda_set.runtime_representation(),
         ),
-        Layout::RecursivePointer(_) => {
+        LayoutRepr::RecursivePointer(_) => {
             // A single-tag union which only wraps itself is erroneous and should have
             // been turned into an error earlier in the process.
             unreachable!();
@@ -2226,7 +2227,15 @@ fn single_tag_payload_fields<'a, 'b>(
     // anyway just so we have some warning in case that relationship somehow didn't hold!
     debug_assert_eq!(
         env.glue_procs_by_layout.get(&layout).is_some(),
-        layout.has_varying_stack_size(&env.layout_cache.interner, env.arena)
+        env.layout_cache
+            .interner
+            .has_varying_stack_size(in_layout, env.arena),
+        "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
+            &layout,
+            env.glue_procs_by_layout.get(&layout),
+            env.layout_cache
+                .interner
+                .has_varying_stack_size(in_layout, env.arena)
     );
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
@@ -2307,7 +2316,7 @@ fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, var
     vars.into_iter().fold(0, |count, var| {
         let layout = env.layout_cache.from_var(arena, var, subs).unwrap();
 
-        if env.layout_cache.get_in(layout).is_dropped_because_empty() {
+        if env.layout_cache.get_repr(layout).is_dropped_because_empty() {
             count
         } else {
             count + 1

@@ -38,7 +38,7 @@ Execute `cargo fmt --all` to fix the formatting.
 If you make changes to [Roc's Standard Library](https://www.roc-lang.org/builtins/Str), you can add comments to the code following [the CommonMark Spec](https://spec.commonmark.org/current/) to further explain your intentions. You can view these changes locally with:
 
 ```sh
-cargo run docs crates/compiler/builtins/roc
+cargo run docs crates/compiler/builtins/roc/main.roc
 ```
 
 This command will generate the documentation in the [`generated-docs`](generated-docs) directory.

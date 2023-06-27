@@ -34,7 +34,9 @@ pub const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
-    pub code_gen: Duration,
+    pub generate_final_ir: Duration,
+    pub code_gen_object: Duration,
+    pub total: Duration,
 }
 
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
@@ -110,7 +112,7 @@ pub fn gen_from_mono_module<'a>(
             target,
             preprocessed_host_path,
             wasm_dev_stack_bytes,
-            AssemblyBackendMode::Binary, // unused in practice
+            AssemblyBackendMode::Binary, // dummy value, unused in practice
         ),
         CodeGenBackend::Assembly(backend_mode) => gen_from_mono_module_dev(
             arena,
@@ -131,7 +133,7 @@ pub fn gen_from_mono_module<'a>(
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 fn gen_from_mono_module_llvm<'a>(
     arena: &'a bumpalo::Bump,
-    mut loaded: MonomorphizedModule<'a>,
+    loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
     opt_level: OptLevel,
@@ -144,7 +146,7 @@ fn gen_from_mono_module_llvm<'a>(
     use inkwell::module::Linkage;
     use inkwell::targets::{FileType, RelocMode};
 
-    let code_gen_start = Instant::now();
+    let all_code_gen_start = Instant::now();
 
     // Generate the binary
     let target_info = roc_target::TargetInfo::from(target);
@@ -230,13 +232,17 @@ fn gen_from_mono_module_llvm<'a>(
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
-        &mut loaded.layout_interner,
+        &loaded.layout_interner,
         opt_level,
         loaded.procedures,
         entry_point,
         Some(&app_ll_file),
         &loaded.glue_layouts,
     );
+
+    // We are now finished building the LLVM IR.
+    let generate_final_ir = all_code_gen_start.elapsed();
+    let code_gen_object_start = Instant::now();
 
     env.dibuilder.finalize();
 
@@ -439,11 +445,16 @@ fn gen_from_mono_module_llvm<'a>(
         }
     };
 
-    let code_gen = code_gen_start.elapsed();
+    let code_gen_object = code_gen_object_start.elapsed();
+    let total = all_code_gen_start.elapsed();
 
     (
         CodeObject::MemoryBuffer(memory_buffer),
-        CodeGenTiming { code_gen },
+        CodeGenTiming {
+            generate_final_ir,
+            code_gen_object,
+            total,
+        },
         ExpectMetadata {
             interns: env.interns,
             layout_interner: loaded.layout_interner,
@@ -503,7 +514,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
-    let code_gen_start = Instant::now();
+    let all_code_gen_start = Instant::now();
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -528,7 +539,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
         internal_error!(
-            "Failed to read host object file {}! Try setting --prebuilt-platform=false",
+            "Failed to read host object file {}! Try omitting --prebuilt-platform",
             preprocessed_host_path.display()
         )
     });
@@ -550,11 +561,18 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         procedures,
     );
 
-    let code_gen = code_gen_start.elapsed();
+    let generate_final_ir = all_code_gen_start.elapsed();
+    let code_gen_object_start = Instant::now();
+    let code_gen_object = code_gen_object_start.elapsed();
+    let total = all_code_gen_start.elapsed();
 
     (
         CodeObject::Vector(final_binary_bytes),
-        CodeGenTiming { code_gen },
+        CodeGenTiming {
+            generate_final_ir,
+            code_gen_object,
+            total,
+        },
         ExpectMetadata {
             interns,
             layout_interner,
@@ -569,7 +587,7 @@ fn gen_from_mono_module_dev_assembly<'a>(
     target: &target_lexicon::Triple,
     backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
-    let code_gen_start = Instant::now();
+    let all_code_gen_start = Instant::now();
 
     let lazy_literals = true;
 
@@ -593,15 +611,23 @@ fn gen_from_mono_module_dev_assembly<'a>(
     let module_object =
         roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
-    let code_gen = code_gen_start.elapsed();
+    let generate_final_ir = all_code_gen_start.elapsed();
+    let code_gen_object_start = Instant::now();
 
     let module_out = module_object
         .write()
         .expect("failed to build output object");
 
+    let code_gen_object = code_gen_object_start.elapsed();
+    let total = all_code_gen_start.elapsed();
+
     (
         CodeObject::Vector(module_out),
-        CodeGenTiming { code_gen },
+        CodeGenTiming {
+            generate_final_ir,
+            code_gen_object,
+            total,
+        },
         ExpectMetadata {
             interns,
             layout_interner,
@@ -794,7 +820,7 @@ fn build_loaded_file<'a>(
     };
 
     // For example, if we're loading the platform from a URL, it's automatically prebuilt
-    // even if the --prebuilt-platform=true CLI flag wasn't set.
+    // even if the --prebuilt-platform CLI flag wasn't set.
     let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
 
     let cwd = app_module_path.parent().unwrap();
@@ -919,9 +945,12 @@ fn build_loaded_file<'a>(
 
     report_timing(
         buf,
-        "Generate Assembly from Mono IR",
-        code_gen_timing.code_gen,
+        "Generate final IR from Mono IR",
+        code_gen_timing.generate_final_ir,
     );
+    report_timing(buf, "Generate object", code_gen_timing.code_gen_object);
+    buf.push('\n');
+    report_timing(buf, "Total", code_gen_timing.total);
 
     let compilation_end = compilation_start.elapsed();
     let size = roc_app_bytes.len();
@@ -1036,9 +1065,10 @@ fn build_loaded_file<'a>(
 }
 
 fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: PathBuf) {
-    let prefix = match prebuilt_requested {
-        true => "Because I was run with --prebuilt-platform=true, ",
-        false => "",
+    let prefix = if prebuilt_requested {
+        "Because I was run with --prebuilt-platform, "
+    } else {
+        ""
     };
 
     let preprocessed_host_path_str = preprocessed_host_path.to_string_lossy();
@@ -1057,7 +1087,7 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
 
             However, it was not there!{}
 
-            If you have the platform's source code locally, you may be able to generate it by re-running this command with --prebuilt-platform=false
+            If you have the platform's source code locally, you may be able to generate it by re-running this command omitting --prebuilt-platform
             "#
         ),
         prefix,

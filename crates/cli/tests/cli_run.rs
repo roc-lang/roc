@@ -10,8 +10,9 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, known_bad_file,
-        run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError, ValgrindErrorXWhat,
+        extract_valgrind_errors, file_path_from_root, fixture_file, fixtures_dir, has_error,
+        known_bad_file, run_cmd, run_roc, run_with_valgrind, strip_colors, Out, ValgrindError,
+        ValgrindErrorXWhat,
     };
     use const_format::concatcp;
     use indoc::indoc;
@@ -51,7 +52,7 @@ mod cli_run {
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
-    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT, "=true");
+    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT);
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
 
@@ -143,16 +144,8 @@ mod cli_run {
             env,
         );
 
-        let ignorable = "🔨 Rebuilding platform...\n";
-        let stderr = compile_out.stderr.replacen(ignorable, "", 1);
-
-        // for some reason, llvm prints out this warning when targeting windows
-        let ignorable = "warning: ignoring debug info with an invalid version (0) in app\r\n";
-        let stderr = stderr.replacen(ignorable, "", 1);
-
-        let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
-        if !(stderr.is_empty() || is_reporting_runtime) {
-            panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
+        if has_error(&compile_out.stderr) {
+            panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, compile_out.stderr);
         }
 
         compile_out
@@ -732,7 +725,7 @@ mod cli_run {
                 Arg::PlainText("81"),
             ],
             &[],
-            "4\n",
+            "4.000000000000001\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )

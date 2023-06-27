@@ -146,7 +146,9 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
-    assert!(allow_type_errors || type_problems.is_empty());
+    if !(allow_type_errors || type_problems.is_empty()) {
+        panic!("mono test has type problems:\n\n{:#?}", type_problems);
+    }
 
     let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
 
@@ -1476,7 +1478,7 @@ fn encode_custom_type() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         HelloWorld := {}
@@ -1486,7 +1488,7 @@ fn encode_custom_type() {
                     |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1499,11 +1501,11 @@ fn encode_derived_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes "abc" Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes "abc" TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1517,11 +1519,11 @@ fn encode_derived_record() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "a"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "a"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1854,16 +1856,16 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
     )
 }
 
-#[mono_test]
+#[mono_test(large_stack = "true")]
 fn encode_derived_record_one_field_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1871,16 +1873,16 @@ fn encode_derived_record_one_field_string() {
     )
 }
 
-#[mono_test]
+#[mono_test(large_stack = "true")]
 fn encode_derived_record_two_field_strings() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1888,16 +1890,16 @@ fn encode_derived_record_two_field_strings() {
     )
 }
 
-#[mono_test]
+#[mono_test(large_stack = "true")]
 fn encode_derived_nested_record_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1910,13 +1912,13 @@ fn encode_derived_tag_one_field_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
             x : [A Str]
             x = A "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1951,13 +1953,13 @@ fn encode_derived_tag_two_payloads_string() {
     indoc!(
         r#"
         app "test"
-            imports [Encode.{ toEncoder }, Json]
+            imports [Encode.{ toEncoder }, TotallyNotJson]
             provides [main] to "./platform"
 
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+            result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2220,15 +2222,15 @@ fn issue_4705() {
     )
 }
 
-#[mono_test(mode = "test")]
+#[mono_test(mode = "test", large_stack = "true")]
 fn issue_4749() {
     indoc!(
         r###"
-        interface Test exposes [] imports [Json]
+        interface Test exposes [] imports [TotallyNotJson]
 
         expect
             input = [82, 111, 99]
-            got = Decode.fromBytes input Json.fromUtf8
+            got = Decode.fromBytes input TotallyNotJson.json
             got == Ok "Roc"
         "###
     )
@@ -2460,14 +2462,14 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     )
 }
 
-#[mono_test(mode = "test")]
+#[mono_test(mode = "test", large_stack = "true")]
 fn issue_4772_weakened_monomorphic_destructure() {
     indoc!(
         r###"
-        interface Test exposes [] imports [Json]
+        interface Test exposes [] imports [TotallyNotJson]
 
         getNumber =
-            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.fromUtf8
+            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") TotallyNotJson.json
 
             when result is
                 Ok val ->
@@ -2661,7 +2663,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
     // rather than collapsing to `[[] + [A, B]:toEncoder:1]`.
     indoc!(
         r#"
-        app "test" imports [Json] provides [main] to "./platform"
+        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
         Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
 
@@ -2676,7 +2678,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         accessor = @Q {a : A, b: B}
 
         main =
-            Encode.toBytes accessor Json.toUtf8
+            Encode.toBytes accessor TotallyNotJson.json
         "#
     )
 }
@@ -2699,7 +2701,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
     // `t.a` and `t.b` are filled in.
     indoc!(
         r#"
-        app "test" imports [Json] provides [main] to "./platform"
+        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
         Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
 
@@ -2716,7 +2718,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
             @Q {a : x, b: x}
 
         main =
-            Encode.toBytes accessor Json.toUtf8
+            Encode.toBytes accessor TotallyNotJson.json
         "#
     )
 }
@@ -2873,11 +2875,11 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
         LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
 
         main =
-            base : LinkedList 
+            base : LinkedList
             base = Nil
 
             walker : LinkedList, Chain -> LinkedList
-            walker = \rest, first -> Cons { first, rest } 
+            walker = \rest, first -> Cons { first, rest }
 
             list : List Chain
             list = []
@@ -2920,6 +2922,297 @@ fn error_on_erroneous_condition() {
         app "test" provides [main] to "./platform"
 
         main = if True then 1 else 2
+        "#
+    )
+}
+
+#[mono_test]
+fn binary_tree_fbip() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            tree = Node (Node (Node (Node Tip Tip) Tip) (Node Tip Tip)) (Node Tip Tip)
+            checkFbip tree
+
+        Tree : [Node Tree Tree, Tip]
+
+        check : Tree -> Num a
+        check = \t -> when t is
+            Node l r -> check l + check r + 1
+            Tip -> 0
+
+        Visit : [NodeR Tree Visit, Done]
+
+        checkFbip : Tree -> Num a
+        checkFbip = \t -> checkFbipHelper t Done 0
+
+        checkFbipHelper : Tree, Visit, Num a-> Num a
+        checkFbipHelper = \t, v, a -> when t is
+            Node l r -> checkFbipHelper l (NodeR r v) (a + 1)
+            Tip -> when v is
+                NodeR r v2 -> checkFbipHelper r v2 a
+                Done -> a
+        "#
+    )
+}
+
+#[mono_test(large_stack = "true")]
+fn rb_tree_fbip() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = Leaf
+            |> ins 0 0
+            |> ins 5 1
+            |> ins 6 2
+            |> ins 4 3
+            |> ins 9 4
+            |> ins 3 5
+            |> ins 2 6
+            |> ins 1 7
+            |> ins 8 8
+            |> ins 7 9
+
+        Color : [Red, Black]
+
+        Tree a : [Node Color (Tree a) I32 a (Tree a), Leaf]
+
+        ins : Tree a, I32, a -> Tree a
+        ins = \t, k, v -> when t is
+            Leaf -> Node Red Leaf k v Leaf
+            Node Black l kx vx r ->
+                if k < kx
+                    then when l is
+                        Node Red _ _ _ _ -> when (ins l k v) is
+                            Node _ (Node Red ly ky vy ry) kz vz rz -> Node Red (Node Black ly ky vy ry) kz vz (Node Black rz kx vx r)
+                            Node _ lz kz vz (Node Red ly ky vy ry) -> Node Red (Node Black lz kz vz ly) ky vy (Node Black ry kx vx r)
+                            Node _ ly ky vy ry -> Node Black (Node Red ly ky vy ry) kx vx r
+                            Leaf -> Leaf
+                        _ -> Node Black (ins l k v) kx vx r
+                else
+                    if k > kx
+                        then when r is
+                            Node Red _ _ _ _ -> when ins r k v is
+                                Node _ (Node Red ly ky vy ry) kz vz rz -> Node Red (Node Black ly ky vy ry) kz vz (Node Black rz kx vx r)
+                                Node _ lz kz vz (Node Red ly ky vy ry) -> Node Red (Node Black lz kz vz ly) ky vy (Node Black ry kx vx r)
+                                Node _ ly ky vy ry -> Node Black (Node Red ly ky vy ry) kx vx r
+                                Leaf -> Leaf
+                            _ -> Node Black l kx vx (ins r k v)
+                    else Node Black l k v r
+            Node Red l kx vx r ->
+                if k < kx
+                    then Node Red (ins l k v) kx vx r
+                else
+                    if k > kx
+                        then Node Red l kx vx (ins r k v)
+                        else Node Red l k v r
+        "#
+    )
+}
+
+#[mono_test]
+fn specialize_after_match() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            listA : LinkedList Str
+            listA = Nil
+
+            listB : LinkedList Str
+            listB = Nil
+
+            longestLinkedList listA listB
+
+        LinkedList a : [Cons a (LinkedList a), Nil]
+
+        longestLinkedList : LinkedList a, LinkedList a -> Nat
+        longestLinkedList = \listA, listB -> when listA is
+            Nil -> linkedListLength listB
+            Cons a aa -> when listB is
+                Nil -> linkedListLength listA
+                Cons b bb ->
+                    lengthA = (linkedListLength aa) + 1
+                    lengthB = linkedListLength listB
+                    if lengthA > lengthB
+                        then lengthA
+                        else lengthB
+
+        linkedListLength : LinkedList a -> Nat
+        linkedListLength = \list -> when list is
+            Nil -> 0
+            Cons _ rest -> 1 + linkedListLength rest
+        "#
+    )
+}
+
+#[mono_test]
+fn drop_specialize_after_struct() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: v, right: v }
+            "result"
+        "#
+    )
+}
+
+#[mono_test]
+fn record_update() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+        main = f {a: [], b: [], c:[]}
+        f : {a: List Nat, b: List Nat, c: List Nat} -> {a: List Nat, b: List Nat, c: List Nat}
+        f = \record -> {record & a: List.set record.a 7 7, b: List.set record.b 8 8}
+        "#
+    )
+}
+
+#[mono_test]
+fn drop_specialize_after_jump() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: { left: v, right: v }, right: v }
+            tupleItem t
+
+        tupleItem = \t ->
+            true = Bool.true
+            l = t.left
+            x = if true then 1 else 0
+            ll = l.left
+            { left: t, right: ll}
+        "#
+    )
+}
+
+#[mono_test(mode = "test")]
+fn dbg_in_expect() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        expect
+            dbg ""
+            Bool.true
+        "###
+    )
+}
+
+#[mono_test]
+fn drop_specialize_before_jump() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Tuple a b : { left : a, right : b }
+
+        main =
+            v = "value"
+            t = { left: v, right: v }
+            tupleItem t
+
+        tupleItem = \t ->
+            true = Bool.true
+            l = t.left
+            x = if true then 1 else 0
+            {left: l, right: {left: l, right: t}}
+        "#
+    )
+}
+
+#[mono_test]
+fn dbg_str_followed_by_number() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            dbg ""
+            42
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_reverse() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        reverse : LinkedList a -> LinkedList a
+        reverse = \list -> reverseHelp Nil list
+
+        reverseHelp : LinkedList a, LinkedList a -> LinkedList a
+        reverseHelp = \accum, list ->
+            when list is
+                Nil -> accum
+                Cons first rest -> reverseHelp (Cons first accum) rest
+
+        main : LinkedList I64
+        main = reverse (Cons 42 Nil)
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_map() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        map : (a -> b), LinkedList a -> LinkedList b
+        map = \f, list ->
+            when list is
+                Nil -> Nil
+                Cons x xs -> Cons (f x) (map f xs)
+
+        main : LinkedList I64
+        main = map (\x -> x + 1i64) (Cons 42 Nil)
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_filter() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        filter : LinkedList a, (a -> Bool) -> LinkedList a
+        filter = \list, predicate ->
+            when list is
+                Nil -> Nil
+                Cons x xs ->
+                    if predicate x then
+                        Cons x (filter xs predicate)
+                    else
+                        filter xs predicate
+
+
+        main : LinkedList I64
+        main = filter (Cons 1 (Cons 2 Nil)) Num.isEven
         "#
     )
 }

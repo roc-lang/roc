@@ -1,0 +1,6 @@
+procedure Test.0 ():
+    let Test.1 : Str = "";
+    dbg Test.1;
+    dec Test.1;
+    let Test.2 : I64 = 42i64;
+    ret Test.2;

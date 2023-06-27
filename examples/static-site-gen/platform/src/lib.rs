@@ -9,10 +9,10 @@ use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
 use syntect::easy::HighlightLines;
+use syntect::highlighting::{Style, ThemeSet};
+use syntect::html::{ClassStyle, ClassedHTMLGenerator};
 use syntect::parsing::SyntaxSet;
-use syntect::highlighting::{ThemeSet, Style};
-use syntect::util::{LinesWithEndings};
-use syntect::html::{ClassedHTMLGenerator, ClassStyle};
+use syntect::util::LinesWithEndings;
 
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
@@ -96,15 +96,6 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         }
         _ => todo!(),
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(
-    dest: *mut c_void,
-    src: *const c_void,
-    bytes: usize,
-) -> *mut c_void {
-    libc::memcpy(dest, src, bytes)
 }
 
 #[no_mangle]
@@ -216,9 +207,9 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     // And track a little bit of state
     let mut in_code_block = false;
     let mut is_roc_code = false;
-    let syntax_set : syntect::parsing::SyntaxSet = SyntaxSet::load_defaults_newlines();
-    let theme_set : syntect::highlighting::ThemeSet = ThemeSet::load_defaults();
-    
+    let syntax_set: syntect::parsing::SyntaxSet = SyntaxSet::load_defaults_newlines();
+    let theme_set: syntect::highlighting::ThemeSet = ThemeSet::load_defaults();
+
     for event in parser {
         match event {
             pulldown_cmark::Event::Code(code_str) => {
@@ -227,23 +218,25 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                         .strip_prefix("roc!")
                         .expect("expected leading 'roc!'");
 
-                    let highlighted_html = roc_highlight::highlight_roc_code_inline(stripped.to_string().as_str());
-                    
+                    let highlighted_html =
+                        roc_highlight::highlight_roc_code_inline(stripped.to_string().as_str());
+
                     parser_with_highlighting.push(pulldown_cmark::Event::Html(
                         pulldown_cmark::CowStr::from(highlighted_html),
                     ));
                 } else {
-                    let inline_code = pulldown_cmark::CowStr::from(format!("<code>{}</code>", code_str));
-                    parser_with_highlighting.push(
-                        pulldown_cmark::Event::Html(inline_code)
-                    );
+                    let inline_code =
+                        pulldown_cmark::CowStr::from(format!("<code>{}</code>", code_str));
+                    parser_with_highlighting.push(pulldown_cmark::Event::Html(inline_code));
                 }
             }
             pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(cbk)) => {
                 in_code_block = true;
                 is_roc_code = is_roc_code_block(&cbk);
             }
-            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(extention_str))) => {
+            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(
+                pulldown_cmark::CodeBlockKind::Fenced(extention_str),
+            )) => {
                 if in_code_block {
                     match replace_code_with_static_file(&code_to_highlight, input_file) {
                         None => {}
@@ -263,13 +256,19 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                     if is_roc_code {
                         highlighted_html = roc_highlight::highlight_roc_code(&code_to_highlight)
                     } else if let Some(syntax) = syntax_set.find_syntax_by_token(&extention_str) {
-                        let mut h = HighlightLines::new(syntax, &theme_set.themes["base16-ocean.dark"]);
+                        let mut h =
+                            HighlightLines::new(syntax, &theme_set.themes["base16-ocean.dark"]);
 
-                        let mut html_generator = ClassedHTMLGenerator::new_with_class_style(syntax, &syntax_set, ClassStyle::Spaced);
+                        let mut html_generator = ClassedHTMLGenerator::new_with_class_style(
+                            syntax,
+                            &syntax_set,
+                            ClassStyle::Spaced,
+                        );
                         for line in LinesWithEndings::from(&code_to_highlight) {
                             html_generator.parse_html_for_line_which_includes_newline(line);
                         }
-                        highlighted_html = format!("<pre><samp>{}</pre></samp>", html_generator.finalize())
+                        highlighted_html =
+                            format!("<pre><samp>{}</pre></samp>", html_generator.finalize())
                     } else {
                         highlighted_html = format!("<pre><samp>{}</pre></samp>", &code_to_highlight)
                     }
@@ -362,12 +361,11 @@ fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
 fn replace_code_with_static_file(code: &str, input_file: &Path) -> Option<String> {
     let input_dir = input_file.parent()?;
     let trimmed_code = code.trim();
-    
+
     // Confirm the code block starts with a `file:` tag
     match trimmed_code.strip_prefix("file:") {
         None => None,
         Some(path) => {
-
             // File must be located in input folder or sub-directory
             if path.contains("../") {
                 panic!("ERROR File must be located within the input diretory!");
@@ -378,7 +376,10 @@ fn replace_code_with_static_file(code: &str, input_file: &Path) -> Option<String
             // Check file exists before opening
             match file_path.try_exists() {
                 Err(_) | Ok(false) => {
-                    panic!("ERROR File does not exist: \"{}\"", file_path.to_str().unwrap());
+                    panic!(
+                        "ERROR File does not exist: \"{}\"",
+                        file_path.to_str().unwrap()
+                    );
                 }
                 Ok(true) => {
                     let vec_u8 = fs::read(file_path).ok()?;

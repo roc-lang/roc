@@ -1,6 +1,6 @@
-mod test_glue;
+use roc_app;
 
-use test_glue::NonRecursive;
+use roc_app::NonRecursive;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -12,7 +12,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = test_glue::mainForHost(());
+    let tag_union = roc_app::mainForHost(());
 
     // Verify that it has all the expected traits.
 
@@ -80,11 +80,6 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         }
         _ => todo!(),
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
 }
 
 #[no_mangle]

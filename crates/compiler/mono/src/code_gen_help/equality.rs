@@ -7,7 +7,7 @@ use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{
-    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+    InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType, UnionLayout,
 };
 
 use super::{let_lowlevel, CodeGenHelp, Context, LAYOUT_BOOL};
@@ -22,30 +22,25 @@ pub fn eq_generic<'a>(
     layout_interner: &mut STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> Stmt<'a> {
-    let main_body = match layout_interner.get(layout) {
-        Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
+    use crate::layout::Builtin::*;
+    use LayoutRepr::*;
+    let main_body = match layout_interner.get_repr(layout) {
+        Builtin(Int(_) | Float(_) | Bool | Decimal) => {
             unreachable!(
                 "No generated proc for `==`. Use direct code gen for {:?}",
                 layout
             )
         }
-        Layout::Builtin(Builtin::Str) => {
+        Builtin(Str) => {
             unreachable!("No generated helper proc for `==` on Str. Use Zig function.")
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            eq_list(root, ident_ids, ctx, layout_interner, elem_layout)
-        }
-        Layout::Struct { field_layouts, .. } => {
-            eq_struct(root, ident_ids, ctx, layout_interner, field_layouts)
-        }
-        Layout::Union(union_layout) => {
-            eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout)
-        }
-        Layout::Boxed(inner_layout) => {
-            eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout)
-        }
-        Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
-        Layout::RecursivePointer(_) => {
+        Builtin(List(elem_layout)) => eq_list(root, ident_ids, ctx, layout_interner, elem_layout),
+        Struct(field_layouts) => eq_struct(root, ident_ids, ctx, layout_interner, field_layouts),
+        Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
+        Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
+        Ptr(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
+        LambdaSet(_) => unreachable!("`==` is not defined on functions"),
+        RecursivePointer(_) => {
             unreachable!(
                 "Can't perform `==` on RecursivePointer. Should have been replaced by a tag union."
             )
@@ -124,17 +119,15 @@ fn if_pointers_equal_return_true<'a>(
 fn if_false_return_false<'a>(
     root: &CodeGenHelp<'a>,
     symbol: Symbol,
-    following: &'a Stmt<'a>,
+    following: Stmt<'a>,
 ) -> Stmt<'a> {
-    Stmt::Switch {
-        cond_symbol: symbol,
-        cond_layout: LAYOUT_BOOL,
-        branches: root
-            .arena
-            .alloc([(0, BranchInfo::None, Stmt::Ret(Symbol::BOOL_FALSE))]),
-        default_branch: (BranchInfo::None, following),
-        ret_layout: LAYOUT_BOOL,
-    }
+    Stmt::if_then_else(
+        root.arena,
+        symbol,
+        Layout::BOOL,
+        following,
+        root.arena.alloc(Stmt::Ret(Symbol::BOOL_FALSE)),
+    )
 }
 
 fn eq_struct<'a>(
@@ -182,13 +175,13 @@ fn eq_struct<'a>(
                 //
                 eq_call_stmt(root.arena.alloc(
                     //
-                    if_false_return_false(root, eq_call_sym, root.arena.alloc(else_stmt)),
+                    if_false_return_false(root, eq_call_sym, else_stmt),
                 )),
             )),
         ))
     }
 
-    if_pointers_equal_return_true(root, ident_ids, [ARG_1, ARG_2], root.arena.alloc(else_stmt))
+    else_stmt
 }
 
 fn eq_tag_union<'a>(
@@ -206,6 +199,10 @@ fn eq_tag_union<'a>(
     }
 
     let body = match union_layout {
+        NonRecursive(&[]) => {
+            // cannot be reached at runtime, but we need to generate valid code
+            Stmt::Ret(Symbol::BOOL_TRUE)
+        }
         NonRecursive(tags) => eq_tag_union_help(
             root,
             ident_ids,
@@ -432,13 +429,19 @@ fn eq_tag_union_help<'a>(
         )),
     ));
 
-    let compare_ptr_or_value =
-        if_pointers_equal_return_true(root, ident_ids, operands, root.arena.alloc(compare_values));
-
     if is_non_recursive {
-        compare_ptr_or_value
+        compare_values
     } else {
-        let union_layout = layout_interner.insert(Layout::Union(union_layout));
+        let compare_ptr_or_value = if_pointers_equal_return_true(
+            root,
+            ident_ids,
+            operands,
+            root.arena.alloc(compare_values),
+        );
+
+        let union_layout =
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
+
         let loop_params_iter = operands.iter().map(|arg| Param {
             symbol: *arg,
             ownership: Ownership::Borrowed,
@@ -470,9 +473,12 @@ fn eq_tag_fields<'a>(
 ) -> Stmt<'a> {
     // Find a RecursivePointer to use in the tail recursion loop
     // (If there are more than one, the others will use non-tail recursion)
-    let rec_ptr_index = field_layouts
-        .iter()
-        .position(|field| matches!(layout_interner.get(*field), Layout::RecursivePointer(_)));
+    let rec_ptr_index = field_layouts.iter().position(|field| {
+        matches!(
+            layout_interner.get_repr(*field),
+            LayoutRepr::RecursivePointer(_)
+        )
+    });
 
     let (tailrec_index, innermost_stmt) = match rec_ptr_index {
         None => {
@@ -579,10 +585,8 @@ fn eq_tag_fields<'a>(
                                 if_false_return_false(
                                     root,
                                     eq_call_sym,
-                                    root.arena.alloc(
-                                        //
-                                        stmt,
-                                    ),
+                                    // else
+                                    stmt,
                                 ),
                             ),
                         ),
@@ -660,8 +664,7 @@ fn eq_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(root.arena.alloc([elem_layout]));
-    let box_layout = layout_interner.insert(Layout::Union(box_union_layout));
+    let box_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(elem_layout));
 
     // Compare lengths
 
@@ -707,8 +710,8 @@ fn eq_list<'a>(
     let size = root.create_symbol(ident_ids, "size");
     let size_expr = Expr::Literal(Literal::Int(
         (layout_interner
-            .get(elem_layout)
-            .stack_size(layout_interner, root.target_info) as i128)
+            .get_repr(elem_layout)
+            .stack_size(layout_interner) as i128)
             .to_ne_bytes(),
     ));
     let size_stmt = |next| Stmt::Let(size, size_expr, layout_isize, next);
@@ -764,18 +767,8 @@ fn eq_list<'a>(
     // Dereference the box pointers to get the current elements
     let elem1 = root.create_symbol(ident_ids, "elem1");
     let elem2 = root.create_symbol(ident_ids, "elem2");
-    let elem1_expr = Expr::UnionAtIndex {
-        structure: box1,
-        union_layout: box_union_layout,
-        tag_id: 0,
-        index: 0,
-    };
-    let elem2_expr = Expr::UnionAtIndex {
-        structure: box2,
-        union_layout: box_union_layout,
-        tag_id: 0,
-        index: 0,
-    };
+    let elem1_expr = Expr::ExprUnbox { symbol: box1 };
+    let elem2_expr = Expr::ExprUnbox { symbol: box2 };
     let elem1_stmt = |next| Stmt::Let(elem1, elem1_expr, elem_layout, next);
     let elem2_stmt = |next| Stmt::Let(elem2, elem2_expr, elem_layout, next);
 
@@ -810,48 +803,40 @@ fn eq_list<'a>(
         root,
         eq_elems,
         // else
-        root.arena.alloc(
+        next_1_stmt(root.arena.alloc(
             //
-            next_1_stmt(root.arena.alloc(
+            next_2_stmt(root.arena.alloc(
                 //
-                next_2_stmt(root.arena.alloc(
-                    //
-                    jump_back,
-                )),
+                jump_back,
             )),
-        ),
+        )),
     );
 
-    let if_end_of_list = Stmt::Switch {
-        cond_symbol: is_end,
-        cond_layout: LAYOUT_BOOL,
-        ret_layout: LAYOUT_BOOL,
-        branches: root
-            .arena
-            .alloc([(1, BranchInfo::None, Stmt::Ret(Symbol::BOOL_TRUE))]),
-        default_branch: (
-            BranchInfo::None,
-            root.arena.alloc(
+    let if_end_of_list = Stmt::if_then_else(
+        arena,
+        is_end,
+        Layout::BOOL,
+        Stmt::Ret(Symbol::BOOL_TRUE),
+        root.arena.alloc(
+            //
+            box1_stmt(root.arena.alloc(
                 //
-                box1_stmt(root.arena.alloc(
+                box2_stmt(root.arena.alloc(
                     //
-                    box2_stmt(root.arena.alloc(
+                    elem1_stmt(root.arena.alloc(
                         //
-                        elem1_stmt(root.arena.alloc(
+                        elem2_stmt(root.arena.alloc(
                             //
-                            elem2_stmt(root.arena.alloc(
+                            eq_elems_stmt(root.arena.alloc(
                                 //
-                                eq_elems_stmt(root.arena.alloc(
-                                    //
-                                    if_elems_not_equal,
-                                )),
+                                if_elems_not_equal,
                             )),
                         )),
                     )),
                 )),
-            ),
+            )),
         ),
-    };
+    );
 
     let joinpoint_loop = Stmt::Join {
         id: elems_loop,
@@ -872,34 +857,39 @@ fn eq_list<'a>(
         root,
         eq_len,
         // else
-        root.arena.alloc(
+        elements_1_stmt(root.arena.alloc(
             //
-            elements_1_stmt(root.arena.alloc(
+            elements_2_stmt(root.arena.alloc(
                 //
-                elements_2_stmt(root.arena.alloc(
-                    //
-                    start_1_stmt(root.arena.alloc(
+                if_pointers_equal_return_true(
+                    root,
+                    ident_ids,
+                    [elements_1, elements_2],
+                    root.arena.alloc(
                         //
-                        start_2_stmt(root.arena.alloc(
+                        start_1_stmt(root.arena.alloc(
                             //
-                            size_stmt(root.arena.alloc(
+                            start_2_stmt(root.arena.alloc(
                                 //
-                                list_size_stmt(root.arena.alloc(
+                                size_stmt(root.arena.alloc(
                                     //
-                                    end_1_stmt(root.arena.alloc(
+                                    list_size_stmt(root.arena.alloc(
                                         //
-                                        joinpoint_loop,
+                                        end_1_stmt(root.arena.alloc(
+                                            //
+                                            joinpoint_loop,
+                                        )),
                                     )),
                                 )),
                             )),
                         )),
-                    )),
-                )),
+                    ),
+                ),
             )),
-        ),
+        )),
     );
 
-    let pointers_else = len_1_stmt(root.arena.alloc(
+    len_1_stmt(root.arena.alloc(
         //
         len_2_stmt(root.arena.alloc(
             //
@@ -908,12 +898,5 @@ fn eq_list<'a>(
                 if_different_lengths,
             )),
         )),
-    ));
-
-    if_pointers_equal_return_true(
-        root,
-        ident_ids,
-        [ARG_1, ARG_2],
-        root.arena.alloc(pointers_else),
-    )
+    ))
 }

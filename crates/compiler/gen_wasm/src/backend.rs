@@ -12,8 +12,8 @@ use roc_mono::ir::{
     Param, Proc, ProcLayout, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
-    UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+    TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 
@@ -507,9 +507,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
         let inner_ret_layout = match wrapper_arg_layouts
             .last()
-            .map(|l| self.layout_interner.get(*l))
+            .map(|l| self.layout_interner.get_repr(*l))
         {
-            Some(Layout::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
+            Some(LayoutRepr::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
@@ -539,8 +539,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 continue;
             }
 
-            let inner_layout = match self.layout_interner.get(*wrapper_arg) {
-                Layout::Boxed(inner) => inner,
+            let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
+                LayoutRepr::Boxed(inner) => inner,
                 x => internal_error!("Expected a Boxed layout, got {:?}", x),
             };
             if self.layout_interner.stack_size(inner_layout) == 0 {
@@ -558,11 +558,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if self.layout_interner.stack_size(closure_data_layout) > 0 {
             // The closure data exists, and will have been passed in to the wrapper as a
             // one-element struct.
-            let inner_closure_data_layout = match self.layout_interner.get(closure_data_layout) {
-                Layout::Struct {
-                    field_layouts: [inner],
-                    ..
-                } => inner,
+            let inner_closure_data_layout = match self.layout_interner.get_repr(closure_data_layout)
+            {
+                LayoutRepr::Struct([inner]) => inner,
                 other => internal_error!(
                     "Expected a boxed layout for wrapped closure data, got {:?}",
                     other
@@ -635,8 +633,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             n_inner_args += 1;
         }
 
-        let inner_layout = match self.layout_interner.get(value_layout) {
-            Layout::Boxed(inner) => inner,
+        let inner_layout = match self.layout_interner.get_repr(value_layout) {
+            LayoutRepr::Boxed(inner) => inner,
             x => internal_error!("Expected a Boxed layout, got {:?}", x),
         };
         self.code_builder.get_local(LocalId(1));
@@ -664,26 +662,26 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     fn dereference_boxed_value(&mut self, inner: InLayout) {
         use Align::*;
 
-        match self.layout_interner.get(inner) {
-            Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+        match self.layout_interner.get_repr(inner) {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
                 self.code_builder.i32_load8_u(Bytes1, 0);
             }
-            Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
                 self.code_builder.i32_load16_u(Bytes2, 0);
             }
-            Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
                 self.code_builder.i32_load(Bytes4, 0);
             }
-            Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
                 self.code_builder.i64_load(Bytes8, 0);
             }
-            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
                 self.code_builder.f32_load(Bytes4, 0);
             }
-            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 self.code_builder.f64_load(Bytes8, 0);
             }
-            Layout::Builtin(Builtin::Bool) => {
+            LayoutRepr::Builtin(Builtin::Bool) => {
                 self.code_builder.i32_load8_u(Bytes1, 0);
             }
             _ => {
@@ -1081,6 +1079,20 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
+            Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => self.expr_union_field_ptr_at_index(
+                *structure,
+                *tag_id,
+                union_layout,
+                *index,
+                sym,
+                storage,
+            ),
+
             Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
 
             Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
@@ -1364,7 +1376,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             arguments,
             ret_symbol,
             ret_layout,
-            ret_layout_raw: self.layout_interner.get(ret_layout),
+            ret_layout_raw: self.layout_interner.get_repr(ret_layout),
             ret_storage: ret_storage.to_owned(),
         };
         low_level_call.generate(self);
@@ -1442,8 +1454,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         storage: &StoredValue,
         fields: &'a [Symbol],
     ) {
-        match self.layout_interner.get(layout) {
-            Layout::Struct { .. } => {
+        match self.layout_interner.get_repr(layout) {
+            LayoutRepr::Struct { .. } => {
                 match storage {
                     StoredValue::StackMemory { location, size, .. } => {
                         if *size > 0 {
@@ -1468,7 +1480,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     }
                 };
             }
-            Layout::LambdaSet(lambdaset) => {
+            LayoutRepr::LambdaSet(lambdaset) => {
                 self.expr_struct(sym, lambdaset.runtime_representation(), storage, fields)
             }
             _ => {
@@ -1638,7 +1650,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET_INFO);
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
         let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(self.layout_interner, TARGET_INFO);
+            union_layout.data_size_and_alignment(self.layout_interner);
 
         // We're going to use the pointer many times, so put it in a local variable
         let stored_with_local =
@@ -1690,10 +1702,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
-            let id_offset = data_offset
-                + union_layout
-                    .tag_id_offset(self.layout_interner, TARGET_INFO)
-                    .unwrap();
+            let id_offset = data_offset + union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
@@ -1776,9 +1785,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
-            let id_offset = union_layout
-                .tag_id_offset(self.layout_interner, TARGET_INFO)
-                .unwrap();
+            let id_offset = union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
@@ -1878,11 +1885,92 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         );
     }
 
+    fn expr_union_field_ptr_at_index(
+        &mut self,
+        structure: Symbol,
+        tag_id: TagIdIntType,
+        union_layout: &UnionLayout<'a>,
+        index: u64,
+        symbol: Symbol,
+        storage: &StoredValue,
+    ) {
+        use UnionLayout::*;
+
+        debug_assert!(!union_layout.tag_is_null(tag_id));
+
+        let tag_index = tag_id as usize;
+        let field_layouts = match union_layout {
+            NonRecursive(tags) => tags[tag_index],
+            Recursive(tags) => tags[tag_index],
+            NonNullableUnwrapped(layouts) => *layouts,
+            NullableWrapped {
+                other_tags,
+                nullable_id,
+            } => {
+                let index = if tag_index > *nullable_id as usize {
+                    tag_index - 1
+                } else {
+                    tag_index
+                };
+                other_tags[index]
+            }
+            NullableUnwrapped { other_fields, .. } => *other_fields,
+        };
+
+        let field_offset: u32 = field_layouts
+            .iter()
+            .take(index as usize)
+            .map(|field_layout| self.layout_interner.stack_size(*field_layout))
+            .sum();
+
+        // Get pointer and offset to the tag's data
+        let structure_storage = self.storage.get(&structure).to_owned();
+        let stored_with_local = self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            structure,
+            structure_storage,
+        );
+        let (tag_local_id, tag_offset) = match stored_with_local {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
+            }
+            StoredValue::Local { local_id, .. } => (local_id, 0),
+            StoredValue::VirtualMachineStack { .. } => {
+                internal_error!("{:?} should have a local variable", structure)
+            }
+        };
+
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
+
+        let from_offset = tag_offset + field_offset;
+
+        self.code_builder.get_local(tag_local_id);
+
+        if stores_tag_id_in_pointer {
+            self.code_builder.i32_const(-4); // 11111111...1100
+            self.code_builder.i32_and();
+        }
+
+        self.code_builder.i32_const(from_offset as _);
+        self.code_builder.i32_add();
+
+        let symbol_local = match self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            symbol,
+            storage.clone(),
+        ) {
+            StoredValue::Local { local_id, .. } => local_id,
+            _ => internal_error!("A heap pointer will always be an i32"),
+        };
+
+        self.code_builder.set_local(symbol_local);
+    }
+
     /*******************************************************************
      * Box
      *******************************************************************/
 
-    fn expr_box(
+    pub fn expr_box(
         &mut self,
         ret_sym: Symbol,
         arg_sym: Symbol,
@@ -1900,8 +1988,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         // allocate heap memory and load its data address onto the value stack
-        let arg_layout = match self.layout_interner.get(layout) {
-            Layout::Boxed(arg) => arg,
+        let arg_layout = match self.layout_interner.get_repr(layout) {
+            LayoutRepr::Boxed(arg) => arg,
             _ => internal_error!("ExprBox should always produce a Boxed layout"),
         };
         let (size, alignment) = self.layout_interner.stack_size_and_alignment(arg_layout);
@@ -1915,7 +2003,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .copy_value_to_memory(&mut self.code_builder, ptr_local_id, 0, arg_sym);
     }
 
-    fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
+    pub(crate) fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
         let (from_addr_val, from_offset) = match self.storage.get(&arg_sym) {
             StoredValue::VirtualMachineStack { .. } => {
                 self.storage

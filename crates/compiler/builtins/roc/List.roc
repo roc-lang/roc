@@ -4,6 +4,7 @@ interface List
         get,
         set,
         replace,
+        update,
         append,
         map,
         len,
@@ -72,7 +73,8 @@ interface List
         Num.{ Nat, Num, Int },
     ]
 
-## Types
+## ## Types
+##
 ## A sequential list of values.
 ## ```
 ## [1, 2, 3] # a list of numbers
@@ -220,6 +222,13 @@ isEmpty = \list ->
 # but will cause a reference count increment on the value it got out of the list
 getUnsafe : List a, Nat -> a
 
+## Returns an element from a list at the given index.
+##
+## Returns `Err OutOfBounds` if the given index exceeds the List's length
+## ```
+## expect List.get [100, 200, 300] 1 == Ok 200
+## expect List.get [100, 200, 300] 5 == Err OutOfBounds
+## ```
 get : List a, Nat -> Result a [OutOfBounds]
 get = \list, index ->
     if index < List.len list then
@@ -249,6 +258,50 @@ replace = \list, index, newValue ->
 set : List a, Nat, a -> List a
 set = \list, index, value ->
     (List.replace list index value).list
+
+## Updates the element at the given index with the given function.
+## ```
+## List.update [1, 2, 3] 1 (\x -> x + 1)
+## ```
+## If the given index is outside the bounds of the list, returns the original
+## list unmodified.
+##
+## To replace the element at a given index, instead of updating based on the current value,
+## see [List.set] and [List.replace]
+update : List a, Nat, (a -> a) -> List a
+update = \list, index, func ->
+    when List.get list index is
+        Err OutOfBounds -> list
+        Ok value ->
+            newValue = func value
+            (replaceUnsafe list index newValue).list
+
+# Update one element in bounds
+expect
+    list : List Nat
+    list = [1, 2, 3]
+    got = update list 1 (\x -> x + 42)
+    want = [1, 44, 3]
+    got == want
+
+# Update out of bounds
+expect
+    list : List Nat
+    list = [1, 2, 3]
+    got = update list 5 (\x -> x + 42)
+    got == list
+
+# Update chain
+expect
+    list : List Nat
+    list = [1, 2, 3]
+    got =
+        list
+        |> update 0 (\x -> x + 10)
+        |> update 1 (\x -> x + 20)
+        |> update 2 (\x -> x + 30)
+    want = [11, 22, 33]
+    got == want
 
 ## Add a single element to the end of a list.
 ## ```
@@ -306,6 +359,10 @@ releaseExcessCapacity : List a -> List a
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
+## ```
+## expect List.last [1, 2, 3] == Ok 3
+## expect List.last [] == Err ListWasEmpty
+## ```
 last : List a -> Result a [ListWasEmpty]
 last = \list ->
     when List.get list (Num.subSaturated (List.len list) 1) is
@@ -337,7 +394,7 @@ repeatHelp = \value, count, accum ->
 
 ## Returns the list with its elements reversed.
 ## ```
-## List.reverse [1, 2, 3]
+## expect List.reverse [1, 2, 3] == [3, 2, 1]
 ## ```
 reverse : List a -> List a
 reverse = \list ->
@@ -351,9 +408,9 @@ reverseHelp = \list, left, right ->
 
 ## Join the given lists together into one list.
 ## ```
-## List.join [[1, 2, 3], [4, 5], [], [6, 7]]
-## List.join [[], []]
-## List.join []
+## expect List.join [[1], [2, 3], [], [4, 5]] == [1, 2, 3, 4, 5]
+## expect List.join [[], []] == []
+## expect List.join [] == []
 ## ```
 join : List (List a) -> List a
 join = \lists ->
@@ -512,7 +569,7 @@ all = \list, predicate ->
 ## length that's too low, it would have to re-allocate.
 ##
 ## (If you want to do an operation like this which reduces the memory footprint
-## of the resulting list, you can do two passes over the lis with [List.walk] - one
+## of the resulting list, you can do two passes over the list with [List.walk] - one
 ## to calculate the precise new size, and another to populate the new list.)
 ##
 ## If given a unique list, [List.keepIf] will mutate it in place to assemble the appropriate list.
@@ -551,6 +608,10 @@ dropIf = \list, predicate ->
 
 ## Run the given function on each element of a list, and return the
 ## number of elements for which the function returned `Bool.true`.
+## ```
+## expect List.countIf [1, -2, -3] Num.isNegative == 2
+## expect List.countIf [1, 2, 3] (\num -> num > 1 ) == 2
+## ```
 countIf : List a, (a -> Bool) -> Nat
 countIf = \list, predicate ->
     walkState = \state, elem ->
@@ -564,11 +625,12 @@ countIf = \list, predicate ->
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
 ## ```
-## List.keepOks [["a", "b"], [], [], ["c", "d", "e"]] List.last
+## expect List.keepOks ["1", "Two", "23", "Bird"] Str.toI32 == [1, 23]
 ##
-## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
+## expect List.keepOks [["a", "b"], [], ["c", "d", "e"], [] ] List.first == ["a", "c"]
 ##
-## List.keepOks ["", "a", "bc", "", "d", "ef", ""]
+## fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok str
+## expect List.keepOks ["", "a", "bc", "", "d", "ef", ""] fn == ["a", "bc", "d", "ef"]
 ## ```
 keepOks : List before, (before -> Result after *) -> List after
 keepOks = \list, toResult ->
@@ -600,9 +662,9 @@ keepErrs = \list, toResult ->
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
 ## ```
-## List.map [1, 2, 3] (\num -> num + 1)
+## expect List.map [1, 2, 3] (\num -> num + 1) == [2, 3, 4]
 ##
-## List.map ["", "a", "bc"] Str.isEmpty
+## expect List.map ["", "a", "bc"] Str.isEmpty == [Bool.true, Bool.false, Bool.false]
 ## ```
 map : List a, (a -> b) -> List b
 
@@ -629,6 +691,9 @@ map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
+## ```
+## expect List.mapWithIndex [10, 20, 30] (\num, index -> num + index) == [10, 21, 32]
+## ```
 mapWithIndex : List a, (a, Nat -> b) -> List b
 mapWithIndex = \src, func ->
     length = len src

@@ -391,14 +391,13 @@ pub fn load_types(
     let architectures = Architecture::iter();
     let mut arch_types = Vec::with_capacity(architectures.len());
 
-    let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
-
     for architecture in architectures {
         let mut interns = interns.clone(); // TODO there may be a way to avoid this.
         let target_info = TargetInfo {
             architecture,
             operating_system,
         };
+        let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
         let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
         let mut glue_procs_by_layout = MutMap::default();
 
@@ -416,9 +415,10 @@ pub fn load_types(
 
             let layout = layout_cache.interner.get(in_layout);
 
-            // dbg!(layout);
-
-            if layout.has_varying_stack_size(&layout_cache.interner, arena) {
+            if layout_cache
+                .interner
+                .has_varying_stack_size(in_layout, arena)
+            {
                 let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
                 let answer = generate_glue_procs(
                     home,

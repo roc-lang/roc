@@ -1,3 +1,4 @@
+use indoc::indoc;
 use roc_glue::load::{load_types, IgnoreErrors};
 use roc_glue::rust_glue;
 use roc_load::Threading;

@@ -1,11 +1,11 @@
 use crate::ast::{
-    AssignedField, CommentOrNewline, HasAbilities, HasAbility, HasClause, HasImpls, Pattern,
+    AssignedField, CommentOrNewline, Expr, HasAbilities, HasAbility, HasClause, HasImpls, Pattern,
     Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
 };
-use crate::expr::record_value_field;
+use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
@@ -537,7 +537,7 @@ fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
                     EType::TAbilityImpl,
                     collection_trailing_sep_e!(
                         word1(b'{', ETypeAbilityImpl::Open),
-                        specialize(|e: ERecord<'_>, _| e.into(), loc!(record_value_field())),
+                        specialize(|e: ERecord<'_>, _| e.into(), loc!(ability_impl_field())),
                         word1(b',', ETypeAbilityImpl::End),
                         word1(b'}', ETypeAbilityImpl::End),
                         AssignedField::SpaceBefore
@@ -548,6 +548,15 @@ fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
             EType::TIndentEnd
         )))
     }))
+}
+
+fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
+    then(record_field(), move |arena, state, _, field| {
+        match field.to_assigned_field(arena) {
+            Ok(assigned_field) => Ok((MadeProgress, assigned_field, state)),
+            Err(FoundApplyValue) => Err((MadeProgress, ERecord::Field(state.pos()))),
+        }
+    })
 }
 
 fn expression<'a>(

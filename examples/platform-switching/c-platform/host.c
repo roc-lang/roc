@@ -30,10 +30,6 @@ void roc_panic(void* ptr, unsigned int alignment) {
   exit(0);
 }
 
-void* roc_memcpy(void* dest, const void* src, size_t n) {
-  return memcpy(dest, src, n);
-}
-
 void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }
 
 int roc_shm_open(char* name, int oflag, int mode) {

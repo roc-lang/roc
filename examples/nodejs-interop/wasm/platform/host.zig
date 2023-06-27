@@ -33,10 +33,6 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
 
-export fn roc_memcpy(dest: *anyopaque, src: *anyopaque, count: usize) callconv(.C) void {
-    _ = memcpy(dest, src, count);
-}
-
 // NOTE roc_panic is provided in the JS file, so it can throw an exception
 
 extern fn roc__mainForHost_1_exposed(*RocStr) void;

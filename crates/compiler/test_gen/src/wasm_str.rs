@@ -989,78 +989,78 @@ fn str_trim_small_to_small_shared() {
 }
 
 #[test]
-fn str_trim_left_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimLeft " ""#), RocStr::from(""), RocStr);
+fn str_trim_start_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimStart " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-fn str_trim_left_small_to_small() {
+fn str_trim_start_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft "  hello  ""#),
+        indoc!(r#"Str.trimStart "  hello  ""#),
         RocStr::from("hello  "),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_left_large_to_large_unique() {
+fn str_trim_start_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft (Str.concat "    " "hello world from a large string ")"#),
+        indoc!(r#"Str.trimStart (Str.concat "    " "hello world from a large string ")"#),
         RocStr::from("hello world from a large string "),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_left_large_to_small_unique() {
+fn str_trim_start_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft (Str.concat "  " "hello  ")"#),
+        indoc!(r#"Str.trimStart (Str.concat "  " "hello  ")"#),
         RocStr::from("hello  "),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_right_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimRight " ""#), RocStr::from(""), RocStr);
+fn str_trim_end_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimEnd " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-fn str_trim_right_small_to_small() {
+fn str_trim_end_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight " hello ""#),
+        indoc!(r#"Str.trimEnd " hello ""#),
         RocStr::from(" hello"),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_right_large_to_large_unique() {
+fn str_trim_end_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight (Str.concat " hello world from a large string" "    ")"#),
+        indoc!(r#"Str.trimEnd (Str.concat " hello world from a large string" "    ")"#),
         RocStr::from(" hello world from a large string"),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_right_large_to_small_unique() {
+fn str_trim_end_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight (Str.concat "  hello" "  ")"#),
+        indoc!(r#"Str.trimEnd (Str.concat "  hello" "  ")"#),
         RocStr::from("  hello"),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_right_large_to_large_shared() {
+fn str_trim_end_large_to_large_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello world world "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (
@@ -1072,14 +1072,14 @@ fn str_trim_right_large_to_large_shared() {
 }
 
 #[test]
-fn str_trim_right_large_to_small_shared() {
+fn str_trim_end_large_to_small_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = "  hello "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (RocStr::from("  hello "), RocStr::from("  hello"),),
@@ -1088,14 +1088,14 @@ fn str_trim_right_large_to_small_shared() {
 }
 
 #[test]
-fn str_trim_right_small_to_small_shared() {
+fn str_trim_end_small_to_small_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (RocStr::from(" hello "), RocStr::from(" hello"),),

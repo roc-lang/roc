@@ -20,7 +20,8 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
     ROC_CHECK_MONO_IR, ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION, ROC_PRINT_IR_AFTER_REFCOUNT,
-    ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
+    ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_IR_AFTER_TRMC,
+    ROC_PRINT_LOAD_LOG,
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
@@ -32,7 +33,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, GlueLayouts, LambdaSetId, PartialProc, Proc,
-    ProcLayout, Procs, ProcsBase, UpdateModeIds,
+    ProcLayout, Procs, ProcsBase, UpdateModeIds, UsageTrackingMap,
 };
 use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
@@ -53,8 +54,10 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
+#[cfg(not(target_family = "wasm"))]
+use roc_reporting::report::to_https_problem_report_string;
 use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
-use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
+use roc_solve::module::{extract_module_owned_implementations, SolveConfig, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
@@ -72,7 +75,7 @@ use std::{env, fs};
 #[cfg(not(target_family = "wasm"))]
 use {
     roc_packaging::cache::{self},
-    roc_packaging::https::PackageMetadata,
+    roc_packaging::https::{PackageMetadata, Problem},
 };
 
 pub use crate::work::Phase;
@@ -2454,11 +2457,11 @@ fn update<'a>(
                                     }
                                 }
                                 Err(url_err) => {
-                                    todo!(
-                                        "Gracefully report URL error for {:?} - {:?}",
+                                    let buf = to_https_problem_report_string(
                                         url,
-                                        url_err
+                                        Problem::InvalidUrl(url_err),
                                     );
+                                    return Err(LoadingProblem::FormattedReport(buf));
                                 }
                             }
                         }
@@ -3102,6 +3105,16 @@ fn update<'a>(
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
+                    roc_mono::tail_recursion::apply_trmc(
+                        arena,
+                        &mut layout_interner,
+                        module_id,
+                        ident_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_TRMC);
+
                     inc_dec::insert_inc_dec_operations(
                         arena,
                         &layout_interner,
@@ -3109,6 +3122,20 @@ fn update<'a>(
                     );
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
+
+                    drop_specialization::specialize_drops(
+                        arena,
+                        &mut layout_interner,
+                        module_id,
+                        ident_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(
+                        state,
+                        &layout_interner,
+                        ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION
+                    );
 
                     reset_reuse::insert_reset_reuse_operations(
                         arena,
@@ -3120,21 +3147,6 @@ fn update<'a>(
                     );
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
-
-                    drop_specialization::specialize_drops(
-                        arena,
-                        &mut layout_interner,
-                        module_id,
-                        ident_ids,
-                        state.target_info,
-                        &mut state.procedures,
-                    );
-
-                    debug_print_ir!(
-                        state,
-                        &layout_interner,
-                        ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION
-                    );
 
                     // This is not safe with the new non-recursive RC updates that we do for tag unions
                     //
@@ -3845,7 +3857,7 @@ fn load_module<'a>(
         "Encode", ModuleId::ENCODE
         "Decode", ModuleId::DECODE
         "Hash", ModuleId::HASH
-        "Json", ModuleId::JSON
+        "TotallyNotJson", ModuleId::JSON
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
@@ -4329,17 +4341,22 @@ fn load_packages<'a>(
                 // TODO we should do this async; however, with the current
                 // architecture of file.rs (which doesn't use async/await),
                 // this would be very difficult!
-                let (package_dir, opt_root_module) = cache::install_package(roc_cache_dir, src)
-                    .unwrap_or_else(|err| {
-                        todo!("TODO gracefully handle package install error {:?}", err);
-                    });
+                match cache::install_package(roc_cache_dir, src) {
+                    Ok((package_dir, opt_root_module)) => {
+                        // You can optionally specify the root module using the URL fragment,
+                        // e.g. #foo.roc
+                        // (defaults to main.roc)
+                        match opt_root_module {
+                            Some(root_module) => package_dir.join(root_module),
+                            None => package_dir.join("main.roc"),
+                        }
+                    }
+                    Err(problem) => {
+                        let buf = to_https_problem_report_string(src, problem);
 
-                // You can optionally specify the root module using the URL fragment,
-                // e.g. #foo.roc
-                // (defaults to main.roc)
-                match opt_root_module {
-                    Some(root_module) => package_dir.join(root_module),
-                    None => package_dir.join("main.roc"),
+                        load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(buf)));
+                        return;
+                    }
                 }
             }
 
@@ -5055,6 +5072,14 @@ fn import_variable_for_symbol(
     }
 }
 
+struct SolveResult {
+    solved: Solved<Subs>,
+    solved_implementations: ResolvedImplementations,
+    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    problems: Vec<TypeError>,
+    abilities_store: AbilitiesStore,
+}
+
 #[allow(clippy::complexity)]
 fn run_solve_solve(
     exposed_for_module: ExposedForModule,
@@ -5065,13 +5090,7 @@ fn run_solve_solve(
     var_store: VarStore,
     module: Module,
     derived_module: SharedDerivedModule,
-) -> (
-    Solved<Subs>,
-    ResolvedImplementations,
-    Vec<(Symbol, Variable)>,
-    Vec<TypeError>,
-    AbilitiesStore,
-) {
+) -> SolveResult {
     let Module {
         exposed_symbols,
         aliases,
@@ -5105,30 +5124,34 @@ fn run_solve_solve(
         &import_variables,
     );
 
-    let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
+    let mut solve_aliases = roc_solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
         solve_aliases.insert(&mut types, *name, alias.clone());
     }
 
-    let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solve_output, solved_implementations, exposed_vars_by_symbol) = {
         let module_id = module.module_id;
 
-        let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
-            module_id,
+        let solve_config = SolveConfig {
+            home: module_id,
             types,
-            &constraints,
-            actual_constraint,
+            constraints: &constraints,
+            root_constraint: actual_constraint,
+            pending_derives,
+            exposed_by_module: &exposed_for_module.exposed_by_module,
+            derived_module,
+        };
+
+        let solve_output = roc_solve::module::run_solve(
+            solve_config,
             rigid_variables,
             subs,
             solve_aliases,
             abilities_store,
-            pending_derives,
-            &exposed_for_module.exposed_by_module,
-            derived_module,
         );
 
         let solved_implementations =
-            extract_module_owned_implementations(module_id, &abilities_store);
+            extract_module_owned_implementations(module_id, &solve_output.resolved_abilities_store);
 
         let is_specialization_symbol = |sym| {
             solved_implementations
@@ -5141,7 +5164,8 @@ fn run_solve_solve(
 
         // Expose anything that is explicitly exposed by the header, or is a specialization of an
         // ability.
-        let exposed_vars_by_symbol: Vec<_> = solved_env
+        let exposed_vars_by_symbol: Vec<_> = solve_output
+            .scope
             .vars_by_symbol()
             .filter(|(k, _)| {
                 exposed_symbols.contains(k)
@@ -5150,22 +5174,23 @@ fn run_solve_solve(
             })
             .collect();
 
-        (
-            solved_subs,
-            solved_implementations,
-            exposed_vars_by_symbol,
-            problems,
-            abilities_store,
-        )
+        (solve_output, solved_implementations, exposed_vars_by_symbol)
     };
 
-    (
-        solved_subs,
+    let roc_solve::module::SolveOutput {
+        subs,
+        scope: _,
+        errors,
+        resolved_abilities_store,
+    } = solve_output;
+
+    SolveResult {
+        solved: subs,
         solved_implementations,
         exposed_vars_by_symbol,
-        problems,
-        abilities_store,
-    )
+        problems: errors,
+        abilities_store: resolved_abilities_store,
+    }
 }
 
 fn run_solve<'a>(
@@ -5195,7 +5220,7 @@ fn run_solve<'a>(
     let loc_dbgs = std::mem::take(&mut module.loc_dbgs);
     let module = module;
 
-    let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
+    let solve_result = {
         if module_id.is_builtin() {
             match cached_types.lock().remove(&module_id) {
                 None => run_solve_solve(
@@ -5213,13 +5238,13 @@ fn run_solve<'a>(
                     exposed_vars_by_symbol,
                     abilities,
                     solved_implementations,
-                }) => (
-                    Solved(subs),
+                }) => SolveResult {
+                    solved: Solved(subs),
                     solved_implementations,
                     exposed_vars_by_symbol,
-                    vec![],
-                    abilities,
-                ),
+                    problems: vec![],
+                    abilities_store: abilities,
+                },
             }
         } else {
             run_solve_solve(
@@ -5235,7 +5260,14 @@ fn run_solve<'a>(
         }
     };
 
-    let mut solved_subs = solved_subs;
+    let SolveResult {
+        solved: mut solved_subs,
+        solved_implementations,
+        exposed_vars_by_symbol,
+        problems,
+        abilities_store,
+    } = solve_result;
+
     let exposed_types = roc_solve::module::exposed_types_storage_subs(
         module_id,
         &mut solved_subs,
@@ -5782,6 +5814,7 @@ fn make_specializations<'a>(
         abilities: AbilitiesView::World(&world_abilities),
         exposed_by_module,
         derived_module: &derived_module,
+        struct_indexing: UsageTrackingMap::default(),
     };
 
     let mut procs = Procs::new_in(arena);
@@ -5810,7 +5843,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc(&mut mono_env);
+    let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc();
 
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);
@@ -5882,6 +5915,7 @@ fn build_pending_specializations<'a>(
         abilities: AbilitiesView::Module(&abilities_store),
         exposed_by_module,
         derived_module: &derived_module,
+        struct_indexing: UsageTrackingMap::default(),
     };
 
     let layout_cache_snapshot = layout_cache.snapshot();
@@ -6363,6 +6397,7 @@ fn load_derived_partial_procs<'a>(
             abilities: AbilitiesView::World(world_abilities),
             exposed_by_module,
             derived_module,
+            struct_indexing: UsageTrackingMap::default(),
         };
 
         let partial_proc = match derived_expr {
