@@ -3469,7 +3469,7 @@ fn to_provides_report<'a>(
             }
         }
 
-        EProvides::Provides(pos) => {
+        EProvides::Provides(pos) | EProvides::IndentProvides(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
