@@ -5,9 +5,8 @@ use std::net::SocketAddr;
 use std::panic::AssertUnwindSafe;
 use tokio::task::spawn_blocking;
 use roc_app;
-use std::time::Instant;
 
-const LISTEN_ON_PORT: u16 = 8000;
+const DEFAULT_PORT: u16 = 8000;
 
 fn call_roc(req_bytes: &[u8]) -> (StatusCode, Vec<u8>) {
     // TODO setjmp (both for signal handlers and for roc_panic, bc calling Rust panics from FFI code is UB)
@@ -55,32 +54,36 @@ async fn handle_panics(
     }
 }
 
+const LOCALHOST: [u8; 4] = [127, 0, 0, 1];
+
+async fn run_server(port: u16) -> i32 {
+    let addr = SocketAddr::from((LOCALHOST, port));
+    let server = Server::bind(&addr).serve(hyper::service::make_service_fn(|_conn| async {
+        Ok::<_, Infallible>(hyper::service::service_fn(|req| handle_panics(handle(req))))
+    }));
+
+    println!("Listening on <http://localhost:{port}>");
+
+    match server.await {
+        Ok(_) => 0,
+        Err(err) => {
+            eprintln!("Error initializing Rust `hyper` server: {}", err); // TODO improve this
+
+            1
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let start_time = Instant::now();
-    let addr = SocketAddr::from(([127, 0, 0, 1], LISTEN_ON_PORT));
+    match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime.block_on(async { run_server(DEFAULT_PORT).await }),
+        Err(err) => {
+            eprintln!("Error initializing tokio multithreaded runtime: {}", err); // TODO improve this
 
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap() // TODO print and error and return nonzero
-        .block_on(async {
-            let server = Server::bind(&addr).serve(hyper::service::make_service_fn(|_conn| async {
-                Ok::<_, Infallible>(hyper::service::service_fn(|req| handle_panics(handle(req))))
-            }));
-
-            let elapsed_time = start_time.elapsed();
-
-            println!("Server started up and listening on {:?} in {} ms", addr, elapsed_time.as_millis());
-
-            match server.await {
-                Ok(_) => 0,
-                Err(err) => {
-                    eprintln!("Error initializing Rust `hyper` server: {}", err); // TODO improve this
-                    1
-                }
-            }
-        })
+            1
+        }
+    }
 }
 
 // Externs required by roc_std and by the Roc app
