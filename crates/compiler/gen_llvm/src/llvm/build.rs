@@ -1941,8 +1941,12 @@ fn tag_pointer_set_tag_id<'ctx>(
 
     // NOTE: assumes the lower bits of `cast_pointer` are all 0
     let indexed_pointer = unsafe {
-        env.builder
-            .build_in_bounds_gep(cast_pointer, &[tag_id_intval], "indexed_pointer")
+        env.builder.new_build_in_bounds_gep(
+            env.context.i8_type(),
+            cast_pointer,
+            &[tag_id_intval],
+            "indexed_pointer",
+        )
     };
 
     env.builder
@@ -1994,7 +1998,14 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
         "cast_to_i8_ptr",
     );
 
-    let indexed_pointer = unsafe { env.builder.build_gep(cast_pointer, &[index], "new_ptr") };
+    let indexed_pointer = unsafe {
+        env.builder.new_build_in_bounds_gep(
+            env.context.i8_type(),
+            cast_pointer,
+            &[index],
+            "new_ptr",
+        )
+    };
 
     env.builder
         .build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
@@ -3954,11 +3965,9 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
             arguments_for_call.push(*arg);
         } else {
             match layout_interner.get_repr(*layout) {
-                LayoutRepr::Builtin(Builtin::List(_)) => {
-                    let list_type = arg_type
-                        .into_pointer_type()
-                        .get_element_type()
-                        .into_struct_type();
+                repr @ LayoutRepr::Builtin(Builtin::List(_)) => {
+                    let list_type = basic_type_from_layout(env, layout_interner, repr);
+
                     let loaded = env.builder.new_build_load(
                         list_type,
                         arg.into_pointer_value(),
@@ -5207,14 +5216,14 @@ fn build_proc_header<'a, 'ctx>(
     if false {
         let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
         debug_assert!(kind_id > 0);
-        let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+        let enum_attr = env.context.create_enum_attribute(kind_id, 0);
         fn_val.add_attribute(AttributeLoc::Function, enum_attr);
     }
 
     if false {
         let kind_id = Attribute::get_named_enum_kind_id("noinline");
         debug_assert!(kind_id > 0);
-        let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+        let enum_attr = env.context.create_enum_attribute(kind_id, 0);
         fn_val.add_attribute(AttributeLoc::Function, enum_attr);
     }
 

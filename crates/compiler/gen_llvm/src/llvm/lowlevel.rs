@@ -1844,19 +1844,19 @@ fn throw_because_overflow<'ctx>(env: &Env<'_, 'ctx, '_>, message: &str) {
             // prevent inlining of this function
             let kind_id = Attribute::get_named_enum_kind_id("noinline");
             debug_assert!(kind_id > 0);
-            let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, enum_attr);
 
             // calling this function is unlikely
             let kind_id = Attribute::get_named_enum_kind_id("cold");
             debug_assert!(kind_id > 0);
-            let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, enum_attr);
 
             // this function never returns
             let kind_id = Attribute::get_named_enum_kind_id("noreturn");
             debug_assert!(kind_id > 0);
-            let enum_attr = env.context.create_enum_attribute(kind_id, 1);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, enum_attr);
 
             // Add a basic block for the entry point

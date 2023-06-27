@@ -166,7 +166,7 @@ fn gen_from_mono_module_llvm<'a>(
 
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
-    let enum_attr = context.create_enum_attribute(kind_id, 1);
+    let enum_attr = context.create_enum_attribute(kind_id, 0);
 
     for function in module.get_functions() {
         let name = function.get_name().to_str().unwrap();
