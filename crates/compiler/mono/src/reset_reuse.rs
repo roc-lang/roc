@@ -1122,7 +1122,6 @@ Struct to to check whether two reuse layouts are interchangeable.
 */
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct TokenLayout {
-    has_tag: bool,
     size: u32,
     alignment: u32,
 }
@@ -1416,16 +1415,6 @@ fn get_reuse_layout_info<'a, 'i>(
     union_layout: UnionLayout<'a>,
 ) -> TokenLayout {
     let (size, alignment) = union_layout.data_size_and_alignment(layout_interner);
-    let has_tag = match union_layout {
-        UnionLayout::NonRecursive(_) => unreachable!("Non recursive unions should not be reused."),
-        // The memory for union layouts that has a tag_id can be reused for new allocations with tag_id.
-        UnionLayout::Recursive(_) | UnionLayout::NullableWrapped { .. } => true,
-        // The memory for union layouts that have no tag_id can be reused for new allocations without tag_id
-        UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
-    };
-    TokenLayout {
-        has_tag,
-        size,
-        alignment,
-    }
+
+    TokenLayout { size, alignment }
 }
