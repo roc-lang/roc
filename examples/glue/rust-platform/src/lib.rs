@@ -87,7 +87,7 @@ pub extern "C" fn rust_main() -> i32 {
     let mut op: Op = roc_main();
 
     loop {
-        match dbg!(op.discriminant()) {
+        match op.discriminant() {
             StdoutWrite => {
                 let stdout_write = op.get_StdoutWrite();
                 let output: RocStr = stdout_write.f0;
