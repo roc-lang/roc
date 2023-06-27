@@ -27,10 +27,10 @@ name = "host"
 path = "src/main.rs"
 
 [dependencies]
-roc_std = { path = "glue/roc_std" }
+roc_std = { path = "glue/roc_std", features = ["std"] }
 roc_app = { path = "glue/roc_app" }
 libc = "0.2"
-hyper = { version = "0.14", features= ["http1", "http2", "client", "server", "runtime", "backports", "deprecated"] }
+hyper = { version = "0.14", features = ["http1", "http2", "client", "server", "runtime", "backports", "deprecated"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 futures = "0.3"
 bytes = "1.0"
