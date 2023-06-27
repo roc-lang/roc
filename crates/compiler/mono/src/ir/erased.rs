@@ -284,7 +284,6 @@ pub fn build_erased_function<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     resolved_lambda: ResolvedErasedLambda<'a>,
-    captures: CapturedSymbols<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {

@@ -1396,11 +1396,21 @@ impl<'a> LambdaName<'a> {
 }
 
 /// Closure data for a function
-enum ClosureDataKind<'a> {
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ClosureDataKind<'a> {
     /// The function is compiled with lambda sets.
     LambdaSet(LambdaSet<'a>),
     /// The function is compiled as type-erased.
     Erased,
+}
+
+impl<'a> ClosureDataKind<'a> {
+    pub fn data_layout(&self) -> InLayout<'a> {
+        match self {
+            Self::LambdaSet(lambda_set) => lambda_set.full_layout,
+            Self::Erased => Layout::OPAQUE_PTR,
+        }
+    }
 }
 
 fn build_function_closure_data<'a>(

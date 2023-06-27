@@ -3,9 +3,10 @@
 use crate::borrow::Ownership;
 use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
-    self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
-    LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche,
-    RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    self, Builtin, ClosureCallOptions, ClosureDataKind, ClosureRepresentation, EnumDispatch,
+    InLayout, LambdaName, LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem,
+    LayoutRepr, Niche, RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout,
+    WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -3522,7 +3523,10 @@ fn specialize_proc_help<'a>(
 
             // unpack the closure symbols, if any
             match (opt_closure_layout, captured_symbols) {
-                (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
+                (
+                    Some(ClosureDataKind::LambdaSet(closure_layout)),
+                    CapturedSymbols::Captured(captured),
+                ) => {
                     // debug_assert!(!captured.is_empty());
 
                     // An argument from the closure list may have taken on a specialized symbol
@@ -3690,13 +3694,7 @@ fn specialize_proc_help<'a>(
                     .maybe_get_specialized(*symbol, *layout)
             });
 
-            let closure_data_layout = match opt_closure_layout {
-                Some(lambda_set) => {
-                    let lambda_set = lambda_set.full_layout;
-                    Some(lambda_set)
-                }
-                None => None,
-            };
+            let closure_data_layout = opt_closure_layout.map(|clos| clos.data_layout());
 
             Proc {
                 name: lambda_name,
@@ -3718,7 +3716,7 @@ enum SpecializedLayout<'a> {
     /// A body like `foo = \a,b,c -> ...`
     FunctionBody {
         arguments: &'a [(InLayout<'a>, Symbol)],
-        closure: Option<LambdaSet<'a>>,
+        closure: Option<ClosureDataKind<'a>>,
         ret_layout: InLayout<'a>,
     },
     /// A body like `foo = Num.add`
@@ -3746,12 +3744,22 @@ fn build_specialized_proc_from_var<'a>(
                 lambda_name,
                 pattern_symbols,
                 pattern_layouts_vec,
-                Some(closure_layout),
+                Some(ClosureDataKind::LambdaSet(closure_layout)),
                 ret_layout,
             )
         }
-        RawFunctionLayout::ErasedFunction(..) => {
-            todo_lambda_erasure!()
+        RawFunctionLayout::ErasedFunction(pattern_layouts, ret_layout) => {
+            let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
+            pattern_layouts_vec.extend_from_slice(pattern_layouts);
+
+            build_specialized_proc(
+                env.arena,
+                lambda_name,
+                pattern_symbols,
+                pattern_layouts_vec,
+                Some(ClosureDataKind::Erased),
+                ret_layout,
+            )
         }
         RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
             // a top-level constant 0-argument thunk
@@ -3773,7 +3781,7 @@ fn build_specialized_proc<'a>(
     lambda_name: LambdaName<'a>,
     pattern_symbols: &[Symbol],
     pattern_layouts: Vec<'a, InLayout<'a>>,
-    lambda_set: Option<LambdaSet<'a>>,
+    closure_data: Option<ClosureDataKind<'a>>,
     ret_layout: InLayout<'a>,
 ) -> Result<SpecializedLayout<'a>, LayoutProblem> {
     use SpecializedLayout::*;
@@ -3805,12 +3813,12 @@ fn build_specialized_proc<'a>(
     // then
 
     let proc_name = lambda_name.name();
-    match lambda_set {
-        Some(lambda_set) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
+    match closure_data {
+        Some(closure_data) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
             // here we define the lifted (now top-level) f function. Its final argument is `Symbol::ARG_CLOSURE`,
             // it stores the closure structure (just an integer in this case)
-            let lambda_set_layout = lambda_set.full_layout;
-            proc_args.push((lambda_set_layout, Symbol::ARG_CLOSURE));
+            let closure_data_layout = closure_data.data_layout();
+            proc_args.push((closure_data_layout, Symbol::ARG_CLOSURE));
 
             debug_assert_eq!(
                 pattern_layouts_len + 1,
@@ -3822,11 +3830,11 @@ fn build_specialized_proc<'a>(
 
             Ok(FunctionBody {
                 arguments: proc_args,
-                closure: Some(lambda_set),
+                closure: Some(closure_data),
                 ret_layout,
             })
         }
-        Some(lambda_set) => {
+        Some(closure_data) => {
             // a function that returns a function, but is not itself a closure
             // e.g.  f = Num.add
 
@@ -3846,7 +3854,7 @@ fn build_specialized_proc<'a>(
                 }
                 Ordering::Greater => {
                     if pattern_symbols.is_empty() {
-                        let ret_layout = lambda_set.full_layout;
+                        let ret_layout = closure_data.data_layout();
                         Ok(FunctionPointerBody {
                             closure: None,
                             ret_layout,
@@ -8249,7 +8257,6 @@ fn specialize_symbol<'a>(
                         env,
                         layout_cache,
                         erased_lambda,
-                        captured,
                         assign_to,
                         result,
                     )
