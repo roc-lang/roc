@@ -1,6 +1,7 @@
 #![allow(clippy::manual_map)]
 
 use crate::borrow::Ownership;
+use crate::ir::erased::{build_erased_function, ResolvedErasedLambda};
 use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureDataKind, ClosureRepresentation, EnumDispatch,
@@ -3683,6 +3684,15 @@ fn specialize_proc_help<'a>(
                         }
                     }
                 }
+                (Some(ClosureDataKind::Erased), CapturedSymbols::Captured(captured)) => {
+                    specialized_body = erased::unpack_closure_data(
+                        env,
+                        layout_cache,
+                        Symbol::ARG_CLOSURE,
+                        captured,
+                        specialized_body,
+                    );
+                }
                 (None, CapturedSymbols::None) | (None, CapturedSymbols::Captured([])) => {}
                 _ => unreachable!("to closure or not to closure?"),
             }
@@ -5217,7 +5227,34 @@ pub fn with_hole<'a>(
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
-                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
+                RawFunctionLayout::ErasedFunction(_argument_layouts, _ret_layout) => {
+                    let captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
+                    let captured_symbols = captured_symbols.into_bump_slice();
+                    let captured_symbols = CapturedSymbols::Captured(captured_symbols);
+                    let resolved_erased_lambda =
+                        ResolvedErasedLambda::new(env, layout_cache, name, captured_symbols);
+
+                    let inserted = procs.insert_anonymous(
+                        env,
+                        resolved_erased_lambda.lambda_name(),
+                        function_type,
+                        arguments,
+                        loc_body,
+                        captured_symbols,
+                        return_type,
+                        layout_cache,
+                    );
+
+                    if let Err(e) = inserted {
+                        return runtime_error(
+                            env,
+                            env.arena.alloc(format!("RuntimeError: {:?}", e,)),
+                        );
+                    }
+                    drop(inserted);
+
+                    build_erased_function(env, layout_cache, resolved_erased_lambda, assigned, hole)
+                }
                 RawFunctionLayout::Function(_argument_layouts, lambda_set, _ret_layout) => {
                     let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
                     captured_symbols.sort();
@@ -5250,9 +5287,8 @@ pub fn with_hole<'a>(
                             env,
                             env.arena.alloc(format!("RuntimeError: {e:?}",)),
                         );
-                    } else {
-                        drop(inserted);
                     }
+                    drop(inserted);
 
                     // define the closure data
 

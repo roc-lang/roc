@@ -433,3 +433,81 @@ impl<'a> ResolvedErasedLambda<'a> {
         self.lambda_name
     }
 }
+
+/// Given
+///
+/// ```
+/// captures_symbol : void*
+/// captures = { a: A, b: B }
+/// ```
+///
+/// We generate
+///
+/// ```
+/// heap_captures: Box { A, B } = Expr::Call(Lowlevel { Cast, captures_symbol })
+/// stack_captures = Expr::Unbox(heap_captures)
+/// a = Expr::StructAtIndex(stack_captures, 0)
+/// b = Expr::StructAtIndex(stack_captures, 1)
+/// <hole>
+/// ```
+pub fn unpack_closure_data<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    captures_symbol: Symbol,
+    captures: &[(Symbol, Variable)],
+    mut hole: Stmt<'a>,
+) -> Stmt<'a> {
+    let heap_captures = env.unique_symbol();
+    let stack_captures = env.unique_symbol();
+
+    let captures_layouts = {
+        let layouts = captures
+            .iter()
+            .map(|(_, var)| layout_cache.from_var(env.arena, *var, env.subs).unwrap());
+        &*env.arena.alloc_slice_fill_iter(layouts)
+    };
+
+    let stack_captures_layout =
+        layout_cache.put_in_direct_no_semantic(LayoutRepr::Struct(captures_layouts));
+    let heap_captures_layout =
+        layout_cache.put_in_direct_no_semantic(LayoutRepr::Boxed(stack_captures_layout));
+
+    for (i, ((capture, _capture_var), &capture_layout)) in
+        captures.iter().zip(captures_layouts).enumerate().rev()
+    {
+        hole = Stmt::Let(
+            *capture,
+            Expr::StructAtIndex {
+                index: i as _,
+                field_layouts: captures_layouts,
+                structure: stack_captures,
+            },
+            capture_layout,
+            env.arena.alloc(hole),
+        );
+    }
+
+    hole = Stmt::Let(
+        stack_captures,
+        Expr::ExprUnbox {
+            symbol: heap_captures,
+        },
+        stack_captures_layout,
+        env.arena.alloc(hole),
+    );
+
+    hole = Stmt::Let(
+        heap_captures,
+        Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrCast,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: env.arena.alloc([captures_symbol]),
+        }),
+        heap_captures_layout,
+        env.arena.alloc(hole),
+    );
+
+    hole
+}
