@@ -1931,7 +1931,7 @@ fn tag_pointer_set_tag_id<'ctx>(
     // we only have 3 bits, so can encode only 0..7 (or on 32-bit targets, 2 bits to encode 0..3)
     debug_assert!((tag_id as u32) < env.target_info.ptr_width() as u32);
 
-    let tag_id_intval = env.context.i32_type().const_int(tag_id as u64, false);
+    let tag_id_intval = env.ptr_int().const_int(tag_id as u64, false);
 
     let cast_pointer = env.builder.build_pointer_cast(
         pointer,
@@ -1991,9 +1991,6 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
     let current_tag_id = env.builder.build_and(as_int, mask, "masked");
 
     let index = env.builder.build_int_neg(current_tag_id, "index");
-    let index = env
-        .builder
-        .build_int_cast(index, env.context.i32_type(), "to_i32");
 
     let cast_pointer = env.builder.build_pointer_cast(
         pointer,
@@ -2447,9 +2444,8 @@ fn list_literal<'a, 'ctx>(
             // all elements are constants, so we can use the memory in the constants section directly
             // here we make a pointer to the first actual element (skipping the 0 bytes that
             // represent the refcount)
-            let i32_type = env.context.i32_type();
-            let zero = i32_type.const_zero();
-            let offset = i32_type.const_int(zero_elements as _, false);
+            let zero = env.ptr_int().const_zero();
+            let offset = env.ptr_int().const_int(zero_elements as _, false);
 
             let ptr = unsafe {
                 env.builder.new_build_in_bounds_gep(
@@ -2478,7 +2474,7 @@ fn list_literal<'a, 'ctx>(
 
             // then replace the `undef`s with the values that we evaluate at runtime
             for (index, val) in runtime_evaluated_elements {
-                let index_val = ctx.i32_type().const_int(index as u64, false);
+                let index_val = ctx.i64_type().const_int(index as u64, false);
                 let elem_ptr = unsafe {
                     builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
                 };
@@ -2499,7 +2495,7 @@ fn list_literal<'a, 'ctx>(
                 }
                 ListLiteralElement::Symbol(symbol) => scope.load_symbol(symbol),
             };
-            let index_val = ctx.i32_type().const_int(index as u64, false);
+            let index_val = ctx.i64_type().const_int(index as u64, false);
             let elem_ptr = unsafe {
                 builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
             };
@@ -6263,8 +6259,7 @@ fn define_global_str_literal_ptr<'ctx>(
             env.context.i8_type(),
             ptr,
             &[env
-                .context
-                .i32_type()
+                .ptr_int()
                 .const_int(env.target_info.ptr_width() as u64, false)],
             "get_rc_ptr",
         )
