@@ -456,8 +456,10 @@ pub fn refcount_reset_proc_body<'a>(
         root.arena.alloc(refcount_1_stmt),
     );
 
-    // a Box never masks bits
-    let mask_lower_bits = false;
+    let mask_lower_bits = match layout_interner.get_repr(layout) {
+        LayoutRepr::Union(ul) => ul.stores_tag_id_in_pointer(root.target_info),
+        _ => false,
+    };
 
     // Refcount pointer
     let rc_ptr_stmt = {
@@ -579,8 +581,10 @@ pub fn refcount_resetref_proc_body<'a>(
         root.arena.alloc(refcount_1_stmt),
     );
 
-    // a Box never masks bits
-    let mask_lower_bits = false;
+    let mask_lower_bits = match layout_interner.get_repr(layout) {
+        LayoutRepr::Union(ul) => ul.stores_tag_id_in_pointer(root.target_info),
+        _ => false,
+    };
 
     // Refcount pointer
     let rc_ptr_stmt = {
@@ -632,39 +636,33 @@ fn rc_ptr_from_data_ptr_help<'a>(
     addr_sym: Symbol,
     recursion_ptr: InLayout<'a>,
 ) -> Stmt<'a> {
-    use std::ops::Neg;
+    // symbol of a pointer with any tag id bits cleared
+    let cleared_sym = if mask_lower_bits {
+        root.create_symbol(ident_ids, "cleared")
+    } else {
+        structure
+    };
+
+    let clear_tag_id_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::PtrClearTagId,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: root.arena.alloc([structure]),
+    });
+    let clear_tag_id_stmt =
+        |next| Stmt::Let(cleared_sym, clear_tag_id_expr, root.layout_isize, next);
 
     // Typecast the structure pointer to an integer
     // Backends expect a number Layout to choose the right "subtract" instruction
-    let as_int_sym = if mask_lower_bits {
-        root.create_symbol(ident_ids, "as_int")
-    } else {
-        addr_sym
-    };
     let as_int_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
             op: LowLevel::PtrCast,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
-        arguments: root.arena.alloc([structure]),
+        arguments: root.arena.alloc([cleared_sym]),
     });
-    let as_int_stmt = |next| Stmt::Let(as_int_sym, as_int_expr, root.layout_isize, next);
-
-    // Mask for lower bits (for tag union id)
-    let mask_sym = root.create_symbol(ident_ids, "mask");
-    let mask_expr = Expr::Literal(Literal::Int(
-        (root.target_info.ptr_width() as i128).neg().to_ne_bytes(),
-    ));
-    let mask_stmt = |next| Stmt::Let(mask_sym, mask_expr, root.layout_isize, next);
-
-    let and_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::And,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: root.arena.alloc([as_int_sym, mask_sym]),
-    });
-    let and_stmt = |next| Stmt::Let(addr_sym, and_expr, root.layout_isize, next);
+    let as_int_stmt = |next| Stmt::Let(addr_sym, as_int_expr, root.layout_isize, next);
 
     // Pointer size constant
     let ptr_size_sym = root.create_symbol(ident_ids, "ptr_size");
@@ -694,40 +692,24 @@ fn rc_ptr_from_data_ptr_help<'a>(
     });
     let cast_stmt = |next| Stmt::Let(rc_ptr_sym, cast_expr, recursion_ptr, next);
 
+    let body = as_int_stmt(root.arena.alloc(
+        //
+        ptr_size_stmt(root.arena.alloc(
+            //
+            sub_stmt(root.arena.alloc(
+                //
+                cast_stmt(root.arena.alloc(
+                    //
+                    following,
+                )),
+            )),
+        )),
+    ));
+
     if mask_lower_bits {
-        as_int_stmt(root.arena.alloc(
-            //
-            mask_stmt(root.arena.alloc(
-                //
-                and_stmt(root.arena.alloc(
-                    //
-                    ptr_size_stmt(root.arena.alloc(
-                        //
-                        sub_stmt(root.arena.alloc(
-                            //
-                            cast_stmt(root.arena.alloc(
-                                //
-                                following,
-                            )),
-                        )),
-                    )),
-                )),
-            )),
-        ))
+        clear_tag_id_stmt(root.arena.alloc(body))
     } else {
-        as_int_stmt(root.arena.alloc(
-            //
-            ptr_size_stmt(root.arena.alloc(
-                //
-                sub_stmt(root.arena.alloc(
-                    //
-                    cast_stmt(root.arena.alloc(
-                        //
-                        following,
-                    )),
-                )),
-            )),
-        ))
+        body
     }
 }
 
