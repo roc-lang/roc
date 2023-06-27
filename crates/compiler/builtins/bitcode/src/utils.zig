@@ -275,7 +275,6 @@ inline fn decref_ptr_to_refcount(
     alignment: u32,
 ) void {
     if (RC_TYPE == Refcount.none) return;
-    const extra_bytes = std.math.max(alignment, @sizeOf(usize));
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("| decrement {*}: ", .{refcount_ptr});
@@ -298,13 +297,13 @@ inline fn decref_ptr_to_refcount(
                 }
 
                 if (refcount == REFCOUNT_ONE_ISIZE) {
-                    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                    free_ptr_to_refcount(refcount_ptr, alignment);
                 }
             },
             Refcount.atomic => {
                 var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
                 if (last == REFCOUNT_ONE_ISIZE) {
-                    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                    free_ptr_to_refcount(refcount_ptr, alignment);
                 }
             },
             Refcount.none => unreachable,
