@@ -1180,8 +1180,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let then_block = ctx.append_basic_block(parent, "then_reset");
             let else_block = ctx.append_basic_block(parent, "else_decref");
 
-            let refcount_ptr =
-                PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
+            let refcount_ptr = PointerToRefcount::from_ptr_to_data(
+                env,
+                if union_layout.stores_tag_id_in_pointer(env.target_info) {
+                    tag_pointer_clear_tag_id(env, tag_ptr)
+                } else {
+                    tag_ptr
+                },
+            );
 
             let is_unique = match update_mode {
                 UpdateMode::InPlace => env.context.bool_type().const_int(1, false),
@@ -1265,8 +1271,20 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
             let not_unique_block = ctx.append_basic_block(parent, "else_decref");
 
-            let refcount_ptr =
-                PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
+            // reset is only generated for union values
+            let union_layout = match layout_interner.get_repr(layout) {
+                LayoutRepr::Union(ul) => ul,
+                _ => unreachable!(),
+            };
+
+            let refcount_ptr = PointerToRefcount::from_ptr_to_data(
+                env,
+                if union_layout.stores_tag_id_in_pointer(env.target_info) {
+                    tag_pointer_clear_tag_id(env, tag_ptr)
+                } else {
+                    tag_ptr
+                },
+            );
 
             let is_unique = match update_mode {
                 UpdateMode::InPlace => env.context.bool_type().const_int(1, false),
