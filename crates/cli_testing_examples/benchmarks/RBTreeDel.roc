@@ -13,19 +13,14 @@ ConsList a : [Nil, Cons a (ConsList a)]
 
 main : Task.Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    n = 4_200_000
 
-    when inputResult is
-        Ok n ->
-            m = makeMap n # koka original n = 4_200_000
-            val = fold (\_, v, r -> if v then r + 1 else r) m 0
+    m = makeMap n # koka original n = 4_200_000
+    val = fold (\_, v, r -> if v then r + 1 else r) m 0
 
-            val
-            |> Num.toStr
-            |> Task.putLine
-
-        Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+    val
+    |> Num.toStr
+    |> Task.putLine
 
 boom : Str -> a
 boom = \_ -> boom ""

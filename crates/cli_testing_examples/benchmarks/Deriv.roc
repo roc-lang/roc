@@ -8,21 +8,16 @@ IO a : Task.Task a []
 
 main : Task.Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    n = 10
 
-    when inputResult is
-        Ok n ->
-            x : Expr
-            x = Var "x"
+    x : Expr
+    x = Var "x"
 
-            f : Expr
-            f = pow x x
+    f : Expr
+    f = pow x x
 
-            nest deriv n f # original koka n = 10
-            |> Task.map \_ -> {}
-
-        Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+    nest deriv n f # original koka n = 10
+    |> Task.map \_ -> {}
 
 nest : (I64, Expr -> IO Expr), I64, Expr -> IO Expr
 nest = \f, n, e -> Task.loop { s: n, f, m: n, x: e } nestHelp

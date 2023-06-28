@@ -7,14 +7,6 @@ main : Task.Task {} []
 main =
     Task.putLine (showBool test1)
 
-#     Task.after Task.getInt \n ->
-#         when n is
-#             1 ->
-#                 Task.putLine (showBool test1)
-#
-#             _ ->
-#                 ns = Num.toStr n
-#                 Task.putLine "No test \(ns)"
 showBool : Bool -> Str
 showBool = \b ->
     if

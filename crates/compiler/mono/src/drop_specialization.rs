@@ -28,6 +28,9 @@ use bumpalo::Bump;
 
 use roc_collections::MutMap;
 
+// when a value is known to be unique, perform a free instead of a decref
+const FREE_WHEN_UNIQUE: bool = true;
+
 /**
 Try to find increments of symbols followed by decrements of the symbol they were indexed out of (their parent).
 Then inline the decrement operation of the parent and removing matching pairs of increments and decrements.
@@ -1032,10 +1035,11 @@ fn specialize_union<'a, 'i>(
                                             ))
                                         }),
                                         arena.alloc(Stmt::Refcounting(
-                                            // we know for sure that the allocation is unique at
-                                            // this point. Therefore we can free (or maybe reuse)
-                                            // without checking the refcount again.
-                                            ModifyRc::Free(*symbol),
+                                            if FREE_WHEN_UNIQUE {
+                                                ModifyRc::Free(*symbol)
+                                            } else {
+                                                ModifyRc::DecRef(*symbol)
+                                            },
                                             continuation,
                                         )),
                                     )
@@ -1107,7 +1111,11 @@ fn specialize_boxed<'a, 'i>(
                         // we know for sure that the allocation is unique at
                         // this point. Therefore we can free (or maybe reuse)
                         // without checking the refcount again.
-                        ModifyRc::Free(*symbol),
+                        if FREE_WHEN_UNIQUE {
+                            ModifyRc::Free(*symbol)
+                        } else {
+                            ModifyRc::DecRef(*symbol)
+                        },
                         continuation,
                     ))
                 },

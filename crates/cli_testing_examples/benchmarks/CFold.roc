@@ -6,22 +6,17 @@ app "cfold"
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 main : Task.Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    n = 20
 
-    when inputResult is
-        Ok n ->
-            e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
-            unoptimized = eval e
-            optimized = eval (constFolding (reassoc e))
+    e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
+    unoptimized = eval e
+    optimized = eval (constFolding (reassoc e))
 
-            unoptimized
-            |> Num.toStr
-            |> Str.concat " & "
-            |> Str.concat (Num.toStr optimized)
-            |> Task.putLine
-
-        Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+    unoptimized
+    |> Num.toStr
+    |> Str.concat " & "
+    |> Str.concat (Num.toStr optimized)
+    |> Task.putLine
 
 Expr : [
     Add Expr Expr,

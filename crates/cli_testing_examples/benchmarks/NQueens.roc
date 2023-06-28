@@ -5,16 +5,11 @@ app "nqueens"
 
 main : Task.Task {} []
 main =
-    inputResult <- Task.attempt Task.getInt
+    n = 13
 
-    when inputResult is
-        Ok n ->
-            queens n # original koka 13
-            |> Num.toStr
-            |> Task.putLine
-
-        Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."
+    queens n # original koka 13
+    |> Num.toStr
+    |> Task.putLine
 
 ConsList a : [Nil, Cons a (ConsList a)]
 
