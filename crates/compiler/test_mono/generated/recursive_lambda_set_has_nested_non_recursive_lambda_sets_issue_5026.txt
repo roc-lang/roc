@@ -44,7 +44,7 @@ procedure Test.6 (Test.16, #Attr.12):
     in
     let #Derived_gen.3 : Int1 = lowlevel RefCountIsUnique #Attr.12;
     if #Derived_gen.3 then
-        decref #Attr.12;
+        free #Attr.12;
         jump #Derived_gen.2;
     else
         decref #Attr.12;

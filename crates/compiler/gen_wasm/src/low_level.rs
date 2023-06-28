@@ -1979,6 +1979,19 @@ impl<'a> LowLevelCall<'a> {
                 );
             }
             PtrLoad => backend.expr_unbox(self.ret_symbol, self.arguments[0]),
+            PtrClearTagId => {
+                let ptr = self.arguments[0];
+
+                let ptr_local_id = match backend.storage.get(&ptr) {
+                    StoredValue::Local { local_id, .. } => *local_id,
+                    _ => internal_error!("A pointer will always be an i32"),
+                };
+
+                backend.code_builder.get_local(ptr_local_id);
+
+                backend.code_builder.i32_const(-4); // 11111111...1100
+                backend.code_builder.i32_and();
+            }
             Alloca => {
                 // Alloca : a -> Ptr a
                 let arg = self.arguments[0];

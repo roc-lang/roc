@@ -10,7 +10,7 @@ procedure Test.11 (Test.29, #Attr.12):
     let Test.10 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
     let #Derived_gen.9 : Int1 = lowlevel RefCountIsUnique #Attr.12;
     if #Derived_gen.9 then
-        decref #Attr.12;
+        free #Attr.12;
         ret Test.10;
     else
         decref #Attr.12;
@@ -40,7 +40,7 @@ procedure Test.14 (#Derived_gen.2, #Derived_gen.3):
         in
         let #Derived_gen.11 : Int1 = lowlevel RefCountIsUnique #Attr.12;
         if #Derived_gen.11 then
-            decref #Attr.12;
+            free #Attr.12;
             jump #Derived_gen.10;
         else
             decref #Attr.12;
