@@ -6,6 +6,7 @@ use crate::layout::{
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{BumpMap, BumpMapDefault};
+use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId};
 use roc_module::ident::{Lowercase, TagName};
@@ -295,6 +296,7 @@ pub fn from_can_pattern<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
+    symbol_refinement_map: &VecMap<Symbol, Symbol>,
 ) -> Result<
     (
         Pattern<'a>,
@@ -303,7 +305,14 @@ pub fn from_can_pattern<'a>(
     RuntimeError,
 > {
     let mut assignments = Vec::new_in(env.arena);
-    let pattern = from_can_pattern_help(env, procs, layout_cache, can_pattern, &mut assignments)?;
+    let pattern = from_can_pattern_help(
+        env,
+        procs,
+        layout_cache,
+        can_pattern,
+        &mut assignments,
+        symbol_refinement_map,
+    )?;
 
     Ok((pattern, assignments))
 }
@@ -314,15 +323,24 @@ fn from_can_pattern_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
     assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
+    symbol_refinement_map: &VecMap<Symbol, Symbol>,
 ) -> Result<Pattern<'a>, RuntimeError> {
     use roc_can::pattern::Pattern::*;
 
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
-        Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
+        Identifier(symbol) => Ok(Pattern::Identifier(
+            *symbol_refinement_map.get(symbol).unwrap_or(symbol),
+        )),
         As(subpattern, symbol) => {
-            let mono_subpattern =
-                from_can_pattern_help(env, procs, layout_cache, &subpattern.value, assignments)?;
+            let mono_subpattern = from_can_pattern_help(
+                env,
+                procs,
+                layout_cache,
+                &subpattern.value,
+                assignments,
+                symbol_refinement_map,
+            )?;
 
             Ok(Pattern::As(Box::new(mono_subpattern), *symbol))
         }
@@ -494,6 +512,7 @@ fn from_can_pattern_help<'a>(
                                 layout_cache,
                                 &loc_pat.value,
                                 assignments,
+                                symbol_refinement_map,
                             )?,
                             *layout,
                         ));
@@ -543,6 +562,7 @@ fn from_can_pattern_help<'a>(
                                     layout_cache,
                                     &loc_pat.value,
                                     assignments,
+                                    symbol_refinement_map,
                                 )?,
                                 *layout,
                             ));
@@ -629,6 +649,7 @@ fn from_can_pattern_help<'a>(
                                         layout_cache,
                                         &loc_pat.value,
                                         assignments,
+                                        symbol_refinement_map,
                                     )?,
                                     *layout,
                                 ));
@@ -674,6 +695,7 @@ fn from_can_pattern_help<'a>(
                                         layout_cache,
                                         &loc_pat.value,
                                         assignments,
+                                        symbol_refinement_map,
                                     )?,
                                     *layout,
                                 ));
@@ -718,6 +740,7 @@ fn from_can_pattern_help<'a>(
                                         layout_cache,
                                         &loc_pat.value,
                                         assignments,
+                                        symbol_refinement_map,
                                     )?,
                                     *layout,
                                 ));
@@ -776,6 +799,7 @@ fn from_can_pattern_help<'a>(
                                         layout_cache,
                                         &loc_pat.value,
                                         assignments,
+                                        symbol_refinement_map,
                                     )?,
                                     *layout,
                                 ));
@@ -831,6 +855,7 @@ fn from_can_pattern_help<'a>(
                                         layout_cache,
                                         &loc_pat.value,
                                         assignments,
+                                        symbol_refinement_map,
                                     )?,
                                     *layout,
                                 ));
@@ -864,6 +889,7 @@ fn from_can_pattern_help<'a>(
                 layout_cache,
                 &loc_arg_pattern.value,
                 assignments,
+                symbol_refinement_map,
             )?;
             Ok(Pattern::OpaqueUnwrap {
                 opaque: *opaque,
@@ -905,6 +931,7 @@ fn from_can_pattern_help<'a>(
                         &destructs[index].value,
                         res_layout,
                         assignments,
+                        symbol_refinement_map,
                     )?);
                 } else {
                     // this elem is not destructured by the pattern
@@ -975,6 +1002,7 @@ fn from_can_pattern_help<'a>(
                                     &destruct.value,
                                     field_layout,
                                     assignments,
+                                    symbol_refinement_map,
                                 )?);
                             }
                             None => {
@@ -1066,8 +1094,14 @@ fn from_can_pattern_help<'a>(
 
             let mut mono_patterns = Vec::with_capacity_in(patterns.patterns.len(), env.arena);
             for loc_pat in patterns.patterns.iter() {
-                let mono_pat =
-                    from_can_pattern_help(env, procs, layout_cache, &loc_pat.value, assignments)?;
+                let mono_pat = from_can_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    &loc_pat.value,
+                    assignments,
+                    symbol_refinement_map,
+                )?;
                 mono_patterns.push(mono_pat);
             }
 
@@ -1101,6 +1135,7 @@ fn from_can_record_destruct<'a>(
     can_rd: &roc_can::pattern::RecordDestruct,
     field_layout: InLayout<'a>,
     assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
+    symbol_refinement_map: &VecMap<Symbol, Symbol>,
 ) -> Result<RecordDestruct<'a>, RuntimeError> {
     Ok(RecordDestruct {
         label: can_rd.label.clone(),
@@ -1112,9 +1147,16 @@ fn from_can_record_destruct<'a>(
                 // if we reach this stage, the optional field is present
                 DestructType::Required(can_rd.symbol)
             }
-            roc_can::pattern::DestructType::Guard(_, loc_pattern) => DestructType::Guard(
-                from_can_pattern_help(env, procs, layout_cache, &loc_pattern.value, assignments)?,
-            ),
+            roc_can::pattern::DestructType::Guard(_, loc_pattern) => {
+                DestructType::Guard(from_can_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    &loc_pattern.value,
+                    assignments,
+                    symbol_refinement_map,
+                )?)
+            }
         },
     })
 }
@@ -1126,12 +1168,20 @@ fn from_can_tuple_destruct<'a>(
     can_rd: &roc_can::pattern::TupleDestruct,
     field_layout: InLayout<'a>,
     assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
+    symbol_refinement_map: &VecMap<Symbol, Symbol>,
 ) -> Result<TupleDestruct<'a>, RuntimeError> {
     Ok(TupleDestruct {
         index: can_rd.destruct_index,
         variable: can_rd.var,
         layout: field_layout,
-        pat: from_can_pattern_help(env, procs, layout_cache, &can_rd.typ.1.value, assignments)?,
+        pat: from_can_pattern_help(
+            env,
+            procs,
+            layout_cache,
+            &can_rd.typ.1.value,
+            assignments,
+            symbol_refinement_map,
+        )?,
     })
 }
 
