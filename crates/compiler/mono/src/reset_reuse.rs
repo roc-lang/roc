@@ -9,8 +9,8 @@ use std::hash::Hash;
 
 use crate::borrow::Ownership;
 use crate::ir::{
-    BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt, UpdateModeId,
-    UpdateModeIds,
+    BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, ReuseToken, Stmt,
+    UpdateModeId, UpdateModeIds,
 };
 use crate::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout};
 
@@ -153,16 +153,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 )) {
                                     // We have a reuse token for this layout, use it.
                                     Some(TokenWithInLayout {
-                                        token: reuse_token,
+                                        token: mut reuse_token,
                                         inlayout: layout_info,
                                     }) => {
-                                        let reuse_token = crate::ir::ReuseToken {
-                                            symbol: reuse_token.symbol,
-                                            update_mode: reuse_token.update_mode_id,
-                                            // for now, always overwrite the tag ID just to be sure
-                                            update_tag_id: true,
-                                        };
-
                                         if layout_info == layout {
                                             // The reuse token layout is the same, we can use it without casting.
                                             (
@@ -188,12 +181,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                                 ))
                                             };
 
-                                            let reuse_token = crate::ir::ReuseToken {
-                                                symbol: new_symbol,
-                                                update_mode: reuse_token.update_mode,
-                                                // for now, always overwrite the tag ID just to be sure
-                                                update_tag_id: true,
-                                            };
+                                            // we now want to reuse the cast pointer
+                                            reuse_token.symbol = new_symbol;
 
                                             (
                                                 Some(ptr_cast),
@@ -491,7 +480,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                                     let reuse_token = ReuseToken {
                                         symbol: reuse_symbol,
-                                        update_mode_id: update_mode_ids.next_id(),
+                                        update_mode: update_mode_ids.next_id(),
+                                        // for now, always overwrite the tag ID just to be sure
+                                        update_tag_id: true,
                                     };
 
                                     let owned_layout = **layout;
@@ -553,7 +544,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 // a dec will be replaced by a reset.
                                 let reset_expr = Expr::Reset {
                                     symbol,
-                                    update_mode: reuse_token.update_mode_id,
+                                    update_mode: reuse_token.update_mode,
                                 };
 
                                 return arena.alloc(Stmt::Let(
@@ -567,7 +558,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 // a decref will be replaced by a resetref.
                                 let reset_expr = Expr::ResetRef {
                                     symbol,
-                                    update_mode: reuse_token.update_mode_id,
+                                    update_mode: reuse_token.update_mode,
                                 };
 
                                 return arena.alloc(Stmt::Let(
@@ -753,7 +744,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 tokens.iter().map(|token| TokenWithInLayout {
                                     token: ReuseToken {
                                         symbol: Symbol::new(home, ident_ids.gen_unique()),
-                                        update_mode_id: update_mode_ids.next_id(),
+                                        update_mode: update_mode_ids.next_id(),
+                                        // for now, always overwrite the tag ID just to be sure
+                                        update_tag_id: true,
                                     },
                                     inlayout: token.inlayout,
                                 }),
@@ -1138,19 +1131,6 @@ Struct to to check whether two reuse layouts are interchangeable.
 struct TokenLayout {
     size: u32,
     alignment: u32,
-}
-
-/**
-A reuse token is a symbol that is used to reset a layout.
-Matches symbols that are pointers.
-*/
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct ReuseToken {
-    // The symbol of the reuse token.
-    symbol: Symbol,
-
-    // Index that can be used later to determine if in place mutation is possible.
-    update_mode_id: UpdateModeId,
 }
 
 /**
