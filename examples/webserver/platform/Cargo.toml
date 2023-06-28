@@ -32,7 +32,9 @@ roc_app = { path = "glue/roc_app" }
 libc = "0.2"
 hyper = { version = "0.14", features = ["http1", "http2", "client", "server", "runtime", "backports", "deprecated"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+reqwest = { version="0.11.11", default-features=false, features=["blocking", "rustls-tls"] }
 futures = "0.3"
 bytes = "1.0"
+backtrace = "0.3"
 
 [workspace]

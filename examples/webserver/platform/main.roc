@@ -1,6 +1,6 @@
 platform "webserver-platform"
     requires {} { main : _ }
-    exposes []
+    exposes [Task, Http, Utc]
     packages {}
     imports []
     provides [mainForHost]
