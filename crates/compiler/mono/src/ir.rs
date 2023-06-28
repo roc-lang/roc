@@ -2108,6 +2108,16 @@ impl<'a> Expr<'a> {
         w.push(b'\n');
         String::from_utf8(w).unwrap()
     }
+
+    pub(crate) fn ptr_load(symbol: &'a Symbol) -> Expr<'a> {
+        Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrLoad,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: std::slice::from_ref(symbol),
+        })
+    }
 }
 
 impl<'a> Stmt<'a> {
