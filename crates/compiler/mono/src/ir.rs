@@ -1825,7 +1825,7 @@ pub struct HigherOrderLowLevel<'a> {
     pub passed_function: PassedFunction<'a>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReuseToken {
     pub symbol: Symbol,
     pub update_tag_id: bool,
@@ -1886,15 +1886,6 @@ pub enum Expr<'a> {
         symbol: Symbol,
     },
 
-    Reuse {
-        symbol: Symbol,
-        update_tag_id: bool,
-        update_mode: UpdateModeId,
-        // normal Tag fields
-        tag_layout: UnionLayout<'a>,
-        tag_id: TagIdIntType,
-        arguments: &'a [Symbol],
-    },
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,
@@ -2026,30 +2017,6 @@ impl<'a> Expr<'a> {
                     .append(alloc.intersperse(it, " "))
             }
             NullPointer => alloc.text("NullPointer"),
-            Reuse {
-                symbol,
-                tag_id,
-                arguments,
-                update_mode,
-                ..
-            } => {
-                let doc_tag = alloc
-                    .text("TagId(")
-                    .append(alloc.text(tag_id.to_string()))
-                    .append(")");
-
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
-
-                alloc
-                    .text("Reuse ")
-                    .append(symbol_to_doc(alloc, *symbol, pretty))
-                    .append(alloc.space())
-                    .append(format!("{:?}", update_mode))
-                    .append(alloc.space())
-                    .append(doc_tag)
-                    .append(alloc.space())
-                    .append(alloc.intersperse(it, " "))
-            }
             Reset {
                 symbol,
                 update_mode,
@@ -7615,7 +7582,7 @@ fn substitute_in_expr<'a>(
 
         NullPointer => None,
 
-        Reuse { .. } | Reset { .. } | ResetRef { .. } => {
+        Reset { .. } | ResetRef { .. } => {
             unreachable!("reset/resetref/reuse have not been introduced yet")
         }
 

@@ -1064,26 +1064,6 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
         )
         .into(),
 
-        Reuse {
-            arguments,
-            tag_layout: union_layout,
-            tag_id,
-            symbol,
-            ..
-        } => {
-            let reset = scope.load_symbol(symbol).into_pointer_value();
-            build_tag(
-                env,
-                layout_interner,
-                scope,
-                union_layout,
-                *tag_id,
-                arguments,
-                Some(reset),
-                parent,
-            )
-        }
-
         Tag {
             arguments,
             tag_layout: union_layout,

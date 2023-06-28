@@ -234,12 +234,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
             new_triplets.into_iter().rev().fold(
                 new_continuation,
-                |new_continuation, (binding, (reused, new_expr), layout)| {
+                |new_continuation, (binding, (opt_ptr_cast, new_expr), layout)| {
                     let new_let =
                         arena.alloc(Stmt::Let(*binding, new_expr, *layout, new_continuation));
-                    match reused {
-                        // The layout for the reuse does not match that of the reset, use PtrCast to convert the layout.
-                        Some(wrap) => wrap(new_let),
+
+                    // if the layout for the reuse does not match that of the reset, use PtrCast to convert the layout.
+                    match opt_ptr_cast {
+                        Some(ptr_cast) => ptr_cast(new_let),
                         None => new_let,
                     }
                 },

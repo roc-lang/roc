@@ -1102,9 +1102,6 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
         }),
         Expr::EmptyArray => false,
         Expr::ExprBox { symbol } | Expr::ExprUnbox { symbol } => needle == *symbol,
-        Expr::Reuse {
-            symbol, arguments, ..
-        } => needle == *symbol || arguments.contains(&needle),
         Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
     }

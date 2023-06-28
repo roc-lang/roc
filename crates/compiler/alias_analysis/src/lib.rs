@@ -1315,13 +1315,7 @@ fn expr_spec<'a>(
             builder.add_unknown_with(block, &[], pointer_type)
         }
         Call(call) => call_spec(builder, interner, env, block, layout, call),
-        Reuse {
-            tag_layout,
-            tag_id,
-            arguments,
-            ..
-        }
-        | Tag {
+        Tag {
             tag_layout,
             tag_id,
             arguments,

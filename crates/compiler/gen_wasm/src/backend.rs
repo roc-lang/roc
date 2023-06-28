@@ -1140,14 +1140,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
 
-            Expr::Reuse {
-                tag_layout,
-                tag_id,
-                arguments,
-                symbol: reused,
-                ..
-            } => self.expr_tag(tag_layout, *tag_id, arguments, sym, storage, Some(*reused)),
-
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
             Expr::ResetRef { symbol: arg, .. } => self.expr_resetref(*arg, sym, storage),
