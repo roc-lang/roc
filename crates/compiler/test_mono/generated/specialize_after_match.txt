@@ -39,7 +39,7 @@ procedure Test.2 (Test.9, Test.10):
             let #Derived_gen.5 : Int1 = lowlevel RefCountIsUnique Test.9;
             if #Derived_gen.5 then
                 dec Test.11;
-                decref Test.9;
+                free Test.9;
                 jump #Derived_gen.4;
             else
                 inc Test.12;
@@ -65,7 +65,7 @@ procedure Test.3 (Test.17):
         if #Derived_gen.3 then
             let #Derived_gen.2 : Str = UnionAtIndex (Id 0) (Index 0) Test.17;
             dec #Derived_gen.2;
-            decref Test.17;
+            free Test.17;
             jump #Derived_gen.1;
         else
             inc Test.18;

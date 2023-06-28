@@ -116,7 +116,7 @@ procedure Test.1 (#Derived_gen.0):
                 in
                 let #Derived_gen.7 : Int1 = lowlevel RefCountIsUnique Test.49;
                 if #Derived_gen.7 then
-                    decref Test.49;
+                    free Test.49;
                     jump #Derived_gen.6;
                 else
                     decref Test.49;
@@ -161,7 +161,7 @@ procedure Test.1 (#Derived_gen.0):
                 in
                 let #Derived_gen.9 : Int1 = lowlevel RefCountIsUnique Test.51;
                 if #Derived_gen.9 then
-                    decref Test.51;
+                    free Test.51;
                     jump #Derived_gen.8;
                 else
                     inc Test.14;

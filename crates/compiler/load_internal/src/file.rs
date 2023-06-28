@@ -3141,6 +3141,7 @@ fn update<'a>(
                         arena,
                         &layout_interner,
                         module_id,
+                        state.target_info,
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,

@@ -2996,12 +2996,17 @@ impl<
         );
     }
 
-    fn build_ptr_to_stack_value(
-        &mut self,
-        sym: Symbol,
-        value: Symbol,
-        element_layout: InLayout<'a>,
-    ) {
+    fn build_ptr_clear_tag_id(&mut self, sym: Symbol, ptr: Symbol) {
+        let buf = &mut self.buf;
+
+        let ptr_reg = self.storage_manager.load_to_general_reg(buf, &ptr);
+        let sym_reg = self.storage_manager.claim_general_reg(buf, &sym);
+
+        ASM::mov_reg64_imm64(buf, sym_reg, !0b111);
+        ASM::and_reg64_reg64_reg64(buf, sym_reg, sym_reg, ptr_reg);
+    }
+
+    fn build_alloca(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>) {
         // 1. acquire some stack space
         let element_width = self.interner().stack_size(element_layout);
         let allocation = self.debug_symbol("stack_allocation");
