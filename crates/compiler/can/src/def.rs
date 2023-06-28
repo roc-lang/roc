@@ -2272,12 +2272,17 @@ fn canonicalize_pending_body<'a>(
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
 ) -> DefOutput {
+    let loc_value = match &loc_expr.value {
+        ast::Expr::ParensAround(loc_value) => loc_value,
+        _ => &loc_expr.value,
+    };
+
     // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
     //
     // Only defs of the form `foo = ...` can be closure declarations or self tail calls.
     let (loc_can_expr, def_references) = {
-        match (&loc_can_pattern.value, &loc_expr.value) {
+        match (&loc_can_pattern.value, &loc_value) {
             (
                 Pattern::Identifier(defined_symbol)
                 | Pattern::AbilityMemberSpecialization {
