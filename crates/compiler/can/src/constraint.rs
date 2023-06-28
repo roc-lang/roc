@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
+use crate::expr::Refinements;
 use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -418,7 +419,7 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
-        Constraint::Let(let_index, Slice::default())
+        Constraint::Let(let_index, Slice::default(), None)
     }
 
     #[inline(always)]
@@ -445,7 +446,7 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_contraint);
 
-        Constraint::Let(let_index, Slice::default())
+        Constraint::Let(let_index, Slice::default(), None)
     }
 
     #[inline(always)]
@@ -481,7 +482,7 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_constraint);
 
-        Constraint::Let(let_index, Slice::default())
+        Constraint::Let(let_index, Slice::default(), None)
     }
 
     #[inline(always)]
@@ -493,6 +494,7 @@ impl Constraints {
         defs_constraint: Constraint,
         ret_constraint: Constraint,
         generalizable: Generalizable,
+        refinements: Refinements,
     ) -> Constraint
     where
         I1: IntoIterator<Item = Variable>,
@@ -517,7 +519,7 @@ impl Constraints {
         let let_index = Index::new(self.let_constraints.len() as _);
         self.let_constraints.push(let_constraint);
 
-        Constraint::LetAndExpandType(let_index, Slice::default())
+        Constraint::LetAndExpandType(let_index, Slice::default(), Some(Box::from(refinements)))
     }
 
     /// A variant of `Let` used specifically for imports. When importing types from another module,
@@ -570,7 +572,7 @@ impl Constraints {
 
         let pool_slice = self.variable_slice(pool_variables.iter().copied());
 
-        Constraint::Let(let_index, pool_slice)
+        Constraint::Let(let_index, pool_slice, None)
     }
 
     #[inline(always)]
@@ -610,7 +612,7 @@ impl Constraints {
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::SaveTheEnvironment => true,
-            Constraint::Let(index, _) | Constraint::LetAndExpandType(index, _) => {
+            Constraint::Let(index, _, _) | Constraint::LetAndExpandType(index, _, _) => {
                 let let_constraint = &self.let_constraints[index.index()];
 
                 let offset = let_constraint.defs_and_ret_constraint.index();
@@ -638,7 +640,9 @@ impl Constraints {
             | Constraint::Exhaustive { .. }
             | Constraint::Resolve(..)
             | Constraint::IngestedFile(..)
-            | Constraint::CheckCycle(..) => false,
+            | Constraint::CheckCycle(..)
+            // | Constraint::ExpandTypeUnions(..) 
+            => false,
         }
     }
 
@@ -801,11 +805,20 @@ pub enum Constraint {
     /// The `Slice<Variable>` is used for imports where we manually put the Content into Subs
     /// by copying from another module, but have to make sure that any variables we use to store
     /// these contents are added to `Pool` at the correct rank
-    Let(Index<LetConstraint>, Slice<Variable>),
-    LetAndExpandType(Index<LetConstraint>, Slice<Variable>),
+    Let(
+        Index<LetConstraint>,
+        Slice<Variable>,
+        Option<Box<Refinements>>,
+    ),
+    LetAndExpandType(
+        Index<LetConstraint>,
+        Slice<Variable>,
+        Option<Box<Refinements>>,
+    ),
     And(Slice<Constraint>),
     /// Presence constraints
     IsOpenType(TypeOrVar), // Theory; always applied to a variable? if yes the use that
+    // ExpandTypeUnions(Box<Refinements>),
     IncludesTag(Index<IncludesTag>),
     PatternPresence(
         TypeOrVar,
@@ -842,6 +855,7 @@ pub struct LetConstraint {
     pub def_types: DefTypes,
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
 
+    // pub refinements: Refinements,
     /// Whether the defs introduces in the let-binding can be generalized.
     /// Only
     ///   - syntactic functions
@@ -883,13 +897,18 @@ impl std::fmt::Debug for Constraint {
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
-            Self::Let(arg0, arg1) => f.debug_tuple("Let").field(arg0).field(arg1).finish(),
-            Self::LetAndExpandType(arg0, arg1) => f
+            Self::Let(arg0, arg1, _refinements) => {
+                f.debug_tuple("Let").field(arg0).field(arg1).finish()
+            }
+            Self::LetAndExpandType(arg0, arg1, _refinements) => f
                 .debug_tuple("LetAndExpandType")
                 .field(arg0)
                 .field(arg1)
                 .finish(),
             Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
+            // Self::ExpandTypeUnions(arg0) => {
+            //     write!(f, "ExpandTypeUnions({:?})", arg0)
+            // }
             Self::IsOpenType(arg0) => f.debug_tuple("IsOpenType").field(arg0).finish(),
             Self::IncludesTag(arg0) => f.debug_tuple("IncludesTag").field(arg0).finish(),
             Self::PatternPresence(arg0, arg1, arg2, arg3) => {
