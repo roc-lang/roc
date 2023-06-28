@@ -156,42 +156,52 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                         token: reuse_token,
                                         inlayout: layout_info,
                                     }) => {
-                                        // The reuse token layout is the same, we can use it without casting.
+                                        let reuse_token = crate::ir::ReuseToken {
+                                            symbol: reuse_token.symbol,
+                                            update_mode: reuse_token.update_mode_id,
+                                            // for now, always overwrite the tag ID just to be sure
+                                            update_tag_id: true,
+                                        };
+
                                         if layout_info == layout {
+                                            // The reuse token layout is the same, we can use it without casting.
                                             (
                                                 None,
-                                                Expr::Reuse {
-                                                    symbol: reuse_token.symbol,
-                                                    update_mode: reuse_token.update_mode_id,
-                                                    // for now, always overwrite the tag ID just to be sure
-                                                    update_tag_id: true,
+                                                Expr::Tag {
                                                     tag_layout: *tag_layout,
                                                     tag_id: *tag_id,
                                                     arguments,
+                                                    reuse: Some(reuse_token),
                                                 },
                                             )
-                                        }
-                                        // The reuse token has a different layout from the tag, we need to pointercast it before.
-                                        else {
+                                        } else {
+                                            // The reuse token has a different layout from the tag, we need to pointercast it before.
                                             let new_symbol =
                                                 Symbol::new(home, ident_ids.gen_unique());
+
+                                            let ptr_cast = move |new_let| {
+                                                arena.alloc(Stmt::Let(
+                                                    new_symbol,
+                                                    create_ptr_cast(arena, reuse_token.symbol),
+                                                    *layout,
+                                                    new_let,
+                                                ))
+                                            };
+
+                                            let reuse_token = crate::ir::ReuseToken {
+                                                symbol: new_symbol,
+                                                update_mode: reuse_token.update_mode,
+                                                // for now, always overwrite the tag ID just to be sure
+                                                update_tag_id: true,
+                                            };
+
                                             (
-                                                Some(move |new_let| {
-                                                    arena.alloc(Stmt::Let(
-                                                        new_symbol,
-                                                        create_ptr_cast(arena, reuse_token.symbol),
-                                                        *layout,
-                                                        new_let,
-                                                    ))
-                                                }),
-                                                Expr::Reuse {
-                                                    symbol: new_symbol,
-                                                    update_mode: reuse_token.update_mode_id,
-                                                    // for now, always overwrite the tag ID just to be sure
-                                                    update_tag_id: true,
+                                                Some(ptr_cast),
+                                                Expr::Tag {
                                                     tag_layout: *tag_layout,
                                                     tag_id: *tag_id,
                                                     arguments,
+                                                    reuse: Some(reuse_token),
                                                 },
                                             )
                                         }
