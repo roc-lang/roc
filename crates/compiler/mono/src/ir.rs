@@ -1378,6 +1378,12 @@ impl<'a, 'i> Env<'a, 'i> {
         Symbol::new(self.home, ident_id)
     }
 
+    pub fn duplicate_symbol(&mut self, symbol: Symbol) -> Symbol {
+        let ident_id = self.ident_ids.duplicate_ident(symbol.ident_id());
+
+        Symbol::new(symbol.module_id(), ident_id)
+    }
+
     pub fn next_update_mode_id(&mut self) -> UpdateModeId {
         self.update_mode_ids.next_id()
     }
@@ -2738,11 +2744,16 @@ fn from_can_let<'a>(
     }
 
     // this may be a destructure pattern
-    let (mono_pattern, assignments) =
-        match from_can_pattern(env, procs, layout_cache, &def.loc_pattern.value) {
-            Ok(v) => v,
-            Err(_) => todo!(),
-        };
+    let (mono_pattern, assignments) = match from_can_pattern(
+        env,
+        procs,
+        layout_cache,
+        &def.loc_pattern.value,
+        &VecMap::default(),
+    ) {
+        Ok(v) => v,
+        Err(_) => todo!(),
+    };
 
     // convert the continuation
     let mut stmt = lower_rest!(variable, cont.value);
@@ -6937,6 +6948,20 @@ fn unique_symbol(ident_ids: &mut IdentIds, home: ModuleId) -> Symbol {
     Symbol::new(home, ident_id)
 }
 
+fn can_refine_tag_union(env: &mut Env, from_var: Variable, to_var: Variable) -> bool {
+    if env.subs.equivalent(from_var, to_var) {
+        return false;
+    }
+
+    matches!(
+        env.subs.get_content_without_compacting(from_var),
+        Content::Structure(FlatType::TagUnion(..) | FlatType::RecursiveTagUnion(..))
+    ) && matches!(
+        env.subs.get_content_without_compacting(to_var),
+        Content::Structure(FlatType::TagUnion(..) | FlatType::RecursiveTagUnion(..))
+    )
+}
+
 fn refine_tag_union(
     env: &mut Env,
     from_var: Variable,
@@ -7352,7 +7377,26 @@ fn to_opt_branches<'a>(
         }
 
         for loc_pattern in when_branch.patterns {
-            match from_can_pattern(env, procs, layout_cache, &loc_pattern.pattern.value) {
+            let symbol_refinement_map: VecMap<Symbol, Symbol> = when_branch
+                .refinements
+                .iter()
+                .filter_map(|(&symbol, &unrefined_var, &refined_var)| {
+                    if can_refine_tag_union(env, unrefined_var, refined_var) {
+                        Some((symbol, env.duplicate_symbol(symbol)))
+                    } else {
+                        None
+                    }
+                })
+                // .map(|(&symbol, _, _)| ((symbol, env.duplicate_symbol(symbol))))
+                .collect();
+
+            match from_can_pattern(
+                env,
+                procs,
+                layout_cache,
+                &loc_pattern.pattern.value,
+                &symbol_refinement_map,
+            ) {
                 Ok((mono_pattern, assignments)) => {
                     let loc_expr = if !loc_pattern.degenerate {
                         let mut loc_expr = when_branch.value.clone();
@@ -7374,16 +7418,19 @@ fn to_opt_branches<'a>(
                             loc_expr = Loc::at(region, new_expr);
                         }
 
-                        for (&symbol, &unrefined_var, &refined_var) in
+                        for (&refined_symbol, &unrefined_var, &refined_var) in
                             when_branch.refinements.iter()
                         {
                             if let Some(refinement_branches) =
                                 refine_tag_union(env, unrefined_var, refined_var)
                             {
+                                let unrefined_symbol = *symbol_refinement_map
+                                    .get(&refined_symbol)
+                                    .unwrap_or(&refined_symbol);
                                 let when = roc_can::expr::Expr::When {
                                     loc_cond: Box::new(Loc::at(
                                         region,
-                                        roc_can::expr::Expr::Var(symbol, unrefined_var),
+                                        roc_can::expr::Expr::Var(unrefined_symbol, unrefined_var),
                                     )),
                                     cond_var: unrefined_var,
                                     expr_var: refined_var,
@@ -7398,9 +7445,10 @@ fn to_opt_branches<'a>(
                                     loc_expr: Loc::at(region, when),
                                     loc_pattern: Loc::at(
                                         region,
-                                        roc_can::pattern::Pattern::Identifier(symbol),
+                                        roc_can::pattern::Pattern::Identifier(refined_symbol),
                                     ),
-                                    pattern_vars: std::iter::once((symbol, refined_var)).collect(),
+                                    pattern_vars: std::iter::once((refined_symbol, refined_var))
+                                        .collect(),
                                 };
                                 let new_expr = roc_can::expr::Expr::LetNonRec(
                                     Box::new(def),
