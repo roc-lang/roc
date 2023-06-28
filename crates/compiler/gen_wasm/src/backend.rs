@@ -1104,8 +1104,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 tag_layout: union_layout,
                 tag_id,
                 arguments,
-                ..
-            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage, None),
+                reuse,
+            } => {
+                let reuse = reuse.map(|ru| ru.symbol);
+                self.expr_tag(union_layout, *tag_id, arguments, sym, storage, reuse)
+            }
 
             Expr::GetTagId {
                 structure,

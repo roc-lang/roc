@@ -1325,6 +1325,7 @@ fn expr_spec<'a>(
             tag_layout,
             tag_id,
             arguments,
+            reuse: _,
         } => {
             let data_id = build_tuple_value(builder, env, block, arguments)?;
 

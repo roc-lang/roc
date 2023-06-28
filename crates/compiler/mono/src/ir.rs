@@ -1825,6 +1825,13 @@ pub struct HigherOrderLowLevel<'a> {
     pub passed_function: PassedFunction<'a>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReuseToken {
+    pub symbol: Symbol,
+    pub update_tag_id: bool,
+    pub update_mode: UpdateModeId,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
@@ -1836,6 +1843,7 @@ pub enum Expr<'a> {
         tag_layout: UnionLayout<'a>,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
+        reuse: Option<ReuseToken>,
     },
     Struct(&'a [Symbol]),
     NullPointer,
@@ -1977,7 +1985,10 @@ impl<'a> Expr<'a> {
             Call(call) => call.to_doc(alloc, pretty),
 
             Tag {
-                tag_id, arguments, ..
+                tag_id,
+                arguments,
+                reuse: None,
+                ..
             } => {
                 let doc_tag = alloc
                     .text("TagId(")
@@ -1987,6 +1998,30 @@ impl<'a> Expr<'a> {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 doc_tag
+                    .append(alloc.space())
+                    .append(alloc.intersperse(it, " "))
+            }
+
+            Tag {
+                tag_id,
+                arguments,
+                reuse: Some(reuse_token),
+                ..
+            } => {
+                let doc_tag = alloc
+                    .text("TagId(")
+                    .append(alloc.text(tag_id.to_string()))
+                    .append(")");
+
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
+
+                alloc
+                    .text("Reuse ")
+                    .append(symbol_to_doc(alloc, reuse_token.symbol, pretty))
+                    .append(alloc.space())
+                    .append(format!("{:?}", reuse_token.update_mode))
+                    .append(alloc.space())
+                    .append(doc_tag)
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
@@ -6005,6 +6040,7 @@ where
                 tag_id,
                 tag_layout: union_layout,
                 arguments: symbols,
+                reuse: None,
             };
 
             Stmt::Let(assigned, expr, lambda_set_layout, env.arena.alloc(hole))
@@ -6274,6 +6310,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6296,6 +6333,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6320,6 +6358,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6346,6 +6385,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6363,6 +6403,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -7532,6 +7573,7 @@ fn substitute_in_expr<'a>(
             tag_layout,
             tag_id,
             arguments: args,
+            reuse,
         } => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(
@@ -7545,6 +7587,18 @@ fn substitute_in_expr<'a>(
                 arena,
             );
 
+            let reuse = match *reuse {
+                Some(mut ru) => match substitute(subs, ru.symbol) {
+                    Some(s) => {
+                        did_change = true;
+                        ru.symbol = s;
+                        Some(ru)
+                    }
+                    None => Some(ru),
+                },
+                None => None,
+            };
+
             if did_change {
                 let arguments = new_args.into_bump_slice();
 
@@ -7552,6 +7606,7 @@ fn substitute_in_expr<'a>(
                     tag_layout: *tag_layout,
                     tag_id: *tag_id,
                     arguments,
+                    reuse,
                 })
             } else {
                 None

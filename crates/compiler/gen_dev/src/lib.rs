@@ -838,10 +838,11 @@ trait Backend<'a> {
                 tag_layout,
                 tag_id,
                 arguments,
-                ..
+                reuse,
             } => {
                 self.load_literal_symbols(arguments);
-                self.tag(sym, arguments, tag_layout, *tag_id, None);
+                let reuse = reuse.map(|ru| ru.symbol);
+                self.tag(sym, arguments, tag_layout, *tag_id, reuse);
             }
             Expr::ExprBox { symbol: value } => {
                 let element_layout = match self.interner().get_repr(*layout) {

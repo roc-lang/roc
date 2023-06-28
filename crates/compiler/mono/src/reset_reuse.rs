@@ -134,7 +134,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         tag_layout,
                         tag_id,
                         arguments,
+                        reuse,
                     } => {
+                        debug_assert!(reuse.is_none());
+
                         // The value of the tag is currently only used in the case of nullable recursive unions.
                         // But for completeness we add every kind of union to the layout_tags.
                         environment.add_symbol_tag(*binding, *tag_id);

@@ -639,8 +639,11 @@ impl<'a> TrmcEnv<'a> {
             tag_layout,
             tag_id,
             arguments,
+            reuse,
         } = expr
         {
+            debug_assert!(reuse.is_none());
+
             let info = ConstructorInfo {
                 tag_layout: *tag_layout,
                 tag_id: *tag_id,
@@ -910,6 +913,7 @@ impl<'a> TrmcEnv<'a> {
                                 tag_layout: cons_info.tag_layout,
                                 tag_id: cons_info.tag_id,
                                 arguments: arguments.into_bump_slice(),
+                                reuse: None,
                             };
 
                             let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
