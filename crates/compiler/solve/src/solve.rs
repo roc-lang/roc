@@ -215,7 +215,7 @@ enum Work<'a> {
         /// mimic `type_to_var`, we must add these variables to `Pools`
         /// at the correct rank
         pool_variables: &'a [Variable],
-        expand: bool,
+        refinements: &'a Option<Box<Refinements>>,
     },
     /// The ret_con part of a let constraint that introduces rigid and/or flex variables
     ///
@@ -231,7 +231,7 @@ enum Work<'a> {
         /// mimic `type_to_var`, we must add these variables to `Pools`
         /// at the correct rank
         pool_variables: &'a [Variable],
-        expand: bool,
+        refinements: &'a Option<Box<Refinements>>,
     },
 }
 
@@ -279,7 +279,7 @@ fn solve(
                 rank,
                 let_con,
                 pool_variables,
-                expand,
+                refinements,
             } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
@@ -314,12 +314,27 @@ fn solve(
 
                     let unexpanded_var = loc_var.value;
                     let unexpanded_descriptor = subs.get(unexpanded_var);
-                    let expanded_var = if expand
-                        && matches!(unexpanded_descriptor.content, Content::Structure(..))
-                    {
-                        let ret = subs.fresh(unexpanded_descriptor.clone());
-                        open_tag_union(subs, pools, ret);
-                        ret
+                    let expanded_var = if let Some(refinements2) = &refinements {
+                        if let Some(&(unrefined_var, refined_var)) = refinements2.get(*symbol) {
+                            if matches!(unexpanded_descriptor.content, Content::Structure(..)) {
+                                unify(
+                                    &mut UEnv::new(subs),
+                                    unexpanded_var,
+                                    unrefined_var,
+                                    Mode::EQ,
+                                    Polarity::Neg, // TODO: polarity
+                                );
+                                debug_assert!(subs
+                                    .equivalent_without_compacting(unexpanded_var, unrefined_var));
+                                subs.set(refined_var, unexpanded_descriptor.clone());
+                                open_tag_union(subs, pools, refined_var);
+                                refined_var
+                            } else {
+                                unexpanded_var
+                            }
+                        } else {
+                            unexpanded_var
+                        }
                     } else {
                         unexpanded_var
                     };
@@ -341,7 +356,7 @@ fn solve(
                 rank,
                 let_con,
                 pool_variables,
-                expand,
+                refinements,
             } => {
                 // NOTE be extremely careful with shadowing here
                 let offset = let_con.defs_and_ret_constraint.index();
@@ -455,12 +470,27 @@ fn solve(
 
                     let unexpanded_var = loc_var.value;
                     let unexpanded_descriptor = subs.get(unexpanded_var);
-                    let expanded_var = if expand
-                        && matches!(unexpanded_descriptor.content, Content::Structure(..))
-                    {
-                        let ret = subs.fresh(unexpanded_descriptor.clone());
-                        open_tag_union(subs, pools, ret);
-                        ret
+                    let expanded_var = if let Some(refinements2) = &refinements {
+                        if let Some(&(unrefined_var, refined_var)) = refinements2.get(*symbol) {
+                            if matches!(unexpanded_descriptor.content, Content::Structure(..)) {
+                                unify(
+                                    &mut UEnv::new(subs),
+                                    unexpanded_var,
+                                    unrefined_var,
+                                    Mode::EQ,
+                                    Polarity::Neg, // TODO: polarity
+                                );
+                                debug_assert!(subs
+                                    .equivalent_without_compacting(unexpanded_var, unrefined_var));
+                                subs.set(refined_var, unexpanded_descriptor.clone());
+                                open_tag_union(subs, pools, refined_var);
+                                refined_var
+                            } else {
+                                unexpanded_var
+                            }
+                        } else {
+                            unexpanded_var
+                        }
                     } else {
                         unexpanded_var
                     };
@@ -794,7 +824,8 @@ fn solve(
                     }
                 }
             }
-            Let(index, pool_slice) | LetAndExpandType(index, pool_slice) => {
+            Let(index, pool_slice, refinements)
+            | LetAndExpandType(index, pool_slice, refinements) => {
                 // dbg!(constraint);
                 let let_con = &env.constraints.let_constraints[index.index()];
                 // dbg!(let_con);
@@ -838,7 +869,8 @@ fn solve(
                         rank,
                         let_con,
                         pool_variables,
-                        expand: matches!(constraint, LetAndExpandType(..)),
+                        // expand: matches!(constraint, LetAndExpandType(..)),
+                        refinements,
                     });
                     stack.push(Work::Constraint {
                         scope,
@@ -894,7 +926,8 @@ fn solve(
                         rank,
                         let_con,
                         pool_variables,
-                        expand: matches!(constraint, LetAndExpandType(..)),
+                        // expand: matches!(constraint, LetAndExpandType(..)),
+                        refinements,
                     });
                     stack.push(Work::Constraint {
                         scope,
@@ -905,6 +938,20 @@ fn solve(
                     state
                 }
             }
+            // ExpandTypeUnions(refinements) => {
+            //     let refinements = &**refinements;
+            //     let mut new_env = env.clone();
+            //     for (&symbol, &unrefined_var, &refined_var) in refinements.iter() {
+            //         let unexpanded_var = new_env.get_var_by_symbol(&symbol).unwrap();
+            //         let unexpanded_desc = subs.get(unexpanded_var);
+            //         subs.set(unrefined_var, unexpanded_desc);
+            //         subs.set(refined_var, unexpanded_desc.clone());
+            //         open_tag_union(subs, pools, refined_var);
+            //         new_env.insert_symbol_var_if_vacant(symbol, var)
+            //     }
+
+            //     state
+            // }
             IsOpenType(type_index) => {
                 let actual = either_type_index_to_var(
                     env,

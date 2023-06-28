@@ -582,6 +582,16 @@ impl Refinements {
             .get_or_insert(symbol, || (unrefined_var, refined_var));
     }
 
+    pub fn get(&self, symbol: Symbol) -> Option<&(Variable, Variable)> {
+        self.0.get(&symbol)
+    }
+
+    pub fn merge(&mut self, other: &Refinements) {
+        for (symbol, unrefined_var, refined_var) in other.iter() {
+            self.insert(*symbol, *unrefined_var, *refined_var);
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&Symbol, &Variable, &Variable)> {
         self.0
             .iter()
