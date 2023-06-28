@@ -5939,6 +5939,40 @@ In roc, functions are always written as a lambda, like{}
     }
 
     #[test]
+    fn missing_provides_in_app_header() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "broken"
+                    packages {
+                        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br",
+                    }
+                    imports [
+                        pf.Stdout,
+                    ]
+
+                main =
+                    Stdout.line "answer"
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                I am partway through parsing a header, but I got stuck here:
+
+                7│      ]
+                         ^
+
+                I am expecting the `provides` keyword next, like
+
+                    provides [Animal, default, tame]
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(

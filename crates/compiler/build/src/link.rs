@@ -126,7 +126,7 @@ fn find_wasi_libc_path() -> PathBuf {
     internal_error!("cannot find `wasi-libc.a`")
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
@@ -252,99 +252,6 @@ pub fn build_zig_host_native(
         zig_cmd.args(&["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
         zig_cmd.args(&["-O", "ReleaseSmall"]);
-    }
-
-    zig_cmd
-}
-
-#[cfg(target_os = "macos")]
-#[allow(clippy::too_many_arguments)]
-pub fn build_zig_host_native(
-    env_path: &str,
-    env_home: &str,
-    emit_bin: &str,
-    zig_host_src: &str,
-    _target: &str,
-    opt_level: OptLevel,
-    shared_lib_path: Option<&Path>,
-    builtins_host_path: &Path,
-    // For compatibility with the non-macOS def above. Keep these in sync.
-) -> Command {
-    use serde_json::Value;
-
-    // Run `zig env` to find the location of zig's std/ directory
-    let zig_env_output = zig().args(["env"]).output().unwrap();
-
-    let zig_env_json = if zig_env_output.status.success() {
-        std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
-            internal_error!(
-                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
-                utf8_err
-            );
-        })
-    } else {
-        match std::str::from_utf8(&zig_env_output.stderr) {
-            Ok(stderr) => internal_error!("`zig env` failed - stderr output was: {:?}", stderr),
-            Err(utf8_err) => internal_error!(
-                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
-                utf8_err
-            ),
-        }
-    };
-
-    let mut zig_compiler_rt_path = match serde_json::from_str(zig_env_json) {
-        Ok(Value::Object(map)) => match map.get("std_dir") {
-            Some(Value::String(std_dir)) => PathBuf::from(Path::new(std_dir)),
-            _ => {
-                internal_error!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
-            }
-        },
-        _ => {
-            internal_error!(
-                "Expected JSON containing a `std_dir` field from `zig env`, but got: {:?}",
-                zig_env_json
-            );
-        }
-    };
-
-    zig_compiler_rt_path.push("special");
-    zig_compiler_rt_path.push("compiler_rt.zig");
-
-    let mut zig_cmd = zig();
-    zig_cmd
-        .env_clear()
-        .env("PATH", env_path)
-        .env("HOME", env_home);
-    if let Some(shared_lib_path) = shared_lib_path {
-        zig_cmd.args([
-            "build-exe",
-            "-fPIE",
-            shared_lib_path.to_str().unwrap(),
-            builtins_host_path.to_str().unwrap(),
-        ]);
-    } else {
-        zig_cmd.args(["build-obj"]);
-    }
-    zig_cmd.args([
-        zig_host_src,
-        &format!("-femit-bin={}", emit_bin),
-        "--pkg-begin",
-        "glue",
-        find_zig_glue_path().to_str().unwrap(),
-        "--pkg-end",
-        // include the zig runtime
-        "--pkg-begin",
-        "compiler_rt",
-        zig_compiler_rt_path.to_str().unwrap(),
-        "--pkg-end",
-        // include libc
-        "--library",
-        "c",
-    ]);
-    if matches!(opt_level, OptLevel::Optimize) {
-        zig_cmd.args(["-O", "ReleaseSafe"]);
-    } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(["-O", "ReleaseSmall"]);
     }
 
     zig_cmd

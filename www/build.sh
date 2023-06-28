@@ -115,4 +115,13 @@ mkdir -p $BASIC_CLI_PACKAGE_DIR
 rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
 mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
+# set up docs for basic-cli 0.3.2
+BASIC_CLI_DIR_0_3_2=$BASIC_CLI_PACKAGE_DIR/0-3-2
+mkdir -p $BASIC_CLI_DIR_0_3_2
+curl -fL --output $BASIC_CLI_DIR_0_3_2/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/0.3.2/docs.tar.gz
+tar -xf $BASIC_CLI_DIR_0_3_2/docs.tar.gz -C $BASIC_CLI_DIR_0_3_2/
+rm $BASIC_CLI_DIR_0_3_2/docs.tar.gz
+mv $BASIC_CLI_DIR_0_3_2/generated-docs/* $BASIC_CLI_DIR_0_3_2
+rm -rf $BASIC_CLI_DIR_0_3_2/generated-docs
+
 popd
