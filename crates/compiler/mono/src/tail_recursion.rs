@@ -1089,7 +1089,12 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
     match expr {
         Expr::Literal(_) => false,
         Expr::Call(call) => call.arguments.contains(&needle),
-        Expr::Tag { arguments, .. } => arguments.contains(&needle),
+        Expr::Tag {
+            arguments, reuse, ..
+        } => match reuse {
+            None => arguments.contains(&needle),
+            Some(ru) => ru.symbol == needle || arguments.contains(&needle),
+        },
         Expr::Struct(fields) => fields.contains(&needle),
         Expr::NullPointer => false,
         Expr::StructAtIndex { structure, .. }

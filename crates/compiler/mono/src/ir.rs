@@ -7583,7 +7583,7 @@ fn substitute_in_expr<'a>(
         NullPointer => None,
 
         Reset { .. } | ResetRef { .. } => {
-            unreachable!("reset/resetref/reuse have not been introduced yet")
+            unreachable!("reset(ref) has not been introduced yet")
         }
 
         Struct(args) => {
