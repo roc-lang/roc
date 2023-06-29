@@ -13,7 +13,7 @@ use crate::tarball::Compression;
 // let's try to avoid doing that.
 const BROTLI_BUFFER_BYTES: usize = 8 * 1_000_000; // MB
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct PackageMetadata<'a> {
     /// The BLAKE3 hash of the tarball's contents. Also the .tar filename on disk.
     pub content_hash: &'a str,
@@ -45,7 +45,7 @@ const MISLEADING_CHARACTERS_IN_URL: [char; 5] = [
     '\u{29F8}', // U+29F8 == ⧸ Big Solidus
 ];
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum UrlProblem {
     InvalidExtensionSuffix(String),
     MissingTarExt,
