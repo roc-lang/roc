@@ -18,8 +18,11 @@ const SKIP_SUBS_CACHE: bool = {
 
 pub use roc_load_internal::docs;
 pub use roc_load_internal::file::{
-    EntryPoint, ExecutionMode, ExpectMetadata, Expectations, ExposedToHost, LoadConfig, LoadResult,
-    LoadStart, LoadedModule, LoadingProblem, MonomorphizedModule, Phase, Threading,
+    ExecutionMode, ExpectMetadata, LoadConfig, LoadResult, LoadStart, LoadingProblem, Phase,
+    Threading,
+};
+pub use roc_load_internal::module::{
+    EntryPoint, Expectations, ExposedToHost, LoadedModule, MonomorphizedModule,
 };
 
 #[allow(clippy::too_many_arguments)]

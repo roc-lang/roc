@@ -1,6 +1,12 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::docs::ModuleDocumentation;
+use crate::module::{
+    ConstrainedModule, EntryPoint, Expectations, ExposedToHost, FoundSpecializationsModule,
+    LateSpecializationsModule, LoadedModule, ModuleHeader, ModuleTiming, MonomorphizedModule,
+    ParsedModule, ToplevelExpects, TypeCheckedModule,
+};
+use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
 use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
@@ -32,8 +38,8 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, GlueLayouts, LambdaSetId, PartialProc, Proc,
-    ProcLayout, Procs, ProcsBase, UpdateModeIds, UsageTrackingMap,
+    CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
+    ProcsBase, UpdateModeIds, UsageTrackingMap,
 };
 use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
@@ -43,13 +49,12 @@ use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{
-    self, CommentOrNewline, Defs, Expr, ExtractSpaces, Pattern, Spaced, StrLiteral, TypeAnnotation,
-    ValueDef,
+    self, CommentOrNewline, Expr, ExtractSpaces, Pattern, Spaced, StrLiteral, ValueDef,
 };
 use roc_parse::header::{
-    ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
+    ExposedName, HeaderType, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To,
+    TypedIdent,
 };
-use roc_parse::header::{HeaderType, PackageName};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -133,101 +138,6 @@ impl ExecutionMode {
 
     fn build_if_checks(&self) -> bool {
         matches!(self, Self::ExecutableIfCheck | Self::Test)
-    }
-}
-
-/// Struct storing various intermediate stages by their ModuleId
-#[derive(Debug)]
-struct ModuleCache<'a> {
-    module_names: MutMap<ModuleId, PQModuleName<'a>>,
-
-    /// Phases
-    headers: MutMap<ModuleId, ModuleHeader<'a>>,
-    parsed: MutMap<ModuleId, ParsedModule<'a>>,
-    aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
-    pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
-    constrained: MutMap<ModuleId, ConstrainedModule>,
-    typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
-    found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
-    late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
-
-    /// Various information
-    imports: MutMap<ModuleId, MutSet<ModuleId>>,
-    top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
-    documentation: VecMap<ModuleId, ModuleDocumentation>,
-    can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    type_problems: MutMap<ModuleId, Vec<TypeError>>,
-
-    sources: MutMap<ModuleId, (PathBuf, &'a str)>,
-}
-
-impl<'a> ModuleCache<'a> {
-    fn has_can_errors(&self) -> bool {
-        self.can_problems
-            .values()
-            .flatten()
-            .any(|problem| problem.severity() == Severity::RuntimeError)
-    }
-
-    fn has_type_errors(&self) -> bool {
-        self.type_problems
-            .values()
-            .flatten()
-            .any(|problem| problem.severity() == Severity::RuntimeError)
-    }
-
-    pub fn has_errors(&self) -> bool {
-        self.has_can_errors() || self.has_type_errors()
-    }
-}
-
-impl Default for ModuleCache<'_> {
-    fn default() -> Self {
-        let mut module_names = MutMap::default();
-
-        macro_rules! insert_builtins {
-            ($($name:ident,)*) => {$(
-                module_names.insert(
-                    ModuleId::$name,
-                    PQModuleName::Unqualified(ModuleName::from(ModuleName::$name)),
-                );
-            )*}
-        }
-
-        insert_builtins! {
-            RESULT,
-            LIST,
-            STR,
-            DICT,
-            SET,
-            BOOL,
-            NUM,
-            BOX,
-            ENCODE,
-            DECODE,
-            HASH,
-            JSON,
-        }
-
-        Self {
-            module_names,
-            headers: Default::default(),
-            parsed: Default::default(),
-            aliases: Default::default(),
-            pending_abilities: Default::default(),
-            constrained: Default::default(),
-            typechecked: Default::default(),
-            found_specializations: Default::default(),
-            late_specializations: Default::default(),
-            external_specializations_requested: Default::default(),
-            imports: Default::default(),
-            top_level_thunks: Default::default(),
-            documentation: Default::default(),
-            can_problems: Default::default(),
-            type_problems: Default::default(),
-            sources: Default::default(),
-        }
     }
 }
 
@@ -625,223 +535,11 @@ fn start_phase<'a>(
     vec![task]
 }
 
-#[derive(Debug)]
-pub struct LoadedModule {
-    pub module_id: ModuleId,
-    pub interns: Interns,
-    pub solved: Solved<Subs>,
-    pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
-    pub declarations_by_id: MutMap<ModuleId, Declarations>,
-    pub exposed_to_host: MutMap<Symbol, Variable>,
-    pub dep_idents: IdentIdsByModule,
-    pub exposed_aliases: MutMap<Symbol, Alias>,
-    pub exposed_values: Vec<Symbol>,
-    pub exposed_types_storage: ExposedTypesStorageSubs,
-    pub resolved_implementations: ResolvedImplementations,
-    pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
-    pub timings: MutMap<ModuleId, ModuleTiming>,
-    pub docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
-    pub abilities_store: AbilitiesStore,
-}
-
-impl LoadedModule {
-    pub fn total_problems(&self) -> usize {
-        let mut total = 0;
-
-        for problems in self.can_problems.values() {
-            total += problems.len();
-        }
-
-        for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        total
-    }
-
-    pub fn exposed_values_str(&self) -> Vec<&str> {
-        self.exposed_values
-            .iter()
-            .map(|symbol| symbol.as_str(&self.interns))
-            .collect()
-    }
-
-    pub fn exposed_aliases_str(&self) -> Vec<&str> {
-        self.exposed_aliases
-            .keys()
-            .map(|symbol| symbol.as_str(&self.interns))
-            .collect()
-    }
-}
-
-#[derive(Debug)]
-pub enum BuildProblem<'a> {
-    FileNotFound(&'a Path),
-}
-
-#[derive(Debug)]
-struct ModuleHeader<'a> {
-    module_id: ModuleId,
-    module_path: PathBuf,
-    is_root_module: bool,
-    exposed_ident_ids: IdentIds,
-    deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    packages: MutMap<&'a str, PackageName<'a>>,
-    imported_modules: MutMap<ModuleId, Region>,
-    package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
-    exposes: Vec<Symbol>,
-    exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    parse_state: roc_parse::state::State<'a>,
-    header_type: HeaderType<'a>,
-    header_comments: &'a [CommentOrNewline<'a>],
-    symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
-    module_timing: ModuleTiming,
-    defined_values: Vec<ValueDef<'a>>,
-}
-
-#[derive(Debug)]
-struct ConstrainedModule {
-    module: Module,
-    declarations: Declarations,
-    imported_modules: MutMap<ModuleId, Region>,
-    constraints: Constraints,
-    constraint: ConstraintSoa,
-    ident_ids: IdentIds,
-    var_store: VarStore,
-    dep_idents: IdentIdsByModule,
-    module_timing: ModuleTiming,
-    types: Types,
-    // Rather than adding pending derives as constraints, hand them directly to solve because they
-    // must be solved at the end of a module.
-    pending_derives: PendingDerives,
-}
-
-#[derive(Debug)]
-pub struct TypeCheckedModule<'a> {
-    pub module_id: ModuleId,
-    pub layout_cache: LayoutCache<'a>,
-    pub module_timing: ModuleTiming,
-    pub solved_subs: Solved<Subs>,
-    pub decls: Declarations,
-    pub ident_ids: IdentIds,
-    pub abilities_store: AbilitiesStore,
-    pub expectations: Option<Expectations>,
-}
-
-#[derive(Debug)]
-struct FoundSpecializationsModule<'a> {
-    ident_ids: IdentIds,
-    layout_cache: LayoutCache<'a>,
-    procs_base: ProcsBase<'a>,
-    subs: Subs,
-    module_timing: ModuleTiming,
-    abilities_store: AbilitiesStore,
-    expectations: Option<Expectations>,
-}
-
-#[derive(Debug)]
-struct LateSpecializationsModule<'a> {
-    ident_ids: IdentIds,
-    subs: Subs,
-    module_timing: ModuleTiming,
-    layout_cache: LayoutCache<'a>,
-    procs_base: ProcsBase<'a>,
-    expectations: Option<Expectations>,
-}
-
-#[derive(Debug, Default)]
-pub struct ToplevelExpects {
-    pub pure: VecMap<Symbol, Region>,
-    pub fx: VecMap<Symbol, Region>,
-}
-
-#[derive(Debug)]
-pub struct MonomorphizedModule<'a> {
-    pub module_id: ModuleId,
-    pub interns: Interns,
-    pub subs: Subs,
-    pub layout_interner: STLayoutInterner<'a>,
-    pub output_path: Box<Path>,
-    pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
-    pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub toplevel_expects: ToplevelExpects,
-    pub entry_point: EntryPoint<'a>,
-    pub exposed_to_host: ExposedToHost,
-    pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
-    pub timings: MutMap<ModuleId, ModuleTiming>,
-    pub expectations: VecMap<ModuleId, Expectations>,
-    pub uses_prebuilt_platform: bool,
-    pub glue_layouts: GlueLayouts<'a>,
-}
-
 /// Values used to render expect output
 pub struct ExpectMetadata<'a> {
     pub interns: Interns,
     pub layout_interner: STLayoutInterner<'a>,
     pub expectations: VecMap<ModuleId, Expectations>,
-}
-
-#[derive(Debug)]
-pub enum EntryPoint<'a> {
-    Executable {
-        exposed_to_host: &'a [(Symbol, ProcLayout<'a>)],
-        platform_path: PathBuf,
-    },
-    Test,
-}
-
-#[derive(Debug)]
-pub struct Expectations {
-    pub subs: roc_types::subs::Subs,
-    pub path: PathBuf,
-    pub expectations: VecMap<Region, Vec<ExpectLookup>>,
-    pub dbgs: VecMap<Symbol, DbgLookup>,
-    pub ident_ids: IdentIds,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ExposedToHost {
-    /// usually `mainForHost`
-    pub top_level_values: MutMap<Symbol, Variable>,
-    /// exposed closure types, typically `Fx`
-    pub closure_types: Vec<Symbol>,
-    /// lambda_sets
-    pub lambda_sets: Vec<(Symbol, LambdaSetId)>,
-    pub getters: Vec<Symbol>,
-}
-
-impl<'a> MonomorphizedModule<'a> {
-    pub fn total_problems(&self) -> usize {
-        let mut total = 0;
-
-        for problems in self.can_problems.values() {
-            total += problems.len();
-        }
-
-        for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        total
-    }
-}
-
-#[derive(Debug)]
-struct ParsedModule<'a> {
-    module_id: ModuleId,
-    module_path: PathBuf,
-    src: &'a str,
-    module_timing: ModuleTiming,
-    deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    imported_modules: MutMap<ModuleId, Region>,
-    exposed_ident_ids: IdentIds,
-    exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    parsed_defs: Defs<'a>,
-    symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
-    header_type: HeaderType<'a>,
-    header_comments: &'a [CommentOrNewline<'a>],
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
@@ -1088,76 +786,6 @@ impl<'a> State<'a> {
             world_abilities: Default::default(),
             layout_interner: GlobalLayoutInterner::with_capacity(128, target_info),
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct ModuleTiming {
-    pub read_roc_file: Duration,
-    pub parse_header: Duration,
-    pub parse_body: Duration,
-    pub canonicalize: Duration,
-    pub constrain: Duration,
-    pub solve: Duration,
-    pub find_specializations: Duration,
-    // indexed by make specializations pass
-    pub make_specializations: Vec<Duration>,
-    // TODO pub monomorphize: Duration,
-    /// Total duration will always be more than the sum of the other fields, due
-    /// to things like state lookups in between phases, waiting on other threads, etc.
-    start_time: Instant,
-    end_time: Instant,
-}
-
-impl ModuleTiming {
-    pub fn new(start_time: Instant) -> Self {
-        ModuleTiming {
-            read_roc_file: Duration::default(),
-            parse_header: Duration::default(),
-            parse_body: Duration::default(),
-            canonicalize: Duration::default(),
-            constrain: Duration::default(),
-            solve: Duration::default(),
-            find_specializations: Duration::default(),
-            make_specializations: Vec::with_capacity(2),
-            start_time,
-            end_time: start_time, // just for now; we'll overwrite this at the end
-        }
-    }
-
-    pub fn total(&self) -> Duration {
-        self.end_time.duration_since(self.start_time)
-    }
-
-    /// Subtract all the other fields from total_start_to_finish
-    pub fn other(&self) -> Duration {
-        let Self {
-            read_roc_file,
-            parse_header,
-            parse_body,
-            canonicalize,
-            constrain,
-            solve,
-            find_specializations,
-            make_specializations,
-            start_time,
-            end_time,
-        } = self;
-
-        let calculate = |d: Option<Duration>| -> Option<Duration> {
-            make_specializations
-                .iter()
-                .fold(d, |d, pass_time| d?.checked_sub(*pass_time))?
-                .checked_sub(*find_specializations)?
-                .checked_sub(*solve)?
-                .checked_sub(*constrain)?
-                .checked_sub(*canonicalize)?
-                .checked_sub(*parse_body)?
-                .checked_sub(*parse_header)?
-                .checked_sub(*read_roc_file)
-        };
-
-        calculate(Some(end_time.duration_since(*start_time))).unwrap_or_default()
     }
 }
 
