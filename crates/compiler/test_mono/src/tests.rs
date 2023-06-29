@@ -3651,58 +3651,58 @@ fn type_expansion_two_tags_to_three() {
     )
 }
 
-// #[mono_test]
-// fn type_expansion_implicitly_inside_record() {
-//     indoc!(
-//         r#"
-//         app "test" provides [expandError] to "./platform"
+#[mono_test]
+fn type_expansion_implicitly_inside_record() {
+    indoc!(
+        r#"
+        app "test" provides [expandError] to "./platform"
 
-//         expandError : { type: [Io], message: Str } -> { type: [Io, Net], message: Str }
-//         expandError = \e ->
-//             when e is
-//                 error -> error
-//         "#
-//     )
-// }
+        expandError : { type: [Io], message: Str } -> { type: [Io, Net], message: Str }
+        expandError = \e ->
+            when e is
+                error -> error
+        "#
+    )
+}
 
-// #[mono_test]
-// fn type_expansion_inside_record() {
-//     indoc!(
-//         r#"
-//         app "test" provides [expandError] to "./platform"
+#[mono_test]
+fn type_expansion_inside_record() {
+    indoc!(
+        r#"
+        app "test" provides [expandError] to "./platform"
 
-//         expandError : { type: [Io], message: Str } -> { type: [Io, Net], message: Str }
-//         expandError = \e ->
-//             when e is
-//                 { type, message } -> { type, message }
-//         "#
-//     )
-// }
+        expandError : { type: [Io], message: Str } -> { type: [Io, Net], message: Str }
+        expandError = \e ->
+            when e is
+                { type, message } -> { type, message }
+        "#
+    )
+}
 
-// #[mono_test]
-// fn type_expansion_nested_tag_union() {
-//     indoc!(
-//         r#"
-//         app "test" provides [expandError] to "./platform"
+#[mono_test]
+fn type_expansion_nested_tag_union() {
+    indoc!(
+        r#"
+        app "test" provides [expandError] to "./platform"
 
-//         expandError : [Io [Wrapper Str]] -> [Io [Wrapper Str], Net Str]
-//         expandError = \e ->
-//             when e is
-//                 error -> error
-//         "#
-//     )
-// }
+        expandError : [Io [Wrapper Str]] -> [Io [Wrapper Str], Net Str]
+        expandError = \e ->
+            when e is
+                error -> error
+        "#
+    )
+}
 
-// #[mono_test]
-// fn type_expansion_with_parametric_polymorphism() {
-//     indoc!(
-//         r#"
-//         app "test" provides [expandError] to "./platform"
+#[mono_test]
+fn type_expansion_with_parametric_polymorphism() {
+    indoc!(
+        r#"
+        app "test" provides [expandError] to "./platform"
 
-//         expandError : [Io a] -> [Io a, Net *]
-//         expandError = \e ->
-//             when e is
-//                 error -> error
-//         "#
-//     )
-// }
+        expandError : [Io a] -> [Io a, Net *]
+        expandError = \e ->
+            when e is
+                error -> error
+        "#
+    )
+}
