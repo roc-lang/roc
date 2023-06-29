@@ -6942,6 +6942,8 @@ fn get_sorted_tags<'a>(
     }
 }
 
+/// In refine_tag_union, we use this instead of Env::unique_symbol to avoid
+/// mutably borrowing the entire env, since we're already borrowing a part of it.
 fn unique_symbol(ident_ids: &mut IdentIds, home: ModuleId) -> Symbol {
     let ident_id = ident_ids.gen_unique();
 
