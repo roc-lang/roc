@@ -39,6 +39,7 @@ unsafe extern "C" fn signal_handler(sig: c_int, _: *mut siginfo_t, _: *mut libc:
     });
 }
 
+#[cfg(target_os = "macos")]
 fn setup_signal(sig: c_int) {
     let sa = libc::sigaction {
         sa_sigaction: signal_handler as sighandler_t,
@@ -50,6 +51,28 @@ fn setup_signal(sig: c_int) {
         sa_sigaction: SIG_DFL,
         sa_mask: sigset_t::default(),
         sa_flags: 0,
+    };
+
+    unsafe {
+        sigemptyset(&mut old_sa.sa_mask as *mut sigset_t);
+        sigaction(sig, &sa, &mut old_sa);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn setup_signal(sig: c_int) {
+    let sa = libc::sigaction {
+        sa_sigaction: signal_handler as sighandler_t,
+        sa_mask: unsafe { std::mem::zeroed() },
+        sa_flags: SA_SIGINFO,
+        sa_restorer: None,
+    };
+
+    let mut old_sa = libc::sigaction {
+        sa_sigaction: SIG_DFL,
+        sa_mask: unsafe { std::mem::zeroed() },
+        sa_flags: 0,
+        sa_restorer: None,
     };
 
     unsafe {
