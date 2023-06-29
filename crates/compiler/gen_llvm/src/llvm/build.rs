@@ -1064,14 +1064,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
         )
         .into(),
 
-        Reuse {
+        Tag {
             arguments,
             tag_layout: union_layout,
             tag_id,
-            symbol,
-            ..
+            reuse,
         } => {
-            let reset = scope.load_symbol(symbol).into_pointer_value();
+            let reuse_ptr = reuse.map(|ru| scope.load_symbol(&ru.symbol).into_pointer_value());
+
             build_tag(
                 env,
                 layout_interner,
@@ -1079,26 +1079,10 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 union_layout,
                 *tag_id,
                 arguments,
-                Some(reset),
+                reuse_ptr,
                 parent,
             )
         }
-
-        Tag {
-            arguments,
-            tag_layout: union_layout,
-            tag_id,
-            ..
-        } => build_tag(
-            env,
-            layout_interner,
-            scope,
-            union_layout,
-            *tag_id,
-            arguments,
-            None,
-            parent,
-        ),
 
         ExprBox { symbol } => {
             let (value, layout) = scope.load_symbol_and_layout(symbol);

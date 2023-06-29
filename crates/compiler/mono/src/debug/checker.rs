@@ -397,11 +397,18 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_layout,
                 tag_id,
                 arguments,
+                reuse,
             } => {
                 let interned_layout = self
                     .interner
                     .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
+
+                if let Some(reuse_token) = reuse {
+                    self.check_sym_layout(reuse_token.symbol, interned_layout, UseKind::TagReuse);
+                }
+
                 self.check_tag_expr(interned_layout, tag_layout, tag_id, arguments);
+
                 Some(interned_layout)
             }
             Expr::Struct(syms) => {
@@ -474,21 +481,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     }
                 }
             }),
-            &Expr::Reuse {
-                symbol,
-                update_tag_id: _,
-                update_mode: _,
-                tag_layout,
-                tag_id: _,
-                arguments: _,
-            } => {
-                let union = self
-                    .interner
-                    .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
-                self.check_sym_layout(symbol, union, UseKind::TagReuse);
-                // TODO also check update arguments
-                Some(union)
-            }
             &Expr::Reset {
                 symbol,
                 update_mode: _,

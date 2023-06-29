@@ -9,8 +9,8 @@ use std::hash::Hash;
 
 use crate::borrow::Ownership;
 use crate::ir::{
-    BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt, UpdateModeId,
-    UpdateModeIds,
+    BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, ReuseToken, Stmt,
+    UpdateModeId, UpdateModeIds,
 };
 use crate::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout};
 
@@ -134,7 +134,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         tag_layout,
                         tag_id,
                         arguments,
+                        reuse,
                     } => {
+                        debug_assert!(reuse.is_none());
+
                         // The value of the tag is currently only used in the case of nullable recursive unions.
                         // But for completeness we add every kind of union to the layout_tags.
                         environment.add_symbol_tag(*binding, *tag_id);
@@ -150,45 +153,44 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 )) {
                                     // We have a reuse token for this layout, use it.
                                     Some(TokenWithInLayout {
-                                        token: reuse_token,
+                                        token: mut reuse_token,
                                         inlayout: layout_info,
                                     }) => {
-                                        // The reuse token layout is the same, we can use it without casting.
                                         if layout_info == layout {
+                                            // The reuse token layout is the same, we can use it without casting.
                                             (
                                                 None,
-                                                Expr::Reuse {
-                                                    symbol: reuse_token.symbol,
-                                                    update_mode: reuse_token.update_mode_id,
-                                                    // for now, always overwrite the tag ID just to be sure
-                                                    update_tag_id: true,
+                                                Expr::Tag {
                                                     tag_layout: *tag_layout,
                                                     tag_id: *tag_id,
                                                     arguments,
+                                                    reuse: Some(reuse_token),
                                                 },
                                             )
-                                        }
-                                        // The reuse token has a different layout from the tag, we need to pointercast it before.
-                                        else {
+                                        } else {
+                                            // The reuse token has a different layout from the tag, we need to pointercast it before.
                                             let new_symbol =
                                                 Symbol::new(home, ident_ids.gen_unique());
+
+                                            let ptr_cast = move |new_let| {
+                                                arena.alloc(Stmt::Let(
+                                                    new_symbol,
+                                                    create_ptr_cast(arena, reuse_token.symbol),
+                                                    *layout,
+                                                    new_let,
+                                                ))
+                                            };
+
+                                            // we now want to reuse the cast pointer
+                                            reuse_token.symbol = new_symbol;
+
                                             (
-                                                Some(move |new_let| {
-                                                    arena.alloc(Stmt::Let(
-                                                        new_symbol,
-                                                        create_ptr_cast(arena, reuse_token.symbol),
-                                                        *layout,
-                                                        new_let,
-                                                    ))
-                                                }),
-                                                Expr::Reuse {
-                                                    symbol: new_symbol,
-                                                    update_mode: reuse_token.update_mode_id,
-                                                    // for now, always overwrite the tag ID just to be sure
-                                                    update_tag_id: true,
+                                                Some(ptr_cast),
+                                                Expr::Tag {
                                                     tag_layout: *tag_layout,
                                                     tag_id: *tag_id,
                                                     arguments,
+                                                    reuse: Some(reuse_token),
                                                 },
                                             )
                                         }
@@ -221,12 +223,13 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
             new_triplets.into_iter().rev().fold(
                 new_continuation,
-                |new_continuation, (binding, (reused, new_expr), layout)| {
+                |new_continuation, (binding, (opt_ptr_cast, new_expr), layout)| {
                     let new_let =
                         arena.alloc(Stmt::Let(*binding, new_expr, *layout, new_continuation));
-                    match reused {
-                        // The layout for the reuse does not match that of the reset, use PtrCast to convert the layout.
-                        Some(wrap) => wrap(new_let),
+
+                    // if the layout for the reuse does not match that of the reset, use PtrCast to convert the layout.
+                    match opt_ptr_cast {
+                        Some(ptr_cast) => ptr_cast(new_let),
                         None => new_let,
                     }
                 },
@@ -477,7 +480,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                                     let reuse_token = ReuseToken {
                                         symbol: reuse_symbol,
-                                        update_mode_id: update_mode_ids.next_id(),
+                                        update_mode: update_mode_ids.next_id(),
+                                        // for now, always overwrite the tag ID just to be sure
+                                        update_tag_id: true,
                                     };
 
                                     let owned_layout = **layout;
@@ -539,7 +544,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 // a dec will be replaced by a reset.
                                 let reset_expr = Expr::Reset {
                                     symbol,
-                                    update_mode: reuse_token.update_mode_id,
+                                    update_mode: reuse_token.update_mode,
                                 };
 
                                 return arena.alloc(Stmt::Let(
@@ -553,7 +558,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 // a decref will be replaced by a resetref.
                                 let reset_expr = Expr::ResetRef {
                                     symbol,
-                                    update_mode: reuse_token.update_mode_id,
+                                    update_mode: reuse_token.update_mode,
                                 };
 
                                 return arena.alloc(Stmt::Let(
@@ -739,7 +744,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                 tokens.iter().map(|token| TokenWithInLayout {
                                     token: ReuseToken {
                                         symbol: Symbol::new(home, ident_ids.gen_unique()),
-                                        update_mode_id: update_mode_ids.next_id(),
+                                        update_mode: update_mode_ids.next_id(),
+                                        // for now, always overwrite the tag ID just to be sure
+                                        update_tag_id: true,
                                     },
                                     inlayout: token.inlayout,
                                 }),
@@ -1124,19 +1131,6 @@ Struct to to check whether two reuse layouts are interchangeable.
 struct TokenLayout {
     size: u32,
     alignment: u32,
-}
-
-/**
-A reuse token is a symbol that is used to reset a layout.
-Matches symbols that are pointers.
-*/
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct ReuseToken {
-    // The symbol of the reuse token.
-    symbol: Symbol,
-
-    // Index that can be used later to determine if in place mutation is possible.
-    update_mode_id: UpdateModeId,
 }
 
 /**

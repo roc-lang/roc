@@ -138,7 +138,13 @@ impl<'a> LastSeenMap<'a> {
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 
-                    Expr::Tag { arguments, .. } => {
+                    Expr::Tag {
+                        arguments, reuse, ..
+                    } => {
+                        if let Some(ru) = reuse {
+                            self.set_last_seen(ru.symbol, stmt);
+                        }
+
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
                         }
@@ -171,14 +177,6 @@ impl<'a> LastSeenMap<'a> {
                             if let ListLiteralElement::Symbol(sym) = elem {
                                 self.set_last_seen(*sym, stmt);
                             }
-                        }
-                    }
-                    Expr::Reuse {
-                        symbol, arguments, ..
-                    } => {
-                        self.set_last_seen(*symbol, stmt);
-                        for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
                         }
                     }
                     Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
@@ -838,10 +836,11 @@ trait Backend<'a> {
                 tag_layout,
                 tag_id,
                 arguments,
-                ..
+                reuse,
             } => {
                 self.load_literal_symbols(arguments);
-                self.tag(sym, arguments, tag_layout, *tag_id, None);
+                let reuse = reuse.map(|ru| ru.symbol);
+                self.tag(sym, arguments, tag_layout, *tag_id, reuse);
             }
             Expr::ExprBox { symbol: value } => {
                 let element_layout = match self.interner().get_repr(*layout) {
@@ -860,16 +859,6 @@ trait Backend<'a> {
             }
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
-            }
-            Expr::Reuse {
-                tag_layout,
-                tag_id,
-                symbol: reused,
-                arguments,
-                ..
-            } => {
-                self.load_literal_symbols(arguments);
-                self.tag(sym, arguments, tag_layout, *tag_id, Some(*reused));
             }
             Expr::Reset { symbol, .. } => {
                 let layout = *self.layout_map().get(symbol).unwrap();

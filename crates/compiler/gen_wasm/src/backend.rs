@@ -1104,8 +1104,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 tag_layout: union_layout,
                 tag_id,
                 arguments,
-                ..
-            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage, None),
+                reuse,
+            } => {
+                let reuse = reuse.map(|ru| ru.symbol);
+                self.expr_tag(union_layout, *tag_id, arguments, sym, storage, reuse)
+            }
 
             Expr::GetTagId {
                 structure,
@@ -1136,14 +1139,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
 
             Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
-
-            Expr::Reuse {
-                tag_layout,
-                tag_id,
-                arguments,
-                symbol: reused,
-                ..
-            } => self.expr_tag(tag_layout, *tag_id, arguments, sym, storage, Some(*reused)),
 
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 

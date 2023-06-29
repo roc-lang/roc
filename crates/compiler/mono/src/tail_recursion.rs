@@ -639,8 +639,11 @@ impl<'a> TrmcEnv<'a> {
             tag_layout,
             tag_id,
             arguments,
+            reuse,
         } = expr
         {
+            debug_assert!(reuse.is_none());
+
             let info = ConstructorInfo {
                 tag_layout: *tag_layout,
                 tag_id: *tag_id,
@@ -910,6 +913,7 @@ impl<'a> TrmcEnv<'a> {
                                 tag_layout: cons_info.tag_layout,
                                 tag_id: cons_info.tag_id,
                                 arguments: arguments.into_bump_slice(),
+                                reuse: None,
                             };
 
                             let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
@@ -1085,7 +1089,12 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
     match expr {
         Expr::Literal(_) => false,
         Expr::Call(call) => call.arguments.contains(&needle),
-        Expr::Tag { arguments, .. } => arguments.contains(&needle),
+        Expr::Tag {
+            arguments, reuse, ..
+        } => match reuse {
+            None => arguments.contains(&needle),
+            Some(ru) => ru.symbol == needle || arguments.contains(&needle),
+        },
         Expr::Struct(fields) => fields.contains(&needle),
         Expr::NullPointer => false,
         Expr::StructAtIndex { structure, .. }
@@ -1098,9 +1107,6 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
         }),
         Expr::EmptyArray => false,
         Expr::ExprBox { symbol } | Expr::ExprUnbox { symbol } => needle == *symbol,
-        Expr::Reuse {
-            symbol, arguments, ..
-        } => needle == *symbol || arguments.contains(&needle),
         Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
     }

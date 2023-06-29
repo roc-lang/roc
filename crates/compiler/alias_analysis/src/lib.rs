@@ -1315,16 +1315,11 @@ fn expr_spec<'a>(
             builder.add_unknown_with(block, &[], pointer_type)
         }
         Call(call) => call_spec(builder, interner, env, block, layout, call),
-        Reuse {
+        Tag {
             tag_layout,
             tag_id,
             arguments,
-            ..
-        }
-        | Tag {
-            tag_layout,
-            tag_id,
-            arguments,
+            reuse: _,
         } => {
             let data_id = build_tuple_value(builder, env, block, arguments)?;
 
