@@ -15,7 +15,7 @@ procedure Test.2 (#Derived_gen.0):
             let Test.5 : [<rnu><null>, C *self] = UnionAtIndex (Id 0) (Index 0) Test.7;
             let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.7;
             if #Derived_gen.1 then
-                decref Test.7;
+                free Test.7;
                 jump Test.13 Test.5;
             else
                 inc Test.5;

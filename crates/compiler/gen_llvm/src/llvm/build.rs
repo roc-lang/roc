@@ -1180,8 +1180,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let then_block = ctx.append_basic_block(parent, "then_reset");
             let else_block = ctx.append_basic_block(parent, "else_decref");
 
-            let refcount_ptr =
-                PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
+            let refcount_ptr = PointerToRefcount::from_ptr_to_data(
+                env,
+                if union_layout.stores_tag_id_in_pointer(env.target_info) {
+                    tag_pointer_clear_tag_id(env, tag_ptr)
+                } else {
+                    tag_ptr
+                },
+            );
 
             let is_unique = match update_mode {
                 UpdateMode::InPlace => env.context.bool_type().const_int(1, false),
@@ -1265,8 +1271,20 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
             let not_unique_block = ctx.append_basic_block(parent, "else_decref");
 
-            let refcount_ptr =
-                PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
+            // reset is only generated for union values
+            let union_layout = match layout_interner.get_repr(layout) {
+                LayoutRepr::Union(ul) => ul,
+                _ => unreachable!(),
+            };
+
+            let refcount_ptr = PointerToRefcount::from_ptr_to_data(
+                env,
+                if union_layout.stores_tag_id_in_pointer(env.target_info) {
+                    tag_pointer_clear_tag_id(env, tag_ptr)
+                } else {
+                    tag_ptr
+                },
+            );
 
             let is_unique = match update_mode {
                 UpdateMode::InPlace => env.context.bool_type().const_int(1, false),
@@ -2919,6 +2937,39 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                             // nothing to do
                         }
                     }
+
+                    build_exp_stmt(
+                        env,
+                        layout_interner,
+                        layout_ids,
+                        func_spec_solutions,
+                        scope,
+                        parent,
+                        cont,
+                    )
+                }
+
+                Free(symbol) => {
+                    // unconditionally deallocate the symbol
+                    let (value, layout) = scope.load_symbol_and_layout(symbol);
+                    let alignment = layout_interner.alignment_bytes(layout);
+
+                    debug_assert!(value.is_pointer_value());
+                    let value = value.into_pointer_value();
+
+                    let clear_tag_id = match layout_interner.chase_recursive(layout) {
+                        LayoutRepr::Union(union) => union.stores_tag_id_in_pointer(env.target_info),
+                        _ => false,
+                    };
+
+                    let ptr = if clear_tag_id {
+                        tag_pointer_clear_tag_id(env, value)
+                    } else {
+                        value
+                    };
+
+                    let rc_ptr = PointerToRefcount::from_ptr_to_data(env, ptr);
+                    rc_ptr.deallocate(env, alignment);
 
                     build_exp_stmt(
                         env,

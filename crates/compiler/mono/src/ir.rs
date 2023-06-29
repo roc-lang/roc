@@ -1612,6 +1612,9 @@ pub enum ModifyRc {
     /// sometimes we know we already dealt with the elements (e.g. by copying them all over
     /// to a new list) and so we can just do a DecRef, which is much cheaper in such a case.
     DecRef(Symbol),
+    /// Unconditionally deallocate the memory. For tag union that do pointer tagging (store the tag
+    /// id in the pointer) the backend has to clear the tag id!
+    Free(Symbol),
 }
 
 impl ModifyRc {
@@ -1641,6 +1644,10 @@ impl ModifyRc {
                 .text("decref ")
                 .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
+            Free(symbol) => alloc
+                .text("free ")
+                .append(symbol_to_doc(alloc, symbol, pretty))
+                .append(";"),
         }
     }
 
@@ -1651,6 +1658,7 @@ impl ModifyRc {
             Inc(symbol, _) => *symbol,
             Dec(symbol) => *symbol,
             DecRef(symbol) => *symbol,
+            Free(symbol) => *symbol,
         }
     }
 }

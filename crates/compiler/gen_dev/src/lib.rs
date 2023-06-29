@@ -17,7 +17,7 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::{CallerProc, CodeGenHelp};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
-    Literal, Param, Proc, ProcLayout, SelfRecursive, Stmt,
+    Literal, ModifyRc, Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
     Builtin, InLayout, LambdaName, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
@@ -524,6 +524,29 @@ trait Backend<'a> {
                 self.load_literal_symbols(&[*sym]);
                 self.return_symbol(sym, ret_layout);
                 self.free_symbols(stmt);
+            }
+            Stmt::Refcounting(ModifyRc::Free(symbol), following) => {
+                let dst = Symbol::DEV_TMP;
+
+                let layout = *self.layout_map().get(symbol).unwrap();
+                let alignment_bytes = self.interner().allocation_alignment_bytes(layout);
+                let alignment = self.debug_symbol("alignment");
+                self.load_literal_i32(&alignment, alignment_bytes as i32);
+
+                // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
+
+                self.build_fn_call(
+                    &dst,
+                    bitcode::UTILS_FREE_DATA_PTR.to_string(),
+                    &[*symbol, alignment],
+                    &[Layout::I64, Layout::I32],
+                    &Layout::UNIT,
+                );
+
+                self.free_symbol(&dst);
+                self.free_symbol(&alignment);
+
+                self.build_stmt(layout_ids, following, ret_layout)
             }
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
@@ -1605,8 +1628,12 @@ trait Backend<'a> {
                 self.build_ptr_load(*sym, args[0], *ret_layout);
             }
 
+            LowLevel::PtrClearTagId => {
+                self.build_ptr_clear_tag_id(*sym, args[0]);
+            }
+
             LowLevel::Alloca => {
-                self.build_ptr_to_stack_value(*sym, args[0], arg_layouts[0]);
+                self.build_alloca(*sym, args[0], arg_layouts[0]);
             }
 
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
@@ -2247,12 +2274,9 @@ trait Backend<'a> {
 
     fn build_ptr_load(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>);
 
-    fn build_ptr_to_stack_value(
-        &mut self,
-        sym: Symbol,
-        value: Symbol,
-        element_layout: InLayout<'a>,
-    );
+    fn build_ptr_clear_tag_id(&mut self, sym: Symbol, ptr: Symbol);
+
+    fn build_alloca(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;

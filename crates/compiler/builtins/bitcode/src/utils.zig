@@ -220,6 +220,29 @@ pub fn increfDataPtrC(
     return increfRcPtrC(isizes, inc_amount);
 }
 
+pub fn freeDataPtrC(
+    bytes_or_null: ?[*]isize,
+    alignment: u32,
+) callconv(.C) void {
+    var bytes = bytes_or_null orelse return;
+
+    const ptr = @ptrToInt(bytes);
+    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+    const masked_ptr = ptr & ~tag_mask;
+
+    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+
+    return freeRcPtrC(isizes - 1, alignment);
+}
+
+pub fn freeRcPtrC(
+    bytes_or_null: ?[*]isize,
+    alignment: u32,
+) callconv(.C) void {
+    var bytes = bytes_or_null orelse return;
+    return free_ptr_to_refcount(bytes, alignment);
+}
+
 pub fn decref(
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
@@ -236,12 +259,22 @@ pub fn decref(
     decref_ptr_to_refcount(isizes - 1, alignment);
 }
 
-inline fn decref_ptr_to_refcount(
+inline fn free_ptr_to_refcount(
     refcount_ptr: [*]isize,
     alignment: u32,
 ) void {
     if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
+
+    // NOTE: we don't even check whether the refcount is "infinity" here!
+    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+}
+
+inline fn decref_ptr_to_refcount(
+    refcount_ptr: [*]isize,
+    alignment: u32,
+) void {
+    if (RC_TYPE == Refcount.none) return;
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("| decrement {*}: ", .{refcount_ptr});
@@ -264,13 +297,13 @@ inline fn decref_ptr_to_refcount(
                 }
 
                 if (refcount == REFCOUNT_ONE_ISIZE) {
-                    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                    free_ptr_to_refcount(refcount_ptr, alignment);
                 }
             },
             Refcount.atomic => {
                 var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
                 if (last == REFCOUNT_ONE_ISIZE) {
-                    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                    free_ptr_to_refcount(refcount_ptr, alignment);
                 }
             },
             Refcount.none => unreachable,

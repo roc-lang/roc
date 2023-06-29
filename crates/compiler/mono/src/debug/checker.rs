@@ -716,8 +716,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
     }
 
     fn check_modify_rc(&mut self, rc: ModifyRc) {
+        use ModifyRc::*;
+
         match rc {
-            ModifyRc::Inc(sym, _) | ModifyRc::Dec(sym) | ModifyRc::DecRef(sym) => {
+            Inc(sym, _) | Dec(sym) | DecRef(sym) | Free(sym) => {
                 // TODO: also check that sym layout needs refcounting
                 self.check_sym_exists(sym);
             }

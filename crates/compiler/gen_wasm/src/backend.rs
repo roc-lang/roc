@@ -1,7 +1,7 @@
 use bitvec::vec::BitVec;
 use bumpalo::collections::{String, Vec};
 
-use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
@@ -719,7 +719,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Stmt::Jump(id, arguments) => self.stmt_jump(*id, arguments),
 
-            Stmt::Refcounting(modify, following) => self.stmt_refcounting(modify, following),
+            Stmt::Refcounting(modify, following) => match modify {
+                ModifyRc::Free(symbol) => self.stmt_refcounting_free(*symbol, following),
+                _ => self.stmt_refcounting(modify, following),
+            },
 
             Stmt::Dbg { .. } => todo!("dbg is not implemented in the wasm backend"),
             Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
@@ -997,6 +1000,43 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         }
 
         self.stmt(rc_stmt);
+    }
+
+    fn stmt_refcounting_free(&mut self, value: Symbol, following: &'a Stmt<'a>) {
+        let layout = self.storage.symbol_layouts[&value];
+        let alignment = self.layout_interner.allocation_alignment_bytes(layout);
+
+        // Get pointer and offset
+        let value_storage = self.storage.get(&value).to_owned();
+        let stored_with_local =
+            self.storage
+                .ensure_value_has_local(&mut self.code_builder, value, value_storage);
+        let (tag_local_id, tag_offset) = match stored_with_local {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
+            }
+            StoredValue::Local { local_id, .. } => (local_id, 0),
+            StoredValue::VirtualMachineStack { .. } => {
+                internal_error!("{:?} should have a local variable", value)
+            }
+        };
+
+        // load pointer, and add the offset to the pointer
+        self.code_builder.get_local(tag_local_id);
+
+        if tag_offset > 0 {
+            self.code_builder.i32_const(tag_offset as i32);
+            self.code_builder.i32_add();
+        }
+
+        // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
+
+        // push the allocation's alignment
+        self.code_builder.i32_const(alignment as i32);
+
+        self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR, 2, false);
+
+        self.stmt(following);
     }
 
     pub fn stmt_internal_error(&mut self, msg: &'a str) {
