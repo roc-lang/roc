@@ -1023,7 +1023,7 @@ fn scan_elf_dynamic_deps(
                 )
                 .unwrap(),
             ) as usize;
-            let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
+            let c_buf = dynstr_data[dynstr_off..].as_ptr() as *const c_char;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
             if Path::new(c_str).file_name() == shared_lib_filename {
                 shared_lib_index = Some(dyn_lib_index);
