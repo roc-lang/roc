@@ -680,7 +680,22 @@ impl<'a> BorrowInfState<'a> {
                 // the function must take it as an owned parameter
                 self.own_args_if_param(&xs);
             }
-            Tag { arguments: xs, .. } | Struct(xs) => {
+
+            Struct(xs) => {
+                self.own_var(z);
+
+                // if the used symbol is an argument to the current function,
+                // the function must take it as an owned parameter
+                self.own_args_if_param(xs);
+            }
+
+            Tag {
+                arguments: xs,
+                reuse,
+                ..
+            } => {
+                debug_assert!(reuse.is_none());
+
                 self.own_var(z);
 
                 // if the used symbol is an argument to the current function,
@@ -708,15 +723,7 @@ impl<'a> BorrowInfState<'a> {
                 self.own_var(z);
                 self.own_var(*x);
             }
-            Reuse {
-                symbol: x,
-                arguments: ys,
-                ..
-            } => {
-                self.own_var(z);
-                self.own_var(*x);
-                self.own_args_if_param(ys);
-            }
+
             EmptyArray => {
                 self.own_var(z);
             }

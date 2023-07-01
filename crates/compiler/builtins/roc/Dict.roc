@@ -7,6 +7,7 @@ interface Dict
         clear,
         capacity,
         len,
+        isEmpty,
         get,
         contains,
         insert,
@@ -21,6 +22,8 @@ interface Dict
         insertAll,
         keepShared,
         removeAll,
+        map,
+        joinMap,
     ]
     imports [
         Bool.{ Bool, Eq },
@@ -139,12 +142,12 @@ empty = \{} ->
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
 ## ```
 ## foodDict =
-##           Dict.empty {}
-##           |> Dict.insert "apple" "fruit"
+##     Dict.empty {}
+##     |> Dict.insert "apple" "fruit"
 ##
 ## capacityOfDict = Dict.capacity foodDict
 ## ```
-capacity : Dict k v -> Nat | k has Hash & Eq
+capacity : Dict * * -> Nat
 capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
 
@@ -192,9 +195,19 @@ fromList = \data ->
 ##     |> Dict.len
 ##     |> Bool.isEq 3
 ## ```
-len : Dict k v -> Nat | k has Hash & Eq
+len : Dict * * -> Nat
 len = \@Dict { size } ->
     size
+
+## Check if the dictinoary is empty.
+## ```
+## Dict.isEmpty (Dict.empty {} |> Dict.insert "key" 42)
+##
+## Dict.isEmpty (Dict.empty {})
+## ```
+isEmpty : Dict * * -> Bool
+isEmpty = \@Dict { size } ->
+    size == 0
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
 ## ```
@@ -224,6 +237,28 @@ clear = \@Dict { metadata, dataIndices, data } ->
             data: List.takeFirst data 0,
             size: 0,
         }
+
+## Convert each value in the dictionary to something new, by calling a conversion
+## function on each of them which receives both the key and the old value. Then return a
+## new dictionary containing the same keys and the converted values.
+map : Dict k a, (k, a -> b) -> Dict k b | k has Hash & Eq, b has Hash & Eq
+map = \dict, transform ->
+    init = withCapacity (capacity dict)
+
+    walk dict init \answer, k, v ->
+        insert answer k (transform k v)
+
+## Like [Dict.map], except the transformation function wraps the return value
+## in a dictionary. At the end, all the dictionaries get joined together
+## (using [Dict.insertAll]) into one dictionary.
+##
+## You may know a similar function named `concatMap` in other languages.
+joinMap : Dict a b, (a, b -> Dict x y) -> Dict x y | a has Hash & Eq, x has Hash & Eq
+joinMap = \dict, transform ->
+    init = withCapacity (capacity dict) # Might be a pessimization
+
+    walk dict init \answer, k, v ->
+        insertAll answer (transform k v)
 
 ## Iterate through the keys and values in the dictionary and call the provided
 ## function with signature `state, k, v -> state` for each value, with an

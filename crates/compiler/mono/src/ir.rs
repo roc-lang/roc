@@ -1825,6 +1825,13 @@ pub struct HigherOrderLowLevel<'a> {
     pub passed_function: PassedFunction<'a>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReuseToken {
+    pub symbol: Symbol,
+    pub update_tag_id: bool,
+    pub update_mode: UpdateModeId,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
@@ -1836,6 +1843,7 @@ pub enum Expr<'a> {
         tag_layout: UnionLayout<'a>,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
+        reuse: Option<ReuseToken>,
     },
     Struct(&'a [Symbol]),
     NullPointer,
@@ -1878,15 +1886,6 @@ pub enum Expr<'a> {
         symbol: Symbol,
     },
 
-    Reuse {
-        symbol: Symbol,
-        update_tag_id: bool,
-        update_mode: UpdateModeId,
-        // normal Tag fields
-        tag_layout: UnionLayout<'a>,
-        tag_id: TagIdIntType,
-        arguments: &'a [Symbol],
-    },
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,
@@ -1977,7 +1976,10 @@ impl<'a> Expr<'a> {
             Call(call) => call.to_doc(alloc, pretty),
 
             Tag {
-                tag_id, arguments, ..
+                tag_id,
+                arguments,
+                reuse: None,
+                ..
             } => {
                 let doc_tag = alloc
                     .text("TagId(")
@@ -1990,12 +1992,11 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
-            NullPointer => alloc.text("NullPointer"),
-            Reuse {
-                symbol,
+
+            Tag {
                 tag_id,
                 arguments,
-                update_mode,
+                reuse: Some(reuse_token),
                 ..
             } => {
                 let doc_tag = alloc
@@ -2007,14 +2008,15 @@ impl<'a> Expr<'a> {
 
                 alloc
                     .text("Reuse ")
-                    .append(symbol_to_doc(alloc, *symbol, pretty))
+                    .append(symbol_to_doc(alloc, reuse_token.symbol, pretty))
                     .append(alloc.space())
-                    .append(format!("{:?}", update_mode))
+                    .append(format!("{:?}", reuse_token.update_mode))
                     .append(alloc.space())
                     .append(doc_tag)
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            NullPointer => alloc.text("NullPointer"),
             Reset {
                 symbol,
                 update_mode,
@@ -2105,6 +2107,16 @@ impl<'a> Expr<'a> {
             .unwrap();
         w.push(b'\n');
         String::from_utf8(w).unwrap()
+    }
+
+    pub(crate) fn ptr_load(symbol: &'a Symbol) -> Expr<'a> {
+        Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrLoad,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: std::slice::from_ref(symbol),
+        })
     }
 }
 
@@ -6005,6 +6017,7 @@ where
                 tag_id,
                 tag_layout: union_layout,
                 arguments: symbols,
+                reuse: None,
             };
 
             Stmt::Let(assigned, expr, lambda_set_layout, env.arena.alloc(hole))
@@ -6274,6 +6287,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6296,6 +6310,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6320,6 +6335,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6346,6 +6362,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6363,6 +6380,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -7532,6 +7550,7 @@ fn substitute_in_expr<'a>(
             tag_layout,
             tag_id,
             arguments: args,
+            reuse,
         } => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(
@@ -7545,6 +7564,18 @@ fn substitute_in_expr<'a>(
                 arena,
             );
 
+            let reuse = match *reuse {
+                Some(mut ru) => match substitute(subs, ru.symbol) {
+                    Some(s) => {
+                        did_change = true;
+                        ru.symbol = s;
+                        Some(ru)
+                    }
+                    None => Some(ru),
+                },
+                None => None,
+            };
+
             if did_change {
                 let arguments = new_args.into_bump_slice();
 
@@ -7552,6 +7583,7 @@ fn substitute_in_expr<'a>(
                     tag_layout: *tag_layout,
                     tag_id: *tag_id,
                     arguments,
+                    reuse,
                 })
             } else {
                 None
@@ -7560,8 +7592,8 @@ fn substitute_in_expr<'a>(
 
         NullPointer => None,
 
-        Reuse { .. } | Reset { .. } | ResetRef { .. } => {
-            unreachable!("reset/resetref/reuse have not been introduced yet")
+        Reset { .. } | ResetRef { .. } => {
+            unreachable!("reset(ref) has not been introduced yet")
         }
 
         Struct(args) => {

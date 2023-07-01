@@ -231,9 +231,6 @@ fn specialize_drops_stmt<'a, 'i>(
                     alloc_let_with_continuation!(environment)
                 }
 
-                Expr::Reuse { .. } => {
-                    alloc_let_with_continuation!(environment)
-                }
                 Expr::Reset { .. } => {
                     // TODO allow to inline this to replace it with resetref
                     alloc_let_with_continuation!(environment)

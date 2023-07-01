@@ -7,6 +7,8 @@ interface Set
         walkUntil,
         insert,
         len,
+        isEmpty,
+        capacity,
         remove,
         contains,
         toList,
@@ -14,6 +16,8 @@ interface Set
         union,
         intersection,
         difference,
+        map,
+        joinMap,
     ]
     imports [
         List,
@@ -58,6 +62,13 @@ hashSet = \hasher, @Set inner -> Hash.hash hasher inner
 ## ```
 empty : {} -> Set k | k has Hash & Eq
 empty = \{} -> @Set (Dict.empty {})
+
+## Return a dictionary with space allocated for a number of entries. This
+## may provide a performance optimization if you know how many entries will be
+## inserted.
+withCapacity : Nat -> Set k | k has Hash & Eq
+withCapacity = \cap ->
+    @Set (Dict.withCapacity cap)
 
 ## Creates a new `Set` with a single value.
 ## ```
@@ -115,9 +126,31 @@ expect
 ##
 ## expect countValues == 3
 ## ```
-len : Set k -> Nat | k has Hash & Eq
+len : Set * -> Nat
 len = \@Set dict ->
     Dict.len dict
+
+## Returns the max number of elements the set can hold before requiring a rehash.
+## ```
+## foodSet =
+##     Set.empty {}
+##     |> Set.insert "apple"
+##
+## capacityOfSet = Set.capacity foodSet
+## ```
+capacity : Set * -> Nat
+capacity = \@Set dict ->
+    Dict.capacity dict
+
+## Check if the set is empty.
+## ```
+## Set.isEmpty (Set.empty {} |> Set.insert 42)
+##
+## Set.isEmpty (Set.empty {})
+## ```
+isEmpty : Set * -> Bool
+isEmpty = \@Set dict ->
+    Dict.isEmpty dict
 
 # Inserting a duplicate key has no effect on length.
 expect
@@ -260,6 +293,28 @@ difference = \@Set dict1, @Set dict2 ->
 walk : Set k, state, (state, k -> state) -> state | k has Hash & Eq
 walk = \@Set dict, state, step ->
     Dict.walk dict state (\s, k, _ -> step s k)
+
+## Convert each value in the set to something new, by calling a conversion
+## function on each of them which receives the old value. Then return a
+## new set containing the converted values.
+map : Set a, (a -> b) -> Set b | a has Hash & Eq, b has Hash & Eq
+map = \set, transform ->
+    init = withCapacity (capacity set)
+
+    walk set init \answer, k ->
+        insert answer (transform k)
+
+## Like [Set.map], except the transformation function wraps the return value
+## in a set. At the end, all the sets get joined together
+## (using [Set.union]) into one set.
+##
+## You may know a similar function named `concatMap` in other languages.
+joinMap : Set a, (a -> Set b) -> Set b | a has Hash & Eq, b has Hash & Eq
+joinMap = \set, transform ->
+    init = withCapacity (capacity set) # Might be a pessimization
+
+    walk set init \answer, k ->
+        union answer (transform k)
 
 ## Iterate through the values of a given `Set` and build a value, can stop
 ## iterating part way through the collection.
