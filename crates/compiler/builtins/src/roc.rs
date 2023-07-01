@@ -34,4 +34,4 @@ const BOOL: &str = include_str!("../roc/Bool.roc");
 const ENCODE: &str = include_str!("../roc/Encode.roc");
 const DECODE: &str = include_str!("../roc/Decode.roc");
 const HASH: &str = include_str!("../roc/Hash.roc");
-const JSON: &str = include_str!("../roc/Json.roc");
+const JSON: &str = include_str!("../roc/TotallyNotJson.roc");

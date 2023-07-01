@@ -31,7 +31,7 @@ Defs(
     @5-8 SpaceBefore(
         MalformedIdent(
             "n_p",
-            Underscore(
+            UnderscoreInMiddle(
                 @7,
             ),
         ),

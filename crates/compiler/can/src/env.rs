@@ -124,18 +124,19 @@ impl<'a> Env<'a> {
                     Ok(symbol)
                 }
                 None => {
-                    let error = RuntimeError::LookupNotInScope(
-                        Loc {
+                    let error = RuntimeError::LookupNotInScope {
+                        loc_name: Loc {
                             value: Ident::from(ident),
                             region,
                         },
-                        scope
+                        suggestion_options: scope
                             .locals
                             .ident_ids
                             .ident_strs()
                             .map(|(_, string)| string.into())
                             .collect(),
-                    );
+                        underscored_suggestion_region: None,
+                    };
                     Err(error)
                 }
             }

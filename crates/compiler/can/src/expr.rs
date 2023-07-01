@@ -1019,9 +1019,18 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
+
             let problem = roc_problem::can::RuntimeError::MalformedIdentifier(
                 (*name).into(),
-                roc_parse::ident::BadIdent::Underscore(region.start()),
+                if name.is_empty() {
+                    roc_parse::ident::BadIdent::UnderscoreAlone(region.start())
+                } else {
+                    roc_parse::ident::BadIdent::UnderscoreAtStart {
+                        position: region.start(),
+                        // Check if there's an ignored identifier with this name in scope (for better error messages)
+                        declaration_region: scope.lookup_ignored_local(name),
+                    }
+                },
                 region,
             );
 
@@ -1051,6 +1060,9 @@ pub fn canonicalize_expr<'a>(
                 let defs: Defs = (*loc_defs).clone();
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
+        }
+        ast::Expr::RecordBuilder(_) => {
+            unreachable!("RecordBuilder should have been desugared by now")
         }
         ast::Expr::Backpassing(_, _, _) => {
             unreachable!("Backpassing should have been desugared by now")
@@ -1352,6 +1364,22 @@ pub fn canonicalize_expr<'a>(
             use roc_problem::can::RuntimeError::*;
 
             let problem = MalformedIdentifier((*name).into(), *bad_ident, region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::MultipleRecordBuilders(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = MultipleRecordBuilders(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::UnappliedRecordBuilder(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = UnappliedRecordBuilder(sub_expr.region);
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())

@@ -10,13 +10,6 @@ pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
 /// # Safety
 /// The Roc application needs this.
 #[no_mangle]
-pub unsafe fn roc_memcpy(dest: *mut c_void, src: *const c_void, bytes: usize) -> *mut c_void {
-    libc::memcpy(dest, src, bytes)
-}
-
-/// # Safety
-/// The Roc application needs this.
-#[no_mangle]
 pub unsafe fn roc_realloc(
     c_ptr: *mut c_void,
     new_size: usize,

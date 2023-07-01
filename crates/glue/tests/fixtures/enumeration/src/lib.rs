@@ -1,11 +1,11 @@
-mod test_glue;
+use roc_app;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = test_glue::mainForHost();
+    let tag_union = roc_app::mainForHost();
 
     // Verify that it has all the expected traits.
 
@@ -28,8 +28,8 @@ pub extern "C" fn rust_main() -> i32 {
     println!(
         "tag_union was: {:?}, Bar is: {:?}, Baz is: {:?}",
         tag_union,
-        test_glue::MyEnum::Bar,
-        test_glue::MyEnum::Baz,
+        roc_app::MyEnum::Bar,
+        roc_app::MyEnum::Baz,
     ); // Debug
 
     // Exit code
@@ -73,11 +73,6 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         }
         _ => todo!(),
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
 }
 
 #[no_mangle]

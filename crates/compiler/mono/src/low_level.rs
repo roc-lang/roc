@@ -109,6 +109,8 @@ enum FirstOrder {
     NumCeiling,
     NumPowInt,
     NumFloor,
+    NumIsNan,
+    NumIsInfinite,
     NumIsFinite,
     NumAtan,
     NumAcos,

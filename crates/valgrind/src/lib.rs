@@ -286,12 +286,12 @@ fn list_concat_empty_list_zero_sized_type() {
 }
 
 #[test]
-fn str_trim_right_capacity() {
+fn str_trim_end_capacity() {
     valgrind_test(indoc!(
         r#"
         (
             str = "a" |> Str.reserve 30
-            out = str |> Str.trimRight
+            out = str |> Str.trimEnd
 
             if out == "" then "A" else "B"
         )
@@ -300,12 +300,12 @@ fn str_trim_right_capacity() {
 }
 
 #[test]
-fn str_trim_left_capacity() {
+fn str_trim_start_capacity() {
     valgrind_test(indoc!(
         r#"
         (
             str = "    a" |> Str.reserve 30
-            out = str |> Str.trimLeft
+            out = str |> Str.trimStart
 
             if out == "" then "A" else "B"
         )

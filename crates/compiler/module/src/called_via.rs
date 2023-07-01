@@ -4,21 +4,21 @@ use std::cmp::Ordering;
 use std::fmt;
 
 const PRECEDENCES: [(BinOp, u8); 20] = [
-    (Caret, 7),
-    (Star, 6),
-    (Slash, 6),
-    (DoubleSlash, 5),
-    (Percent, 5),
-    (Plus, 4),
-    (Minus, 4),
-    (Pizza, 3),
-    (Equals, 2),
-    (NotEquals, 2),
-    (LessThan, 1),
-    (GreaterThan, 1),
-    (LessThanOrEq, 1),
-    (GreaterThanOrEq, 1),
-    (And, 0),
+    (Caret, 8),
+    (Star, 7),
+    (Slash, 7),
+    (DoubleSlash, 6),
+    (Percent, 6),
+    (Plus, 5),
+    (Minus, 5),
+    (Pizza, 4),
+    (Equals, 3),
+    (NotEquals, 3),
+    (LessThan, 2),
+    (GreaterThan, 2),
+    (LessThanOrEq, 2),
+    (GreaterThanOrEq, 2),
+    (And, 1),
     (Or, 0),
     // These should never come up
     (Assignment, 255),
@@ -88,6 +88,10 @@ pub enum CalledVia {
     /// This call is the result of desugaring string interpolation,
     /// e.g. "\(first) \(last)" is transformed into Str.concat (Str.concat first " ") last.
     StringInterpolation,
+
+    /// This call is the result of desugaring a Record Builder field.
+    /// e.g. succeed { a <- get "a" } is transformed into (get "a") (succeed \a -> { a })
+    RecordBuilder,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

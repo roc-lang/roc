@@ -1259,6 +1259,15 @@ define_builtins! {
         153 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
         154 NUM_COUNT_ONE_BITS: "countOneBits"
         155 NUM_ABS_DIFF: "absDiff"
+        156 NUM_IS_NAN: "isNaN"
+        157 NUM_IS_INFINITE: "isInfinite"
+        158 NUM_IS_FINITE: "isFinite"
+        159 NUM_MIN: "min"
+        160 NUM_MAX: "max"
+        161 NUM_E: "e"
+        162 NUM_PI: "pi"
+        163 NUM_TAU: "tau"
+        164 NUM_BITWISE_NOT: "bitwiseNot"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1294,8 +1303,8 @@ define_builtins! {
         15 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         16 STR_REPEAT: "repeat"
         17 STR_TRIM: "trim"
-        18 STR_TRIM_LEFT: "trimLeft"
-        19 STR_TRIM_RIGHT: "trimRight"
+        18 STR_TRIM_START: "trimStart"
+        19 STR_TRIM_END: "trimEnd"
         20 STR_TO_DEC: "toDec"
         21 STR_TO_F64: "toF64"
         22 STR_TO_F32: "toF32"
@@ -1419,6 +1428,7 @@ define_builtins! {
         79 LIST_WALK_FROM_UNTIL: "walkFromUntil"
         80 LIST_ITER_HELP: "iterHelp"
         81 LIST_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
+        82 LIST_UPDATE: "update"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1460,6 +1470,10 @@ define_builtins! {
         21 DICT_UPDATE: "update"
 
         22 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
+        23 DICT_PSEUDO_SEED: "pseudoSeed"
+        24 DICT_IS_EMPTY: "isEmpty"
+        25 DICT_MAP: "map"
+        26 DICT_JOINMAP: "joinMap"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1479,6 +1493,9 @@ define_builtins! {
         14 SET_CONTAINS: "contains"
         15 SET_TO_DICT: "toDict"
         16 SET_CAPACITY: "capacity"
+        17 SET_IS_EMPTY: "isEmpty"
+        18 SET_MAP: "map"
+        19 SET_JOIN_MAP: "joinMap"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type
@@ -1562,13 +1579,15 @@ define_builtins! {
         13 HASH_HASH_I64: "hashI64"
         14 HASH_HASH_I128: "hashI128"
         15 HASH_HASH_NAT: "hashNat"
-        16 HASH_COMPLETE: "complete"
-        17 HASH_HASH_STR_BYTES: "hashStrBytes"
-        18 HASH_HASH_LIST: "hashList"
-        19 HASH_HASH_UNORDERED: "hashUnordered"
+        16 I128_OF_DEC: "i128OfDec"
+        17 HASH_HASH_DEC: "hashDec"
+        18 HASH_COMPLETE: "complete"
+        19 HASH_HASH_STR_BYTES: "hashStrBytes"
+        20 HASH_HASH_LIST: "hashList"
+        21 HASH_HASH_UNORDERED: "hashUnordered"
     }
-    14 JSON: "Json" => {
-        0 JSON_JSON: "Json"
+    14 JSON: "TotallyNotJson" => {
+        0 JSON_JSON: "TotallyNotJson"
     }
 
     num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)

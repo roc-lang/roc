@@ -22,7 +22,7 @@ interface Html.Internal.Client
             Size,
             translateStatic,
         },
-        Json,
+        TotallyNotJson,
         Action,
     ]
 
@@ -104,7 +104,7 @@ initClientAppHelp : List U8, App state initData -> { state, rendered : RenderedT
 initClientAppHelp = \json, app ->
     state =
         json
-        |> Decode.fromBytes Json.fromUtf8
+        |> Decode.fromBytes TotallyNotJson.json
         |> app.init
     dynamicView =
         app.render state
@@ -444,7 +444,7 @@ diffAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
                         if accessors == newAccessors then
                             Tuple attrs patches
                         else
-                            json = newAccessors |> Encode.toBytes Json.toUtf8
+                            json = newAccessors |> Encode.toBytes TotallyNotJson.json
 
                             Tuple
                                 { attrs & eventListeners: Dict.insert attrs.eventListeners eventName { accessors, handlerId } }
@@ -596,7 +596,7 @@ renderAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
                             newDeletedHandlerCache: deletedHandlerCache,
                         }
             accessorsJson =
-                accessors |> Encode.toBytes Json.toUtf8
+                accessors |> Encode.toBytes TotallyNotJson.json
             patch =
                 SetListener nodeId eventType accessorsJson handlerId
 
@@ -656,48 +656,10 @@ nextNodeId = \rendered ->
 eqRenderedTree : RenderedTree state, RenderedTree state -> Bool
 eqRenderedTree = \a, b ->
     (a.root == b.root)
-    && eqRenderedNodes a.nodes b.nodes
+    && (a.nodes == b.nodes)
     && (List.len a.handlers == List.len b.handlers)
     && (a.deletedNodeCache == b.deletedNodeCache)
     && (a.deletedHandlerCache == b.deletedHandlerCache)
-
-eqRenderedNodes : List (Result RenderedNode [DeletedNode]), List (Result RenderedNode [DeletedNode]) -> Bool
-eqRenderedNodes = \a, b ->
-    List.map2 a b Tuple
-    |> List.all
-        (\t ->
-            when t is
-                Tuple (Ok x) (Ok y) -> eqRenderedNode x y
-                Tuple (Err x) (Err y) -> x == y
-                _ -> Bool.false)
-
-eqRenderedNode : RenderedNode, RenderedNode -> Bool
-eqRenderedNode = \a, b ->
-    when { a, b } is
-        { a: RenderedNone, b: RenderedNone } ->
-            Bool.true
-
-        { a: RenderedText aStr, b: RenderedText bStr } ->
-            aStr == bStr
-
-        { a: RenderedElement aName aAttrs aChildren, b: RenderedElement bName bAttrs bChildren } ->
-            (aName == bName)
-            && (aChildren == bChildren) # good enough for testing!
-            && eqRenderedAttrs aAttrs bAttrs
-
-        _ -> Bool.false
-
-eqRenderedAttrs : RenderedAttributes, RenderedAttributes -> Bool
-eqRenderedAttrs = \a, b ->
-    eqAttrDict a.eventListeners b.eventListeners
-    && eqAttrDict a.htmlAttrs b.htmlAttrs
-    && eqAttrDict a.domProps b.domProps
-    && eqAttrDict a.styles b.styles
-
-eqAttrDict : Dict Str v, Dict Str v -> Bool | v has Eq
-eqAttrDict = \a, b ->
-    Dict.keys a
-    |> List.all \k -> Dict.get a k == Dict.get b k
 
 # indexNodes
 expect
@@ -713,12 +675,12 @@ expect
     expected = {
         nodes: [
             RenderedText "Roc",
-            RenderedElement "a" { emptyRenderedAttrs & htmlAttrs: Dict.fromList [T "href" "https://www.roc-lang.org/"] } [0],
+            RenderedElement "a" { emptyRenderedAttrs & htmlAttrs: Dict.fromList [("href", "https://www.roc-lang.org/")] } [0],
         ],
         siblingIds: [1],
     }
 
-    (List.map2 actual.nodes expected.nodes eqRenderedNode |> List.walk Bool.true Bool.and)
+    (actual.nodes == expected.nodes)
     && (actual.siblingIds == expected.siblingIds)
 
 # diff
@@ -812,7 +774,7 @@ expect
 
     initJson : List U8
     initJson =
-        { answer: 42 } |> Encode.toBytes Json.toUtf8 # panics at mono/src/ir.rs:5739:56
+        { answer: 42 } |> Encode.toBytes TotallyNotJson.json # panics at mono/src/ir.rs:5739:56
     expected : { state : State, rendered : RenderedTree State, patches : List Patch }
     expected = {
         state: { answer: 42 },
@@ -822,7 +784,7 @@ expect
                 Ok (RenderedText "The app"),
                 Ok (RenderedElement "h1" emptyRenderedAttrs [0]),
                 Ok (RenderedText "The answer is 42"),
-                Ok (RenderedElement "div" { emptyRenderedAttrs & eventListeners: Dict.fromList [T "click" { accessors: [], handlerId: 0 }] } [2]),
+                Ok (RenderedElement "div" { emptyRenderedAttrs & eventListeners: Dict.fromList [("click", { accessors: [], handlerId: 0 })] } [2]),
                 Ok (RenderedElement "body" emptyRenderedAttrs [1, 3]),
             ],
             deletedNodeCache: [],

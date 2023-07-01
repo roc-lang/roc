@@ -140,7 +140,6 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
 
         // special exceptions for roc_ functions that map to libc symbols
         let direct_mapping = match name {
-            "roc_memcpy" => Some("memcpy"),
             "roc_memset" => Some("memset"),
             "roc_memmove" => Some("memmove"),
 
@@ -603,7 +602,7 @@ fn gen_elf_le(
     }
 
     // Copy header and shift everything to enable more program sections.
-    let added_header_count = 2;
+    let added_header_count = 3;
     md.added_byte_count = ph_ent_size as u64 * added_header_count;
     md.added_byte_count = md.added_byte_count
         + (MIN_SECTION_ALIGNMENT as u64 - md.added_byte_count % MIN_SECTION_ALIGNMENT as u64);
@@ -1278,22 +1277,12 @@ fn surgery_elf_help(
     let mut offset = sh_offset as usize;
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
 
-    let new_rodata_section_offset = offset;
-
     // Align physical and virtual address of new segment.
     let mut virt_offset = align_to_offset_by_constraint(
         md.last_vaddr as usize,
         offset,
         md.load_align_constraint as usize,
     );
-    let new_rodata_section_vaddr = virt_offset;
-    if verbose {
-        println!();
-        println!(
-            "New Virtual Rodata Section Address: {:+x?}",
-            new_rodata_section_vaddr
-        );
-    }
 
     // First decide on sections locations and then recode every exact symbol locations.
 
@@ -1380,8 +1369,43 @@ fn surgery_elf_help(
         .map(|sec| section_offset_map.get(&sec.index()).unwrap())
         .min()
         .unwrap();
-    let (new_text_section_offset, new_text_section_vaddr) =
-        (*new_text_section_offset, *new_text_section_vaddr);
+    let (new_text_section_offset, new_text_section_vaddr) = (
+        *new_text_section_offset as u64,
+        *new_text_section_vaddr as u64,
+    );
+    // BSS section is not guaranteed to exist.
+    // If it doesn't exist, just use the text section offset.
+    // This will make a bss section of size 0.
+    let bss_default = (
+        new_text_section_offset as usize,
+        new_text_section_vaddr as usize,
+    );
+    let (new_bss_section_offset, new_bss_section_vaddr) = bss_sections
+        .iter()
+        .map(|sec| section_offset_map.get(&sec.index()).unwrap())
+        .min()
+        .unwrap_or(&bss_default);
+    let (new_bss_section_offset, new_bss_section_vaddr) = (
+        *new_bss_section_offset as u64,
+        *new_bss_section_vaddr as u64,
+    );
+
+    // rodata section is not guaranteed to exist.
+    // If it doesn't exist, just use the bss section offset.
+    // This will make a rodata section of size 0.
+    let rodata_default = (
+        new_bss_section_offset as usize,
+        new_bss_section_vaddr as usize,
+    );
+    let (new_rodata_section_offset, new_rodata_section_vaddr) = rodata_sections
+        .iter()
+        .map(|sec| section_offset_map.get(&sec.index()).unwrap())
+        .min()
+        .unwrap_or(&rodata_default);
+    let (new_rodata_section_offset, new_rodata_section_vaddr) = (
+        *new_rodata_section_offset as u64,
+        *new_rodata_section_vaddr as u64,
+    );
 
     // Move data and deal with relocations.
     for sec in rodata_sections
@@ -1471,21 +1495,11 @@ fn surgery_elf_help(
                             }
                         }
                     } else {
-                        // Explicitly ignore some symbols that are currently always linked.
-                        const ALWAYS_LINKED: &[&str] = &["__divti3", "__udivti3"];
-
-                        match app_obj.symbol_by_index(index) {
-                            Ok(sym) if ALWAYS_LINKED.contains(&sym.name().unwrap_or_default()) => {
-                                continue
-                            }
-                            _ => {
-                                internal_error!(
-                                    "Undefined Symbol in relocation, {:+x?}: {:+x?}",
-                                    rel,
-                                    app_obj.symbol_by_index(index)
-                                );
-                            }
-                        }
+                        internal_error!(
+                            "Undefined Symbol in relocation, {:+x?}: {:+x?}",
+                            rel,
+                            app_obj.symbol_by_index(index)
+                        );
                     }
                 }
 
@@ -1504,15 +1518,15 @@ fn surgery_elf_help(
     // Flush app only data to speed up write to disk.
     exec_mmap
         .flush_async_range(
-            new_rodata_section_offset,
-            offset - new_rodata_section_offset,
+            new_rodata_section_offset as usize,
+            offset - new_rodata_section_offset as usize,
         )
         .unwrap_or_else(|e| internal_error!("{}", e));
 
     // TODO: look into merging symbol tables, debug info, and eh frames to enable better debugger experience.
 
-    // Add 2 new sections and segments.
-    let new_section_count = 2;
+    // Add 3 new sections and segments.
+    let new_section_count = 3;
     offset += new_section_count * sh_ent_size as usize;
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
         exec_mmap,
@@ -1520,20 +1534,32 @@ fn surgery_elf_help(
         sh_num as usize + new_section_count,
     );
 
-    let new_rodata_section_size = new_text_section_offset as u64 - new_rodata_section_offset as u64;
-    let new_rodata_section_virtual_size =
-        new_text_section_vaddr as u64 - new_rodata_section_vaddr as u64;
-    let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size;
-    let new_text_section_size = new_sh_offset as u64 - new_text_section_offset as u64;
+    let new_rodata_section_size = new_text_section_offset - new_rodata_section_offset;
+    let new_bss_section_virtual_size = new_text_section_vaddr - new_bss_section_vaddr;
+    let new_text_section_size = new_sh_offset as u64 - new_text_section_offset;
 
     // set the new rodata section header
-    section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
+    section_headers[section_headers.len() - 3] = elf::SectionHeader64 {
         sh_name: endian::U32::new(LE, 0),
         sh_type: endian::U32::new(LE, elf::SHT_PROGBITS),
         sh_flags: endian::U64::new(LE, elf::SHF_ALLOC as u64),
-        sh_addr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
-        sh_offset: endian::U64::new(LE, new_rodata_section_offset as u64),
+        sh_addr: endian::U64::new(LE, new_rodata_section_vaddr),
+        sh_offset: endian::U64::new(LE, new_rodata_section_offset),
         sh_size: endian::U64::new(LE, new_rodata_section_size),
+        sh_link: endian::U32::new(LE, 0),
+        sh_info: endian::U32::new(LE, 0),
+        sh_addralign: endian::U64::new(LE, 16),
+        sh_entsize: endian::U64::new(LE, 0),
+    };
+
+    // set the new bss section header
+    section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
+        sh_name: endian::U32::new(LE, 0),
+        sh_type: endian::U32::new(LE, elf::SHT_NOBITS),
+        sh_flags: endian::U64::new(LE, (elf::SHF_ALLOC) as u64),
+        sh_addr: endian::U64::new(LE, new_bss_section_vaddr),
+        sh_offset: endian::U64::new(LE, new_bss_section_offset),
+        sh_size: endian::U64::new(LE, new_bss_section_virtual_size),
         sh_link: endian::U32::new(LE, 0),
         sh_info: endian::U32::new(LE, 0),
         sh_addralign: endian::U64::new(LE, 16),
@@ -1546,7 +1572,7 @@ fn surgery_elf_help(
         sh_type: endian::U32::new(LE, elf::SHT_PROGBITS),
         sh_flags: endian::U64::new(LE, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64),
         sh_addr: endian::U64::new(LE, new_text_section_vaddr),
-        sh_offset: endian::U64::new(LE, new_text_section_offset as u64),
+        sh_offset: endian::U64::new(LE, new_text_section_offset),
         sh_size: endian::U64::new(LE, new_text_section_size),
         sh_link: endian::U32::new(LE, 0),
         sh_info: endian::U32::new(LE, 0),
@@ -1569,14 +1595,26 @@ fn surgery_elf_help(
     );
 
     // set the new rodata section program header
-    program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
+    program_headers[program_headers.len() - 3] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
         p_flags: endian::U32::new(LE, elf::PF_R),
-        p_offset: endian::U64::new(LE, new_rodata_section_offset as u64),
-        p_vaddr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
-        p_paddr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
+        p_offset: endian::U64::new(LE, new_rodata_section_offset),
+        p_vaddr: endian::U64::new(LE, new_rodata_section_vaddr),
+        p_paddr: endian::U64::new(LE, new_rodata_section_vaddr),
         p_filesz: endian::U64::new(LE, new_rodata_section_size),
-        p_memsz: endian::U64::new(LE, new_rodata_section_virtual_size),
+        p_memsz: endian::U64::new(LE, new_rodata_section_size),
+        p_align: endian::U64::new(LE, md.load_align_constraint),
+    };
+
+    // set the new bss section program header
+    program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
+        p_type: endian::U32::new(LE, elf::PT_LOAD),
+        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_W),
+        p_offset: endian::U64::new(LE, new_bss_section_offset),
+        p_vaddr: endian::U64::new(LE, new_bss_section_vaddr),
+        p_paddr: endian::U64::new(LE, new_bss_section_vaddr),
+        p_filesz: endian::U64::new(LE, 0),
+        p_memsz: endian::U64::new(LE, new_bss_section_virtual_size),
         p_align: endian::U64::new(LE, md.load_align_constraint),
     };
 
@@ -1585,7 +1623,7 @@ fn surgery_elf_help(
     program_headers[new_text_section_index] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
         p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_X),
-        p_offset: endian::U64::new(LE, new_text_section_offset as u64),
+        p_offset: endian::U64::new(LE, new_text_section_offset),
         p_vaddr: endian::U64::new(LE, new_text_section_vaddr),
         p_paddr: endian::U64::new(LE, new_text_section_vaddr),
         p_filesz: endian::U64::new(LE, new_text_section_size),
@@ -1732,7 +1770,6 @@ mod tests {
 
         assert_eq!(
             [
-                "memcpy",
                 "memset",
                 "roc_alloc",
                 "roc_dealloc",

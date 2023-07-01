@@ -85,7 +85,10 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
-                LowLevel::PtrWrite => unimplemented!(),
+                LowLevel::PtrStore => unimplemented!(),
+                LowLevel::PtrLoad => unimplemented!(),
+                LowLevel::PtrClearTagId => unimplemented!(),
+                LowLevel::Alloca => unimplemented!(),
                 LowLevel::RefCountIncRcPtr => unimplemented!(),
                 LowLevel::RefCountDecRcPtr=> unimplemented!(),
                 LowLevel::RefCountIncDataPtr => unimplemented!(),
@@ -118,8 +121,8 @@ map_symbol_to_lowlevel_and_arity! {
     StrToUtf8; STR_TO_UTF8; 1,
     StrRepeat; STR_REPEAT; 2,
     StrTrim; STR_TRIM; 1,
-    StrTrimLeft; STR_TRIM_LEFT; 1,
-    StrTrimRight; STR_TRIM_RIGHT; 1,
+    StrTrimStart; STR_TRIM_START; 1,
+    StrTrimEnd; STR_TRIM_END; 1,
     StrToScalars; STR_TO_SCALARS; 1,
     StrGetUnsafe; STR_GET_UNSAFE; 2,
     StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,
@@ -184,6 +187,9 @@ map_symbol_to_lowlevel_and_arity! {
     NumLogUnchecked; NUM_LOG; 1,
     NumRound; NUM_ROUND; 1,
     NumToFrac; NUM_TO_FRAC; 1,
+    NumIsNan; NUM_IS_NAN; 1,
+    NumIsInfinite; NUM_IS_INFINITE; 1,
+    NumIsFinite; NUM_IS_FINITE; 1,
     NumPow; NUM_POW; 2,
     NumCeiling; NUM_CEILING; 1,
     NumPowInt; NUM_POW_INT; 2,
@@ -205,6 +211,7 @@ map_symbol_to_lowlevel_and_arity! {
     NumCountLeadingZeroBits; NUM_COUNT_LEADING_ZERO_BITS; 1,
     NumCountTrailingZeroBits; NUM_COUNT_TRAILING_ZERO_BITS; 1,
     NumCountOneBits; NUM_COUNT_ONE_BITS; 1,
+    I128OfDec; I128_OF_DEC; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,
@@ -214,6 +221,7 @@ map_symbol_to_lowlevel_and_arity! {
     BoxExpr; BOX_BOX_FUNCTION; 1,
     UnboxExpr; BOX_UNBOX; 1,
     Unreachable; LIST_UNREACHABLE; 1,
+    DictPseudoSeed; DICT_PSEUDO_SEED; 1,
 }
 
 /// Some builtins cannot be constructed in code gen alone, and need to be defined

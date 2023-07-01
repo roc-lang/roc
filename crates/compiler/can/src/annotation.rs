@@ -448,8 +448,9 @@ pub fn find_type_def_symbols(
             As(actual, _, _) => {
                 stack.push(&actual.value);
             }
-            Tuple { elems: _, ext: _ } => {
-                todo!("find_type_def_symbols: Tuple");
+            Tuple { elems, ext } => {
+                stack.extend(elems.iter().map(|t| &t.value));
+                stack.extend(ext.iter().map(|t| &t.value));
             }
             Record { fields, ext } => {
                 let mut inner_stack = Vec::with_capacity(fields.items.len());

@@ -13,6 +13,7 @@ use crate::tarball::Compression;
 // let's try to avoid doing that.
 const BROTLI_BUFFER_BYTES: usize = 8 * 1_000_000; // MB
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct PackageMetadata<'a> {
     /// The BLAKE3 hash of the tarball's contents. Also the .tar filename on disk.
     pub content_hash: &'a str,
@@ -29,13 +30,29 @@ pub struct PackageMetadata<'a> {
 /// - .tar.br
 const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 
-#[derive(Debug)]
+/// Since the TLD (top level domain) `.zip` is now available, there is a new attack
+/// vector where malicous URLs can be used to confuse the reader.
+/// Example of a URL which would take you to example.zip:
+/// https://github.com∕kubernetes∕kubernetes∕archive∕refs∕tags∕@example.zip
+/// roc employs a checksum mechanism to prevent tampering with packages.
+/// Nevertheless we should avoid such issues earlier.
+/// You can read more here: https://medium.com/@bobbyrsec/the-dangers-of-googles-zip-tld-5e1e675e59a5
+const MISLEADING_CHARACTERS_IN_URL: [char; 5] = [
+    '@',        // @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
+    '\u{2044}', // U+2044 ==  ⁄ Fraction Slash
+    '\u{2215}', // U+2215 ==  ∕ Division Slash
+    '\u{FF0F}', // U+2215 == ／ Fullwidth Solidus
+    '\u{29F8}', // U+29F8 == ⧸ Big Solidus
+];
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum UrlProblem {
     InvalidExtensionSuffix(String),
     MissingTarExt,
     InvalidFragment(String),
     MissingHash,
     MissingHttps,
+    MisleadingCharacter,
 }
 
 impl<'a> TryFrom<&'a str> for PackageMetadata<'a> {
@@ -55,6 +72,14 @@ impl<'a> PackageMetadata<'a> {
                 return Err(UrlProblem::MissingHttps);
             }
         };
+
+        // Next, check if there are misleading characters in the URL
+        if url
+            .chars()
+            .any(|ch| MISLEADING_CHARACTERS_IN_URL.contains(&ch))
+        {
+            return Err(UrlProblem::MisleadingCharacter);
+        }
 
         // Next, get the (optional) URL fragment, which must be a .roc filename
         let (without_fragment, fragment) = match without_protocol.rsplit_once('#') {
@@ -100,6 +125,105 @@ impl<'a> PackageMetadata<'a> {
             root_module_filename: fragment,
         })
     }
+}
+
+#[test]
+fn url_problem_missing_https() {
+    let expected = Err(UrlProblem::MissingHttps);
+    assert_eq!(PackageMetadata::try_from("http://example.com"), expected);
+}
+
+#[test]
+fn url_problem_misleading_characters() {
+    let expected = Err(UrlProblem::MisleadingCharacter);
+
+    for misleading_character_example in [
+        "https://user:password@example.com/",
+        //"https://example.com⁄path",
+        "https://example.com\u{2044}path",
+        //"https://example.com∕path",
+        "https://example.com\u{2215}path",
+        //"https://example.com／path",
+        "https://example.com\u{ff0f}path",
+        //"https://example.com⧸path",
+        "https://example.com\u{29f8}path",
+    ] {
+        assert_eq!(
+            PackageMetadata::try_from(misleading_character_example),
+            expected
+        );
+    }
+}
+
+#[test]
+fn url_problem_invalid_fragment_not_a_roc_file() {
+    let expected = Err(UrlProblem::InvalidFragment("filename.sh".to_string()));
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/#filename.sh"),
+        expected
+    );
+}
+
+#[test]
+fn url_problem_invalid_fragment_empty_roc_filename() {
+    let expected = Err(UrlProblem::InvalidFragment(".roc".to_string()));
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/#.roc"),
+        expected
+    );
+}
+
+#[test]
+fn url_problem_not_a_tar_url() {
+    let expected = Err(UrlProblem::MissingTarExt);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/filename.zip"),
+        expected
+    );
+}
+
+#[test]
+fn url_problem_invalid_tar_suffix() {
+    let expected = Err(UrlProblem::InvalidExtensionSuffix(".zip".to_string()));
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/filename.tar.zip"),
+        expected
+    );
+}
+
+#[test]
+fn url_problem_missing_hash() {
+    let expected = Err(UrlProblem::MissingHash);
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/.tar.gz"),
+        expected
+    );
+}
+
+#[test]
+fn url_without_fragment() {
+    let expected = Ok(PackageMetadata {
+        cache_subdir: "example.com/path",
+        content_hash: "hash",
+        root_module_filename: None,
+    });
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/path/hash.tar.gz"),
+        expected
+    );
+}
+
+#[test]
+fn url_with_fragment() {
+    let expected = Ok(PackageMetadata {
+        cache_subdir: "example.com/path",
+        content_hash: "hash",
+        root_module_filename: Some("filename.roc"),
+    });
+    assert_eq!(
+        PackageMetadata::try_from("https://example.com/path/hash.tar.gz#filename.roc"),
+        expected
+    );
 }
 
 #[derive(Debug)]

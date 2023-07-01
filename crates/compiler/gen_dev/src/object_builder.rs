@@ -305,6 +305,10 @@ fn build_object<'a, B: Backend<'a>>(
     }
 
     // Generate IR for specialized helper procs (refcounting & equality)
+    let empty = bumpalo::collections::Vec::new_in(arena);
+    let mut helper_symbols_and_layouts =
+        std::mem::replace(backend.helper_proc_symbols_mut(), empty);
+
     let helper_procs = {
         let (module_id, _interner, interns, helper_proc_gen, caller_procs) =
             backend.module_interns_helpers_mut();
@@ -315,20 +319,32 @@ fn build_object<'a, B: Backend<'a>>(
         let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
         let mut helper_procs = helper_proc_gen.take_procs();
 
-        helper_procs.extend(owned_caller_procs.into_iter().map(|cp| cp.proc));
-        module_id.register_debug_idents(ident_ids);
+        for caller_proc in owned_caller_procs {
+            helper_symbols_and_layouts.push((caller_proc.proc_symbol, caller_proc.proc_layout));
+            helper_procs.push(caller_proc.proc);
+        }
+
+        if false {
+            module_id.register_debug_idents(ident_ids);
+
+            for p in &helper_procs {
+                println!("{}", p.to_pretty(_interner, 200, true));
+            }
+        }
 
         helper_procs
     };
 
-    let empty = bumpalo::collections::Vec::new_in(arena);
-    let helper_symbols_and_layouts = std::mem::replace(backend.helper_proc_symbols_mut(), empty);
     let mut helper_names_symbols_procs = Vec::with_capacity_in(helper_procs.len(), arena);
+
+    debug_assert_eq!(helper_symbols_and_layouts.len(), helper_procs.len());
 
     // Names and linker data for helpers
     for ((sym, layout), proc) in helper_symbols_and_layouts.into_iter().zip(helper_procs) {
-        let fn_name = backend.function_symbol_to_string(
-            sym,
+        debug_assert_eq!(sym, proc.name.name());
+
+        let fn_name = backend.lambda_name_to_string(
+            LambdaName::no_niche(sym),
             layout.arguments.iter().copied(),
             None,
             layout.result,
@@ -448,7 +464,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
 
     let box_layout = backend
         .interner_mut()
-        .insert(roc_mono::layout::Layout::Boxed(proc.ret_layout));
+        .insert_direct_no_semantic(roc_mono::layout::LayoutRepr::Boxed(proc.ret_layout));
 
     let mut args = bumpalo::collections::Vec::new_in(arena);
     args.extend(proc.args);
@@ -469,7 +485,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
 
     let box_write = Call {
         call_type: roc_mono::ir::CallType::LowLevel {
-            op: roc_module::low_level::LowLevel::PtrWrite,
+            op: roc_module::low_level::LowLevel::PtrStore,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([arg_generic, s1]),
@@ -543,8 +559,8 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
         Exposed::Exposed => layout_ids
             .get_toplevel(sym, &layout)
             .to_exposed_symbol_string(sym, backend.interns()),
-        Exposed::NotExposed => backend.function_symbol_to_string(
-            sym,
+        Exposed::NotExposed => backend.lambda_name_to_string(
+            proc.name,
             layout.arguments.iter().copied(),
             None,
             layout.result,
@@ -641,6 +657,7 @@ fn build_proc<'a, B: Backend<'a>>(
                     };
                     output.add_symbol(builtin_symbol);
                 }
+
                 // If the symbol is an undefined reference counting procedure, we need to add it here.
                 if output.symbol_id(name.as_bytes()).is_none() {
                     for (sym, rc_name) in rc_proc_names.iter() {

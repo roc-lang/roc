@@ -1,0 +1,174 @@
+procedure List.145 (List.146, List.147, List.144):
+    let List.540 : [<r>C {}, C *self {{}, []}] = CallByName Test.29 List.146 List.147 List.144;
+    ret List.540;
+
+procedure List.18 (List.142, List.143, List.144):
+    let List.521 : [<r>C {}, C *self {{}, []}] = CallByName List.93 List.142 List.143 List.144;
+    ret List.521;
+
+procedure List.6 (#Attr.2):
+    let List.538 : U64 = lowlevel ListLen #Attr.2;
+    ret List.538;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.537 : [] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.537;
+
+procedure List.80 (#Derived_gen.6, #Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.10):
+    joinpoint List.527 List.439 List.440 List.441 List.442 List.443:
+        let List.529 : Int1 = CallByName Num.22 List.442 List.443;
+        if List.529 then
+            let List.536 : [] = CallByName List.66 List.439 List.442;
+            let List.530 : [<r>C {}, C *self {{}, []}] = CallByName List.145 List.440 List.536 List.441;
+            let List.533 : U64 = 1i64;
+            let List.532 : U64 = CallByName Num.19 List.442 List.533;
+            jump List.527 List.439 List.530 List.441 List.532 List.443;
+        else
+            dec List.439;
+            ret List.440;
+    in
+    jump List.527 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10;
+
+procedure List.93 (List.436, List.437, List.438):
+    let List.525 : U64 = 0i64;
+    let List.526 : U64 = CallByName List.6 List.436;
+    let List.524 : [<r>C {}, C *self {{}, []}] = CallByName List.80 List.436 List.437 List.438 List.525 List.526;
+    ret List.524;
+
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.292 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.292;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.293 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.293;
+
+procedure Test.10 (Test.66, #Attr.12):
+    let Test.9 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    let #Derived_gen.20 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.20 then
+        free #Attr.12;
+        ret Test.9;
+    else
+        decref #Attr.12;
+        ret Test.9;
+
+procedure Test.10 (Test.66, #Attr.12):
+    let Test.9 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    ret Test.9;
+
+procedure Test.14 (Test.45, #Attr.12):
+    let Test.13 : {{}, []} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
+    let Test.12 : [<r>C {}, C *self {{}, []}] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    joinpoint #Derived_gen.18:
+        let Test.50 : {} = Struct {};
+        let Test.51 : U8 = GetTagId Test.12;
+        joinpoint Test.52 Test.15:
+            let Test.16 : [C {}, C []] = CallByName Test.20 Test.15 Test.13;
+            let Test.48 : {} = Struct {};
+            let Test.49 : U8 = GetTagId Test.16;
+            switch Test.49:
+                case 0:
+                    let Test.47 : {} = CallByName Test.10 Test.48 Test.16;
+                    ret Test.47;
+            
+                default:
+                    let Test.47 : {} = CallByName Test.25 Test.48 Test.16;
+                    ret Test.47;
+            
+        in
+        switch Test.51:
+            case 0:
+                let Test.53 : {} = CallByName Test.10 Test.50 Test.12;
+                jump Test.52 Test.53;
+        
+            default:
+                let Test.53 : {} = CallByName Test.14 Test.50 Test.12;
+                jump Test.52 Test.53;
+        
+    in
+    let #Derived_gen.19 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.19 then
+        free #Attr.12;
+        jump #Derived_gen.18;
+    else
+        inc Test.12;
+        decref #Attr.12;
+        jump #Derived_gen.18;
+
+procedure Test.20 (Test.21, Test.18):
+    let Test.23 : [C {}, C []] = CallByName Test.32 Test.21 Test.18;
+    ret Test.23;
+
+procedure Test.25 (Test.57, #Attr.12):
+    let Test.24 : [] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.60 : Str = "voided tag constructor is unreachable";
+    Crash Test.60
+
+procedure Test.29 (Test.30, Test.31, Test.28):
+    let Test.42 : {{}, []} = Struct {Test.28, Test.31};
+    let Test.41 : [<r>C {}, C *self {{}, []}] = CallByName Test.5 Test.30 Test.42;
+    ret Test.41;
+
+procedure Test.3 (Test.9):
+    let Test.65 : [<r>C {}, C *self {{}, []}] = TagId(0) Test.9;
+    ret Test.65;
+
+procedure Test.3 (Test.9):
+    let Test.72 : [C {}, C []] = TagId(0) Test.9;
+    ret Test.72;
+
+procedure Test.32 (Test.61, #Attr.12):
+    let Test.31 : [] = StructAtIndex 1 #Attr.12;
+    let Test.28 : {} = StructAtIndex 0 #Attr.12;
+    let Test.63 : [C {}, C []] = CallByName Test.33 Test.31;
+    ret Test.63;
+
+procedure Test.33 (Test.69):
+    let Test.71 : {} = Struct {};
+    let Test.70 : [C {}, C []] = CallByName Test.3 Test.71;
+    ret Test.70;
+
+procedure Test.4 (Test.12, Test.13):
+    let Test.46 : [<r>C {}, C *self {{}, []}] = TagId(1) Test.12 Test.13;
+    ret Test.46;
+
+procedure Test.5 (Test.17, Test.18):
+    let Test.19 : [<r>C {}, C *self {{}, []}] = CallByName Test.4 Test.17 Test.18;
+    ret Test.19;
+
+procedure Test.6 (Test.27, Test.28):
+    let Test.64 : {} = Struct {};
+    let Test.38 : [<r>C {}, C *self {{}, []}] = CallByName Test.3 Test.64;
+    let Test.37 : [<r>C {}, C *self {{}, []}] = CallByName List.18 Test.27 Test.38 Test.28;
+    ret Test.37;
+
+procedure Test.76 (Test.77):
+    let Test.78 : {{}, []} = Unbox Test.77;
+    dec Test.77;
+    let Test.79 : {} = StructAtIndex 0 Test.78;
+    ret Test.79;
+
+procedure Test.80 (Test.81):
+    let Test.82 : {{}, []} = Unbox Test.81;
+    dec Test.81;
+    let Test.83 : [] = StructAtIndex 1 Test.82;
+    ret Test.83;
+
+procedure Test.84 (Test.86, #Attr.12):
+    let Test.87 : U8 = GetTagId #Attr.12;
+    switch Test.87:
+        case 0:
+            let Test.85 : {} = CallByName Test.10 Test.86 #Attr.12;
+            ret Test.85;
+    
+        default:
+            let Test.85 : {} = CallByName Test.14 Test.86 #Attr.12;
+            ret Test.85;
+    
+
+procedure Test.0 ():
+    let Test.35 : List [] = Array [];
+    let Test.36 : {} = Struct {};
+    let Test.34 : [<r>C {}, C *self {{}, []}] = CallByName Test.6 Test.35 Test.36;
+    ret Test.34;

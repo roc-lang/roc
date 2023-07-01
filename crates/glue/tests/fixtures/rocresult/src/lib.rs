@@ -1,11 +1,11 @@
-mod test_glue;
+use roc_app;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let string = test_glue::mainForHost(true);
+    let string = roc_app::mainForHost(true);
     println!("Answer was: {:?}", string); // Debug
                                           //
-    let integer = test_glue::mainForHost(false);
+    let integer = roc_app::mainForHost(false);
     println!("Answer was: {:?}", integer); // Debug
 
     // Exit code
@@ -49,11 +49,6 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         }
         _ => todo!(),
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
 }
 
 #[no_mangle]

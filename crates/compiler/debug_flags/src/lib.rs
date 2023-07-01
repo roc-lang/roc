@@ -92,6 +92,9 @@ flags! {
     /// Prints all type mismatches hit during type unification.
     ROC_PRINT_MISMATCHES
 
+    /// Prints all type variables entered for fixpoint-fixing.
+    ROC_PRINT_FIXPOINT_FIXING
+
     /// Verifies that after let-generalization of a def, any rigid variables in the type annotation
     /// of the def are indeed generalized.
     ///
@@ -131,6 +134,10 @@ flags! {
     /// Writes a pretty-printed mono IR to stderr after insertion of refcount
     /// instructions.
     ROC_PRINT_IR_AFTER_REFCOUNT
+
+    /// Writes a pretty-printed mono IR to stderr after the tail recursion (modulo cons)
+    /// has been applied.
+    ROC_PRINT_IR_AFTER_TRMC
 
     /// Writes a pretty-printed mono IR to stderr after performing dropspecialization.
     /// Which inlines drop functions to remove pairs of alloc/dealloc instructions of its children.

@@ -2302,7 +2302,7 @@ pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
     }
 }
 
-pub fn strTrimLeft(input_string: RocStr) callconv(.C) RocStr {
+pub fn strTrimStart(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2350,7 +2350,7 @@ pub fn strTrimLeft(input_string: RocStr) callconv(.C) RocStr {
     }
 }
 
-pub fn strTrimRight(input_string: RocStr) callconv(.C) RocStr {
+pub fn strTrimEnd(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2583,22 +2583,22 @@ test "strTrim: small to small" {
     try expect(trimmed.isSmallStr());
 }
 
-test "strTrimLeft: empty" {
-    const trimmedEmpty = strTrimLeft(RocStr.empty());
+test "strTrimStart: empty" {
+    const trimmedEmpty = strTrimStart(RocStr.empty());
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
-test "strTrimLeft: blank" {
+test "strTrimStart: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
 
-    const trimmed = strTrimLeft(original);
+    const trimmed = strTrimStart(original);
 
     try expect(trimmed.eq(RocStr.empty()));
 }
 
-test "strTrimLeft: large to large" {
+test "strTrimStart: large to large" {
     const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
@@ -2611,12 +2611,12 @@ test "strTrimLeft: large to large" {
 
     try expect(!expected.isSmallStr());
 
-    const trimmed = strTrimLeft(original);
+    const trimmed = strTrimStart(original);
 
     try expect(trimmed.eq(expected));
 }
 
-test "strTrimLeft: large to small" {
+test "strTrimStart: large to small" {
     // `original` will be consumed by the concat; do not free explicitly
     const original_bytes = "                    hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
@@ -2629,14 +2629,14 @@ test "strTrimLeft: large to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrimLeft(original);
+    const trimmed = strTrimStart(original);
     defer trimmed.decref();
 
     try expect(trimmed.eq(expected));
     try expect(!trimmed.isSmallStr());
 }
 
-test "strTrimLeft: small to small" {
+test "strTrimStart: small to small" {
     const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
@@ -2649,28 +2649,28 @@ test "strTrimLeft: small to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrimLeft(original);
+    const trimmed = strTrimStart(original);
 
     try expect(trimmed.eq(expected));
     try expect(trimmed.isSmallStr());
 }
 
-test "strTrimRight: empty" {
-    const trimmedEmpty = strTrimRight(RocStr.empty());
+test "strTrimEnd: empty" {
+    const trimmedEmpty = strTrimEnd(RocStr.empty());
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
-test "strTrimRight: blank" {
+test "strTrimEnd: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
 
-    const trimmed = strTrimRight(original);
+    const trimmed = strTrimEnd(original);
 
     try expect(trimmed.eq(RocStr.empty()));
 }
 
-test "strTrimRight: large to large" {
+test "strTrimEnd: large to large" {
     const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
@@ -2683,12 +2683,12 @@ test "strTrimRight: large to large" {
 
     try expect(!expected.isSmallStr());
 
-    const trimmed = strTrimRight(original);
+    const trimmed = strTrimEnd(original);
 
     try expect(trimmed.eq(expected));
 }
 
-test "strTrimRight: large to small" {
+test "strTrimEnd: large to small" {
     // `original` will be consumed by the concat; do not free explicitly
     const original_bytes = " hello                    ";
     const original = RocStr.init(original_bytes, original_bytes.len);
@@ -2701,14 +2701,14 @@ test "strTrimRight: large to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrimRight(original);
+    const trimmed = strTrimEnd(original);
     defer trimmed.decref();
 
     try expect(trimmed.eq(expected));
     try expect(!trimmed.isSmallStr());
 }
 
-test "strTrimRight: small to small" {
+test "strTrimEnd: small to small" {
     const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
@@ -2721,7 +2721,7 @@ test "strTrimRight: small to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrimRight(original);
+    const trimmed = strTrimEnd(original);
 
     try expect(trimmed.eq(expected));
     try expect(trimmed.isSmallStr());

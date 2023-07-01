@@ -258,7 +258,7 @@ mod test_reporting {
             subs.rigid_var(var.value, "*".into());
         }
 
-        let mut solve_aliases = roc_solve::solve::Aliases::default();
+        let mut solve_aliases = roc_solve::Aliases::default();
 
         for (name, alias) in output.aliases {
             solve_aliases.insert(&mut types, name, alias);
@@ -271,7 +271,7 @@ mod test_reporting {
             &mut unify_problems,
             types,
             &constraints,
-            &constraint,
+            constraint,
             // Use `new_report_problem_as` in order to get proper derives.
             // TODO: remove the non-new reporting test infra.
             PendingDerives::default(),
@@ -5642,8 +5642,8 @@ All branches in an `if` must have the same type!
 
         Num.sin
         Num.div
-        Num.abs
-        Num.neg
+        Num.min
+        Num.e
     "###
     );
 
@@ -5931,6 +5931,40 @@ In roc, functions are always written as a lambda, like{}
                                         ^
 
                 I was expecting a type name, value name or function name next, like
+
+                    provides [Animal, default, tame]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn missing_provides_in_app_header() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "broken"
+                    packages {
+                        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br",
+                    }
+                    imports [
+                        pf.Stdout,
+                    ]
+
+                main =
+                    Stdout.line "answer"
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                I am partway through parsing a header, but I got stuck here:
+
+                7│      ]
+                         ^
+
+                I am expecting the `provides` keyword next, like
 
                     provides [Animal, default, tame]
             "#
@@ -10152,6 +10186,41 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        forgot_to_remove_underscore,
+        indoc!(
+            r#"
+            \_foo -> foo
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+                Nothing is named `foo` in this scope.
+
+                4│      \_foo -> foo
+                                 ^^^
+
+                There is an ignored identifier of a similar name here:
+
+                4│      \_foo -> foo
+                         ^^^^
+
+                Did you mean to remove the leading underscore?
+
+                If not, did you mean one of these?
+
+                    Box
+                    Bool
+                    U8
+                    F64
+                "###
+            ),
+        )
+    );
+
+    test_report!(
         call_with_underscore_identifier,
         indoc!(
             r#"
@@ -10162,20 +10231,265 @@ In roc, functions are always written as a lambda, like{}
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
-            &format!(
+            indoc!(
                 r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-Underscores are not allowed in identifier names:
+                An underscore is being used as a variable here:
 
-6│      f 1 _ 1
-{}
+                6│      f 1 _ 1
+                            ^
 
-I recommend using camelCase. It's the standard style in Roc code!
-"###,
-                "  " // TODO make the reporter not insert extraneous spaces here in the first place!
+                An underscore can be used to ignore a value when pattern matching, but
+                it cannot be used as a variable.
+                "###
             ),
         )
     );
+
+    test_report!(
+        call_with_declared_identifier_starting_with_underscore,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a _b 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This variable's name starts with an underscore:
+
+                6│      \a, _b -> f a _b 1
+                            ^^
+
+                But then it is used here:
+
+                6│      \a, _b -> f a _b 1
+                                      ^^
+
+                A variable's name can only start with an underscore if the variable is
+                unused. Since you are using this variable, you could remove the
+                underscore from its name in both places.
+                "###
+            ),
+        )
+    );
+
+    test_report!(
+        call_with_undeclared_identifier_starting_with_underscore,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a _r 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"
+                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                This variable's name starts with an underscore:
+
+                6│      \a, _b -> f a _r 1
+                                      ^^
+
+                A variable's name can only start with an underscore if the variable is
+                unused. But it looks like the variable is being used here!
+                "###
+            ),
+        )
+    );
+
+    test_report!(
+        underscore_in_middle_of_identifier,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            \a, _b -> f a var_name 1
+            "#
+        ),
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            indoc!(
+                r###"
+                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                Underscores are not allowed in identifier names:
+
+                6│      \a, _b -> f a var_name 1
+                                      ^^^^^^^^
+
+                I recommend using camelCase. It's the standard style in Roc code!
+                "###
+            ),
+        )
+    );
+
+    // Record Builders
+
+    test_report!(
+        optional_field_in_record_builder,
+        indoc!(
+            r#"
+            { 
+                a: <- apply "a",
+                b,
+                c ? "optional"
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD BUILDER ────────── tmp/optional_field_in_record_builder/Test.roc ─
+
+    I am partway through parsing a record builder, and I found an optional
+    field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { 
+    5│          a: <- apply "a",
+    6│          b,
+    7│          c ? "optional"
+                ^^^^^^^^^^^^^^
+
+    Optional fields can only appear when you destructure a record.
+    "###
+    );
+
+    test_report!(
+        record_update_builder,
+        indoc!(
+            r#"
+            { rec &
+                a: <- apply "a",
+                b: 3
+            }
+            "#
+        ),
+        @r###"
+    ── BAD RECORD UPDATE ────────────────────── tmp/record_update_builder/Test.roc ─
+
+    I am partway through parsing a record update, and I found a record
+    builder field:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      { rec &
+    5│          a: <- apply "a",
+                ^^^^^^^^^^^^^^^
+
+    Record builders cannot be updated like records.
+    "###
+    );
+
+    test_report!(
+        multiple_record_builders,
+        indoc!(
+            r#"
+            succeed
+                { a: <- apply "a" }
+                { b: <- apply "b" }
+            "#
+        ),
+        @r###"
+    ── MULTIPLE RECORD BUILDERS ────────────────────────────── /code/proj/Main.roc ─
+
+    This function is applied to multiple record builders:
+
+    4│>      succeed
+    5│>          { a: <- apply "a" }
+    6│>          { b: <- apply "b" }
+
+    Note: Functions can only take at most one record builder!
+
+    Tip: You can combine them or apply them separately.
+
+    "###
+    );
+
+    test_report!(
+        unapplied_record_builder,
+        indoc!(
+            r#"
+            { a: <- apply "a" }
+            "#
+        ),
+        @r###"
+    ── UNAPPLIED RECORD BUILDER ────────────────────────────── /code/proj/Main.roc ─
+
+    This record builder was not applied to a function:
+
+    4│      { a: <- apply "a" }
+            ^^^^^^^^^^^^^^^^^^^
+
+    However, we need a function to construct the record.
+
+    Note: Functions must be applied directly. The pipe operator (|>) cannot be used.
+    "###
+    );
+
+    test_report!(
+        record_builder_apply_non_function,
+        indoc!(
+            r#"
+            succeed = \_ -> crash ""
+
+            succeed { 
+                a: <- "a",
+            }
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value is not a function, but it was given 1 argument:
+
+    7│          a: <- "a",
+                      ^^^
+
+    Tip: Remove `<-` to assign the field directly.
+    "###
+    );
+
+    // Skipping test because opaque types defined in the same module
+    // do not fail with the special opaque type error
+    //
+    // test_report!(
+    //     record_builder_apply_opaque,
+    //     indoc!(
+    //         r#"
+    //         succeed = \_ -> crash ""
+
+    //         Decode := {}
+
+    //         get : Str -> Decode
+    //         get = \_ -> @Decode {}
+
+    //         succeed {
+    //             a: <- get "a",
+    //             # missing |> apply ^
+    //         }
+    //         "#
+    //     ),
+    //     @r###"
+    // ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    // This value is an opaque type, so it cannot be called with an argument:
+
+    // 12│          a: <- get "a",
+    //                    ^^^^^^^
+
+    // Hint: Did you mean to apply it to a function first?
+    //     "###
+    // );
 
     test_report!(
         destructure_assignment_introduces_no_variables_nested,
@@ -10715,10 +11029,10 @@ I recommend using camelCase. It's the standard style in Roc code!
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
                 when decoded is
                     Ok rcd -> rcd.first rcd.second
                     _ -> "something went wrong"

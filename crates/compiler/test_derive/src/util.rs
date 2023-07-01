@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use bumpalo::Bump;
 use roc_packaging::cache::RocCacheDir;
+use roc_solve::module::{SolveConfig, SolveOutput};
 use ven_pretty::DocAllocator;
 
 use roc_can::{
@@ -21,7 +22,8 @@ use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
 use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey, Derived};
-use roc_load_internal::file::{add_imports, LoadedModule, Threading};
+use roc_load_internal::file::{add_imports, Threading};
+use roc_load_internal::module::LoadedModule;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
@@ -418,18 +420,27 @@ fn check_derived_typechecks_and_golden(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
         std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS, "1")
     );
-    let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
-        test_module,
+
+    let solve_config = SolveConfig {
+        home: test_module,
+        constraints: &constraints,
+        root_constraint: constr,
         types,
-        &constraints,
-        constr,
+        pending_derives: Default::default(),
+        exposed_by_module: &exposed_for_module.exposed_by_module,
+        derived_module: Default::default(),
+    };
+
+    let SolveOutput {
+        subs: mut solved_subs,
+        errors: problems,
+        ..
+    } = roc_solve::module::run_solve(
+        solve_config,
         RigidVariables::default(),
         test_subs,
         Default::default(),
         abilities_store,
-        Default::default(),
-        &exposed_for_module.exposed_by_module,
-        Default::default(),
     );
     dbg_do!(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,

@@ -290,11 +290,6 @@ mod dummy_platform_functions {
     }
 
     #[no_mangle]
-    pub fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_void {
-        unimplemented!("It is not valid to call roc memcpy from within the compiler. Please use the \"platform\" feature if this is a platform.")
-    }
-
-    #[no_mangle]
     pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
         unimplemented!("It is not valid to call roc memset from within the compiler. Please use the \"platform\" feature if this is a platform.")
     }

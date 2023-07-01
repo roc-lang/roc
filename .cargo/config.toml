@@ -3,6 +3,12 @@ test-gen-llvm = "test -p test_gen"
 test-gen-dev = "test -p roc_gen_dev -p test_gen --no-default-features --features gen-dev"
 test-gen-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --features gen-wasm"
 test-gen-llvm-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --features gen-llvm-wasm"
+
+nextest-gen-llvm = "nextest run -p test_gen"
+nextest-gen-dev = "nextest run -p roc_gen_dev -p test_gen --no-default-features --features gen-dev"
+nextest-gen-wasm = "nextest run -p roc_gen_wasm -p test_gen --no-default-features --features gen-wasm"
+nextest-gen-llvm-wasm = "nextest run -p roc_gen_wasm -p test_gen --no-default-features --features gen-llvm-wasm"
+
 uitest = "test -p uitest"
 
 [target.wasm32-unknown-unknown]
@@ -11,10 +17,6 @@ uitest = "test -p uitest"
 # lto=fat            Spend extra effort on link-time optimization across crates
 # embed-bitcode=yes  Turn back on lto since it is no longer default
 rustflags = ["-Copt-level=s", "-Clto=fat", "-Cembed-bitcode=yes"]
-
-[target.'cfg(not(target = "wasm32-unknown-unknown"))']
-# Sets the avx, avx2, sse2 and sse4.2 target-features correctly based on your CPU.
-rustflags = ["-Ctarget-cpu=native"]
 
 # TODO: there is probably a more proper solution to this.
 # We are pulling in roc_alloc and friends due to using roc_std.

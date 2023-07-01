@@ -1,6 +1,17 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId }]
+    imports [
+        pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId },
+        "../static/Cargo.toml" as rocAppCargoToml : Str,
+        "../../roc_std/Cargo.toml" as rocStdCargoToml : Str,
+        "../../roc_std/src/lib.rs" as rocStdLib : Str,
+        "../../roc_std/src/roc_box.rs" as rocStdBox : Str,
+        "../../roc_std/src/roc_list.rs" as rocStdList : Str,
+        "../../roc_std/src/roc_dict.rs" as rocStdDict : Str,
+        "../../roc_std/src/roc_set.rs" as rocStdSet : Str,
+        "../../roc_std/src/roc_str.rs" as rocStdStr : Str,
+        "../../roc_std/src/storage.rs" as rocStdStorage : Str,
+    ]
     provides [makeGlue] to pf
 
 makeGlue : List Types -> Result (List File) Str
@@ -22,8 +33,24 @@ makeGlue = \typesByArch ->
 
     typesByArch
     |> List.map convertTypesToFile
-    |> List.append { name: "mod.rs", content: modFileContent }
+    |> List.append { name: "roc_app/src/lib.rs", content: modFileContent }
+    |> List.concat staticFiles
     |> Ok
+
+## These are always included, and don't depend on the specifics of the app.
+staticFiles : List File
+staticFiles =
+    [
+        { name: "roc_app/Cargo.toml", content: rocAppCargoToml },
+        { name: "roc_std/Cargo.toml", content: rocStdCargoToml },
+        { name: "roc_std/src/lib.rs", content: rocStdLib },
+        { name: "roc_std/src/roc_box.rs", content: rocStdBox },
+        { name: "roc_std/src/roc_list.rs", content: rocStdList },
+        { name: "roc_std/src/roc_dict.rs", content: rocStdDict },
+        { name: "roc_std/src/roc_set.rs", content: rocStdSet },
+        { name: "roc_std/src/roc_str.rs", content: rocStdStr },
+        { name: "roc_std/src/storage.rs", content: rocStdStorage },
+    ]
 
 convertTypesToFile : Types -> File
 convertTypesToFile = \types ->
@@ -34,7 +61,7 @@ convertTypesToFile = \types ->
                     generateStruct buf types id name fields Public
 
                 TagUnionPayload { name, fields } ->
-                    generateStruct buf types id name (nameTagUnionPayloadFields fields) Private
+                    generateStruct buf types id name (nameTagUnionPayloadFields fields) Public
 
                 TagUnion (Enumeration { name, tags, size }) ->
                     generateEnumeration buf types type name tags size
@@ -94,7 +121,7 @@ convertTypesToFile = \types ->
     archStr = archName arch
 
     {
-        name: "\(archStr).rs",
+        name: "roc_app/src/\(archStr).rs",
         content: content |> generateEntryPoints types,
     }
 
@@ -898,6 +925,28 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> List.mapWithIndex partialEqCase
         |> Str.joinWith "\n"
 
+    partialEqImpl =
+        if canDerivePartialEq types (Types.shape types id) then
+            """
+            impl PartialEq for \(escapedName) {
+                fn eq(&self, other: &Self) -> bool {
+                    use discriminant_\(escapedName)::*;
+
+                    if self.discriminant() != other.discriminant() {
+                        return false;
+                    }
+
+                    match self.discriminant() {
+                        \(partialEqCases)
+                    }
+                }
+            }
+
+            impl Eq for \(escapedName) {}
+            """
+        else
+            ""
+
     debugCase = \{ name: tagName, payload: optPayload }, index ->
         if Some (Num.intCast index) == nullTagIndex then
             """
@@ -959,6 +1008,26 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> List.mapWithIndex hashCase
         |> Str.joinWith "\n"
 
+
+
+    hashImpl =
+        if canDerivePartialEq types (Types.shape types id) then
+            """
+            impl core::hash::Hash for \(escapedName) {
+                fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+                    use discriminant_\(escapedName)::*;
+
+                    self.discriminant().hash(state);
+
+                    match self.discriminant() {
+                        \(hashCases)
+                    }
+                }
+            }
+            """
+        else
+            ""
+
     partialOrdCase = \{ name: tagName }, index ->
         if Some (Num.intCast index) == nullTagIndex then
             """
@@ -980,6 +1049,36 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         tags
         |> List.mapWithIndex partialOrdCase
         |> Str.joinWith "\n"
+
+    partialOrdImpl =
+        if canDerivePartialEq types (Types.shape types id) then
+            """
+            impl PartialOrd for \(escapedName) {
+                fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                    Some(<Self as Ord>::cmp(self, other))
+                }
+            }
+
+            impl Ord for \(escapedName) {
+                fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                    use discriminant_\(escapedName)::*;
+
+                    use std::cmp::Ordering::*;
+
+                    match self.discriminant().cmp(&other.discriminant()) {
+                        Less => Less,
+                        Greater => Greater,
+                        Equal => unsafe {
+                            match self.discriminant() {
+                                \(partialOrdCases)
+                            }
+                        },
+                    }
+                }
+            }
+            """
+        else
+            ""
 
     sizeOfSelf = Num.toStr (Types.size types id)
     alignOfSelf = Num.toStr (Types.alignment types id)
@@ -1042,21 +1141,12 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
             }
         }
 
-        impl PartialEq for \(escapedName) {
-            fn eq(&self, other: &Self) -> bool {
-                use discriminant_\(escapedName)::*;
+        \(partialEqImpl)
 
-                if self.discriminant() != other.discriminant() {
-                    return false;
-                }
+        \(hashImpl)
 
-                match self.discriminant() {
-                    \(partialEqCases)
-                }
-            }
-        }
+        \(partialOrdImpl)
 
-        impl Eq for \(escapedName) {}
 
         impl core::fmt::Debug for \(escapedName) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1068,41 +1158,6 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
             }
         }
 
-        impl core::hash::Hash for \(escapedName) {
-            fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-                use discriminant_\(escapedName)::*;
-
-                self.discriminant().hash(state);
-
-                match self.discriminant() {
-                    \(hashCases)
-                }
-            }
-        }
-
-        impl PartialOrd for \(escapedName) {
-            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                Some(<Self as Ord>::cmp(self, other))
-            }
-        }
-
-        impl Ord for \(escapedName) {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                use discriminant_\(escapedName)::*;
-
-                use std::cmp::Ordering::*;
-
-                match self.discriminant().cmp(&other.discriminant()) {
-                    Less => Less,
-                    Greater => Greater,
-                    Equal => unsafe {
-                        match self.discriminant() {
-                            \(partialOrdCases)
-                        }
-                    },
-                }
-            }
-        }
 
         #[repr(C)]
         union \(unionName) {
@@ -1260,7 +1315,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             FirstTagIsNull ->
                 """
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                enum discriminant_\(name) {
+                pub enum discriminant_\(name) {
                     \(nullTag) = 0,
                     \(nonNullTag) = 1,
                 }
@@ -1269,7 +1324,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             SecondTagIsNull ->
                 """
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                enum discriminant_\(name) {
+                pub enum discriminant_\(name) {
                     \(nonNullTag) = 0,
                     \(nullTag) = 1,
                 }
@@ -1651,8 +1706,8 @@ canDerivePartialEq = \types, type ->
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
             List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
 
-        TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.all fields \{ id } -> canDerivePartialEq types (Types.shape types id)
+        TagUnion (SingleTagStruct { payload: HasClosure _ }) ->
+            Bool.false
 
         TagUnion (NonRecursive { tags }) ->
             List.all tags \{ payload } ->
@@ -1712,9 +1767,11 @@ canDeriveCopy = \types, type ->
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
-        RocStr | Bool | Num _ | TagUnionPayload { fields: HasClosure _ } -> Bool.false
+        RocStr | Bool | Num _  -> Bool.false
         RocList id | RocSet id | RocBox id ->
             cannotDeriveDefault types (Types.shape types id)
+
+        TagUnionPayload { fields: HasClosure _ } -> Bool.true
 
         RocDict keyId valId ->
             cannotDeriveCopy types (Types.shape types keyId)

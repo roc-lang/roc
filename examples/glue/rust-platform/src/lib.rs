@@ -45,11 +45,6 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
     libc::memset(dst, c, n)
 }
@@ -92,9 +87,9 @@ pub extern "C" fn rust_main() -> i32 {
     let mut op: Op = roc_main();
 
     loop {
-        match dbg!(op.discriminant()) {
+        match op.discriminant() {
             StdoutWrite => {
-                let stdout_write = unsafe { op.get_StdoutWrite() };
+                let stdout_write = op.get_StdoutWrite();
                 let output: RocStr = stdout_write.f0;
                 op = unsafe { stdout_write.f1.force_thunk(()) };
 
@@ -103,7 +98,7 @@ pub extern "C" fn rust_main() -> i32 {
                 }
             }
             StderrWrite => {
-                let stderr_write = unsafe { op.get_StderrWrite() };
+                let stderr_write = op.get_StderrWrite();
                 let output: RocStr = stderr_write.f0;
                 op = unsafe { stderr_write.f1.force_thunk(()) };
 
