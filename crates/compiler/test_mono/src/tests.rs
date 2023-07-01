@@ -3216,3 +3216,47 @@ fn linked_list_filter() {
         "#
     )
 }
+
+#[mono_test]
+fn capture_void_layout_task() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Fx a : {} -> a
+
+        Task ok err : Fx (Result ok err)
+
+        succeed : ok -> Task ok *
+        succeed = \ok -> \{} -> Ok ok
+
+        after : Fx a, (a -> Fx b) -> Fx b
+        after = \fx, toNext ->
+            afterInner = \{} ->
+                fxOut = fx {}
+                next = toNext fxOut
+                next {}
+
+            afterInner
+
+        await : Task a err, (a -> Task b err) -> Task b err
+        await = \fx, toNext ->
+            inner = after fx \result ->
+                when result is
+                    Ok a ->
+                        bFx = toNext a
+                        bFx
+                    Err e -> (\{} -> Err e)
+            inner
+
+        forEach : List a, (a -> Task {} err) -> Task {} err
+        forEach = \list, fromElem ->
+            List.walk list (succeed {}) \task, elem ->
+                await task \{} -> fromElem elem
+
+        main : Task {} []
+        main =
+            forEach [] \_ -> succeed {}
+        "#
+    )
+}
