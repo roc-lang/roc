@@ -867,7 +867,7 @@ fn write_content<'a>(
             debug_assert!(env.debug.print_lambda_sets);
 
             // Easy mode 🤠
-            buf.push_str("?")
+            buf.push('?');
         }
         RangedNumber(range) => {
             buf.push_str("Range(");
