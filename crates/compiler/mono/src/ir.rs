@@ -1900,15 +1900,6 @@ pub enum Expr<'a> {
         lambda_name: LambdaName<'a>,
     },
 
-    Reuse {
-        symbol: Symbol,
-        update_tag_id: bool,
-        update_mode: UpdateModeId,
-        // normal Tag fields
-        tag_layout: UnionLayout<'a>,
-        tag_id: TagIdIntType,
-        arguments: &'a [Symbol],
-    },
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,

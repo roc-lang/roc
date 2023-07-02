@@ -495,21 +495,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 }
                 Some(Layout::OPAQUE_PTR)
             }
-            &Expr::Reuse {
-                symbol,
-                update_tag_id: _,
-                update_mode: _,
-                tag_layout,
-                tag_id: _,
-                arguments: _,
-            } => {
-                let union = self
-                    .interner
-                    .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
-                self.check_sym_layout(symbol, union, UseKind::TagReuse);
-                // TODO also check update arguments
-                Some(union)
-            }
             &Expr::Reset {
                 symbol,
                 update_mode: _,

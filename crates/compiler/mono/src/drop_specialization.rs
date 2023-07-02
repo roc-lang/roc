@@ -1601,7 +1601,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         PtrCast => RC::NoRc,
         Alloca => RC::NoRc,
 
-        PtrClearTagId | PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
         }
