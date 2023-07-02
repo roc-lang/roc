@@ -1413,7 +1413,7 @@ impl<'a> ClosureDataKind<'a> {
     pub fn data_layout(&self) -> InLayout<'a> {
         match self {
             Self::LambdaSet(lambda_set) => lambda_set.full_layout,
-            Self::Erased => Layout::OPAQUE_PTR,
+            Self::Erased => Layout::ERASED,
         }
     }
 }
@@ -2601,14 +2601,6 @@ impl<'a> Layout<'a> {
             _ => layout,
         }
     }
-}
-
-/// Index into an [Erased layout][Layout::ERASED].
-#[repr(u8)]
-pub(crate) enum ErasedIndex {
-    Value = 0,
-    Callee = 1,
-    RefCounter = 2,
 }
 
 impl<'a> LayoutRepr<'a> {

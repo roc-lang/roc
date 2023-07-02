@@ -2119,9 +2119,9 @@ impl<'a> Expr<'a> {
                 };
                 let callee = symbol_to_doc(alloc, *callee, pretty);
                 alloc
-                    .text("ErasedMake { value:")
+                    .text("ErasedMake { value: ")
                     .append(value)
-                    .append(", callee:")
+                    .append(", callee: ")
                     .append(callee)
                     .append(" }")
             }
@@ -4091,7 +4091,7 @@ impl<'a> ProcLayout<'a> {
                     arguments
                 } else {
                     let mut extended_args = Vec::with_capacity_in(arguments.len(), arena);
-                    extended_args.extend(arguments.iter().chain(&[Layout::OPAQUE_PTR]).copied());
+                    extended_args.extend(arguments.iter().chain(&[Layout::ERASED]).copied());
                     extended_args.into_bump_slice()
                 };
 

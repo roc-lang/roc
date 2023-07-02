@@ -4,30 +4,26 @@ use roc_types::subs::Variable;
 
 use crate::{
     borrow::Ownership,
-    layout::{ErasedIndex, FunctionPointer, InLayout, LambdaName, Layout, LayoutCache, LayoutRepr},
+    layout::{FunctionPointer, InLayout, LambdaName, Layout, LayoutCache, LayoutRepr},
 };
 
 use super::{
-    with_hole, BranchInfo, Call, CallType, CapturedSymbols, Env, Expr, JoinPointId, Param, Procs,
-    Stmt, UpdateModeId,
+    with_hole, BranchInfo, Call, CallType, CapturedSymbols, Env, ErasedField, Expr, JoinPointId,
+    Param, Procs, Stmt, UpdateModeId,
 };
-
-const ERASED_FUNCTION_FIELD_LAYOUTS: &[InLayout] =
-    &[Layout::OPAQUE_PTR, Layout::OPAQUE_PTR, Layout::OPAQUE_PTR];
 
 fn index_erased_function<'a>(
     arena: &'a Bump,
     assign_to: Symbol,
     erased_function: Symbol,
-    index: ErasedIndex,
+    field: ErasedField,
 ) -> impl FnOnce(Stmt<'a>) -> Stmt<'a> {
     move |rest| {
         Stmt::Let(
             assign_to,
-            Expr::StructAtIndex {
-                index: index as _,
-                structure: erased_function,
-                field_layouts: ERASED_FUNCTION_FIELD_LAYOUTS,
+            Expr::ErasedLoad {
+                symbol: erased_function,
+                field,
             },
             Layout::OPAQUE_PTR,
             arena.alloc(rest),
@@ -153,30 +149,30 @@ pub fn call_erased_function<'a>(
 
     let join_point_id = JoinPointId(env.unique_symbol());
 
-    // f_value = f.value
+    // f_value = ErasedLoad(f, .value)
     let f_value = env.unique_symbol();
-    let let_f_value = index_erased_function(arena, f_value, f, ErasedIndex::Value);
+    let let_f_value = index_erased_function(arena, f_value, f, ErasedField::Value);
 
-    // f_callee = f.callee
+    // f_callee = ErasedLoad(f, .callee)
     let f_callee = env.unique_symbol();
-    let let_f_callee = index_erased_function(arena, f_callee, f, ErasedIndex::Callee);
+    let let_f_callee = index_erased_function(arena, f_callee, f, ErasedField::Callee);
 
     let mut build_closure_data_branch = |env: &mut Env, pass_closure| {
-        // f_callee = cast(f_callee, (..params) -> ret);
+        // f_callee = Cast(f_callee, (..params) -> ret);
         // result = f_callee ..args
         // jump join result
 
         let (f_args, function_argument_symbols) = if pass_closure {
-            // f_args = ...args, f.value
+            // f_args = ...args, f
             // function_argument_symbols = ...args, f.value
             let f_args = {
                 let mut args = AVec::with_capacity_in(f_args.len() + 1, arena);
-                args.extend(f_args.iter().chain(&[Layout::OPAQUE_PTR]).copied());
+                args.extend(f_args.iter().chain(&[Layout::ERASED]).copied());
                 args.into_bump_slice()
             };
             let function_argument_symbols = {
                 let mut args = AVec::with_capacity_in(function_argument_symbols.len() + 1, arena);
-                args.extend(function_argument_symbols.iter().chain(&[f_value]));
+                args.extend(function_argument_symbols.iter().chain(&[f]));
                 args.into_bump_slice()
             };
             (f_args, function_argument_symbols)
@@ -239,9 +235,9 @@ pub fn call_erased_function<'a>(
         };
 
         let remainder =
-            // f_value = f.value
+            // f_value = ErasedLoad(f, .value)
             let_f_value(
-            // f_callee = f.callee
+            // f_callee = ErasedLoad(f, .callee)
             let_f_callee(
                 //
                 call_and_jump_on_value,
@@ -302,32 +298,26 @@ pub fn build_erased_function<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let value = env.unique_symbol();
-    let callee = env.unique_symbol();
-    let refcounter = env.unique_symbol();
-
-    // assigned = Expr::Struct({ value, callee, refcounter })
-    // hole <assigned>
-    let result = Stmt::Let(
-        assigned,
-        Expr::Struct(env.arena.alloc([value, callee, refcounter])),
-        Layout::ERASED,
-        hole,
-    );
-
-    // refcounter = TODO
-    // <hole>
-    let result = Stmt::Let(
-        refcounter,
-        Expr::NullPointer,
-        Layout::OPAQUE_PTR,
-        env.arena.alloc(result),
-    );
-
     let ResolvedErasedLambda {
         captures,
         lambda_name,
     } = resolved_lambda;
+
+    let value = match captures {
+        None => None,
+        Some(_) => Some(env.unique_symbol()),
+    };
+
+    let callee = env.unique_symbol();
+
+    // assigned = Expr::ErasedMake({ value, callee })
+    // hole <assigned>
+    let result = Stmt::Let(
+        assigned,
+        Expr::ErasedMake { value, callee },
+        Layout::ERASED,
+        hole,
+    );
 
     // callee = Expr::FunctionPointer(f)
     let result = Stmt::Let(
@@ -339,16 +329,7 @@ pub fn build_erased_function<'a>(
 
     // value = Expr::Box({s})
     match captures {
-        None => {
-            // value = nullptr
-            // <hole>
-            Stmt::Let(
-                value,
-                Expr::NullPointer,
-                Layout::OPAQUE_PTR,
-                env.arena.alloc(result),
-            )
-        }
+        None => result,
         Some(ResolvedErasedCaptures { layouts, symbols }) => {
             // captures = {...captures}
             // captures = Box(captures)
@@ -364,7 +345,7 @@ pub fn build_erased_function<'a>(
                 layout_cache.put_in_direct_no_semantic(LayoutRepr::Boxed(stack_captures_layout));
 
             let result = Stmt::Let(
-                value,
+                value.unwrap(),
                 Expr::Call(Call {
                     call_type: CallType::LowLevel {
                         op: LowLevel::PtrCast,
@@ -473,6 +454,7 @@ pub fn unpack_closure_data<'a>(
     captures: &[(Symbol, Variable)],
     mut hole: Stmt<'a>,
 ) -> Stmt<'a> {
+    let loaded_captures = env.unique_symbol();
     let heap_captures = env.unique_symbol();
     let stack_captures = env.unique_symbol();
 
@@ -525,5 +507,12 @@ pub fn unpack_closure_data<'a>(
         env.arena.alloc(hole),
     );
 
-    hole
+    let let_loaded_captures = index_erased_function(
+        env.arena,
+        loaded_captures,
+        captures_symbol,
+        ErasedField::Value,
+    );
+
+    let_loaded_captures(hole)
 }

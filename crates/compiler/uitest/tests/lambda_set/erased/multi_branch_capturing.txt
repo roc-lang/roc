@@ -13,101 +13,97 @@ main = (f "") {}
 #       ^^^^ {} -?-> Str
 
 # -emit:mono
-procedure : `#UserApp.3` Str
-procedure = `#UserApp.3` (`#UserApp.40`: {}):
-    let `#UserApp.41` : Str = "";
-    ret `#UserApp.41`;
+procedure Bool.2 ():
+    let Bool.23 : Int1 = true;
+    ret Bool.23;
 
-procedure : `#UserApp.4` Str
-procedure = `#UserApp.4` (`#UserApp.29`: {}, `#Attr.#arg_closure`: Boxed([])):
-    let `#UserApp.31` : Boxed({Str}) = lowlevel PtrCast `#Attr.#arg_closure`;
-    let `#UserApp.32` : {Str} = Unbox `#UserApp.31`;
-    joinpoint `#Derived_gen.IdentId(0)`:
-        let `#UserApp.s` : Str = StructAtIndex 0 `#UserApp.32`;
-        ret `#UserApp.s`;
+procedure Test.1 (Test.2):
+    let Test.38 : Int1 = CallByName Bool.2;
+    if Test.38 then
+        dec Test.2;
+        let Test.44 : {} = Struct {};
+        let Test.45 : Boxed({}) = Box Test.44;
+        let Test.42 : Boxed([]) = lowlevel PtrCast Test.45;
+        let Test.43 : Boxed([]) = FunctionPointer Test.3;
+        dec Test.43;
+        let Test.39 : ?Erased = ErasedMake { value: Test.42, callee: Test.43 };
+        ret Test.39;
+    else
+        let Test.36 : {Str} = Struct {Test.2};
+        let Test.37 : Boxed({Str}) = Box Test.36;
+        let Test.34 : Boxed([]) = lowlevel PtrCast Test.37;
+        let Test.35 : Boxed([]) = FunctionPointer Test.4;
+        dec Test.35;
+        let Test.28 : ?Erased = ErasedMake { value: Test.34, callee: Test.35 };
+        ret Test.28;
+
+procedure Test.3 (Test.40):
+    let Test.41 : Str = "";
+    ret Test.41;
+
+procedure Test.4 (Test.29, #Attr.12):
+    inc #Attr.12;
+    let Test.31 : Boxed([]) = ErasedLoad #Attr.12 .Value;
+    dec Test.31;
+    let Test.32 : Boxed({Str}) = lowlevel PtrCast #Attr.12;
+    let Test.33 : {Str} = Unbox Test.32;
+    joinpoint #Derived_gen.0:
+        let Test.2 : Str = StructAtIndex 0 Test.33;
+        ret Test.2;
     in
-    let `#Derived_gen.IdentId(1)` : Int1 = lowlevel RefCountIsUnique `#UserApp.31`;
-    if `#Derived_gen.IdentId(1)` then
-        decref `#UserApp.31`;
-        jump `#Derived_gen.IdentId(0)`;
+    let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.32;
+    if #Derived_gen.1 then
+        free Test.32;
+        jump #Derived_gen.0;
     else
-        inc `#UserApp.32`;
-        decref `#UserApp.31`;
-        jump `#Derived_gen.IdentId(0)`;
+        inc Test.33;
+        decref Test.32;
+        jump #Derived_gen.0;
 
-procedure : `#UserApp.f` {Boxed([]), Boxed([]), Boxed([])}
-procedure = `#UserApp.f` (`#UserApp.s`: Str):
-    let `#UserApp.38` : Int1 = CallByName `Bool.true`;
-    if `#UserApp.38` then
-        dec `#UserApp.s`;
-        let `#UserApp.45` : {} = Struct {};
-        let `#UserApp.46` : Boxed({}) = Box `#UserApp.45`;
-        let `#UserApp.42` : Boxed([]) = lowlevel PtrCast `#UserApp.46`;
-        let `#UserApp.43` : Boxed([]) = FunctionPointer `#UserApp.3`;
-        let `#UserApp.44` : Boxed([]) = NullPointer;
-        let `#UserApp.39` : {Boxed([]), Boxed([]), Boxed([])} = Struct {`#UserApp.42`, `#UserApp.43`, `#UserApp.44`};
-        ret `#UserApp.39`;
-    else
-        let `#UserApp.36` : {Str} = Struct {`#UserApp.s`};
-        let `#UserApp.37` : Boxed({Str}) = Box `#UserApp.36`;
-        let `#UserApp.33` : Boxed([]) = lowlevel PtrCast `#UserApp.37`;
-        let `#UserApp.34` : Boxed([]) = FunctionPointer `#UserApp.4`;
-        let `#UserApp.35` : Boxed([]) = NullPointer;
-        let `#UserApp.28` : {Boxed([]), Boxed([]), Boxed([])} = Struct {`#UserApp.33`, `#UserApp.34`, `#UserApp.35`};
-        ret `#UserApp.28`;
-
-procedure : `Bool.true` Int1
-procedure = `Bool.true` ():
-    let `Bool.23` : Int1 = true;
-    ret `Bool.23`;
-
-procedure : `#UserApp.main` Str
-procedure = `#UserApp.main` ():
-    let `#UserApp.6` : {} = Struct {};
-    let `#UserApp.17` : Str = "";
-    let `#UserApp.47` : Boxed([]) = NullPointer;
-    let `#UserApp.48` : Boxed([]) = FunctionPointer `#UserApp.f`;
-    let `#UserApp.49` : Boxed([]) = NullPointer;
-    let `#UserApp.18` : {Boxed([]), Boxed([]), Boxed([])} = Struct {`#UserApp.47`, `#UserApp.48`, `#UserApp.49`};
-    joinpoint `#UserApp.19` `#UserApp.7`:
-        joinpoint `#UserApp.8` `#UserApp.5`:
-            ret `#UserApp.5`;
+procedure Test.0 ():
+    let Test.6 : {} = Struct {};
+    let Test.17 : Str = "";
+    let Test.46 : Boxed([]) = FunctionPointer Test.1;
+    dec Test.46;
+    let Test.18 : ?Erased = ErasedMake { value: <null>, callee: Test.46 };
+    joinpoint Test.19 Test.7:
+        joinpoint Test.8 Test.5:
+            ret Test.5;
         in
-        let `#UserApp.9` : Boxed([]) = StructAtIndex 0 `#UserApp.7`;
-        let `#UserApp.10` : Boxed([]) = StructAtIndex 1 `#UserApp.7`;
-        let `#Derived_gen.IdentId(4)` : Boxed([]) = StructAtIndex 2 `#UserApp.7`;
-        dec `#Derived_gen.IdentId(4)`;
-        let `#UserApp.12` : Boxed([]) = NullPointer;
-        let `#UserApp.11` : Int1 = lowlevel Eq `#UserApp.9` `#UserApp.12`;
-        dec `#UserApp.12`;
-        switch `#UserApp.11`:
+        let Test.9 : Boxed([]) = ErasedLoad Test.7 .Value;
+        let Test.10 : Boxed([]) = ErasedLoad Test.7 .Callee;
+        let Test.12 : Boxed([]) = NullPointer;
+        let Test.11 : Int1 = lowlevel Eq Test.9 Test.12;
+        dec Test.12;
+        dec Test.9;
+        switch Test.11:
             case 0:
-                dec `#UserApp.9`;
-                let `#UserApp.13` : FunPtr({} -> Str) = lowlevel PtrCast `#UserApp.10`;
-                let `#UserApp.14` : Str = CallByPtr `#UserApp.13` `#UserApp.6`;
-                jump `#UserApp.8` `#UserApp.14`;
+                let Test.13 : FunPtr({} -> Str) = lowlevel PtrCast Test.10;
+                let Test.14 : Str = CallByPtr Test.13 Test.6;
+                jump Test.8 Test.14;
         
             default:
-                let `#UserApp.15` : FunPtr({}, Boxed([]) -> Str) = lowlevel PtrCast `#UserApp.10`;
-                let `#UserApp.16` : Str = CallByPtr `#UserApp.15` `#UserApp.6` `#UserApp.9`;
-                jump `#UserApp.8` `#UserApp.16`;
+                inc Test.7;
+                let Test.15 : FunPtr({}, ?Erased -> Str) = lowlevel PtrCast Test.10;
+                let Test.16 : Str = CallByPtr Test.15 Test.6 Test.7;
+                jump Test.8 Test.16;
         
     in
-    let `#UserApp.20` : Boxed([]) = StructAtIndex 0 `#UserApp.18`;
-    let `#UserApp.21` : Boxed([]) = StructAtIndex 1 `#UserApp.18`;
-    dec `#UserApp.49`;
-    let `#UserApp.23` : Boxed([]) = NullPointer;
-    let `#UserApp.22` : Int1 = lowlevel Eq `#UserApp.20` `#UserApp.23`;
-    dec `#UserApp.23`;
-    switch `#UserApp.22`:
+    let Test.20 : Boxed([]) = ErasedLoad Test.18 .Value;
+    let Test.21 : Boxed([]) = ErasedLoad Test.18 .Callee;
+    let Test.23 : Boxed([]) = NullPointer;
+    let Test.22 : Int1 = lowlevel Eq Test.20 Test.23;
+    dec Test.20;
+    dec Test.23;
+    switch Test.22:
         case 0:
-            dec `#UserApp.20`;
-            let `#UserApp.24` : FunPtr(Str -> {Boxed([]), Boxed([]), Boxed([])}) = lowlevel PtrCast `#UserApp.21`;
-            let `#UserApp.25` : {Boxed([]), Boxed([]), Boxed([])} = CallByPtr `#UserApp.24` `#UserApp.17`;
-            jump `#UserApp.19` `#UserApp.25`;
+            let Test.24 : FunPtr(Str -> ?Erased) = lowlevel PtrCast Test.21;
+            let Test.25 : ?Erased = CallByPtr Test.24 Test.17;
+            jump Test.19 Test.25;
     
         default:
-            let `#UserApp.26` : FunPtr(Str, Boxed([]) -> {Boxed([]), Boxed([]), Boxed([])}) = lowlevel PtrCast `#UserApp.21`;
-            let `#UserApp.27` : {Boxed([]), Boxed([]), Boxed([])} = CallByPtr `#UserApp.26` `#UserApp.17` `#UserApp.20`;
-            jump `#UserApp.19` `#UserApp.27`;
+            inc Test.18;
+            let Test.26 : FunPtr(Str, ?Erased -> ?Erased) = lowlevel PtrCast Test.21;
+            let Test.27 : ?Erased = CallByPtr Test.26 Test.17 Test.18;
+            jump Test.19 Test.27;
     
