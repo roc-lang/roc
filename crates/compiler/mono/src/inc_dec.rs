@@ -887,6 +887,16 @@ fn insert_refcount_operations_binding<'a>(
             inc_owned!(arguments.iter().copied(), new_let)
         }
 
+        Expr::ErasedMake { value, callee: _ } => {
+            let new_let = new_let!(stmt);
+
+            if let Some(value) = value {
+                inc_owned!([*value], new_let)
+            } else {
+                new_let
+            }
+        }
+
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
         | Expr::UnionAtIndex { structure, .. }

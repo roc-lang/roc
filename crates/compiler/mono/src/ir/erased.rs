@@ -122,13 +122,15 @@ fn is_null<'a>(
 /// f = compile(f)
 /// joinpoint join result:
 ///    <hole>
-/// if (f.value) {
-///    f = cast(f.callee, (..params, void*) -> ret);
-///    result = f ..args f.value
+/// f_value: Ptr<[]> = ErasedLoad(f, .value)
+/// f_callee: Ptr<[]> = ErasedLoad(f, .callee)
+/// if (f_value != nullptr) {
+///    f_callee = Cast(f_callee, (..params, Erased) -> ret);
+///    result = f_callee ..args f
 ///    jump join result
 /// } else {
-///    f = cast(f.callee, (..params) -> ret);
-///    result = f ..args
+///    f_callee = cast(f_callee, (..params) -> ret);
+///    result = f_callee ..args
 ///    jump join result
 /// }
 /// ```
@@ -275,10 +277,23 @@ pub fn call_erased_function<'a>(
 /// We generate
 ///
 /// ```
-/// value = Expr::Box({s})
+/// boxed_value = Expr::Box({s})
+/// stack_value: Ptr<[]> = Cast(boxed_value, Ptr<[]>)
 /// callee = Expr::FunctionPointer(f)
-/// refcounter = TODO
-/// f = Expr::Struct({ value, callee, refcounter })
+/// f = Expr::ErasedMake({ value, callee })
+/// ```
+///
+/// Given
+///
+/// ```
+/// f = \{} -> {}
+/// ```
+///
+/// We generate
+///
+/// ```
+/// callee = Expr::FunctionPointer(f)
+/// f = Expr::ErasedMake({ value: nullptr, callee })
 /// ```
 pub fn build_erased_function<'a>(
     env: &mut Env<'a, '_>,
@@ -437,14 +452,15 @@ impl<'a> ResolvedErasedLambda<'a> {
 /// Given
 ///
 /// ```
-/// captures_symbol : void*
-/// captures = { a: A, b: B }
+/// proc f(...args, captures_symbol: Erased):
+///     # captures = { a: A, b: B }
 /// ```
 ///
 /// We generate
 ///
 /// ```
-/// heap_captures: Box { A, B } = Expr::Call(Lowlevel { Cast, captures_symbol })
+/// loaded_captures: Ptr<[]> = ErasedLoad(captures_symbol, .value)
+/// heap_captures: Box<{ A, B }> = Expr::Call(Lowlevel { Cast, captures_symbol })
 /// stack_captures = Expr::Unbox(heap_captures)
 /// a = Expr::StructAtIndex(stack_captures, 0)
 /// b = Expr::StructAtIndex(stack_captures, 1)

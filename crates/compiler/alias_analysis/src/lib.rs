@@ -1522,6 +1522,7 @@ fn expr_spec<'a>(
             builder.add_make_named(block, MOD_APP, type_name, value)
         }
         FunctionPointer { .. } => todo_lambda_erasure!(),
+        ErasedMake { .. } => todo_lambda_erasure!(),
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(env, builder, interner, interner.get_repr(layout))?;
 

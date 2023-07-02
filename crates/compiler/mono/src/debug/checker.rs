@@ -15,6 +15,11 @@ use crate::{
     },
 };
 
+pub enum ErasedMakeKind {
+    Value,
+    Callee,
+}
+
 pub enum UseKind {
     Ret,
     TagExpr,
@@ -27,6 +32,7 @@ pub enum UseKind {
     SwitchCond,
     ExpectCond,
     ExpectLookup,
+    ErasedMake(ErasedMakeKind),
 }
 
 pub enum ProblemKind<'a> {
@@ -484,6 +490,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     }
                 }
             }),
+            &Expr::ErasedMake { value, callee } => {
+                self.check_erased_make(value, callee);
+                Some(Layout::ERASED)
+            }
             &Expr::FunctionPointer { lambda_name } => {
                 let lambda_symbol = lambda_name.name();
                 if !self.procs.iter().any(|((name, proc), _)| {
@@ -747,6 +757,21 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 self.check_sym_exists(sym);
             }
         }
+    }
+
+    fn check_erased_make(&mut self, value: Option<Symbol>, callee: Symbol) {
+        if let Some(value) = value {
+            self.check_sym_layout(
+                value,
+                Layout::OPAQUE_PTR,
+                UseKind::ErasedMake(ErasedMakeKind::Value),
+            );
+        }
+        self.check_sym_layout(
+            callee,
+            Layout::OPAQUE_PTR,
+            UseKind::ErasedMake(ErasedMakeKind::Callee),
+        );
     }
 }
 

@@ -149,6 +149,16 @@ impl<'a> LastSeenMap<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
+                    Expr::ExprBox { symbol } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
+                    Expr::ExprUnbox { symbol } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
+                    Expr::ErasedMake { value, callee } => {
+                        value.map(|v| self.set_last_seen(v, stmt));
+                        self.set_last_seen(*callee, stmt);
+                    }
                     Expr::Struct(syms) => {
                         for sym in *syms {
                             self.set_last_seen(*sym, stmt);
@@ -846,6 +856,7 @@ trait Backend<'a> {
                 self.load_literal_i64(sym, 0);
             }
             Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+            Expr::ErasedMake { .. } => todo_lambda_erasure!(),
             Expr::Reset { symbol, .. } => {
                 let layout = *self.layout_map().get(symbol).unwrap();
 

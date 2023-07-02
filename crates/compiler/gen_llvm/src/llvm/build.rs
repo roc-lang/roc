@@ -1126,6 +1126,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             )
         }
 
+        ErasedMake { .. } => todo_lambda_erasure!(),
         FunctionPointer { .. } => todo_lambda_erasure!(),
 
         Reset {

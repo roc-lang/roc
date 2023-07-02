@@ -708,6 +708,35 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_if_param(xs);
             }
 
+            ExprBox { symbol: x } => {
+                self.own_var(z);
+
+                // if the used symbol is an argument to the current function,
+                // the function must take it as an owned parameter
+                self.own_args_if_param(&[*x]);
+            }
+
+            ExprUnbox { symbol: x } => {
+                // if the boxed value is owned, the box is
+                self.if_is_owned_then_own(*x, z);
+
+                // if the extracted value is owned, the structure must be too
+                self.if_is_owned_then_own(z, *x);
+            }
+
+            ErasedMake { value, callee } => {
+                value.map(|v| {
+                    // if the value is owned, the erasure is
+                    self.if_is_owned_then_own(v, z);
+
+                    // if the erasure is owned, the value is
+                    self.if_is_owned_then_own(z, v);
+                });
+
+                // the erasure owns the callee (which should always be a stack value)
+                self.own_var(*callee);
+            }
+
             Reset { symbol: x, .. } | ResetRef { symbol: x, .. } => {
                 self.own_var(z);
                 self.own_var(*x);

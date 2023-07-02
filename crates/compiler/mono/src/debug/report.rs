@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    checker::{ProblemKind, UseKind},
+    checker::{ErasedMakeKind, ProblemKind, UseKind},
     Problem, Problems,
 };
 
@@ -438,6 +438,10 @@ fn format_use_kind(use_kind: UseKind) -> &'static str {
         UseKind::SwitchCond => "switch condition",
         UseKind::ExpectCond => "expect condition",
         UseKind::ExpectLookup => "lookup for an expect",
+        UseKind::ErasedMake(kind) => match kind {
+            ErasedMakeKind::Value => "erased value",
+            ErasedMakeKind::Callee => "erased callee",
+        },
     }
 }
 

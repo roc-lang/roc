@@ -1895,6 +1895,15 @@ pub enum Expr<'a> {
         symbol: Symbol,
     },
 
+    /// Creates a type-erased value.
+    ErasedMake {
+        /// The erased value. If this is an erased function, the value are the function captures,
+        /// or `None` if the function is not a closure.
+        value: Option<Symbol>,
+        /// The function pointer of the erased value, if it's an erased function.
+        callee: Symbol,
+    },
+
     /// Returns a pointer to the given function.
     FunctionPointer {
         lambda_name: LambdaName<'a>,
@@ -2088,6 +2097,20 @@ impl<'a> Expr<'a> {
             ExprUnbox { symbol, .. } => alloc
                 .text("Unbox ")
                 .append(symbol_to_doc(alloc, *symbol, pretty)),
+
+            ErasedMake { value, callee } => {
+                let value = match value {
+                    Some(v) => symbol_to_doc(alloc, *v, pretty),
+                    None => alloc.text("<null>"),
+                };
+                let callee = symbol_to_doc(alloc, *callee, pretty);
+                alloc
+                    .text("ErasedMake { value:")
+                    .append(value)
+                    .append(", callee:")
+                    .append(callee)
+                    .append(" }")
+            }
 
             FunctionPointer { lambda_name } => alloc
                 .text("FunctionPointer ")
@@ -7791,6 +7814,27 @@ fn substitute_in_expr<'a>(
 
         ExprUnbox { symbol } => {
             substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
+        }
+
+        ErasedMake { value, callee } => {
+            match (
+                value.and_then(|v| substitute(subs, v)),
+                substitute(subs, *callee),
+            ) {
+                (None, None) => None,
+                (Some(value), None) => Some(ErasedMake {
+                    value: Some(value),
+                    callee: *callee,
+                }),
+                (None, Some(callee)) => Some(ErasedMake {
+                    value: *value,
+                    callee,
+                }),
+                (Some(value), Some(callee)) => Some(ErasedMake {
+                    value: Some(value),
+                    callee,
+                }),
+            }
         }
 
         FunctionPointer { .. } => None,

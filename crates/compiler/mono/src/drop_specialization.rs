@@ -228,6 +228,11 @@ fn specialize_drops_stmt<'a, 'i>(
                             environment.add_list_child(*binding, *child, index as u64);
                         }
                     }
+                    ErasedMake { value, callee: _ } => {
+                        if let Some(value) = value {
+                            environment.add_struct_child(*binding, *value, 0);
+                        }
+                    }
                     Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
                     RuntimeErrorFunction(_)
                     | FunctionPointer { .. }
