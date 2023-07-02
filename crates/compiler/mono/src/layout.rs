@@ -722,9 +722,9 @@ impl<'a> FunctionPointer<'a> {
         let ret = interner.to_doc(ret, alloc, seen_rec, parens);
 
         alloc
-            .text("FunPtr(")
+            .text("FunPtr((")
             .append(args)
-            .append(alloc.text(" -> "))
+            .append(alloc.text(") -> "))
             .append(ret)
             .append(")")
     }

@@ -29,6 +29,7 @@ pub enum UseKind {
     ExpectLookup,
     ErasedMake(ErasedField),
     Erased,
+    FunctionPointer,
 }
 
 pub enum ProblemKind<'a> {
@@ -118,6 +119,24 @@ pub enum ProblemKind<'a> {
     CreateTagPayloadMismatch {
         num_needed: usize,
         num_given: usize,
+    },
+    ErasedMakeValueNotBoxed {
+        symbol: Symbol,
+        def_layout: InLayout<'a>,
+        def_line: usize,
+    },
+    ErasedMakeCalleeNotFunctionPointer {
+        symbol: Symbol,
+        def_layout: InLayout<'a>,
+        def_line: usize,
+    },
+    ErasedLoadValueNotBoxed {
+        symbol: Symbol,
+        target_layout: InLayout<'a>,
+    },
+    ErasedLoadCalleeNotFunctionPointer {
+        symbol: Symbol,
+        target_layout: InLayout<'a>,
     },
 }
 
@@ -276,7 +295,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
         match body {
             Stmt::Let(x, e, x_layout, rest) => {
-                if let Some(e_layout) = self.check_expr(e) {
+                if let Some(e_layout) = self.check_expr(e, *x_layout) {
                     if self.not_equiv(e_layout, *x_layout) {
                         self.problem(ProblemKind::SymbolDefMismatch {
                             symbol: *x,
@@ -393,7 +412,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         }
     }
 
-    fn check_expr(&mut self, e: &Expr<'a>) -> Option<InLayout<'a>> {
+    fn check_expr(&mut self, e: &Expr<'a>, target_layout: InLayout<'a>) -> Option<InLayout<'a>> {
         match e {
             Expr::Literal(_) => None,
             Expr::NullPointer => None,
@@ -486,11 +505,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     }
                 }
             }),
-            &Expr::ErasedMake { value, callee } => {
-                self.check_erased_make(value, callee);
-                Some(Layout::ERASED)
+            &Expr::ErasedMake { value, callee } => Some(self.check_erased_make(value, callee)),
+            &Expr::ErasedLoad { symbol, field } => {
+                Some(self.check_erased_load(symbol, field, target_layout))
             }
-            &Expr::ErasedLoad { symbol, field } => Some(self.check_erased_load(symbol, field)),
             &Expr::FunctionPointer { lambda_name } => {
                 let lambda_symbol = lambda_name.name();
                 if !self.procs.iter().any(|((name, proc), _)| {
@@ -500,7 +518,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         symbol: lambda_symbol,
                     });
                 }
-                Some(Layout::OPAQUE_PTR)
+                Some(target_layout)
             }
             &Expr::Reset {
                 symbol,
@@ -691,7 +709,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                             args: arg_layouts,
                             ret: *ret_layout,
                         }));
-                self.check_sym_layout(*pointer, expected_layout, UseKind::SwitchCond);
+                self.check_sym_layout(*pointer, expected_layout, UseKind::FunctionPointer);
                 for (arg, wanted_layout) in arguments.iter().zip(arg_layouts.iter()) {
                     self.check_sym_layout(*arg, *wanted_layout, UseKind::CallArg);
                 }
@@ -756,28 +774,67 @@ impl<'a, 'r> Ctx<'a, 'r> {
         }
     }
 
-    fn check_erased_make(&mut self, value: Option<Symbol>, callee: Symbol) {
+    fn check_erased_make(&mut self, value: Option<Symbol>, callee: Symbol) -> InLayout<'a> {
         if let Some(value) = value {
-            self.check_sym_layout(
-                value,
-                Layout::OPAQUE_PTR,
-                UseKind::ErasedMake(ErasedField::Value),
-            );
+            self.with_sym_layout(value, |this, def_line, layout| {
+                let repr = this.interner.get_repr(layout);
+                if !matches!(repr, LayoutRepr::Boxed(_)) {
+                    this.problem(ProblemKind::ErasedMakeValueNotBoxed {
+                        symbol: value,
+                        def_layout: layout,
+                        def_line,
+                    });
+                }
+
+                Option::<()>::None
+            });
         }
-        self.check_sym_layout(
-            callee,
-            Layout::OPAQUE_PTR,
-            UseKind::ErasedMake(ErasedField::Callee),
-        );
+        self.with_sym_layout(callee, |this, def_line, layout| {
+            let repr = this.interner.get_repr(layout);
+            if !matches!(repr, LayoutRepr::FunctionPointer(_)) {
+                this.problem(ProblemKind::ErasedMakeCalleeNotFunctionPointer {
+                    symbol: callee,
+                    def_layout: layout,
+                    def_line,
+                });
+            }
+
+            Option::<()>::None
+        });
+
+        Layout::ERASED
     }
 
-    fn check_erased_load(&mut self, symbol: Symbol, field: ErasedField) -> InLayout<'a> {
+    fn check_erased_load(
+        &mut self,
+        symbol: Symbol,
+        field: ErasedField,
+        target_layout: InLayout<'a>,
+    ) -> InLayout<'a> {
         self.check_sym_layout(symbol, Layout::ERASED, UseKind::Erased);
 
         match field {
-            ErasedField::Value => Layout::OPAQUE_PTR,
-            ErasedField::Callee => Layout::OPAQUE_PTR,
+            ErasedField::Value => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(repr, LayoutRepr::Boxed(_)) {
+                    self.problem(ProblemKind::ErasedLoadValueNotBoxed {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
+            ErasedField::Callee => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(repr, LayoutRepr::FunctionPointer(_)) {
+                    self.problem(ProblemKind::ErasedLoadCalleeNotFunctionPointer {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
         }
+
+        target_layout
     }
 }
 

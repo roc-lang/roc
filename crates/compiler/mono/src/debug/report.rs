@@ -415,6 +415,74 @@ where
                 f.as_string(num_given),
             ])
         }
+        ProblemKind::ErasedMakeValueNotBoxed {
+            symbol,
+            def_layout,
+            def_line,
+        } => {
+            title = "ERASED VALUE IS NOT BOXED";
+            docs_before = vec![(
+                def_line,
+                f.concat([
+                    f.reflow("The value "),
+                    format_symbol(f, interns, symbol),
+                    f.reflow(" defined here"),
+                ]),
+            )];
+            f.concat([
+                f.reflow("must be boxed in order to be erased, but has layout "),
+                interner.to_doc_top(def_layout, f),
+            ])
+        }
+        ProblemKind::ErasedMakeCalleeNotFunctionPointer {
+            symbol,
+            def_layout,
+            def_line,
+        } => {
+            title = "ERASED CALLEE IS NOT A FUNCTION POINTER";
+            docs_before = vec![(
+                def_line,
+                f.concat([
+                    f.reflow("The value "),
+                    format_symbol(f, interns, symbol),
+                    f.reflow(" defined here"),
+                ]),
+            )];
+            f.concat([
+                f.reflow(
+                    "must be a function pointer in order to be an erasure callee, but has layout ",
+                ),
+                interner.to_doc_top(def_layout, f),
+            ])
+        }
+        ProblemKind::ErasedLoadValueNotBoxed {
+            symbol,
+            target_layout,
+        } => {
+            title = "ERASED VALUE IS NOT BOXED";
+            docs_before = vec![];
+            f.concat([
+                f.reflow("The erased value load "),
+                format_symbol(f, interns, symbol),
+                f.reflow(" has layout "),
+                interner.to_doc_top(target_layout, f),
+                f.reflow(", but should be boxed!"),
+            ])
+        }
+        ProblemKind::ErasedLoadCalleeNotFunctionPointer {
+            symbol,
+            target_layout,
+        } => {
+            title = "ERASED CALLEE IS NOT A FUNCTION POINTER";
+            docs_before = vec![];
+            f.concat([
+                f.reflow("The erased callee load "),
+                format_symbol(f, interns, symbol),
+                f.reflow(" has layout "),
+                interner.to_doc_top(target_layout, f),
+                f.reflow(", but should be a function pointer!"),
+            ])
+        }
     };
     (title, docs_before, doc)
 }
@@ -443,6 +511,7 @@ fn format_use_kind(use_kind: UseKind) -> &'static str {
             ErasedField::Callee => "erased callee field",
         },
         UseKind::Erased => "erasure",
+        UseKind::FunctionPointer => "function pointer",
     }
 }
 

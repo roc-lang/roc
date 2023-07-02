@@ -5268,12 +5268,18 @@ pub fn with_hole<'a>(
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
-                RawFunctionLayout::ErasedFunction(_argument_layouts, _ret_layout) => {
+                RawFunctionLayout::ErasedFunction(argument_layouts, ret_layout) => {
                     let captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
                     let captured_symbols = captured_symbols.into_bump_slice();
                     let captured_symbols = CapturedSymbols::Captured(captured_symbols);
-                    let resolved_erased_lambda =
-                        ResolvedErasedLambda::new(env, layout_cache, name, captured_symbols);
+                    let resolved_erased_lambda = ResolvedErasedLambda::new(
+                        env,
+                        layout_cache,
+                        name,
+                        captured_symbols,
+                        argument_layouts,
+                        ret_layout,
+                    );
 
                     let inserted = procs.insert_anonymous(
                         env,
@@ -8340,9 +8346,15 @@ fn specialize_symbol<'a>(
                         )
                     }
                 }
-                RawFunctionLayout::ErasedFunction(..) => {
-                    let erased_lambda =
-                        erased::ResolvedErasedLambda::new(env, layout_cache, original, captured);
+                RawFunctionLayout::ErasedFunction(argument_layouts, ret_layout) => {
+                    let erased_lambda = erased::ResolvedErasedLambda::new(
+                        env,
+                        layout_cache,
+                        original,
+                        captured,
+                        argument_layouts,
+                        ret_layout,
+                    );
                     let lambda_name = erased_lambda.lambda_name();
 
                     let proc_layout =
