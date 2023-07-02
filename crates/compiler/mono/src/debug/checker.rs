@@ -6,19 +6,14 @@ use roc_module::symbol::Symbol;
 
 use crate::{
     ir::{
-        Call, CallSpecId, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
-        ModifyRc, Param, Proc, ProcLayout, Stmt,
+        Call, CallSpecId, CallType, ErasedField, Expr, HigherOrderLowLevel, JoinPointId,
+        ListLiteralElement, ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{
         Builtin, FunctionPointer, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner,
         TagIdIntType, UnionLayout,
     },
 };
-
-pub enum ErasedMakeKind {
-    Value,
-    Callee,
-}
 
 pub enum UseKind {
     Ret,
@@ -32,7 +27,8 @@ pub enum UseKind {
     SwitchCond,
     ExpectCond,
     ExpectLookup,
-    ErasedMake(ErasedMakeKind),
+    ErasedMake(ErasedField),
+    Erased,
 }
 
 pub enum ProblemKind<'a> {
@@ -494,6 +490,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 self.check_erased_make(value, callee);
                 Some(Layout::ERASED)
             }
+            &Expr::ErasedLoad { symbol, field } => Some(self.check_erased_load(symbol, field)),
             &Expr::FunctionPointer { lambda_name } => {
                 let lambda_symbol = lambda_name.name();
                 if !self.procs.iter().any(|((name, proc), _)| {
@@ -764,14 +761,23 @@ impl<'a, 'r> Ctx<'a, 'r> {
             self.check_sym_layout(
                 value,
                 Layout::OPAQUE_PTR,
-                UseKind::ErasedMake(ErasedMakeKind::Value),
+                UseKind::ErasedMake(ErasedField::Value),
             );
         }
         self.check_sym_layout(
             callee,
             Layout::OPAQUE_PTR,
-            UseKind::ErasedMake(ErasedMakeKind::Callee),
+            UseKind::ErasedMake(ErasedField::Callee),
         );
+    }
+
+    fn check_erased_load(&mut self, symbol: Symbol, field: ErasedField) -> InLayout<'a> {
+        self.check_sym_layout(symbol, Layout::ERASED, UseKind::Erased);
+
+        match field {
+            ErasedField::Value => Layout::OPAQUE_PTR,
+            ErasedField::Callee => Layout::OPAQUE_PTR,
+        }
     }
 }
 

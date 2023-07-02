@@ -1142,6 +1142,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
             Expr::ErasedMake { .. } => todo_lambda_erasure!(),
+            Expr::ErasedLoad { .. } => todo_lambda_erasure!(),
 
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 

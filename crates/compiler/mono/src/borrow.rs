@@ -737,6 +737,14 @@ impl<'a> BorrowInfState<'a> {
                 self.own_var(*callee);
             }
 
+            ErasedLoad { symbol, field: _ } => {
+                // if the extracted value is owned, the erasure is too
+                self.if_is_owned_then_own(*symbol, z);
+
+                // if the erasure is owned, so is the extracted value
+                self.if_is_owned_then_own(z, *symbol);
+            }
+
             Reset { symbol: x, .. } | ResetRef { symbol: x, .. } => {
                 self.own_var(z);
                 self.own_var(*x);

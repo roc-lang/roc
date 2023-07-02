@@ -14,6 +14,7 @@ use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
+use crate::ir::ErasedField;
 use crate::{
     borrow::{lowlevel_borrow_signature, Ownership},
     ir::{
@@ -894,6 +895,15 @@ fn insert_refcount_operations_binding<'a>(
                 inc_owned!([*value], new_let)
             } else {
                 new_let
+            }
+        }
+
+        Expr::ErasedLoad { symbol, field } => {
+            let new_let = new_let!(stmt);
+
+            match field {
+                ErasedField::Value => inc_owned!([*symbol], new_let),
+                ErasedField::Callee => new_let,
             }
         }
 

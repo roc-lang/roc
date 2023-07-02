@@ -1523,6 +1523,7 @@ fn expr_spec<'a>(
         }
         FunctionPointer { .. } => todo_lambda_erasure!(),
         ErasedMake { .. } => todo_lambda_erasure!(),
+        ErasedLoad { .. } => todo_lambda_erasure!(),
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(env, builder, interner, interner.get_repr(layout))?;
 

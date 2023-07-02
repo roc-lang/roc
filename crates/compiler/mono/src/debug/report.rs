@@ -4,12 +4,12 @@ use roc_module::symbol::{Interns, Symbol};
 use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
 use crate::{
-    ir::{Parens, ProcLayout},
+    ir::{ErasedField, Parens, ProcLayout},
     layout::LayoutInterner,
 };
 
 use super::{
-    checker::{ErasedMakeKind, ProblemKind, UseKind},
+    checker::{ProblemKind, UseKind},
     Problem, Problems,
 };
 
@@ -439,9 +439,10 @@ fn format_use_kind(use_kind: UseKind) -> &'static str {
         UseKind::ExpectCond => "expect condition",
         UseKind::ExpectLookup => "lookup for an expect",
         UseKind::ErasedMake(kind) => match kind {
-            ErasedMakeKind::Value => "erased value",
-            ErasedMakeKind::Callee => "erased callee",
+            ErasedField::Value => "erased value field",
+            ErasedField::Callee => "erased callee field",
         },
+        UseKind::Erased => "erasure",
     }
 }
 

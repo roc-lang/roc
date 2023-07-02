@@ -17,8 +17,8 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
-    ProcLayout, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, ErasedField, Expr, JoinPointId, ListLiteralElement, Literal,
+    ModifyRc, Proc, ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -231,6 +231,16 @@ fn specialize_drops_stmt<'a, 'i>(
                     ErasedMake { value, callee: _ } => {
                         if let Some(value) = value {
                             environment.add_struct_child(*binding, *value, 0);
+                        }
+                    }
+                    ErasedLoad { symbol, field } => {
+                        match field {
+                            ErasedField::Value => {
+                                environment.add_struct_child(*symbol, *binding, 0);
+                            }
+                            ErasedField::Callee => {
+                                // nothing to own
+                            }
                         }
                     }
                     Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }

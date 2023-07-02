@@ -1841,6 +1841,12 @@ pub struct ReuseToken {
     pub update_mode: UpdateModeId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErasedField {
+    Value,
+    Callee,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
@@ -1902,6 +1908,14 @@ pub enum Expr<'a> {
         value: Option<Symbol>,
         /// The function pointer of the erased value, if it's an erased function.
         callee: Symbol,
+    },
+
+    /// Loads a field from a type-erased value.
+    ErasedLoad {
+        /// The erased symbol.
+        symbol: Symbol,
+        /// The field to load.
+        field: ErasedField,
     },
 
     /// Returns a pointer to the given function.
@@ -2110,6 +2124,19 @@ impl<'a> Expr<'a> {
                     .append(", callee:")
                     .append(callee)
                     .append(" }")
+            }
+
+            ErasedLoad { symbol, field } => {
+                let field = match field {
+                    ErasedField::Value => ".Value",
+                    ErasedField::Callee => ".Callee",
+                };
+
+                alloc
+                    .text("ErasedLoad ")
+                    .append(symbol_to_doc(alloc, *symbol, pretty))
+                    .append(alloc.text(" "))
+                    .append(field)
             }
 
             FunctionPointer { lambda_name } => alloc
@@ -7836,6 +7863,11 @@ fn substitute_in_expr<'a>(
                 }),
             }
         }
+
+        ErasedLoad { symbol, field } => substitute(subs, *symbol).map(|new_symbol| ErasedLoad {
+            symbol: new_symbol,
+            field: *field,
+        }),
 
         FunctionPointer { .. } => None,
 
