@@ -584,6 +584,8 @@ impl<'a> CodeGenHelp<'a> {
             LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
 
             LayoutRepr::FunctionPointer(_) => return layout,
+
+            LayoutRepr::Erased(_) => return layout,
         };
 
         layout_interner.insert(Layout::new(LayoutWrapper::Direct(repr), semantic))
@@ -841,5 +843,6 @@ fn layout_needs_helper_proc<'a>(
         LayoutRepr::RecursivePointer(_) => false,
         LayoutRepr::Ptr(_) => false,
         LayoutRepr::FunctionPointer(_) => false,
+        LayoutRepr::Erased(_) => true,
     }
 }

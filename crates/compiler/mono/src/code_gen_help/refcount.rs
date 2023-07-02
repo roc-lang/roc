@@ -2,6 +2,7 @@
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
@@ -230,6 +231,9 @@ pub fn refcount_generic<'a>(
                 runtime_layout,
                 structure,
             )
+        }
+        LayoutRepr::Erased(_) => {
+            todo_lambda_erasure!()
         }
         LayoutRepr::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"

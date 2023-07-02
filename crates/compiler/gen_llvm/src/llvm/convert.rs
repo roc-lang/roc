@@ -50,6 +50,7 @@ pub fn basic_type_from_layout<'a, 'ctx>(
             .as_basic_type_enum(),
 
         FunctionPointer(_) => todo_lambda_erasure!(),
+        Erased(_) => todo_lambda_erasure!(),
 
         Builtin(builtin) => basic_type_from_builtin(env, &builtin),
     }

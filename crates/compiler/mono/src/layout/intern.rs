@@ -356,6 +356,7 @@ pub trait LayoutInterner<'a>: Sized {
                 .append(self.to_doc(inner, alloc, seen_rec, parens))
                 .append(")"),
             FunctionPointer(fp) => fp.to_doc(alloc, self, seen_rec, parens),
+            Erased(e) => e.to_doc(alloc),
         }
     }
 
@@ -1131,6 +1132,7 @@ mod reify {
                     ret: reify_layout(arena, interner, slot, ret),
                 })
             }
+            LayoutRepr::Erased(e) => LayoutRepr::Erased(e),
         }
     }
 
@@ -1404,7 +1406,7 @@ mod equiv {
 pub mod dbg_deep {
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, LayoutRepr, UnionLayout};
+    use crate::layout::{Builtin, Erased, LambdaSet, LayoutRepr, UnionLayout};
 
     use super::{InLayout, LayoutInterner};
 
@@ -1462,6 +1464,7 @@ pub mod dbg_deep {
                     .field("args", &fp.args)
                     .field("ret", &fp.ret)
                     .finish(),
+                LayoutRepr::Erased(Erased) => f.debug_struct("?Erased").finish(),
             }
         }
     }
@@ -1574,7 +1577,7 @@ pub mod dbg_deep {
 pub mod dbg_stable {
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, LayoutRepr, SemanticRepr, UnionLayout};
+    use crate::layout::{Builtin, Erased, LambdaSet, LayoutRepr, SemanticRepr, UnionLayout};
 
     use super::{InLayout, LayoutInterner};
 
@@ -1640,6 +1643,7 @@ pub mod dbg_stable {
                     .field("args", &fp.args)
                     .field("ret", &fp.ret)
                     .finish(),
+                LayoutRepr::Erased(Erased) => f.debug_struct("?Erased").finish(),
             }
         }
     }

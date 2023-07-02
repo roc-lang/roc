@@ -26,8 +26,11 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use ven_pretty::{DocAllocator, DocBuilder};
 
+mod erased;
 mod intern;
 mod semantic;
+
+pub use erased::Erased;
 pub use intern::{
     GlobalLayoutInterner, InLayout, LayoutInterner, STLayoutInterner, TLLayoutInterner,
 };
@@ -684,8 +687,10 @@ pub enum LayoutRepr<'a> {
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
     RecursivePointer(InLayout<'a>),
-    /// Only used for erased functions.
+    /// Only used in erased functions.
     FunctionPointer(FunctionPointer<'a>),
+    /// The layout of an erasure.
+    Erased(Erased),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -2623,6 +2628,7 @@ impl<'a> LayoutRepr<'a> {
     pub const F64: Self = LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64));
     pub const DEC: Self = LayoutRepr::Builtin(Builtin::Decimal);
     pub const STR: Self = LayoutRepr::Builtin(Builtin::Str);
+<<<<<<< HEAD
     pub const OPAQUE_PTR: Self = LayoutRepr::Ptr(Layout::VOID);
     pub const ERASED: Self = Self::struct_(&[
         // .value
@@ -2632,6 +2638,10 @@ impl<'a> LayoutRepr<'a> {
         // .refcounter
         Layout::OPAQUE_PTR,
     ]);
+=======
+    pub const OPAQUE_PTR: Self = LayoutRepr::Boxed(Layout::VOID);
+    pub const ERASED: Self = LayoutRepr::Erased(Erased);
+>>>>>>> 0ff7ccbb9 (Add Layout::Erased)
 
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
         Self::Struct(field_layouts)
@@ -2677,6 +2687,7 @@ impl<'a> LayoutRepr<'a> {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
+            Erased(e) => e.safe_to_memcpy(),
             FunctionPointer(..) => true,
         }
     }
@@ -2766,6 +2777,7 @@ impl<'a> LayoutRepr<'a> {
             RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
                 interner.target_info().ptr_width() as u32
             }
+            Erased(e) => e.stack_size_without_alignment(interner.target_info()),
         }
     }
 
@@ -2820,6 +2832,7 @@ impl<'a> LayoutRepr<'a> {
             RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
                 interner.target_info().ptr_width() as u32
             }
+            Erased(e) => e.alignment_bytes(interner.target_info()),
         }
     }
 
@@ -2842,6 +2855,7 @@ impl<'a> LayoutRepr<'a> {
             }
             Ptr(inner) => interner.get_repr(*inner).alignment_bytes(interner),
             FunctionPointer(_) => ptr_width,
+            Erased(e) => e.allocation_alignment_bytes(interner.target_info()),
         }
     }
 
@@ -2916,6 +2930,7 @@ impl<'a> LayoutRepr<'a> {
                 false
             }
             FunctionPointer(_) => false,
+            Erased(e) => e.is_refcounted(),
         }
     }
 
@@ -2979,6 +2994,9 @@ impl<'a> LayoutRepr<'a> {
                 }
                 FunctionPointer(_) => {
                     // drop through
+                }
+                Erased(_) => {
+                    // erasures are just pointers, so they do not vary
                 }
             }
         }

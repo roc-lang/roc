@@ -8,7 +8,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_error_macros::{internal_error, todo_lambda_erasure};
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
     Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -168,6 +168,8 @@ fn build_eq<'a, 'ctx>(
         ),
 
         LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closures"),
+        LayoutRepr::FunctionPointer(_) => unreachable!("cannot compare function pointers"),
+        LayoutRepr::Erased(_) => unreachable!("cannot compare erased types"),
 
         LayoutRepr::Union(union_layout) => build_tag_eq(
             env,
@@ -225,8 +227,6 @@ fn build_eq<'a, 'ctx>(
                 field2_cast.into(),
             )
         }
-
-        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
     }
 }
 
@@ -401,8 +401,8 @@ fn build_neq<'a, 'ctx>(
             unreachable!("recursion pointers should never be compared directly")
         }
         LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closure"),
-
-        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::FunctionPointer(_) => unreachable!("cannot compare function pointers"),
+        LayoutRepr::Erased(_) => unreachable!("cannot compare erased types"),
     }
 }
 

@@ -388,6 +388,7 @@ fn build_clone<'a, 'ctx>(
             )
         }
         LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::Erased(_) => todo_lambda_erasure!(),
     }
 }
 

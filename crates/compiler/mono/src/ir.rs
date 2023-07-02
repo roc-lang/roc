@@ -10225,6 +10225,7 @@ where
                 /* do nothing, we've already generated for this type through the Union(_) */
             }
             LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 

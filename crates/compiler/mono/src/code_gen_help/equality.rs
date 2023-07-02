@@ -39,6 +39,7 @@ pub fn eq_generic<'a>(
         Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
         Ptr(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         LambdaSet(_) => unreachable!("`==` is not defined on functions"),
+        Erased(_) => unreachable!("`==` is not defined on erased types"),
         RecursivePointer(_) => {
             unreachable!(
                 "Can't perform `==` on RecursivePointer. Should have been replaced by a tag union."

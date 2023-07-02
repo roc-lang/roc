@@ -2101,6 +2101,7 @@ fn tag_union_type_from_layout<'a>(
             unreachable!();
         }
         LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::Erased(_) => todo_lambda_erasure!(),
     }
 }
 

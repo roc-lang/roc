@@ -2122,6 +2122,7 @@ impl<'a> LowLevelCall<'a> {
             }
 
             LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 

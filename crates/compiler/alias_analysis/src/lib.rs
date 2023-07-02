@@ -1640,6 +1640,7 @@ fn layout_spec_help<'a>(
         },
 
         FunctionPointer(_) => todo_lambda_erasure!(),
+        Erased(_) => todo_lambda_erasure!(),
     }
 }
 

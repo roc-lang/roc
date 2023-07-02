@@ -101,6 +101,7 @@ impl WasmLayout {
             | LayoutRepr::Ptr(_)
             | LayoutRepr::RecursivePointer(_) => Self::Primitive(PTR_TYPE, PTR_SIZE),
             LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 
