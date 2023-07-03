@@ -2272,10 +2272,11 @@ fn canonicalize_pending_body<'a>(
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
 ) -> DefOutput {
-    let loc_value = match &loc_expr.value {
-        ast::Expr::ParensAround(loc_value) => loc_value,
-        _ => &loc_expr.value,
-    };
+    let mut loc_value = &loc_expr.value;
+
+    while let ast::Expr::ParensAround(value) = loc_value {
+        loc_value = value;
+    }
 
     // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
