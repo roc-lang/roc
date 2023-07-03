@@ -15,7 +15,7 @@ interface Parser.Str
         scalar,
         oneOf,
         digit,
-        digits,
+        positiveInt,
         strFromRaw,
     ]
     imports [Parser.Core.{ Parser, ParseResult, map, oneOrMore, parse, parsePartial, buildPrimitiveParser }]
@@ -186,12 +186,12 @@ digit =
     oneOf digitParsers
 
 # NOTE: Currently happily accepts leading zeroes
-digits : Parser RawStr (Int *)
-digits =
+positiveInt : Parser RawStr (Int *)
+positiveInt =
     oneOrMore digit
     |> map \digitsList ->
         digitsList
-        |> List.map Num.intCast
+        |> List.map \char -> Num.intCast char - '0'
         |> List.walk 0 \sum, digitVal -> 10 * sum + digitVal
 
 ## Try a bunch of different parsers.
