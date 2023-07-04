@@ -1,7 +1,4 @@
-use inkwell::{
-    types::{BasicTypeEnum, StructType},
-    AddressSpace,
-};
+use inkwell::{types::StructType, AddressSpace};
 
 use super::build::Env;
 

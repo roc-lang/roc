@@ -5951,7 +5951,7 @@ pub enum CCReturn {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FunctionSpec<'ctx> {
+pub(crate) struct FunctionSpec<'ctx> {
     /// The function type
     pub typ: FunctionType<'ctx>,
     call_conv: u32,
