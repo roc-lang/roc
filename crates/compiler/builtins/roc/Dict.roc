@@ -101,14 +101,14 @@ Dict k v := {
     data : List (k, v),
     size : Nat,
 } | k has Hash & Eq
-     has [
-         Eq {
-             isEq,
-         },
-         Hash {
-             hash: hashDict,
-         },
-     ]
+    has [
+        Eq {
+            isEq,
+        },
+        Hash {
+            hash: hashDict,
+        },
+    ]
 
 isEq : Dict k v, Dict k v -> Bool | k has Hash & Eq, v has Eq
 isEq = \xs, ys ->
@@ -1011,16 +1011,16 @@ expect
 # TODO: Add a builtin to distinguish big endian systems and change loading orders.
 # TODO: Switch out Wymum on systems with slow 128bit multiplication.
 LowLevelHasher := { originalSeed : U64, state : U64 } has [
-         Hasher {
-             addBytes,
-             addU8,
-             addU16,
-             addU32,
-             addU64,
-             addU128,
-             complete,
-         },
-     ]
+        Hasher {
+            addBytes,
+            addU8,
+            addU16,
+            addU32,
+            addU64,
+            addU128,
+            complete,
+        },
+    ]
 
 # unsafe primitive that does not perform a bounds check
 # TODO hide behind an InternalList.roc module

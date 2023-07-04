@@ -30,14 +30,14 @@ interface Set
 ## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
 ## type which stores a collection of unique values, without any ordering
 Set k := Dict.Dict k {} | k has Hash & Eq
-     has [
-         Eq {
-             isEq,
-         },
-         Hash {
-             hash: hashSet,
-         },
-     ]
+    has [
+        Eq {
+            isEq,
+        },
+        Hash {
+            hash: hashSet,
+        },
+    ]
 
 isEq : Set k, Set k -> Bool | k has Hash & Eq
 isEq = \xs, ys ->

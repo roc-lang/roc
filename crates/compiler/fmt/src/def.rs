@@ -117,7 +117,7 @@ impl<'a> Formattable for TypeDef<'a> {
                         buf,
                         Parens::NotNeeded,
                         Newlines::from_bool(make_multiline),
-                        indent + 1 + INDENT,
+                        indent + INDENT,
                     );
                 }
             }
