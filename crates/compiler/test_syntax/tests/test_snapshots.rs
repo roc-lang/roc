@@ -430,6 +430,7 @@ mod test_snapshots {
         pass/requires_type.header,
         pass/single_arg_closure.expr,
         pass/single_underscore_closure.expr,
+        pass/space_before_colon.full,
         pass/space_only_after_minus.expr,
         pass/spaced_singleton_list.expr,
         pass/spaces_inside_empty_list.expr,
