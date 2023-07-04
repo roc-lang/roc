@@ -9,13 +9,13 @@ use morphic_lib::{
     TypeDefBuilder, TypeId, TypeName, UpdateModeVar, ValueId,
 };
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::{internal_error, todo_lambda_erasure};
+use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
 use roc_mono::ir::{
-    Call, CallType, EntryPoint, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement,
-    Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
+    Call, CallType, EntryPoint, ErasedField, Expr, HigherOrderLowLevel, HostExposedLayouts,
+    ListLiteralElement, Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, Niche, RawFunctionLayout,
@@ -201,7 +201,17 @@ where
 
                             host_exposed_functions.push((bytes, hels.proc_layout.arguments));
                         }
-                        RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
+                        RawFunctionLayout::ErasedFunction(..) => {
+                            let it = hels.proc_layout.arguments.iter().copied();
+                            let bytes = func_name_bytes_help(
+                                hels.symbol,
+                                it,
+                                Niche::NONE,
+                                hels.proc_layout.result,
+                            );
+
+                            host_exposed_functions.push((bytes, hels.proc_layout.arguments));
+                        }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
                             let bytes = func_name_bytes_help(
                                 hels.symbol,
@@ -789,8 +799,15 @@ fn call_spec<'a>(
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
         }
-        ByPointer { .. } => {
-            todo_lambda_erasure!()
+        ByPointer {
+            pointer,
+            ret_layout,
+            arg_layouts: _,
+        } => {
+            let result_type = layout_spec(env, builder, interner, interner.get_repr(*ret_layout))?;
+            let fnptr = env.symbols[pointer];
+            let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
+            builder.add_unknown_with(block, &[fnptr, arg_value_id], result_type)
         }
         Foreign {
             foreign_symbol: _,
@@ -1521,9 +1538,28 @@ fn expr_spec<'a>(
             let value = with_new_heap_cell(builder, block, union_data)?;
             builder.add_make_named(block, MOD_APP, type_name, value)
         }
-        FunctionPointer { .. } => todo_lambda_erasure!(),
-        ErasedMake { .. } => todo_lambda_erasure!(),
-        ErasedLoad { .. } => todo_lambda_erasure!(),
+        FunctionPointer { .. } => {
+            let pointer_type = layout_spec(env, builder, interner, interner.get_repr(layout))?;
+
+            builder.add_unknown_with(block, &[], pointer_type)
+        }
+        ErasedMake { callee, value } => {
+            let value = match value {
+                Some(v) => box_erasure_value_unknown(builder, block, env.symbols[v]),
+                // model nullptr
+                None => box_erasure_value_unknown_nullptr(builder, block),
+            }?;
+
+            let callee = env.symbols[callee];
+
+            erasure_make(builder, block, value, callee)
+        }
+        ErasedLoad { symbol, field } => {
+            let value = env.symbols[symbol];
+            let loaded_type = layout_spec(env, builder, interner, interner.get_repr(layout))?;
+
+            erasure_load(builder, block, value, *field, loaded_type)
+        }
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(env, builder, interner, interner.get_repr(layout))?;
 
@@ -1639,8 +1675,8 @@ fn layout_spec_help<'a>(
             _ => internal_error!("somehow, a non-recursive layout is under a recursive pointer"),
         },
 
-        FunctionPointer(_) => todo_lambda_erasure!(),
-        Erased(_) => todo_lambda_erasure!(),
+        FunctionPointer(_) => function_pointer_type(builder),
+        Erased(_) => erasure_type(builder),
     }
 }
 
@@ -1716,4 +1752,79 @@ fn new_static_list(builder: &mut FuncDefBuilder, block: BlockId) -> Result<Value
 fn new_num(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
     // we model all our numbers as unit values
     builder.add_make_tuple(block, &[])
+}
+
+fn function_pointer_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
+    builder.add_tuple_type(&[])
+}
+
+const ERASURE_CALEE_INDEX: u32 = 0;
+const ERASURE_VALUE_INDEX: u32 = 1;
+
+/// Erasure type modeled as
+///
+/// ```
+/// Tuple(callee: FnPtr, value: HeapCell)
+/// ```
+fn erasure_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
+    let value_cell_id = builder.add_heap_cell_type();
+    let callee_id = function_pointer_type(builder)?;
+    builder.add_tuple_type(&[value_cell_id, callee_id])
+}
+
+fn erasure_box_value_type<TC: TypeContext>(builder: &mut TC) -> TypeId {
+    builder.add_heap_cell_type()
+}
+
+fn box_erasure_value_unknown(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    value: ValueId,
+) -> Result<ValueId> {
+    let heap_cell = erasure_box_value_type(builder);
+    builder.add_unknown_with(block, &[value], heap_cell)
+}
+
+fn box_erasure_value_unknown_nullptr(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+) -> Result<ValueId> {
+    let heap_cell = erasure_box_value_type(builder);
+    builder.add_unknown_with(block, &[], heap_cell)
+}
+
+/// Erasure value modeled as
+///
+/// ```
+/// callee = make_tuple(&[])
+/// value = unknown(make_tuple(...captures))
+///
+/// x : Tuple(callee: FnPtr, value: HeapCell)
+/// x = make_tuple(callee, value)
+/// ```
+fn erasure_make(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    value: ValueId,
+    callee: ValueId,
+) -> Result<ValueId> {
+    builder.add_make_tuple(block, &[value, callee])
+}
+
+fn erasure_load(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    value: ValueId,
+    field: ErasedField,
+    loaded_type: TypeId,
+) -> Result<ValueId> {
+    match field {
+        ErasedField::Callee => builder.add_get_tuple_field(block, value, ERASURE_CALEE_INDEX),
+        ErasedField::Value => {
+            let unknown_heap_cell_value =
+                builder.add_get_tuple_field(block, value, ERASURE_VALUE_INDEX)?;
+            // Cast the unknown cell to the wanted type
+            builder.add_unknown_with(block, &[unknown_heap_cell_value], loaded_type)
+        }
+    }
 }
