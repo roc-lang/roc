@@ -11,6 +11,7 @@ mod lowlevel;
 pub mod refcounting;
 
 mod align;
+mod erased;
 mod memcpy;
 mod scope;
 mod struct_;

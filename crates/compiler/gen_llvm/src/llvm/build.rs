@@ -6021,7 +6021,7 @@ impl<'ctx> FunctionSpec<'ctx> {
     }
 
     /// Fastcc calling convention
-    fn fastcc<'a, 'env>(
+    pub fn fastcc<'a, 'env>(
         env: &Env<'a, 'ctx, 'env>,
         roc_return: RocReturn,
         return_type: BasicTypeEnum<'ctx>,
