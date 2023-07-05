@@ -719,7 +719,7 @@ impl<'a> BorrowInfState<'a> {
                 self.if_is_owned_then_own(z, *x);
             }
 
-            Reset { symbol: x, .. } | ResetRef { symbol: x, .. } => {
+            Reset { symbol: x, .. } => {
                 self.own_var(z);
                 self.own_var(*x);
             }

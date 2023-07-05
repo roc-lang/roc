@@ -414,7 +414,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             }
 
             let can_reuse = match rc {
-                ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol) => {
+                ModifyRc::Dec(symbol) => {
                     // can only reuse if the symbol is (potentially) unique
                     if environment.non_unique_symbols.contains(symbol) {
                         SymbolIsUnique::Never
@@ -426,15 +426,14 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                     // a free'd symbol is guaranteed to be unique
                     SymbolIsUnique::Always(*symbol)
                 }
-                ModifyRc::Inc(_, _) => {
-                    // an incremented symbol is never unique
+                ModifyRc::Inc(_, _) | ModifyRc::DecRef(_) => {
+                    // an incremented symbol is never unique and a decref never frees a reusable symbol.
                     SymbolIsUnique::Never
                 }
             };
 
             enum ResetOperation {
                 Reset,
-                ResetRef,
                 ClearTagId,
                 Nothing,
             }
@@ -458,10 +457,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                         ModifyRc::Dec(_) => (
                                             Symbol::new(home, ident_ids.gen_unique()),
                                             ResetOperation::Reset,
-                                        ),
-                                        ModifyRc::DecRef(_) => (
-                                            Symbol::new(home, ident_ids.gen_unique()),
-                                            ResetOperation::ResetRef,
                                         ),
                                         ModifyRc::Free(_) => {
                                             if union_layout
@@ -543,20 +538,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                             ResetOperation::Reset => {
                                 // a dec will be replaced by a reset.
                                 let reset_expr = Expr::Reset {
-                                    symbol,
-                                    update_mode: reuse_token.update_mode,
-                                };
-
-                                return arena.alloc(Stmt::Let(
-                                    reuse_token.symbol,
-                                    reset_expr,
-                                    layout,
-                                    new_continuation,
-                                ));
-                            }
-                            ResetOperation::ResetRef => {
-                                // a decref will be replaced by a resetref.
-                                let reset_expr = Expr::ResetRef {
                                     symbol,
                                     update_mode: reuse_token.update_mode,
                                 };
@@ -1398,7 +1379,7 @@ fn drop_unused_reuse_tokens<'a>(
 ) -> &'a Stmt<'a> {
     unused_tokens.fold(continuation, |continuation, reuse_token| {
         arena.alloc(Stmt::Refcounting(
-            ModifyRc::DecRef(reuse_token.symbol),
+            ModifyRc::Free(reuse_token.symbol),
             continuation,
         ))
     })

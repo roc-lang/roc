@@ -179,7 +179,7 @@ impl<'a> LastSeenMap<'a> {
                             }
                         }
                     }
-                    Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
+                    Expr::Reset { symbol, .. } => {
                         self.set_last_seen(*symbol, stmt);
                     }
                     Expr::EmptyArray => {}
@@ -872,26 +872,6 @@ trait Backend<'a> {
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
                     rc_proc_gen.call_reset_refcount(ident_ids, layout_interner, layout, *symbol)
-                };
-
-                for spec in new_specializations.into_iter() {
-                    self.helper_proc_symbols_mut().push(spec);
-                }
-
-                self.build_expr(sym, &new_expr, &Layout::BOOL)
-            }
-            Expr::ResetRef { symbol, .. } => {
-                let layout = *self.layout_map().get(symbol).unwrap();
-
-                // Expand the Refcounting statement into more detailed IR with a function call
-                // If this layout requires a new RC proc, we get enough info to create a linker symbol
-                // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
-                let (new_expr, new_specializations) = {
-                    let (module_id, layout_interner, interns, rc_proc_gen, _) =
-                        self.module_interns_helpers_mut();
-                    let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
-
-                    rc_proc_gen.call_resetref_refcount(ident_ids, layout_interner, layout, *symbol)
                 };
 
                 for spec in new_specializations.into_iter() {

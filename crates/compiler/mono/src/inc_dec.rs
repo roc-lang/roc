@@ -1093,8 +1093,8 @@ fn insert_refcount_operations_binding<'a>(
                 }
             }
         }
-        Expr::Reset { .. } | Expr::ResetRef { .. } => {
-            unreachable!("Reset(ref) should not exist at this point")
+        Expr::Reset { .. } => {
+            unreachable!("Reset should not exist at this point")
         }
     }
 }

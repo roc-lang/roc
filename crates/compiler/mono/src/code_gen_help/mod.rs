@@ -36,7 +36,6 @@ pub enum HelperOp {
     IndirectDec,
     DecRef(JoinPointId),
     Reset,
-    ResetRef,
     Eq,
 }
 
@@ -169,24 +168,11 @@ impl<'a> CodeGenHelp<'a> {
         layout: InLayout<'a>,
         argument: Symbol,
     ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        self.call_refcount(ident_ids, layout_interner, layout, argument, false)
+        self.call_refcount(ident_ids, layout_interner, layout, argument)
     }
 
     /**
-    Call a resetref operation. It is similar to reset except it does not recursively decrement it's children when unique.
-    */
-    pub fn call_resetref_refcount(
-        &mut self,
-        ident_ids: &mut IdentIds,
-        layout_interner: &mut STLayoutInterner<'a>,
-        layout: InLayout<'a>,
-        argument: Symbol,
-    ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        self.call_refcount(ident_ids, layout_interner, layout, argument, true)
-    }
-
-    /**
-    Call either a reset or a resetref refcount operation.
+    Call a reset refcount operation.
     */
     fn call_refcount(
         &mut self,
@@ -194,16 +180,11 @@ impl<'a> CodeGenHelp<'a> {
         layout_interner: &mut STLayoutInterner<'a>,
         layout: InLayout<'a>,
         argument: Symbol,
-        resetref: bool,
     ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
         let mut ctx = Context {
             new_linker_data: Vec::new_in(self.arena),
             recursive_union: None,
-            op: if resetref {
-                HelperOp::ResetRef
-            } else {
-                HelperOp::Reset
-            },
+            op: HelperOp::Reset,
         };
 
         let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout_interner, layout);
@@ -306,7 +287,7 @@ impl<'a> CodeGenHelp<'a> {
 
                 match ctx.op {
                     Dec | DecRef(_) => (LAYOUT_UNIT, self.arena.alloc([arg])),
-                    Reset | ResetRef => (layout, self.arena.alloc([layout])),
+                    Reset => (layout, self.arena.alloc([layout])),
                     Inc => (LAYOUT_UNIT, self.arena.alloc([arg, self.layout_isize])),
                     IndirectDec => (LAYOUT_UNIT, arena.alloc([ptr_arg])),
                     IndirectInc => (LAYOUT_UNIT, arena.alloc([ptr_arg, self.layout_isize])),
@@ -405,17 +386,6 @@ impl<'a> CodeGenHelp<'a> {
                     Symbol::ARG_1,
                 ),
             ),
-            ResetRef => (
-                layout,
-                refcount::refcount_resetref_proc_body(
-                    self,
-                    ident_ids,
-                    ctx,
-                    layout_interner,
-                    layout,
-                    Symbol::ARG_1,
-                ),
-            ),
             Eq => (
                 LAYOUT_BOOL,
                 equality::eq_generic(self, ident_ids, ctx, layout_interner, layout),
@@ -429,7 +399,7 @@ impl<'a> CodeGenHelp<'a> {
                     let inc_amount = (self.layout_isize, ARG_2);
                     self.arena.alloc([roc_value, inc_amount])
                 }
-                Dec | DecRef(_) | Reset | ResetRef => self.arena.alloc([roc_value]),
+                Dec | DecRef(_) | Reset => self.arena.alloc([roc_value]),
                 IndirectInc => {
                     let ptr_layout =
                         layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(layout));
@@ -503,7 +473,7 @@ impl<'a> CodeGenHelp<'a> {
                     niche: Niche::NONE,
                 }
             }
-            HelperOp::Reset | HelperOp::ResetRef => ProcLayout {
+            HelperOp::Reset => ProcLayout {
                 arguments: self.arena.alloc([layout]),
                 result: layout,
                 niche: Niche::NONE,

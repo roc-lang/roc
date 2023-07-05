@@ -232,12 +232,9 @@ fn specialize_drops_stmt<'a, 'i>(
                 }
 
                 Expr::Reset { .. } => {
-                    // TODO allow to inline this to replace it with resetref
                     alloc_let_with_continuation!(environment)
                 }
-                Expr::ResetRef { .. } => {
-                    alloc_let_with_continuation!(environment)
-                }
+
                 Expr::Literal(literal) => {
                     // literal ints are used to store the the index for lists.
                     // Add it to the env so when we use it to index a list, we can use the index to specialize the drop.
