@@ -526,15 +526,6 @@ fn specialize_drops_stmt<'a, 'i>(
                             &mut incremented_children,
                             continuation,
                         ),
-                        LayoutRepr::Boxed(_layout) => specialize_boxed(
-                            arena,
-                            layout_interner,
-                            ident_ids,
-                            environment,
-                            &mut incremented_children,
-                            symbol,
-                            continuation,
-                        ),
                         LayoutRepr::Builtin(Builtin::List(layout)) => specialize_list(
                             arena,
                             layout_interner,
@@ -1055,65 +1046,6 @@ fn specialize_union<'a, 'i>(
                     }
                 }
             }
-        }
-    }
-}
-
-fn specialize_boxed<'a, 'i>(
-    arena: &'a Bump,
-    layout_interner: &'i mut STLayoutInterner<'a>,
-    ident_ids: &'i mut IdentIds,
-    environment: &mut DropSpecializationEnvironment<'a>,
-    incremented_children: &mut CountingMap<Child>,
-    symbol: &Symbol,
-    continuation: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let removed = match incremented_children.map.iter().next() {
-        Some((s, _)) => {
-            let s = *s;
-            incremented_children.pop(&s);
-            Some(s)
-        }
-        None => None,
-    };
-
-    let new_continuation =
-        specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
-
-    match removed {
-        Some(s) => {
-            branch_uniqueness(
-                arena,
-                ident_ids,
-                layout_interner,
-                environment,
-                *symbol,
-                // If the symbol is unique:
-                // - free the box
-                |_, _, continuation| {
-                    arena.alloc(Stmt::Refcounting(
-                        // we know for sure that the allocation is unique at
-                        // this point. Therefore we can free (or maybe reuse)
-                        // without checking the refcount again.
-                        ModifyRc::Free(*symbol),
-                        continuation,
-                    ))
-                },
-                // If the symbol is not unique:
-                // - increment the child
-                // - decref the box
-                |_, _, continuation| {
-                    arena.alloc(Stmt::Refcounting(
-                        ModifyRc::Inc(s, 1),
-                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef(*symbol), continuation)),
-                    ))
-                },
-                new_continuation,
-            )
-        }
-        None => {
-            // No known children, keep decrementing the symbol.
-            arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
         }
     }
 }

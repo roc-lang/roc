@@ -509,7 +509,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .last()
             .map(|l| self.layout_interner.get_repr(*l))
         {
-            Some(LayoutRepr::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
+            Some(LayoutRepr::Ptr(inner)) => WasmLayout::new(self.layout_interner, inner),
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
@@ -540,8 +540,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             }
 
             let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
-                LayoutRepr::Boxed(inner) => inner,
-                x => internal_error!("Expected a Boxed layout, got {:?}", x),
+                LayoutRepr::Ptr(inner) => inner,
+                x => internal_error!("Expected a Ptr layout, got {:?}", x),
             };
             if self.layout_interner.stack_size(inner_layout) == 0 {
                 continue;
@@ -634,8 +634,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         }
 
         let inner_layout = match self.layout_interner.get_repr(value_layout) {
-            LayoutRepr::Boxed(inner) => inner,
-            x => internal_error!("Expected a Boxed layout, got {:?}", x),
+            LayoutRepr::Ptr(inner) => inner,
+            x => internal_error!("Expected a Ptr layout, got {:?}", x),
         };
         self.code_builder.get_local(LocalId(1));
         self.dereference_boxed_value(inner_layout);

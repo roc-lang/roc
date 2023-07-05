@@ -571,11 +571,6 @@ impl<'a> CodeGenHelp<'a> {
                 return layout;
             }
 
-            LayoutRepr::Boxed(inner) => {
-                let inner = self.replace_rec_ptr(ctx, layout_interner, inner);
-                LayoutRepr::Boxed(inner)
-            }
-
             LayoutRepr::Ptr(inner) => {
                 let inner = self.replace_rec_ptr(ctx, layout_interner, inner);
                 LayoutRepr::Ptr(inner)
@@ -842,7 +837,6 @@ fn layout_needs_helper_proc<'a>(
         LayoutRepr::Union(_) => true,
         LayoutRepr::LambdaSet(_) => true,
         LayoutRepr::RecursivePointer(_) => false,
-        LayoutRepr::Boxed(_) => true,
         LayoutRepr::Ptr(_) => false,
     }
 }

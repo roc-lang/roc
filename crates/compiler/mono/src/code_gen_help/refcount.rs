@@ -233,64 +233,10 @@ pub fn refcount_generic<'a>(
         LayoutRepr::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
         ),
-        LayoutRepr::Boxed(inner_layout) => refcount_boxed(
-            root,
-            ident_ids,
-            ctx,
-            layout_interner,
-            layout,
-            inner_layout,
-            structure,
-        ),
         LayoutRepr::Ptr(_) => {
             unreachable!("We should never call a refcounting helper on a Ptr layout directly")
         }
     }
-}
-
-fn if_unique<'a>(
-    root: &mut CodeGenHelp<'a>,
-    ident_ids: &mut IdentIds,
-    value: Symbol,
-    when_unique: impl FnOnce(JoinPointId) -> Stmt<'a>,
-    when_done: Stmt<'a>,
-) -> Stmt<'a> {
-    //  joinpoint f =
-    //      <when_done>
-    //  in
-    //      if is_unique <value> then
-    //          <when_unique>(f)
-    //      else
-    //          jump f
-
-    let joinpoint = root.create_symbol(ident_ids, "is_unique_joinpoint");
-    let joinpoint = JoinPointId(joinpoint);
-
-    let is_unique = root.create_symbol(ident_ids, "is_unique");
-
-    let mut stmt = Stmt::if_then_else(
-        root.arena,
-        is_unique,
-        Layout::UNIT,
-        when_unique(joinpoint),
-        root.arena.alloc(Stmt::Jump(joinpoint, &[])),
-    );
-
-    stmt = Stmt::Join {
-        id: joinpoint,
-        parameters: &[],
-        body: root.arena.alloc(when_done),
-        remainder: root.arena.alloc(stmt),
-    };
-
-    let_lowlevel(
-        root.arena,
-        root.layout_isize,
-        is_unique,
-        LowLevel::RefCountIsUnique,
-        &[value],
-        root.arena.alloc(stmt),
-    )
 }
 
 pub fn refcount_reset_proc_body<'a>(
@@ -1977,73 +1923,4 @@ fn refcount_tag_fields<'a>(
     }
 
     stmt
-}
-
-fn refcount_boxed<'a>(
-    root: &mut CodeGenHelp<'a>,
-    ident_ids: &mut IdentIds,
-    ctx: &mut Context<'a>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout<'a>,
-    inner_layout: InLayout<'a>,
-    outer: Symbol,
-) -> Stmt<'a> {
-    let arena = root.arena;
-
-    //
-    // modify refcount of the inner and outer structures
-    // RC on inner first, to avoid use-after-free for Dec
-    // We're defining statements in reverse, so define outer first
-    //
-
-    let alignment = layout_interner.allocation_alignment_bytes(layout);
-    let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
-    let modify_outer = modify_refcount(
-        root,
-        ident_ids,
-        ctx,
-        Pointer::ToData(outer),
-        alignment,
-        arena.alloc(ret_stmt),
-    );
-
-    // decrement the inner value if the operation is a decrement and the box itself is unique
-    if layout_interner.is_refcounted(inner_layout) && ctx.op.is_dec() {
-        let inner = root.create_symbol(ident_ids, "inner");
-        let inner_expr = Expr::ptr_load(arena.alloc(outer));
-
-        let mod_inner_unit = root.create_symbol(ident_ids, "mod_inner_unit");
-        let mod_inner_args = refcount_args(root, ctx, inner);
-        let mod_inner_expr = root
-            .call_specialized_op(
-                ident_ids,
-                ctx,
-                layout_interner,
-                inner_layout,
-                mod_inner_args,
-            )
-            .unwrap();
-
-        if_unique(
-            root,
-            ident_ids,
-            outer,
-            |id| {
-                Stmt::Let(
-                    inner,
-                    inner_expr,
-                    inner_layout,
-                    arena.alloc(Stmt::Let(
-                        mod_inner_unit,
-                        mod_inner_expr,
-                        LAYOUT_UNIT,
-                        arena.alloc(Stmt::Jump(id, &[])),
-                    )),
-                )
-            },
-            modify_outer,
-        )
-    } else {
-        modify_outer
-    }
 }

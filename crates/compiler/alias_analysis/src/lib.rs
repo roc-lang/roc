@@ -1612,7 +1612,7 @@ fn layout_spec_help<'a>(
             }
         }
 
-        Ptr(inner_layout) | Boxed(inner_layout) => {
+        Ptr(inner_layout) => {
             let inner_type =
                 layout_spec_help(env, builder, interner, interner.get_repr(inner_layout))?;
             let cell_type = builder.add_heap_cell_type();
