@@ -31,7 +31,7 @@ procedure Test.2 (#Derived_gen.0, #Derived_gen.1):
                     let #Derived_gen.11 : {} = lowlevel PtrStore #Derived_gen.5 Test.20;
                     jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.10 #Derived_gen.6;
                 else
-                    decref #Derived_gen.14;
+                    free #Derived_gen.14;
                     jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.5 #Derived_gen.6;
             in
             let #Derived_gen.13 : Int1 = lowlevel RefCountIsUnique Test.4;

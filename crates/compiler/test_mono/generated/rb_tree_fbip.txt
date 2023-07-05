@@ -189,7 +189,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                                     else
                                         jump Test.225 #Derived_gen.118;
                                 else
-                                    decref #Derived_gen.118;
+                                    free #Derived_gen.118;
                                     dec Test.19;
                                     let Test.197 : [<rnu>C *self I64 *self I32 Int1, <null>] = TagId(0) ;
                                     let #Derived_gen.20 : {} = lowlevel PtrStore #Derived_gen.6 Test.197;
@@ -245,7 +245,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                                         in
                                         let #Derived_gen.113 : Int1 = lowlevel RefCountIsUnique Test.118;
                                         if #Derived_gen.113 then
-                                            decref #Derived_gen.322;
+                                            free #Derived_gen.322;
                                             let #Derived_gen.329 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.136, id: UpdateModeId { id: 243 } };
                                             jump #Derived_gen.112 #Derived_gen.323 #Derived_gen.329 Test.118;
                                         else
@@ -275,7 +275,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                                                 in
                                                 let #Derived_gen.103 : Int1 = lowlevel RefCountIsUnique Test.118;
                                                 if #Derived_gen.103 then
-                                                    decref #Derived_gen.342;
+                                                    free #Derived_gen.342;
                                                     jump #Derived_gen.102 #Derived_gen.343 Test.118;
                                                 else
                                                     inc Test.83;
@@ -333,7 +333,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                                                     in
                                                     let #Derived_gen.107 : Int1 = lowlevel RefCountIsUnique Test.118;
                                                     if #Derived_gen.107 then
-                                                        decref #Derived_gen.347;
+                                                        free #Derived_gen.347;
                                                         let #Derived_gen.354 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.138, id: UpdateModeId { id: 272 } };
                                                         jump #Derived_gen.106 #Derived_gen.348 #Derived_gen.354 Test.118;
                                                     else
@@ -362,8 +362,8 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                                         else
                                             jump Test.163 #Derived_gen.118 #Derived_gen.289;
                                     else
-                                        decref #Derived_gen.289;
-                                        decref #Derived_gen.118;
+                                        free #Derived_gen.289;
+                                        free #Derived_gen.118;
                                         joinpoint #Derived_gen.108:
                                             let Test.135 : [<rnu>C *self I64 *self I32 Int1, <null>] = TagId(0) ;
                                             let #Derived_gen.31 : {} = lowlevel PtrStore #Derived_gen.6 Test.135;
