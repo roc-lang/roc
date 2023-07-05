@@ -2118,6 +2118,24 @@ impl<'a> Expr<'a> {
             arguments: std::slice::from_ref(symbol),
         })
     }
+
+    pub(crate) fn expr_box(symbol: &'a Symbol, element_layout: &'a InLayout<'a>) -> Expr<'a> {
+        Expr::Tag {
+            tag_layout: UnionLayout::NonNullableUnwrapped(std::slice::from_ref(element_layout)),
+            tag_id: 0,
+            arguments: std::slice::from_ref(symbol),
+            reuse: None,
+        }
+    }
+
+    pub(crate) fn expr_unbox(symbol: Symbol, element_layout: &'a InLayout<'a>) -> Expr<'a> {
+        Expr::UnionAtIndex {
+            structure: symbol,
+            tag_id: 0,
+            union_layout: UnionLayout::NonNullableUnwrapped(std::slice::from_ref(element_layout)),
+            index: 0,
+        }
+    }
 }
 
 impl<'a> Stmt<'a> {
@@ -5614,13 +5632,22 @@ pub fn with_hole<'a>(
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    Stmt::Let(assigned, Expr::ExprBox { symbol: x }, layout, hole)
+                    let element_layout = match layout_cache.interner.get_repr(layout) {
+                        LayoutRepr::Union(UnionLayout::NonNullableUnwrapped([l])) => l,
+                        _ => unreachable!("invalid layout for a box expression"),
+                    };
+
+                    let expr = Expr::expr_box(arena.alloc(x), element_layout);
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
                 UnboxExpr => {
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    Stmt::Let(assigned, Expr::ExprUnbox { symbol: x }, layout, hole)
+                    let expr = Expr::expr_unbox(x, arena.alloc(layout));
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
                 _ => {
                     let call = self::Call {

@@ -3206,8 +3206,13 @@ fn layout_from_flat_type<'a>(
                     let inner_var = args[0];
                     let inner_layout =
                         cached!(Layout::from_var(env, inner_var), criteria, env.subs);
+
+                    let repr = LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(
+                        arena.alloc([inner_layout]),
+                    ));
+
                     let boxed_layout = env.cache.put_in(Layout {
-                        repr: LayoutRepr::Boxed(inner_layout).direct(),
+                        repr: repr.direct(),
                         semantic: SemanticRepr::NONE,
                     });
 
