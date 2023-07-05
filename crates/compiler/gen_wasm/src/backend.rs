@@ -1003,39 +1003,43 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     }
 
     fn stmt_refcounting_free(&mut self, value: Symbol, following: &'a Stmt<'a>) {
-        let layout = self.storage.symbol_layouts[&value];
-        let alignment = self.layout_interner.allocation_alignment_bytes(layout);
+        self.storage.load_symbols(&mut self.code_builder, &[value]);
+        self.code_builder.if_();
+        {
+            let layout = self.storage.symbol_layouts[&value];
+            let alignment = self.layout_interner.allocation_alignment_bytes(layout);
 
-        // Get pointer and offset
-        let value_storage = self.storage.get(&value).to_owned();
-        let stored_with_local =
-            self.storage
-                .ensure_value_has_local(&mut self.code_builder, value, value_storage);
-        let (tag_local_id, tag_offset) = match stored_with_local {
-            StoredValue::StackMemory { location, .. } => {
-                location.local_and_offset(self.storage.stack_frame_pointer)
+            // Get pointer and offset
+            let value_storage = self.storage.get(&value).to_owned();
+            let stored_with_local =
+                self.storage
+                    .ensure_value_has_local(&mut self.code_builder, value, value_storage);
+            let (tag_local_id, tag_offset) = match stored_with_local {
+                StoredValue::StackMemory { location, .. } => {
+                    location.local_and_offset(self.storage.stack_frame_pointer)
+                }
+                StoredValue::Local { local_id, .. } => (local_id, 0),
+                StoredValue::VirtualMachineStack { .. } => {
+                    internal_error!("{:?} should have a local variable", value)
+                }
+            };
+
+            // load pointer, and add the offset to the pointer
+            self.code_builder.get_local(tag_local_id);
+
+            if tag_offset > 0 {
+                self.code_builder.i32_const(tag_offset as i32);
+                self.code_builder.i32_add();
             }
-            StoredValue::Local { local_id, .. } => (local_id, 0),
-            StoredValue::VirtualMachineStack { .. } => {
-                internal_error!("{:?} should have a local variable", value)
-            }
-        };
 
-        // load pointer, and add the offset to the pointer
-        self.code_builder.get_local(tag_local_id);
+            // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
 
-        if tag_offset > 0 {
-            self.code_builder.i32_const(tag_offset as i32);
-            self.code_builder.i32_add();
+            // push the allocation's alignment
+            self.code_builder.i32_const(alignment as i32);
+
+            self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR, 2, false);
         }
-
-        // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
-
-        // push the allocation's alignment
-        self.code_builder.i32_const(alignment as i32);
-
-        self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR, 2, false);
-
+        self.code_builder.end();
         self.stmt(following);
     }
 

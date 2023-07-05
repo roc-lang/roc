@@ -2851,26 +2851,44 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 }
 
                 Free(symbol) => {
-                    // unconditionally deallocate the symbol
                     let (value, layout) = scope.load_symbol_and_layout(symbol);
                     let alignment = layout_interner.alignment_bytes(layout);
 
                     debug_assert!(value.is_pointer_value());
                     let value = value.into_pointer_value();
 
-                    let clear_tag_id = match layout_interner.chase_recursive(layout) {
-                        LayoutRepr::Union(union) => union.stores_tag_id_in_pointer(env.target_info),
-                        _ => false,
-                    };
+                    // Deallocate the symbol if it's not null
+                    let is_not_null_ptr = env.builder.build_is_not_null(value, "is_not_null_ptr");
+                    let ctx = env.context;
+                    let then_block = ctx.append_basic_block(parent, "then_free");
+                    let cont_block = ctx.append_basic_block(parent, "cont");
 
-                    let ptr = if clear_tag_id {
-                        tag_pointer_clear_tag_id(env, value)
-                    } else {
-                        value
-                    };
+                    env.builder
+                        .build_conditional_branch(is_not_null_ptr, then_block, cont_block);
 
-                    let rc_ptr = PointerToRefcount::from_ptr_to_data(env, ptr);
-                    rc_ptr.deallocate(env, alignment);
+                    {
+                        env.builder.position_at_end(then_block);
+
+                        let clear_tag_id = match layout_interner.chase_recursive(layout) {
+                            LayoutRepr::Union(union) => {
+                                union.stores_tag_id_in_pointer(env.target_info)
+                            }
+                            _ => false,
+                        };
+
+                        let ptr = if clear_tag_id {
+                            tag_pointer_clear_tag_id(env, value)
+                        } else {
+                            value
+                        };
+
+                        let rc_ptr = PointerToRefcount::from_ptr_to_data(env, ptr);
+                        rc_ptr.deallocate(env, alignment);
+
+                        env.builder.build_unconditional_branch(cont_block);
+                    }
+
+                    env.builder.position_at_end(cont_block);
 
                     build_exp_stmt(
                         env,
