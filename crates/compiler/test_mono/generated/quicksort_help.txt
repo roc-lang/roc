@@ -10,7 +10,7 @@ procedure Num.22 (#Attr.2, #Attr.3):
     let Num.294 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
     ret Num.294;
 
-procedure Test.1 (Test.24, Test.25, Test.26):
+procedure Test.1 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
     joinpoint Test.12 Test.2 Test.3 Test.4:
         let Test.14 : Int1 = CallByName Num.22 Test.3 Test.4;
         if Test.14 then
@@ -29,7 +29,7 @@ procedure Test.1 (Test.24, Test.25, Test.26):
         else
             ret Test.2;
     in
-    jump Test.12 Test.24 Test.25 Test.26;
+    jump Test.12 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2;
 
 procedure Test.0 ():
     let Test.9 : List I64 = Array [];

@@ -135,6 +135,10 @@ flags! {
     /// instructions.
     ROC_PRINT_IR_AFTER_REFCOUNT
 
+    /// Writes a pretty-printed mono IR to stderr after the tail recursion (modulo cons)
+    /// has been applied.
+    ROC_PRINT_IR_AFTER_TRMC
+
     /// Writes a pretty-printed mono IR to stderr after performing dropspecialization.
     /// Which inlines drop functions to remove pairs of alloc/dealloc instructions of its children.
     ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION

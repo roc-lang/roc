@@ -2085,6 +2085,7 @@ fn tag_union_type_from_layout<'a>(
                 },
             }
         }
+        LayoutRepr::Ptr(_) => unreachable!("Ptr values are never publicly exposed"),
         LayoutRepr::Boxed(elem_layout) => {
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(env, union_tags, subs, layout, &[elem_layout], types);
@@ -2228,7 +2229,13 @@ fn single_tag_payload_fields<'a, 'b>(
         env.glue_procs_by_layout.get(&layout).is_some(),
         env.layout_cache
             .interner
-            .has_varying_stack_size(in_layout, env.arena)
+            .has_varying_stack_size(in_layout, env.arena),
+        "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
+            &layout,
+            env.glue_procs_by_layout.get(&layout),
+            env.layout_cache
+                .interner
+                .has_varying_stack_size(in_layout, env.arena)
     );
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);

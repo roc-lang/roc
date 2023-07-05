@@ -258,7 +258,7 @@ mod test_reporting {
             subs.rigid_var(var.value, "*".into());
         }
 
-        let mut solve_aliases = roc_solve::solve::Aliases::default();
+        let mut solve_aliases = roc_solve::Aliases::default();
 
         for (name, alias) in output.aliases {
             solve_aliases.insert(&mut types, name, alias);
@@ -271,7 +271,7 @@ mod test_reporting {
             &mut unify_problems,
             types,
             &constraints,
-            &constraint,
+            constraint,
             // Use `new_report_problem_as` in order to get proper derives.
             // TODO: remove the non-new reporting test infra.
             PendingDerives::default(),
@@ -5931,6 +5931,40 @@ In roc, functions are always written as a lambda, like{}
                                         ^
 
                 I was expecting a type name, value name or function name next, like
+
+                    provides [Animal, default, tame]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn missing_provides_in_app_header() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "broken"
+                    packages {
+                        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br",
+                    }
+                    imports [
+                        pf.Stdout,
+                    ]
+
+                main =
+                    Stdout.line "answer"
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                I am partway through parsing a header, but I got stuck here:
+
+                7│      ]
+                         ^
+
+                I am expecting the `provides` keyword next, like
 
                     provides [Animal, default, tame]
             "#

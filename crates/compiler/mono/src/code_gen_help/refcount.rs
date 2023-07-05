@@ -118,6 +118,9 @@ pub fn refcount_stmt<'a>(
                 },
             }
         }
+        ModifyRc::Free(_) => {
+            unreachable!("free should be handled by the backend directly")
+        }
     }
 }
 
@@ -132,7 +135,7 @@ pub fn refcount_indirect<'a>(
     let arena = root.arena;
 
     let unit = root.create_symbol(ident_ids, "unit");
-    let unboxed = root.create_symbol(ident_ids, "unboxed");
+    let loaded = root.create_symbol(ident_ids, "loaded");
 
     let indirect_op = ctx.op;
     let direct_op = match ctx.op {
@@ -144,7 +147,7 @@ pub fn refcount_indirect<'a>(
     // we've done the indirection, the inner value shoud be inc- or decremented directly
     ctx.op = direct_op;
 
-    let mod_args = refcount_args(root, ctx, unboxed);
+    let mod_args = refcount_args(root, ctx, loaded);
     let opt_mod_expr =
         root.call_specialized_op(ident_ids, ctx, layout_interner, element_layout, mod_args);
 
@@ -153,8 +156,8 @@ pub fn refcount_indirect<'a>(
 
     if let Some(mod_expr) = opt_mod_expr {
         Stmt::Let(
-            unboxed,
-            Expr::ExprUnbox { symbol: structure },
+            loaded,
+            Expr::ptr_load(arena.alloc(structure)),
             element_layout,
             arena.alloc(
                 //
@@ -239,6 +242,9 @@ pub fn refcount_generic<'a>(
             inner_layout,
             structure,
         ),
+        LayoutRepr::Ptr(_) => {
+            unreachable!("We should never call a refcounting helper on a Ptr layout directly")
+        }
     }
 }
 
@@ -441,7 +447,7 @@ pub fn refcount_reset_proc_body<'a>(
     );
 
     // Refcount value
-    let rc_expr = Expr::ExprUnbox { symbol: rc_ptr };
+    let rc_expr = Expr::ptr_load(root.arena.alloc(rc_ptr));
 
     let rc_stmt = Stmt::Let(
         rc,
@@ -450,8 +456,10 @@ pub fn refcount_reset_proc_body<'a>(
         root.arena.alloc(refcount_1_stmt),
     );
 
-    // a Box never masks bits
-    let mask_lower_bits = false;
+    let mask_lower_bits = match layout_interner.get_repr(layout) {
+        LayoutRepr::Union(ul) => ul.stores_tag_id_in_pointer(root.target_info),
+        _ => false,
+    };
 
     // Refcount pointer
     let rc_ptr_stmt = {
@@ -564,7 +572,7 @@ pub fn refcount_resetref_proc_body<'a>(
     );
 
     // Refcount value
-    let rc_expr = Expr::ExprUnbox { symbol: rc_ptr };
+    let rc_expr = Expr::ptr_load(root.arena.alloc(rc_ptr));
 
     let rc_stmt = Stmt::Let(
         rc,
@@ -573,8 +581,10 @@ pub fn refcount_resetref_proc_body<'a>(
         root.arena.alloc(refcount_1_stmt),
     );
 
-    // a Box never masks bits
-    let mask_lower_bits = false;
+    let mask_lower_bits = match layout_interner.get_repr(layout) {
+        LayoutRepr::Union(ul) => ul.stores_tag_id_in_pointer(root.target_info),
+        _ => false,
+    };
 
     // Refcount pointer
     let rc_ptr_stmt = {
@@ -626,39 +636,33 @@ fn rc_ptr_from_data_ptr_help<'a>(
     addr_sym: Symbol,
     recursion_ptr: InLayout<'a>,
 ) -> Stmt<'a> {
-    use std::ops::Neg;
+    // symbol of a pointer with any tag id bits cleared
+    let cleared_sym = if mask_lower_bits {
+        root.create_symbol(ident_ids, "cleared")
+    } else {
+        structure
+    };
+
+    let clear_tag_id_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::PtrClearTagId,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: root.arena.alloc([structure]),
+    });
+    let clear_tag_id_stmt =
+        |next| Stmt::Let(cleared_sym, clear_tag_id_expr, root.layout_isize, next);
 
     // Typecast the structure pointer to an integer
     // Backends expect a number Layout to choose the right "subtract" instruction
-    let as_int_sym = if mask_lower_bits {
-        root.create_symbol(ident_ids, "as_int")
-    } else {
-        addr_sym
-    };
     let as_int_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
             op: LowLevel::PtrCast,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
-        arguments: root.arena.alloc([structure]),
+        arguments: root.arena.alloc([cleared_sym]),
     });
-    let as_int_stmt = |next| Stmt::Let(as_int_sym, as_int_expr, root.layout_isize, next);
-
-    // Mask for lower bits (for tag union id)
-    let mask_sym = root.create_symbol(ident_ids, "mask");
-    let mask_expr = Expr::Literal(Literal::Int(
-        (root.target_info.ptr_width() as i128).neg().to_ne_bytes(),
-    ));
-    let mask_stmt = |next| Stmt::Let(mask_sym, mask_expr, root.layout_isize, next);
-
-    let and_expr = Expr::Call(Call {
-        call_type: CallType::LowLevel {
-            op: LowLevel::And,
-            update_mode: UpdateModeId::BACKEND_DUMMY,
-        },
-        arguments: root.arena.alloc([as_int_sym, mask_sym]),
-    });
-    let and_stmt = |next| Stmt::Let(addr_sym, and_expr, root.layout_isize, next);
+    let as_int_stmt = |next| Stmt::Let(addr_sym, as_int_expr, root.layout_isize, next);
 
     // Pointer size constant
     let ptr_size_sym = root.create_symbol(ident_ids, "ptr_size");
@@ -688,40 +692,24 @@ fn rc_ptr_from_data_ptr_help<'a>(
     });
     let cast_stmt = |next| Stmt::Let(rc_ptr_sym, cast_expr, recursion_ptr, next);
 
+    let body = as_int_stmt(root.arena.alloc(
+        //
+        ptr_size_stmt(root.arena.alloc(
+            //
+            sub_stmt(root.arena.alloc(
+                //
+                cast_stmt(root.arena.alloc(
+                    //
+                    following,
+                )),
+            )),
+        )),
+    ));
+
     if mask_lower_bits {
-        as_int_stmt(root.arena.alloc(
-            //
-            mask_stmt(root.arena.alloc(
-                //
-                and_stmt(root.arena.alloc(
-                    //
-                    ptr_size_stmt(root.arena.alloc(
-                        //
-                        sub_stmt(root.arena.alloc(
-                            //
-                            cast_stmt(root.arena.alloc(
-                                //
-                                following,
-                            )),
-                        )),
-                    )),
-                )),
-            )),
-        ))
+        clear_tag_id_stmt(root.arena.alloc(body))
     } else {
-        as_int_stmt(root.arena.alloc(
-            //
-            ptr_size_stmt(root.arena.alloc(
-                //
-                sub_stmt(root.arena.alloc(
-                    //
-                    cast_stmt(root.arena.alloc(
-                        //
-                        following,
-                    )),
-                )),
-            )),
-        ))
+        body
     }
 }
 
@@ -980,8 +968,8 @@ fn refcount_list<'a>(
     let layout_isize = root.layout_isize;
     let arena = root.arena;
 
-    // A "Box" layout (heap pointer to a single list element)
-    let box_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(elem_layout));
+    // A "Ptr" layout (heap pointer to a single list element)
+    let ptr_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(elem_layout));
 
     //
     // Check if the list is empty
@@ -1005,7 +993,7 @@ fn refcount_list<'a>(
 
     // let capacity = StructAtIndex 2 structure
     let capacity = root.create_symbol(ident_ids, "capacity");
-    let list_field_layouts = arena.alloc([box_layout, layout_isize, layout_isize]);
+    let list_field_layouts = arena.alloc([ptr_layout, layout_isize, layout_isize]);
     let capacity_expr = Expr::StructAtIndex {
         index: 2,
         field_layouts: list_field_layouts,
@@ -1029,7 +1017,7 @@ fn refcount_list<'a>(
         field_layouts: list_field_layouts,
         structure,
     };
-    let first_element_stmt = |next| Stmt::Let(first_element, first_element_expr, box_layout, next);
+    let first_element_stmt = |next| Stmt::Let(first_element, first_element_expr, ptr_layout, next);
 
     let jp_elements = JoinPointId(root.create_symbol(ident_ids, "jp_elements"));
     let data_pointer = root.create_symbol(ident_ids, "data_pointer");
@@ -1116,7 +1104,7 @@ fn refcount_list<'a>(
                 layout_interner,
                 elem_layout,
                 LAYOUT_UNIT,
-                box_layout,
+                ptr_layout,
                 len,
                 first_element_pointer,
                 modify_list,
@@ -1178,7 +1166,7 @@ fn refcount_list_elems<'a>(
     layout_interner: &mut STLayoutInterner<'a>,
     elem_layout: InLayout<'a>,
     ret_layout: InLayout<'a>,
-    box_layout: InLayout<'a>,
+    ptr_layout: InLayout<'a>,
     length: Symbol,
     elements: Symbol,
     following: Stmt<'a>,
@@ -1236,13 +1224,13 @@ fn refcount_list_elems<'a>(
     // if we haven't reached the end yet...
     //
 
-    // Cast integer to box pointer
-    let box_ptr = root.create_symbol(ident_ids, "box");
-    let box_stmt = |next| let_lowlevel(arena, box_layout, box_ptr, PtrCast, &[addr], next);
+    // Cast integer to pointer
+    let ptr_symbol = root.create_symbol(ident_ids, "ptr");
+    let ptr_stmt = |next| let_lowlevel(arena, ptr_layout, ptr_symbol, PtrCast, &[addr], next);
 
-    // Dereference the box pointer to get the current element
+    // Dereference the pointer to get the current element
     let elem = root.create_symbol(ident_ids, "elem");
-    let elem_expr = Expr::ExprUnbox { symbol: box_ptr };
+    let elem_expr = Expr::ptr_load(arena.alloc(ptr_symbol));
     let elem_stmt = |next| Stmt::Let(elem, elem_expr, elem_layout, next);
 
     //
@@ -1285,7 +1273,7 @@ fn refcount_list_elems<'a>(
         is_end,
         ret_layout,
         following,
-        arena.alloc(box_stmt(arena.alloc(
+        arena.alloc(ptr_stmt(arena.alloc(
             //
             elem_stmt(arena.alloc(
                 //

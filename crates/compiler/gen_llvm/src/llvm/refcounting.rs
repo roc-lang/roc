@@ -14,7 +14,7 @@ use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, InstructionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
@@ -193,6 +193,14 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         builder.build_return(None);
     }
+
+    pub fn deallocate<'a, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        alignment: u32,
+    ) -> InstructionValue<'ctx> {
+        free_pointer(env, self.value, alignment)
+    }
 }
 
 fn incref_pointer<'ctx>(
@@ -214,6 +222,28 @@ fn incref_pointer<'ctx>(
         ],
         roc_builtins::bitcode::UTILS_INCREF_RC_PTR,
     );
+}
+
+fn free_pointer<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    pointer: PointerValue<'ctx>,
+    alignment: u32,
+) -> InstructionValue<'ctx> {
+    let alignment = env.context.i32_type().const_int(alignment as _, false);
+    call_void_bitcode_fn(
+        env,
+        &[
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.ptr_int().ptr_type(AddressSpace::default()),
+                    "to_isize_ptr",
+                )
+                .into(),
+            alignment.into(),
+        ],
+        roc_builtins::bitcode::UTILS_FREE_RC_PTR,
+    )
 }
 
 fn decref_pointer<'ctx>(env: &Env<'_, 'ctx, '_>, pointer: PointerValue<'ctx>, alignment: u32) {
@@ -535,6 +565,12 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
             let function = modify_refcount_boxed(env, layout_interner, layout_ids, mode, inner);
 
             Some(function)
+        }
+
+        Ptr(_inner) => {
+            debug_assert_eq!(true, false);
+
+            None
         }
 
         Union(variant) => {

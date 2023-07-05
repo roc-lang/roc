@@ -2163,10 +2163,15 @@ impl Subs {
         self.utable.vars_since_snapshot(&snapshot.utable_snapshot)
     }
 
-    pub fn get_lambda_set(&self, lambda_set: Variable) -> LambdaSet {
-        match self.get_content_without_compacting(lambda_set) {
-            Content::LambdaSet(lambda_set) => *lambda_set,
-            _ => internal_error!("not a lambda set"),
+    pub fn get_lambda_set(&self, mut lambda_set: Variable) -> LambdaSet {
+        loop {
+            match self.get_content_without_compacting(lambda_set) {
+                Content::LambdaSet(lambda_set) => return *lambda_set,
+                Content::RecursionVar { structure, .. } => {
+                    lambda_set = *structure;
+                }
+                _ => internal_error!("not a lambda set"),
+            }
         }
     }
 

@@ -1373,7 +1373,7 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 app "hello"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
     imports [pf.Stdout]
-    provides main to pf
+    provides [main] to pf
 ```
 
 This is known as a _module header_. Every `.roc` file is a _module_, and there are different types of modules. We know this particular one is an _application module_ because it begins with the `app` keyword.

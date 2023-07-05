@@ -397,11 +397,18 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_layout,
                 tag_id,
                 arguments,
+                reuse,
             } => {
                 let interned_layout = self
                     .interner
                     .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
+
+                if let Some(reuse_token) = reuse {
+                    self.check_sym_layout(reuse_token.symbol, interned_layout, UseKind::TagReuse);
+                }
+
                 self.check_tag_expr(interned_layout, tag_layout, tag_id, arguments);
+
                 Some(interned_layout)
             }
             Expr::Struct(syms) => {
@@ -428,6 +435,14 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 index,
             } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
                 ctx.check_union_at_index(structure, layout, union_layout, tag_id, index)
+            }),
+            &Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
+                ctx.check_union_field_ptr_at_index(structure, layout, union_layout, tag_id, index)
             }),
             Expr::Array { elem_layout, elems } => {
                 for elem in elems.iter() {
@@ -466,21 +481,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     }
                 }
             }),
-            &Expr::Reuse {
-                symbol,
-                update_tag_id: _,
-                update_mode: _,
-                tag_layout,
-                tag_id: _,
-                arguments: _,
-            } => {
-                let union = self
-                    .interner
-                    .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
-                self.check_sym_layout(symbol, union, UseKind::TagReuse);
-                // TODO also check update arguments
-                Some(union)
-            }
             &Expr::Reset {
                 symbol,
                 update_mode: _,
@@ -561,6 +561,58 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     }
                     let layout = payloads[index as usize];
                     Some(layout)
+                }
+            }
+        })
+    }
+
+    fn check_union_field_ptr_at_index(
+        &mut self,
+        structure: Symbol,
+        interned_union_layout: InLayout<'a>,
+        union_layout: UnionLayout<'a>,
+        tag_id: u16,
+        index: u64,
+    ) -> Option<InLayout<'a>> {
+        let union = self
+            .interner
+            .insert_direct_no_semantic(LayoutRepr::Union(union_layout));
+
+        let field_ptr_layout = match get_tag_id_payloads(union_layout, tag_id) {
+            TagPayloads::IdNotInUnion => None,
+            TagPayloads::Payloads(payloads) => payloads.get(index as usize).map(|field_layout| {
+                self.interner
+                    .insert_direct_no_semantic(LayoutRepr::Ptr(*field_layout))
+            }),
+        };
+
+        self.with_sym_layout(structure, |ctx, def_line, _layout| {
+            ctx.check_sym_layout(structure, union, UseKind::TagExpr);
+
+            match get_tag_id_payloads(union_layout, tag_id) {
+                TagPayloads::IdNotInUnion => {
+                    ctx.problem(ProblemKind::IndexingTagIdNotInUnion {
+                        structure,
+                        def_line,
+                        tag_id,
+                        union_layout: interned_union_layout,
+                    });
+                    None
+                }
+                TagPayloads::Payloads(payloads) => {
+                    if field_ptr_layout.is_none() {
+                        ctx.problem(ProblemKind::TagUnionStructIndexOOB {
+                            structure,
+                            def_line,
+                            tag_id,
+                            index,
+                            size: payloads.len(),
+                        });
+
+                        None
+                    } else {
+                        field_ptr_layout
+                    }
                 }
             }
         })
@@ -656,8 +708,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
     }
 
     fn check_modify_rc(&mut self, rc: ModifyRc) {
+        use ModifyRc::*;
+
         match rc {
-            ModifyRc::Inc(sym, _) | ModifyRc::Dec(sym) | ModifyRc::DecRef(sym) => {
+            Inc(sym, _) | Dec(sym) | DecRef(sym) | Free(sym) => {
                 // TODO: also check that sym layout needs refcounting
                 self.check_sym_exists(sym);
             }

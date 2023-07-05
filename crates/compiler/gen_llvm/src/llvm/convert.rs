@@ -30,7 +30,8 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             layout_interner,
             layout_interner.get_repr(lambda_set.runtime_representation()),
         ),
-        Boxed(inner_layout) => {
+
+        Ptr(inner_layout) | Boxed(inner_layout) => {
             let inner_type = basic_type_from_layout(
                 env,
                 layout_interner,
@@ -40,6 +41,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             inner_type.ptr_type(AddressSpace::default()).into()
         }
         Union(union_layout) => basic_type_from_union_layout(env, layout_interner, &union_layout),
+
         RecursivePointer(_) => env
             .context
             .i64_type()

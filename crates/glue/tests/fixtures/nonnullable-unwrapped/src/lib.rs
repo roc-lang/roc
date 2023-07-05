@@ -1,8 +1,8 @@
-mod test_glue;
+use roc_app;
 
 use indoc::indoc;
+use roc_app::StrRoseTree;
 use roc_std::{RocList, RocStr};
-use test_glue::StrRoseTree;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]

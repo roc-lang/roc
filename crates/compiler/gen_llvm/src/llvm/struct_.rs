@@ -92,7 +92,15 @@ impl<'ctx> RocStruct<'ctx> {
                 index_struct_value(env, layout_interner, field_layouts, *argument, index)
             }
             (Self::ByReference(ptr), LayoutRepr::Struct(field_layouts)) => {
-                index_struct_ptr(env, layout_interner, field_layouts, *ptr, index)
+                let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
+                index_struct_ptr(
+                    env,
+                    layout_interner,
+                    struct_type.into_struct_type(),
+                    field_layouts,
+                    *ptr,
+                    index,
+                )
             }
             (other, layout) => {
                 unreachable!(
@@ -135,26 +143,26 @@ fn index_struct_value<'a, 'ctx>(
 fn index_struct_ptr<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
+    struct_type: StructType<'ctx>,
     field_layouts: &[InLayout<'a>],
     ptr: PointerValue<'ctx>,
     index: u64,
 ) -> BasicValueEnum<'ctx> {
     debug_assert!(!field_layouts.is_empty());
 
-    let field_value = get_field_from_ptr(
-        env,
-        ptr,
-        index as _,
-        env.arena
-            .alloc(format!("struct_field_access_record_{}", index)),
-    );
-
     let field_layout = field_layouts[index as usize];
+    let field_repr = layout_interner.get_repr(field_layout);
+
+    let name = format!("struct_field_access_record_{}", index);
+    let field_value = env
+        .builder
+        .new_build_struct_gep(struct_type, ptr, index as u32, &name)
+        .unwrap();
 
     load_roc_value(
         env,
         layout_interner,
-        layout_interner.get_repr(field_layout),
+        field_repr,
         field_value,
         "struct_field",
     )
@@ -169,15 +177,6 @@ fn get_field_from_value<'ctx>(
     env.builder
         .build_extract_value(argument, index, name)
         .unwrap()
-}
-
-fn get_field_from_ptr<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    ptr: PointerValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> PointerValue<'ctx> {
-    env.builder.build_struct_gep(ptr, index, name).unwrap()
 }
 
 struct BuildStruct<'ctx> {

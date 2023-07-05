@@ -17,8 +17,10 @@ mod helpers;
 use crate::helpers::fixtures_dir;
 use bumpalo::Bump;
 use roc_can::module::ExposedByModule;
-use roc_load_internal::file::{ExecutionMode, LoadConfig, Threading};
-use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem};
+use roc_load_internal::file::{
+    ExecutionMode, LoadConfig, LoadResult, LoadStart, LoadingProblem, Threading,
+};
+use roc_load_internal::module::LoadedModule;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;

@@ -230,6 +230,10 @@ pub trait LayoutInterner<'a>: Sized {
         self.get_repr(layout).is_refcounted()
     }
 
+    fn is_nullable(&self, layout: InLayout<'a>) -> bool {
+        self.get_repr(layout).is_nullable()
+    }
+
     fn is_passed_by_reference(&self, layout: InLayout<'a>) -> bool {
         self.get_repr(layout).is_passed_by_reference(self)
     }
@@ -348,6 +352,10 @@ pub trait LayoutInterner<'a>: Sized {
             }
             Boxed(inner) => alloc
                 .text("Boxed(")
+                .append(self.to_doc(inner, alloc, seen_rec, parens))
+                .append(")"),
+            Ptr(inner) => alloc
+                .text("Ptr(")
                 .append(self.to_doc(inner, alloc, seen_rec, parens))
                 .append(")"),
         }
@@ -1108,6 +1116,7 @@ mod reify {
                 LayoutRepr::Struct(reify_layout_slice(arena, interner, slot, field_layouts))
             }
             LayoutRepr::Boxed(lay) => LayoutRepr::Boxed(reify_layout(arena, interner, slot, lay)),
+            LayoutRepr::Ptr(lay) => LayoutRepr::Ptr(reify_layout(arena, interner, slot, lay)),
             LayoutRepr::Union(un) => LayoutRepr::Union(reify_union(arena, interner, slot, un)),
             LayoutRepr::LambdaSet(ls) => {
                 LayoutRepr::LambdaSet(reify_lambda_set(arena, interner, slot, ls))
@@ -1312,6 +1321,7 @@ mod equiv {
                     equiv_fields!(fl1, fl2)
                 }
                 (Boxed(b1), Boxed(b2)) => stack.push((b1, b2)),
+                (Ptr(b1), Ptr(b2)) => stack.push((b1, b2)),
                 (Union(u1), Union(u2)) => {
                     use UnionLayout::*;
                     match (u1, u2) {
@@ -1432,6 +1442,7 @@ pub mod dbg_deep {
                     .field("fields", &DbgFields(self.0, field_layouts))
                     .finish(),
                 LayoutRepr::Boxed(b) => f.debug_tuple("Boxed").field(&Dbg(self.0, *b)).finish(),
+                LayoutRepr::Ptr(b) => f.debug_tuple("Ptr").field(&Dbg(self.0, *b)).finish(),
                 LayoutRepr::Union(un) => f
                     .debug_tuple("Union")
                     .field(&DbgUnion(self.0, *un))
@@ -1605,6 +1616,7 @@ pub mod dbg_stable {
                     .field("fields", &DbgFields(self.0, field_layouts))
                     .finish(),
                 LayoutRepr::Boxed(b) => f.debug_tuple("Boxed").field(&Dbg(self.0, *b)).finish(),
+                LayoutRepr::Ptr(b) => f.debug_tuple("Ptr").field(&Dbg(self.0, *b)).finish(),
                 LayoutRepr::Union(un) => f
                     .debug_tuple("Union")
                     .field(&DbgUnion(self.0, *un))

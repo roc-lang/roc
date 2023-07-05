@@ -17,7 +17,7 @@ procedure Test.0 ():
     let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.2;
     if #Derived_gen.1 then
         dec Test.13;
-        decref Test.2;
+        free Test.2;
         jump #Derived_gen.0;
     else
         decref Test.2;

@@ -1,7 +1,6 @@
 [package]
 name = "roc_std"
 description = "Rust representations of Roc data structures"
-readme = "README.md"
 
 authors = ["The Roc Contributors"]
 edition = "2021"

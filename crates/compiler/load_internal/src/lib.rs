@@ -6,6 +6,8 @@
 use roc_module::symbol::ModuleId;
 pub mod docs;
 pub mod file;
+pub mod module;
+mod module_cache;
 mod work;
 
 #[cfg(target_family = "wasm")]

@@ -64,6 +64,26 @@ pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
 pub type TypeOrVar = EitherIndex<TypeTag, Variable>;
 
 impl Constraints {
+    pub fn empty() -> Self {
+        Self {
+            constraints: Default::default(),
+            type_slices: Default::default(),
+            variables: Default::default(),
+            loc_symbols: Default::default(),
+            let_constraints: Default::default(),
+            categories: Default::default(),
+            pattern_categories: Default::default(),
+            expectations: Default::default(),
+            pattern_expectations: Default::default(),
+            includes_tags: Default::default(),
+            strings: Default::default(),
+            sketched_rows: Default::default(),
+            eq: Default::default(),
+            pattern_eq: Default::default(),
+            cycles: Default::default(),
+        }
+    }
+
     pub fn new() -> Self {
         let constraints = Vec::new();
         let type_slices = Vec::with_capacity(16);

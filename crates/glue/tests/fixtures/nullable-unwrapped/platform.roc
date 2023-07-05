@@ -7,5 +7,5 @@ platform "test-platform"
 
 StrConsList : [Nil, Cons Str StrConsList]
 
-mainForHost : {} -> StrConsList
-mainForHost = \{} -> main
+mainForHost : StrConsList
+mainForHost = main

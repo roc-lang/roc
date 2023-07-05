@@ -93,9 +93,15 @@ ins = \tree, kx, vx ->
 
         Node Black a ky vy b ->
             if lt kx ky then
-                (if isRed a then balance1 (Node Black Leaf ky vy b) (ins a kx vx) else Node Black (ins a kx vx) ky vy b)
+                if isRed a then
+                    balance1 (Node Black Leaf ky vy b) (ins a kx vx)
+                else
+                    Node Black (ins a kx vx) ky vy b
             else if lt ky kx then
-                (if isRed b then balance2 (Node Black a ky vy Leaf) (ins b kx vx) else Node Black a ky vy (ins b kx vx))
+                if isRed b then
+                    balance2 (Node Black a ky vy Leaf) (ins b kx vx)
+                else
+                    Node Black a ky vy (ins b kx vx)
             else
                 Node Black a kx vx b
 

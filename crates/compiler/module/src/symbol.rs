@@ -1471,6 +1471,9 @@ define_builtins! {
 
         22 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
         23 DICT_PSEUDO_SEED: "pseudoSeed"
+        24 DICT_IS_EMPTY: "isEmpty"
+        25 DICT_MAP: "map"
+        26 DICT_JOINMAP: "joinMap"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1490,6 +1493,9 @@ define_builtins! {
         14 SET_CONTAINS: "contains"
         15 SET_TO_DICT: "toDict"
         16 SET_CAPACITY: "capacity"
+        17 SET_IS_EMPTY: "isEmpty"
+        18 SET_MAP: "map"
+        19 SET_JOIN_MAP: "joinMap"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type

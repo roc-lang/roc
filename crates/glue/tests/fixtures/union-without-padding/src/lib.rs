@@ -1,8 +1,8 @@
-mod test_glue;
+use roc_app;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut test_glue::NonRecursive);
+    fn roc_main(_: *mut roc_app::NonRecursive);
 }
 
 #[no_mangle]
@@ -10,7 +10,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = test_glue::mainForHost(());
+    let tag_union = roc_app::mainForHost(());
 
     // Verify that it has all the expected traits.
 
@@ -23,10 +23,10 @@ pub extern "C" fn rust_main() -> i32 {
     println!(
         "tag_union was: {:?}\n`Foo \"small str\"` is: {:?}\n`Bar 123` is: {:?}\n`Baz` is: {:?}\n`Blah 456` is: {:?}",
         tag_union,
-        test_glue::NonRecursive::Foo("small str".into()),
-        test_glue::NonRecursive::Bar(123),
-        test_glue::NonRecursive::Baz(),
-        test_glue::NonRecursive::Blah(456),
+        roc_app::NonRecursive::Foo("small str".into()),
+        roc_app::NonRecursive::Bar(123),
+        roc_app::NonRecursive::Baz(),
+        roc_app::NonRecursive::Blah(456),
     ); // Debug
 
     let mut set = HashSet::new();

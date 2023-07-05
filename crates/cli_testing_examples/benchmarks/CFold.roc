@@ -21,7 +21,7 @@ main =
             |> Task.putLine
 
         Err GetIntError ->
-            Task.putLine "Error: Failed to get Integer from stdin."      
+            Task.putLine "Error: Failed to get Integer from stdin."
 
 Expr : [
     Add Expr Expr,
@@ -100,35 +100,27 @@ constFolding = \e ->
             x1 = constFolding e1
             x2 = constFolding e2
 
-            when Pair x1 x2 is
-                Pair (Val a) (Val b) ->
-                    Val (a + b)
+            when x1 is
+                Val a ->
+                    when x2 is
+                        Val b -> Val (a + b)
+                        Add (Val b) x | Add x (Val b) -> Add (Val (a + b)) x
+                        _ -> Add x1 x2
 
-                Pair (Val a) (Add (Val b) x) ->
-                    Add (Val (a + b)) x
-
-                Pair (Val a) (Add x (Val b)) ->
-                    Add (Val (a + b)) x
-
-                Pair y1 y2 ->
-                    Add y1 y2
+                _ -> Add x1 x2
 
         Mul e1 e2 ->
             x1 = constFolding e1
             x2 = constFolding e2
 
-            when Pair x1 x2 is
-                Pair (Val a) (Val b) ->
-                    Val (a * b)
+            when x1 is
+                Val a ->
+                    when x2 is
+                        Val b -> Val (a * b)
+                        Mul (Val b) x | Mul x (Val b) -> Mul (Val (a * b)) x
+                        _ -> Mul x1 x2
 
-                Pair (Val a) (Mul (Val b) x) ->
-                    Mul (Val (a * b)) x
-
-                Pair (Val a) (Mul x (Val b)) ->
-                    Mul (Val (a * b)) x
-
-                Pair y1 y2 ->
-                    Add y1 y2
+                _ -> Mul x1 x2
 
         _ ->
             e

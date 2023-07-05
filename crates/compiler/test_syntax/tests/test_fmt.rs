@@ -5447,7 +5447,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 A := U8
-                     has [Eq, Hash]
+                    has [Eq, Hash]
 
                 0
                 "#
@@ -5465,7 +5465,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 A := a | a has Hash
-                     has [Eq, Hash]
+                    has [Eq, Hash]
 
                 0
                 "#
@@ -5555,11 +5555,11 @@ mod test_fmt {
                 r#"
                 A := U8 has [Eq { eq, eq1 }]
                 A := U8 has [
-                         Eq {
-                             eq,
-                             eq1,
-                         },
-                     ]
+                        Eq {
+                            eq,
+                            eq1,
+                        },
+                    ]
 
                 0
                 "#
@@ -5569,7 +5569,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             A := a | a has Other
-                 has [Eq { eq }, Hash { hash }]
+                has [Eq { eq }, Hash { hash }]
 
             0
             "#

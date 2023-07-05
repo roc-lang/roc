@@ -403,34 +403,6 @@ impl<'a> Proc<'a> {
         w.push(b'\n');
         String::from_utf8(w).unwrap()
     }
-
-    fn make_tail_recursive(&mut self, env: &mut Env<'a, '_>) {
-        let mut args = Vec::with_capacity_in(self.args.len(), env.arena);
-        let mut proc_args = Vec::with_capacity_in(self.args.len(), env.arena);
-
-        for (layout, symbol) in self.args {
-            let new = env.unique_symbol();
-            args.push((*layout, *symbol, new));
-            proc_args.push((*layout, new));
-        }
-
-        use self::SelfRecursive::*;
-        if let SelfRecursive(id) = self.is_self_recursive {
-            let transformed = crate::tail_recursion::make_tail_recursive(
-                env.arena,
-                id,
-                self.name,
-                self.body.clone(),
-                args.into_bump_slice(),
-                self.ret_layout,
-            );
-
-            if let Some(with_tco) = transformed {
-                self.body = with_tco;
-                self.args = proc_args.into_bump_slice();
-            }
-        }
-    }
 }
 
 /// A host-exposed function must be specialized; it's a seed for subsequent specializations
@@ -1018,14 +990,11 @@ impl<'a> Procs<'a> {
 
     pub fn get_specialized_procs_without_rc(
         self,
-        env: &mut Env<'a, '_>,
     ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
         let mut specialized_procs =
             MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
-        for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
-            proc.make_tail_recursive(env);
-
+        for (symbol, layout, proc) in self.specialized.into_iter_assert_done() {
             let key = (symbol, layout);
             specialized_procs.insert(key, proc);
         }
@@ -1396,6 +1365,11 @@ impl<'a, 'i> Env<'a, 'i> {
         Symbol::new(self.home, ident_id)
     }
 
+    pub fn named_unique_symbol(&mut self, name: &str) -> Symbol {
+        let ident_id = self.ident_ids.add_str(name);
+        Symbol::new(self.home, ident_id)
+    }
+
     pub fn next_update_mode_id(&mut self) -> UpdateModeId {
         self.update_mode_ids.next_id()
     }
@@ -1638,6 +1612,9 @@ pub enum ModifyRc {
     /// sometimes we know we already dealt with the elements (e.g. by copying them all over
     /// to a new list) and so we can just do a DecRef, which is much cheaper in such a case.
     DecRef(Symbol),
+    /// Unconditionally deallocate the memory. For tag union that do pointer tagging (store the tag
+    /// id in the pointer) the backend has to clear the tag id!
+    Free(Symbol),
 }
 
 impl ModifyRc {
@@ -1667,6 +1644,10 @@ impl ModifyRc {
                 .text("decref ")
                 .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
+            Free(symbol) => alloc
+                .text("free ")
+                .append(symbol_to_doc(alloc, symbol, pretty))
+                .append(";"),
         }
     }
 
@@ -1677,6 +1658,7 @@ impl ModifyRc {
             Inc(symbol, _) => *symbol,
             Dec(symbol) => *symbol,
             DecRef(symbol) => *symbol,
+            Free(symbol) => *symbol,
         }
     }
 }
@@ -1843,6 +1825,13 @@ pub struct HigherOrderLowLevel<'a> {
     pub passed_function: PassedFunction<'a>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReuseToken {
+    pub symbol: Symbol,
+    pub update_tag_id: bool,
+    pub update_mode: UpdateModeId,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
@@ -1854,6 +1843,7 @@ pub enum Expr<'a> {
         tag_layout: UnionLayout<'a>,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
+        reuse: Option<ReuseToken>,
     },
     Struct(&'a [Symbol]),
     NullPointer,
@@ -1875,6 +1865,12 @@ pub enum Expr<'a> {
         union_layout: UnionLayout<'a>,
         index: u64,
     },
+    UnionFieldPtrAtIndex {
+        structure: Symbol,
+        tag_id: TagIdIntType,
+        union_layout: UnionLayout<'a>,
+        index: u64,
+    },
 
     Array {
         elem_layout: InLayout<'a>,
@@ -1890,15 +1886,6 @@ pub enum Expr<'a> {
         symbol: Symbol,
     },
 
-    Reuse {
-        symbol: Symbol,
-        update_tag_id: bool,
-        update_mode: UpdateModeId,
-        // normal Tag fields
-        tag_layout: UnionLayout<'a>,
-        tag_id: TagIdIntType,
-        arguments: &'a [Symbol],
-    },
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,
@@ -1989,7 +1976,10 @@ impl<'a> Expr<'a> {
             Call(call) => call.to_doc(alloc, pretty),
 
             Tag {
-                tag_id, arguments, ..
+                tag_id,
+                arguments,
+                reuse: None,
+                ..
             } => {
                 let doc_tag = alloc
                     .text("TagId(")
@@ -2002,12 +1992,11 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
-            NullPointer => alloc.text("NullPointer"),
-            Reuse {
-                symbol,
+
+            Tag {
                 tag_id,
                 arguments,
-                update_mode,
+                reuse: Some(reuse_token),
                 ..
             } => {
                 let doc_tag = alloc
@@ -2019,14 +2008,15 @@ impl<'a> Expr<'a> {
 
                 alloc
                     .text("Reuse ")
-                    .append(symbol_to_doc(alloc, *symbol, pretty))
+                    .append(symbol_to_doc(alloc, reuse_token.symbol, pretty))
                     .append(alloc.space())
-                    .append(format!("{:?}", update_mode))
+                    .append(format!("{:?}", reuse_token.update_mode))
                     .append(alloc.space())
                     .append(doc_tag)
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            NullPointer => alloc.text("NullPointer"),
             Reset {
                 symbol,
                 update_mode,
@@ -2092,6 +2082,19 @@ impl<'a> Expr<'a> {
                 ..
             } => text!(alloc, "UnionAtIndex (Id {}) (Index {}) ", tag_id, index)
                 .append(symbol_to_doc(alloc, *structure, pretty)),
+
+            UnionFieldPtrAtIndex {
+                tag_id,
+                structure,
+                index,
+                ..
+            } => text!(
+                alloc,
+                "UnionFieldPtrAtIndex (Id {}) (Index {}) ",
+                tag_id,
+                index
+            )
+            .append(symbol_to_doc(alloc, *structure, pretty)),
         }
     }
 
@@ -2104,6 +2107,16 @@ impl<'a> Expr<'a> {
             .unwrap();
         w.push(b'\n');
         String::from_utf8(w).unwrap()
+    }
+
+    pub(crate) fn ptr_load(symbol: &'a Symbol) -> Expr<'a> {
+        Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrLoad,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: std::slice::from_ref(symbol),
+        })
     }
 }
 
@@ -6004,6 +6017,7 @@ where
                 tag_id,
                 tag_layout: union_layout,
                 arguments: symbols,
+                reuse: None,
             };
 
             Stmt::Let(assigned, expr, lambda_set_layout, env.arena.alloc(hole))
@@ -6273,6 +6287,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6295,6 +6310,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6319,6 +6335,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6345,6 +6362,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -6362,6 +6380,7 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_id: tag_id as _,
                         arguments: field_symbols,
+                        reuse: None,
                     };
 
                     (tag, union_layout)
@@ -7531,6 +7550,7 @@ fn substitute_in_expr<'a>(
             tag_layout,
             tag_id,
             arguments: args,
+            reuse,
         } => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(
@@ -7544,6 +7564,18 @@ fn substitute_in_expr<'a>(
                 arena,
             );
 
+            let reuse = match *reuse {
+                Some(mut ru) => match substitute(subs, ru.symbol) {
+                    Some(s) => {
+                        did_change = true;
+                        ru.symbol = s;
+                        Some(ru)
+                    }
+                    None => Some(ru),
+                },
+                None => None,
+            };
+
             if did_change {
                 let arguments = new_args.into_bump_slice();
 
@@ -7551,6 +7583,7 @@ fn substitute_in_expr<'a>(
                     tag_layout: *tag_layout,
                     tag_id: *tag_id,
                     arguments,
+                    reuse,
                 })
             } else {
                 None
@@ -7559,8 +7592,8 @@ fn substitute_in_expr<'a>(
 
         NullPointer => None,
 
-        Reuse { .. } | Reset { .. } | ResetRef { .. } => {
-            unreachable!("reset/resetref/reuse have not been introduced yet")
+        Reset { .. } | ResetRef { .. } => {
+            unreachable!("reset(ref) has not been introduced yet")
         }
 
         Struct(args) => {
@@ -7658,6 +7691,22 @@ fn substitute_in_expr<'a>(
             union_layout,
         } => match substitute(subs, *structure) {
             Some(structure) => Some(UnionAtIndex {
+                structure,
+                tag_id: *tag_id,
+                index: *index,
+                union_layout: *union_layout,
+            }),
+            None => None,
+        },
+
+        // currently only used for tail recursion modulo cons (TRMC)
+        UnionFieldPtrAtIndex {
+            structure,
+            tag_id,
+            index,
+            union_layout,
+        } => match substitute(subs, *structure) {
+            Some(structure) => Some(UnionFieldPtrAtIndex {
                 structure,
                 tag_id: *tag_id,
                 index: *index,
@@ -9865,6 +9914,9 @@ where
             }
             LayoutRepr::Boxed(boxed) => {
                 stack.push(layout_interner.get(boxed));
+            }
+            LayoutRepr::Ptr(inner) => {
+                stack.push(layout_interner.get(inner));
             }
             LayoutRepr::Union(union_layout) => match union_layout {
                 UnionLayout::NonRecursive(tags) => {

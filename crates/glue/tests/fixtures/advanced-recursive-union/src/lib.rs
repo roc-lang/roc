@@ -1,14 +1,13 @@
-mod test_glue;
+use roc_app;
 
 use indoc::indoc;
-// use test_glue::Rbt;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = test_glue::mainForHost(());
+    let tag_union = roc_app::mainForHost(());
 
     // Verify that it has all the expected traits.
 
