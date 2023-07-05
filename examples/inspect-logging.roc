@@ -34,13 +34,5 @@ main =
     |> Community.addFriend 0 2
     |> Community.addFriend 1 2
     |> Inspect.inspect
-    |> LogFormatter.toBytes
-    |> Str.fromUtf8
-    |> unwrapOrCrash
+    |> LogFormatter.toStr
     |> Stdout.line
-
-unwrapOrCrash : Result ok err -> ok
-unwrapOrCrash = \res ->
-    when res is
-        Ok v -> v
-        Err _ -> crash "Hit an error in a result"

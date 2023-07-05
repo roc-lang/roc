@@ -1,7 +1,7 @@
 interface LogFormatter
     exposes [
         LogFormatter,
-        toBytes,
+        toStr,
     ]
     imports [
         Inspect.{
@@ -10,7 +10,7 @@ interface LogFormatter
         },
     ]
 
-LogFormatter := { bytes : List U8 }
+LogFormatter := { data : Str }
      has [
          Formatter {
              init: init,
@@ -41,17 +41,17 @@ LogFormatter := { bytes : List U8 }
      ]
 
 init : {} -> LogFormatter
-init = \{} -> @LogFormatter { bytes: [] }
+init = \{} -> @LogFormatter { data: "" }
 
 list : list, Inspect.ElemWalkFn (LogFormatter, Bool) list elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
 list = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
-    write f0 (Str.toUtf8 "[")
+    write f0 "["
     |> \f1 ->
         (f2, prependSep), elem <- walkFn content (f1, Bool.false)
         f3 =
             if prependSep then
-                write f2 (Str.toUtf8 ", ")
+                write f2 ", "
             else
                 f2
 
@@ -60,17 +60,17 @@ list = \content, walkFn, toInspector ->
         |> Inspect.apply f3
         |> \f4 -> (f4, Bool.true)
     |> .0
-    |> write (Str.toUtf8 "]")
+    |> write "]"
 
 set : set, Inspect.ElemWalkFn (LogFormatter, Bool) set elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
 set = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
-    write f0 (Str.toUtf8 "{")
+    write f0 "{"
     |> \f1 ->
         (f2, prependSep), elem <- walkFn content (f1, Bool.false)
         f3 =
             if prependSep then
-                write f2 (Str.toUtf8 ", ")
+                write f2 ", "
             else
                 f2
 
@@ -79,171 +79,171 @@ set = \content, walkFn, toInspector ->
         |> Inspect.apply f3
         |> \f4 -> (f4, Bool.true)
     |> .0
-    |> write (Str.toUtf8 "}")
+    |> write "}"
 
 dict : dict, Inspect.KeyValWalkFn (LogFormatter, Bool) dict key value, (key -> Inspector LogFormatter), (value -> Inspector LogFormatter) -> Inspector LogFormatter
 dict = \d, walkFn, keyToInspector, valueToInspector ->
     f0 <- Inspect.custom
-    write f0 (Str.toUtf8 "{")
+    write f0 "{"
     |> \f1 ->
         (f2, prependSep), key, value <- walkFn d (f1, Bool.false)
         f3 =
             if prependSep then
-                write f2 (Str.toUtf8 ", ")
+                write f2 ", "
             else
                 f2
 
         Inspect.apply (keyToInspector key) f3
-        |> write (Str.toUtf8 ": ")
+        |> write ": "
         |> \x -> Inspect.apply (valueToInspector value) x
         |> \f4 -> (f4, Bool.true)
     |> .0
-    |> write (Str.toUtf8 "}")
+    |> write "}"
 
 tag : Str, List (Inspector LogFormatter) -> Inspector LogFormatter
 tag = \name, fields ->
     if List.isEmpty fields then
         f0 <- Inspect.custom
-        write f0 (Str.toUtf8 name)
+        write f0 name
     else
         f0 <- Inspect.custom
-        write f0 (Str.toUtf8 "(")
-        |> write (Str.toUtf8 name)
+        write f0 "("
+        |> write name
         |> \f1 ->
             f2, inspector <- List.walk fields f1
-            write f2 (Str.toUtf8 " ")
+            write f2 " "
             |> \x -> Inspect.apply inspector x
-        |> write (Str.toUtf8 ")")
+        |> write ")"
 
 tuple : List (Inspector LogFormatter) -> Inspector LogFormatter
 tuple = \fields ->
     f0 <- Inspect.custom
-    write f0 (Str.toUtf8 "(")
+    write f0 "("
     |> \f1 ->
         (f2, prependSep), inspector <- List.walk fields (f1, Bool.false)
         f3 =
             if prependSep then
-                write f2 (Str.toUtf8 ", ")
+                write f2 ", "
             else
                 f2
 
         Inspect.apply inspector f3
         |> \f4 -> (f4, Bool.true)
     |> .0
-    |> write (Str.toUtf8 ")")
+    |> write ")"
 
 record : List { key : Str, value : Inspector LogFormatter } -> Inspector LogFormatter
 record = \fields ->
     f0 <- Inspect.custom
-    write f0 (Str.toUtf8 "{")
+    write f0 "{"
     |> \f1 ->
         (f2, prependSep), { key, value } <- List.walk fields (f1, Bool.false)
         f3 =
             if prependSep then
-                write f2 (Str.toUtf8 ", ")
+                write f2 ", "
             else
                 f2
 
-        write f3 (Str.toUtf8 key)
-        |> write (Str.toUtf8 ": ")
+        write f3 key
+        |> write ": "
         |> \x -> Inspect.apply value x
         |> \f4 -> (f4, Bool.true)
     |> .0
-    |> write (Str.toUtf8 "}")
+    |> write "}"
 
 bool : Bool -> Inspector LogFormatter
 bool = \b ->
     if b then
         f0 <- Inspect.custom
-        write f0 (Str.toUtf8 "true")
+        write f0 "true"
     else
         f0 <- Inspect.custom
-        write f0 (Str.toUtf8 "false")
+        write f0 "false"
 
 str : Str -> Inspector LogFormatter
 str = \s ->
     f0 <- Inspect.custom
     f0
-    |> write (Str.toUtf8 "\"")
-    |> write (Str.toUtf8 s)
-    |> write (Str.toUtf8 "\"")
+    |> write "\""
+    |> write s
+    |> write "\""
 
 opaque : Str -> Inspector LogFormatter
 opaque = \s ->
     f0 <- Inspect.custom
     f0
-    |> write (Str.toUtf8 "<")
-    |> write (Str.toUtf8 s)
-    |> write (Str.toUtf8 ">")
+    |> write "<"
+    |> write s
+    |> write ">"
 
 u8 : U8 -> Inspector LogFormatter
 u8 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 i8 : I8 -> Inspector LogFormatter
 i8 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 u16 : U16 -> Inspector LogFormatter
 u16 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 i16 : I16 -> Inspector LogFormatter
 i16 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 u32 : U32 -> Inspector LogFormatter
 u32 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 i32 : I32 -> Inspector LogFormatter
 i32 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 u64 : U64 -> Inspector LogFormatter
 u64 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 i64 : I64 -> Inspector LogFormatter
 i64 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 u128 : U128 -> Inspector LogFormatter
 u128 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 i128 : I128 -> Inspector LogFormatter
 i128 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 f32 : F32 -> Inspector LogFormatter
 f32 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 f64 : F64 -> Inspector LogFormatter
 f64 = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
 dec : Dec -> Inspector LogFormatter
 dec = \num ->
     f0 <- Inspect.custom
-    write f0 (num |> Num.toStr |> Str.toUtf8)
+    write f0 (num |> Num.toStr)
 
-write : LogFormatter, List U8 -> LogFormatter
-write = \@LogFormatter { bytes }, added ->
-    @LogFormatter { bytes: List.concat bytes added }
+write : LogFormatter, Str -> LogFormatter
+write = \@LogFormatter { data }, added ->
+    @LogFormatter { data: Str.concat data added }
 
-toBytes : LogFormatter -> List U8
-toBytes = \@LogFormatter { bytes } -> bytes
+toStr : LogFormatter -> Str
+toStr = \@LogFormatter { data } -> data
