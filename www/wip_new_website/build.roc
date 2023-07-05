@@ -1,55 +1,46 @@
 #!/usr/bin/env roc
 app "website-builder"
-    # TODO update to basic-cli release when Command module is available 
-    packages { pf: "https://github.com/lukewilliamboswell/roc-things/releases/download/test/VQYlmhbzLld4kAE4Y8sWt349md89iyGBg5hgoIBfvcs.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0-rc1/hbIodFf7kULTYZJkzgsvgsnFAvQexm5hVeBaOMZk84I.tar.br" }
     imports [
         pf.Task.{ Task },
         pf.Command,
+        pf.Arg
     ]
     provides [main] to pf
 
 main = 
-
+    # TODO take dist folder name and main.roc path as args once https://github.com/roc-lang/basic-cli/issues/82 is fixed
+    # TODO add function to remove boilerplate
     # Remove dist folder
     {} <- 
         Command.new "rm"
-        |> Command.arg "-rf"
-        |> Command.arg "dist/"
+        |> Command.args ["-rf", "dist/"]
         |> Command.status
-        |> Task.onFail \_ -> crash "Failed to remove dist folder"
+        |> Task.onErr \_ -> crash "Failed to remove dist folder"
         |> Task.await
 
     # Build site
     {} <- 
         Command.new "roc"
-        |> Command.arg "run"
-        |> Command.arg "main.roc"
-        |> Command.arg "--"
-        |> Command.arg "content/"
-        |> Command.arg "dist/"
+        |> Command.args ["run", "main.roc", "--", "content/", "dist/"]
         |> Command.status
-        |> Task.onFail \_ -> crash "Failed to build site"
+        |> Task.onErr \_ -> crash "Failed to build site"
         |> Task.await
 
     # Copy static files
     {} <- 
         Command.new "cp"
-        |> Command.arg "-r"
-        |> Command.arg "static/site.css"
-        |> Command.arg "dist/"
+        |> Command.args ["-r", "static/site.css", "dist/"]
         |> Command.status
-        |> Task.onFail \_ -> crash "Failed to copy static files"
+        |> Task.onErr \_ -> crash "Failed to copy static files"
         |> Task.await
 
     # Start file server
     {} <- 
         Command.new "simple-http-server"
-        |> Command.arg "-p"
-        |> Command.arg "8080"
-        |> Command.arg "--"
-        |> Command.arg "dist/"
+        |> Command.args ["-p", "8080", "--", "dist/"]
         |> Command.status
-        |> Task.onFail \_ -> crash "Failed to run file server; consider intalling with `cargo install simple-http-server`"
+        |> Task.onErr \_ -> crash "Failed to run file server; consider intalling with `cargo install simple-http-server`"
         |> Task.await
 
-    Task.succeed {}
+    Task.ok {}

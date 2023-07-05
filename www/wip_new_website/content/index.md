@@ -10,16 +10,16 @@ A systems programming language that is fast, friendly, and functional.
 
 <section class="home-goals-container">
     <div class="home-goals-column">
-      <h2 class="home-goals-title">a fast language</h2>
-      <p class="home-goals-description">We want Roc to run faster than any non-systems language that sees mainstream use in industry. <a class="home-goals-learn-more" href="/design_goals_page.html#fast">Learn more</a></p>
+      <h2 class="home-goals-title">Fast</h2>
+      <p class="home-goals-description">We want Roc to run faster than any non-systems language that sees mainstream use in industry. <a class="home-goals-learn-more" href="/design_goals.html#fast">Learn more</a></p>
     </div>
     <div class="home-goals-column">
-      <h2 class="home-goals-title">a friendly language</h2>
-      <p class="home-goals-description">Roc aims to be a user-friendly language with a friendly community of users. <a class="home-goals-learn-more" href="/design_goals_page.html#friendly">Learn more</a></p>
+      <h2 class="home-goals-title">Friendly</h2>
+      <p class="home-goals-description">Roc aims to be a user-friendly language with a friendly community of users. <a class="home-goals-learn-more" href="/design_goals.html#friendly">Learn more</a></p>
     </div>
     <div class="home-goals-column">
-      <h2 class="home-goals-title">a functional language</h2>
-      <p class="home-goals-description">Roc aims to be a purely functional programming language. <a class="home-goals-learn-more" href="/design_goals_page.html#functional">Learn more</a></p>
+      <h2 class="home-goals-title">Functional</h2>
+      <p class="home-goals-description">Roc aims to be a purely functional programming language. <a class="home-goals-learn-more" href="/design_goals.html#functional">Learn more</a></p>
 </section>
 
 ## Try Roc

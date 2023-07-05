@@ -8,13 +8,13 @@ app "roc-website"
 
 pageData =  
     Dict.empty {} 
-    |> Dict.insert "community_page.html" { title: "Community", description: "The Roc community" }
-    |> Dict.insert "design_goals_page.html" { title: "Design Goals", description: "Roc's design goals" }
-    |> Dict.insert "docs_page.html" { title: "Documentation", description: "Learn the Roc programming language" }
-    |> Dict.insert "home_page.html" { title: "Roc Lang", description: "The Roc programming language" }
-    |> Dict.insert "install_page.html" { title: "Install", description: "Getting started with the Roc programming language" }
-    |> Dict.insert "sponsor_page.html" { title: "Sponsor", description: "Sponsor Roc" }
-    |> Dict.insert "tutorial_page.html" { title: "Tutorial", description: "The Roc tutorial" }
+    |> Dict.insert "community.html" { title: "Community", description: "The Roc community" }
+    |> Dict.insert "design_goals.html" { title: "Design Goals", description: "Roc's design goals" }
+    |> Dict.insert "docs.html" { title: "Documentation", description: "Learn the Roc programming language" }
+    |> Dict.insert "home.html" { title: "Roc Lang", description: "The Roc programming language" }
+    |> Dict.insert "install.html" { title: "Install", description: "Getting started with the Roc programming language" }
+    |> Dict.insert "sponsor.html" { title: "Sponsor", description: "Sponsor Roc" }
+    |> Dict.insert "tutorial.html" { title: "Tutorial", description: "The Roc tutorial" }
 
 getPage : Str -> {title : Str, description : Str}
 getPage = \current ->
@@ -41,7 +41,7 @@ view = \page, htmlContent ->
             Html.title [] [text (getTitle page)],
             meta [name "description", content (getDescription page)] [],
             meta [name "viewport", content "width=device-width"] [],
-            link [rel "stylesheet", href "/site.css"] [],
+            link [rel "stylesheet", href "./site.css"] [],
             link [rel "icon", href "/favicon.svg"] [],
         ],
         body [] [
@@ -69,16 +69,16 @@ viewNavbar : Html.Node
 viewNavbar =
     div [id "top-bar"] [
         nav [] [
-            a [href "/home_page.html", title "The Roc Programming Language"] [
+            a [href "./home.html", title "The Roc Programming Language"] [
                 rocLogo
             ],
             div [id "top-bar-links"] [
-                a [href "/tutorial_page.html"] [text "tutorial"],
-                a [href "/install_page.html"] [text "install"],
+                a [href "./tutorial.html"] [text "tutorial"],
+                a [href "./install.html"] [text "install"],
                 a [href "#todo-link-to-examples-site"] [text "examples"],
-                a [href "/community_page.html"] [text "community"],
-                a [href "/sponsor_page.html"] [text "sponsor"],
-                a [href "/docs_page.html"] [text "docs"],
+                a [href "./community.html"] [text "community"],
+                a [href "./sponsor.html"] [text "sponsor"],
+                a [href "./docs.html"] [text "docs"],
             ],
         ],
     ]
