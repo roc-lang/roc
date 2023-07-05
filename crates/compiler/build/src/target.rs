@@ -149,7 +149,6 @@ pub fn target_machine(
 
     init_arch(target);
 
-
     Target::from_name(arch).unwrap().create_target_machine(
         &TargetTriple::create(target_triple_str(target)),
         "generic",
