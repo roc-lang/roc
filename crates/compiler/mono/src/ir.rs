@@ -1878,14 +1878,6 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
-    ExprBox {
-        symbol: Symbol,
-    },
-
-    ExprUnbox {
-        symbol: Symbol,
-    },
-
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,
@@ -2066,14 +2058,6 @@ impl<'a> Expr<'a> {
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
-
-            ExprBox { symbol, .. } => alloc
-                .text("Box ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
-
-            ExprUnbox { symbol, .. } => alloc
-                .text("Unbox ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
 
             UnionAtIndex {
                 tag_id,
@@ -7679,14 +7663,6 @@ fn substitute_in_expr<'a>(
             }
         }
 
-        ExprBox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprBox { symbol: new_symbol })
-        }
-
-        ExprUnbox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
-        }
-
         StructAtIndex {
             index,
             structure,
@@ -10053,7 +10029,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+        let unbox_expr = Expr::ptr_load(arena.alloc(argument));
 
         let unbox_stmt = Stmt::Let(
             unboxed,
@@ -10153,7 +10129,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+        let unbox_expr = Expr::ptr_load(arena.alloc(argument));
 
         let unbox_stmt = Stmt::Let(unboxed, unbox_expr, interned, arena.alloc(field_get_stmt));
 

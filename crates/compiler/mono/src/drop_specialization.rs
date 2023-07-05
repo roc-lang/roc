@@ -169,11 +169,6 @@ fn specialize_drops_stmt<'a, 'i>(
 
                     alloc_let_with_continuation!(environment)
                 }
-                Expr::ExprBox { symbol: child } => {
-                    environment.add_box_child(*binding, *child);
-
-                    alloc_let_with_continuation!(environment)
-                }
                 Expr::Array {
                     elems: children, ..
                 } => {
@@ -224,10 +219,6 @@ fn specialize_drops_stmt<'a, 'i>(
                     // Generated code might know the tag of the union without switching on it.
                     // So if we UnionFieldPtrAtIndex, we must know the tag and we can use it to specialize the drop.
                     environment.symbol_tag.insert(*structure, *tag_id);
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::ExprUnbox { symbol } => {
-                    environment.add_box_child(*symbol, *binding);
                     alloc_let_with_continuation!(environment)
                 }
 
@@ -1531,13 +1522,6 @@ impl<'a> DropSpecializationEnvironment<'a> {
             .entry(parent)
             .or_insert_with(|| Vec::new_in(self.arena))
             .push((child, tag, index));
-    }
-
-    fn add_box_child(&mut self, parent: Parent, child: Child) {
-        self.box_children
-            .entry(parent)
-            .or_insert_with(|| Vec::new_in(self.arena))
-            .push(child);
     }
 
     fn add_list_child(&mut self, parent: Parent, child: Child, index: u64) {

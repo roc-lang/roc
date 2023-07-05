@@ -1978,7 +1978,7 @@ impl<'a> LowLevelCall<'a> {
                     value,
                 );
             }
-            PtrLoad => backend.expr_unbox(self.ret_symbol, self.arguments[0]),
+            PtrLoad => backend.ptr_load(self.ret_symbol, self.arguments[0]),
             PtrClearTagId => {
                 let ptr = self.arguments[0];
 

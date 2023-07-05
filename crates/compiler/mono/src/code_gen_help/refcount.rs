@@ -2010,7 +2010,7 @@ fn refcount_boxed<'a>(
     // decrement the inner value if the operation is a decrement and the box itself is unique
     if layout_interner.is_refcounted(inner_layout) && ctx.op.is_dec() {
         let inner = root.create_symbol(ident_ids, "inner");
-        let inner_expr = Expr::ExprUnbox { symbol: outer };
+        let inner_expr = Expr::ptr_load(arena.alloc(outer));
 
         let mod_inner_unit = root.create_symbol(ident_ids, "mod_inner_unit");
         let mod_inner_args = refcount_args(root, ctx, inner);

@@ -149,12 +149,6 @@ impl<'a> LastSeenMap<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::ExprBox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
-                    Expr::ExprUnbox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
                     Expr::Struct(syms) => {
                         for sym in *syms {
                             self.set_last_seen(*sym, stmt);
@@ -841,21 +835,6 @@ trait Backend<'a> {
                 self.load_literal_symbols(arguments);
                 let reuse = reuse.map(|ru| ru.symbol);
                 self.tag(sym, arguments, tag_layout, *tag_id, reuse);
-            }
-            Expr::ExprBox { symbol: value } => {
-                let element_layout = match self.interner().get_repr(*layout) {
-                    LayoutRepr::Boxed(boxed) => boxed,
-                    _ => unreachable!("{:?}", self.interner().dbg(*layout)),
-                };
-
-                self.load_literal_symbols([*value].as_slice());
-                self.expr_box(*sym, *value, element_layout, None)
-            }
-            Expr::ExprUnbox { symbol: ptr } => {
-                let element_layout = *layout;
-
-                self.load_literal_symbols([*ptr].as_slice());
-                self.expr_unbox(*sym, *ptr, element_layout)
             }
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
