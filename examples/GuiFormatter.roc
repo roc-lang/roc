@@ -28,6 +28,7 @@ GuiFormatter := { nodes : List Elem }
              record: record,
              bool: bool,
              str: str,
+             opaque: opaque,
              u8: u8,
              i8: i8,
              u16: u16,
@@ -150,6 +151,11 @@ str : Str -> Inspector GuiFormatter
 str = \s ->
     f0 <- Inspect.custom
     addNode f0 (Text "\"\(s)\"")
+
+opaque : Str -> Inspector GuiFormatter
+opaque = \s ->
+    f0 <- Inspect.custom
+    addNode f0 (Text "<\(s)>")
 
 u8 : U8 -> Inspector GuiFormatter
 u8 = \num ->

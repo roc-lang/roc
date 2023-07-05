@@ -22,6 +22,7 @@ LogFormatter := { bytes : List U8 }
              record: record,
              bool: bool,
              str: str,
+             opaque: opaque,
              u8: u8,
              i8: i8,
              u16: u16,
@@ -166,6 +167,14 @@ str = \s ->
     |> write (Str.toUtf8 "\"")
     |> write (Str.toUtf8 s)
     |> write (Str.toUtf8 "\"")
+
+opaque : Str -> Inspector LogFormatter
+opaque = \s ->
+    f0 <- Inspect.custom
+    f0
+    |> write (Str.toUtf8 "<")
+    |> write (Str.toUtf8 s)
+    |> write (Str.toUtf8 ">")
 
 u8 : U8 -> Inspector LogFormatter
 u8 = \num ->
