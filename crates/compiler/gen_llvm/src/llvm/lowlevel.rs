@@ -2611,7 +2611,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
     } = higher_order;
 
     let PassedFunction {
-        argument_layouts,
+        argument_layouts: _,
         return_layout: result_layout,
         owns_captured_environment: function_owns_closure_data,
         name: function_name,
@@ -2626,9 +2626,6 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
                 env,
                 FuncBorrowSpec::Some(func_spec),
                 function_name.name(),
-                argument_layouts,
-                function_name.niche(),
-                return_layout,
             );
 
             let (closure, closure_layout) =

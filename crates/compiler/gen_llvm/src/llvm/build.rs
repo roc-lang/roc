@@ -606,14 +606,7 @@ fn promote_to_main_function<'a, 'ctx>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn = function_value_by_func_spec(
-        env,
-        FuncBorrowSpec::Some(*func_spec),
-        symbol,
-        &[],
-        Niche::NONE,
-        Layout::UNIT,
-    );
+    let roc_main_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
     let main_fn_name = "$Test.main";
 
@@ -662,14 +655,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn = function_value_by_func_spec(
-        env,
-        FuncBorrowSpec::Some(*func_spec),
-        symbol,
-        &[],
-        Niche::NONE,
-        Layout::UNIT,
-    );
+    let roc_main_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
     let output_type = match roc_main_fn.get_type().get_return_type() {
         Some(return_type) => {
@@ -4956,14 +4942,7 @@ pub fn build_procedures<'a>(
         );
 
         // NOTE fake layout; it is only used for debug prints
-        let getter_fn = function_value_by_func_spec(
-            env,
-            FuncBorrowSpec::Some(*func_spec),
-            symbol,
-            &[],
-            niche,
-            Layout::UNIT,
-        );
+        let getter_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
         let name = getter_fn.get_name().to_str().unwrap();
         let getter_name = symbol.as_str(&env.interns);
@@ -5078,14 +5057,8 @@ pub fn build_procedures_expose_expects<'a>(
         );
 
         // NOTE fake layout; it is only used for debug prints
-        let roc_main_fn = function_value_by_func_spec(
-            env,
-            FuncBorrowSpec::Some(*func_spec),
-            symbol,
-            &[],
-            captures_niche,
-            Layout::UNIT,
-        );
+        let roc_main_fn =
+            function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
         let name = roc_main_fn.get_name().to_str().unwrap();
 
@@ -5352,14 +5325,7 @@ fn expose_alias_to_host<'a>(
                         "we expect only one specialization of this symbol"
                     );
 
-                    function_value_by_func_spec(
-                        env,
-                        FuncBorrowSpec::Some(*func_spec),
-                        hels.symbol,
-                        hels.proc_layout.arguments,
-                        Niche::NONE,
-                        hels.proc_layout.result,
-                    )
+                    function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), hels.symbol)
                 }
                 None => {
                     // morphic did not generate a specialization for this function,
@@ -5668,45 +5634,23 @@ pub(crate) fn function_value_by_func_spec<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     func_spec: FuncBorrowSpec,
     symbol: Symbol,
-    arguments: &[InLayout<'a>],
-    niche: Niche<'a>,
-    result: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
     let fn_name = fn_name.as_str();
 
-    function_value_by_name_help(env, arguments, niche, result, symbol, fn_name)
+    function_value_by_name_help(env, symbol, fn_name)
 }
 
 fn function_value_by_name_help<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    arguments: &[InLayout<'a>],
-    _niche: Niche<'a>,
-    result: InLayout<'a>,
     symbol: Symbol,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
     env.module.get_function(fn_name).unwrap_or_else(|| {
         if symbol.is_builtin() {
-            eprintln!(
-                "Unrecognized builtin function: {:?}\nLayout: {:?}\n",
-                fn_name,
-                (arguments, result)
-            );
-            eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
-
-            panic!("Unrecognized builtin function: {fn_name:?} (symbol: {symbol:?})",)
+            panic!("Unrecognized builtin function: {fn_name:?} (symbol: {symbol:?})")
         } else {
-            // Unrecognized non-builtin function:
-            eprintln!(
-                "Unrecognized non-builtin function: {:?}\n\nSymbol: {:?}\nLayout: {:?}\n",
-                fn_name,
-                symbol,
-                (arguments, result)
-            );
-            eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
-
-            panic!("Unrecognized non-builtin function: {fn_name:?} (symbol: {symbol:?})",)
+            panic!("Unrecognized non-builtin function: {fn_name:?} (symbol: {symbol:?})")
         }
     })
 }
@@ -5721,14 +5665,7 @@ fn roc_call_with_args<'a, 'ctx>(
     func_spec: FuncBorrowSpec,
     arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let fn_val = function_value_by_func_spec(
-        env,
-        func_spec,
-        name.name(),
-        argument_layouts,
-        name.niche(),
-        result_layout,
-    );
+    let fn_val = function_value_by_func_spec(env, func_spec, name.name());
 
     call_roc_function(
         env,

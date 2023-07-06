@@ -68,12 +68,8 @@ pub fn build<'a, 'ctx>(
     let alloca = env
         .builder
         .build_alloca(function_ptr_type, "function_pointer_alloca");
-    let func_value: FunctionValue<'ctx> = function_value_by_func_spec(
-        env,
-        FuncBorrowSpec::Erased,
-        lambda_name.name(),
-        lambda_name.niche(),
-    );
+    let func_value: FunctionValue<'ctx> =
+        function_value_by_func_spec(env, FuncBorrowSpec::Erased, lambda_name.name());
     env.builder
         .build_store(alloca, func_value.as_global_value().as_pointer_value());
     alloca.into()
