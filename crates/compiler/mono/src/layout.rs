@@ -496,6 +496,10 @@ impl<'a> RawFunctionLayout<'a> {
         matches!(self, RawFunctionLayout::ZeroArgumentThunk(_))
     }
 
+    pub fn is_erased_function(&self) -> bool {
+        matches!(self, RawFunctionLayout::ErasedFunction(_, _))
+    }
+
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
         var: Variable,

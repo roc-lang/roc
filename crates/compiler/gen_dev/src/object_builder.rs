@@ -444,6 +444,7 @@ fn build_exposed_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'a>) -> P
         ret_layout: proc.ret_layout,
         is_self_recursive: roc_mono::ir::SelfRecursive::NotSelfRecursive,
         host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
+        is_erased: proc.is_erased,
     }
 }
 
@@ -525,6 +526,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
         ret_layout: roc_mono::layout::Layout::UNIT,
         is_self_recursive: roc_mono::ir::SelfRecursive::NotSelfRecursive,
         host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
+        is_erased: proc.is_erased,
     }
 }
 

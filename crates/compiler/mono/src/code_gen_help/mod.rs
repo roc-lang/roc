@@ -453,6 +453,7 @@ impl<'a> CodeGenHelp<'a> {
             ret_layout,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         });
 
         proc_symbol
@@ -772,6 +773,7 @@ impl<'a> CallerProc<'a> {
             ret_layout: Layout::UNIT,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         };
 
         if false {

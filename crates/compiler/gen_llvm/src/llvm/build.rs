@@ -4,6 +4,7 @@ use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
 use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
+use crate::llvm::fn_ptr;
 use crate::llvm::memcpy::build_memcpy;
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -605,8 +606,14 @@ fn promote_to_main_function<'a, 'ctx>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn =
-        function_value_by_func_spec(env, *func_spec, symbol, &[], Niche::NONE, Layout::UNIT);
+    let roc_main_fn = function_value_by_func_spec(
+        env,
+        FuncBorrowSpec::Some(*func_spec),
+        symbol,
+        &[],
+        Niche::NONE,
+        Layout::UNIT,
+    );
 
     let main_fn_name = "$Test.main";
 
@@ -655,8 +662,14 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn =
-        function_value_by_func_spec(env, *func_spec, symbol, &[], Niche::NONE, Layout::UNIT);
+    let roc_main_fn = function_value_by_func_spec(
+        env,
+        FuncBorrowSpec::Some(*func_spec),
+        symbol,
+        &[],
+        Niche::NONE,
+        Layout::UNIT,
+    );
 
     let output_type = match roc_main_fn.get_type().get_return_type() {
         Some(return_type) => {
@@ -934,7 +947,7 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
                 arg_layouts,
                 *ret_layout,
                 *name,
-                func_spec,
+                FuncBorrowSpec::Some(func_spec),
                 arg_tuples.into_bump_slice(),
             )
         }
@@ -1126,7 +1139,12 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             )
         }
 
-        FunctionPointer { .. } => todo_lambda_erasure!(),
+        FunctionPointer { lambda_name } => {
+            let function_ptr_type =
+                fn_ptr::pointer_type_expecting_layout(env, layout_interner, layout);
+            let alloca = fn_ptr::build(env, layout_interner, *lambda_name, function_ptr_type);
+            alloca.into()
+        }
         ErasedMake { .. } => todo_lambda_erasure!(),
         ErasedLoad { .. } => todo_lambda_erasure!(),
 
@@ -4871,15 +4889,19 @@ pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
 
         let it = func_solutions.specs();
         let mut function_values = std::vec::Vec::with_capacity(it.size_hint().0);
+
+        let is_erased = proc.is_erased;
+        debug_assert!(!is_erased || func_solutions.specs().count() == 1);
+
         for specialization in it {
-            let fn_val = build_proc_header(
-                env,
-                layout_interner,
-                *specialization,
-                symbol,
-                &proc,
-                layout_ids,
-            );
+            let func_spec = if is_erased {
+                FuncBorrowSpec::Erased
+            } else {
+                FuncBorrowSpec::Some(*specialization)
+            };
+
+            let fn_val =
+                build_proc_header(env, layout_interner, func_spec, symbol, &proc, layout_ids);
 
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition
@@ -4934,8 +4956,14 @@ pub fn build_procedures<'a>(
         );
 
         // NOTE fake layout; it is only used for debug prints
-        let getter_fn =
-            function_value_by_func_spec(env, *func_spec, symbol, &[], niche, Layout::UNIT);
+        let getter_fn = function_value_by_func_spec(
+            env,
+            FuncBorrowSpec::Some(*func_spec),
+            symbol,
+            &[],
+            niche,
+            Layout::UNIT,
+        );
 
         let name = getter_fn.get_name().to_str().unwrap();
         let getter_name = symbol.as_str(&env.interns);
@@ -5050,8 +5078,14 @@ pub fn build_procedures_expose_expects<'a>(
         );
 
         // NOTE fake layout; it is only used for debug prints
-        let roc_main_fn =
-            function_value_by_func_spec(env, *func_spec, symbol, &[], captures_niche, Layout::UNIT);
+        let roc_main_fn = function_value_by_func_spec(
+            env,
+            FuncBorrowSpec::Some(*func_spec),
+            symbol,
+            &[],
+            captures_niche,
+            Layout::UNIT,
+        );
 
         let name = roc_main_fn.get_name().to_str().unwrap();
 
@@ -5178,11 +5212,19 @@ fn build_procedures_help<'a>(
     mod_solutions
 }
 
+pub enum FuncBorrowSpec {
+    /// This function has an specialization due to alias analysis.
+    Some(FuncSpec),
+    /// This function does not have a specialization due to alias analysis,
+    /// because it is type-erased, and thus has no statically determined AA specialization.
+    Erased,
+}
+
 fn func_spec_name<'a>(
     arena: &'a Bump,
     interns: &Interns,
     symbol: Symbol,
-    func_spec: FuncSpec,
+    func_spec: FuncBorrowSpec,
 ) -> bumpalo::collections::String<'a> {
     use std::fmt::Write;
 
@@ -5192,8 +5234,13 @@ fn func_spec_name<'a>(
     let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
     write!(buf, "{module_string}_{ident_string}_").unwrap();
 
-    for byte in func_spec.0.iter() {
-        write!(buf, "{byte:x?}").unwrap();
+    match func_spec {
+        FuncBorrowSpec::Some(func_spec) => {
+            for byte in func_spec.0.iter() {
+                write!(buf, "{byte:x?}").unwrap();
+            }
+        }
+        FuncBorrowSpec::Erased => write!(buf, "erased").unwrap(),
     }
 
     buf
@@ -5202,7 +5249,7 @@ fn func_spec_name<'a>(
 fn build_proc_header<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    func_spec: FuncSpec,
+    func_spec: FuncBorrowSpec,
     symbol: Symbol,
     proc: &roc_mono::ir::Proc<'a>,
     layout_ids: &mut LayoutIds<'a>,
@@ -5307,7 +5354,7 @@ fn expose_alias_to_host<'a>(
 
                     function_value_by_func_spec(
                         env,
-                        *func_spec,
+                        FuncBorrowSpec::Some(*func_spec),
                         hels.symbol,
                         hels.proc_layout.arguments,
                         Niche::NONE,
@@ -5619,7 +5666,7 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 
 pub(crate) fn function_value_by_func_spec<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    func_spec: FuncSpec,
+    func_spec: FuncBorrowSpec,
     symbol: Symbol,
     arguments: &[InLayout<'a>],
     niche: Niche<'a>,
@@ -5671,7 +5718,7 @@ fn roc_call_with_args<'a, 'ctx>(
     argument_layouts: &[InLayout<'a>],
     result_layout: InLayout<'a>,
     name: LambdaName<'a>,
-    func_spec: FuncSpec,
+    func_spec: FuncBorrowSpec,
     arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
     let fn_val = function_value_by_func_spec(
@@ -6412,7 +6459,7 @@ fn get_foreign_symbol<'ctx>(
 /// Add a function to a module, after asserting that the function is unique.
 /// We never want to define the same function twice in the same module!
 /// The result can be bugs that are difficult to track down.
-pub fn add_func<'ctx>(
+pub(crate) fn add_func<'ctx>(
     ctx: &Context,
     module: &Module<'ctx>,
     name: &str,

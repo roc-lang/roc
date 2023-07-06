@@ -308,6 +308,7 @@ pub struct Proc<'a> {
     pub ret_layout: InLayout<'a>,
     pub is_self_recursive: SelfRecursive,
     pub host_exposed_layouts: HostExposedLayouts<'a>,
+    pub is_erased: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3269,6 +3270,7 @@ fn generate_runtime_error_function<'a>(
 
     let runtime_error = runtime_error(env, msg.into_bump_str());
 
+    let is_erased = layout.is_erased_function();
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
             let real_arg_layouts =
@@ -3299,6 +3301,7 @@ fn generate_runtime_error_function<'a>(
         ret_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        is_erased,
     }
 }
 
@@ -3394,6 +3397,7 @@ fn generate_host_exposed_function<'a>(
                 ret_layout: result,
                 is_self_recursive: SelfRecursive::NotSelfRecursive,
                 host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                is_erased: false,
             };
 
             let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
@@ -3458,6 +3462,7 @@ fn generate_host_exposed_lambda_set<'a>(
         ret_layout: return_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        is_erased: false,
     };
 
     let top_level = ProcLayout::new(
@@ -3529,6 +3534,7 @@ fn specialize_proc_help<'a>(
         SpecializedLayout::FunctionPointerBody {
             ret_layout,
             closure: opt_closure_layout,
+            is_erased,
         } => {
             // this is a function body like
             //
@@ -3554,12 +3560,14 @@ fn specialize_proc_help<'a>(
                 ret_layout,
                 is_self_recursive: recursivity,
                 host_exposed_layouts,
+                is_erased,
             }
         }
         SpecializedLayout::FunctionBody {
             arguments: proc_args,
             closure: opt_closure_layout,
             ret_layout,
+            is_erased,
         } => {
             let mut proc_args = Vec::from_iter_in(proc_args.iter().copied(), env.arena);
 
@@ -3755,6 +3763,7 @@ fn specialize_proc_help<'a>(
                 ret_layout,
                 is_self_recursive: recursivity,
                 host_exposed_layouts,
+                is_erased,
             }
         }
     };
@@ -3769,11 +3778,13 @@ enum SpecializedLayout<'a> {
         arguments: &'a [(InLayout<'a>, Symbol)],
         closure: Option<ClosureDataKind<'a>>,
         ret_layout: InLayout<'a>,
+        is_erased: bool,
     },
     /// A body like `foo = Num.add`
     FunctionPointerBody {
         closure: Option<LambdaSet<'a>>,
         ret_layout: InLayout<'a>,
+        is_erased: bool,
     },
 }
 
@@ -3845,6 +3856,8 @@ fn build_specialized_proc<'a>(
         proc_args.push((arg_layout, *arg_name));
     }
 
+    let is_erased = matches!(closure_data, Some(ClosureDataKind::Erased));
+
     // Given
     //
     //     foo =
@@ -3883,6 +3896,7 @@ fn build_specialized_proc<'a>(
                 arguments: proc_args,
                 closure: Some(closure_data),
                 ret_layout,
+                is_erased,
             })
         }
         Some(closure_data) => {
@@ -3901,6 +3915,7 @@ fn build_specialized_proc<'a>(
                         arguments: proc_args,
                         closure: None,
                         ret_layout,
+                        is_erased,
                     })
                 }
                 Ordering::Greater => {
@@ -3909,6 +3924,7 @@ fn build_specialized_proc<'a>(
                         Ok(FunctionPointerBody {
                             closure: None,
                             ret_layout,
+                            is_erased,
                         })
                     } else {
                         // so far, the problem when hitting this branch was always somewhere else
@@ -3939,6 +3955,7 @@ fn build_specialized_proc<'a>(
                         arguments: proc_args,
                         closure: None,
                         ret_layout,
+                        is_erased,
                     })
                 }
                 Ordering::Greater => {
@@ -3946,6 +3963,7 @@ fn build_specialized_proc<'a>(
                         Ok(FunctionPointerBody {
                             closure: None,
                             ret_layout,
+                            is_erased,
                         })
                     } else {
                         // so far, the problem when hitting this branch was always somewhere else
@@ -10316,6 +10334,7 @@ where
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         };
 
         answer.push(GlueProc {
@@ -10411,6 +10430,7 @@ where
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         };
 
         answer.push(GlueProc {
