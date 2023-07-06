@@ -1525,7 +1525,7 @@ fn open_tag_union(env: &mut InferenceEnv, var: Variable) {
 
         let desc = env.subs.get(var);
         match desc.content {
-            // TODO: handle TagUnion, EmptyTagUnion,
+            // TODO: handle FunctionOrTagUnion, EmptyTagUnion, RecursiveTagUnion
             Structure(TagUnion(tags, ext)) => {
                 if let Structure(EmptyTagUnion) = env.subs.get_content_without_compacting(ext.var())
                 {
