@@ -61,7 +61,6 @@ pub fn pointer_type_expecting_layout<'a, 'ctx>(
 
 pub fn build<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
     lambda_name: LambdaName<'a>,
     function_ptr_type: PointerType<'ctx>,
 ) -> BasicValueEnum<'ctx> {

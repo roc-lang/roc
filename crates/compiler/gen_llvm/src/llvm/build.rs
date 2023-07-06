@@ -4,12 +4,12 @@ use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
 use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
-use crate::llvm::fn_ptr;
 use crate::llvm::memcpy::build_memcpy;
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
 use crate::llvm::struct_::{struct_from_fields, RocStruct};
+use crate::llvm::{erased, fn_ptr};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -912,7 +912,6 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
         CallType::ByName {
             name,
             specialization_id,
-            arg_layouts,
             ret_layout,
             ..
         } => {
@@ -930,7 +929,6 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
             roc_call_with_args(
                 env,
                 layout_interner,
-                arg_layouts,
                 *ret_layout,
                 *name,
                 FuncBorrowSpec::Some(func_spec),
@@ -1128,10 +1126,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
         FunctionPointer { lambda_name } => {
             let function_ptr_type =
                 fn_ptr::pointer_type_expecting_layout(env, layout_interner, layout);
-            let alloca = fn_ptr::build(env, layout_interner, *lambda_name, function_ptr_type);
+            let alloca = fn_ptr::build(env, *lambda_name, function_ptr_type);
             alloca.into()
         }
-        ErasedMake { .. } => todo_lambda_erasure!(),
+        ErasedMake { value, callee } => {
+            let value = value.map(|sym| scope.load_symbol(&sym).into_pointer_value());
+            let callee = scope.load_symbol(callee).into_pointer_value();
+            erased::build(env, value, callee).into()
+        }
         ErasedLoad { .. } => todo_lambda_erasure!(),
 
         Reset {
@@ -5659,7 +5661,6 @@ fn function_value_by_name_help<'a, 'ctx>(
 fn roc_call_with_args<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    argument_layouts: &[InLayout<'a>],
     result_layout: InLayout<'a>,
     name: LambdaName<'a>,
     func_spec: FuncBorrowSpec,
