@@ -368,11 +368,13 @@ pub fn build_erased_function<'a>(
     }
 }
 
+#[derive(Debug)]
 struct ResolvedErasedCaptures<'a> {
     layouts: &'a [InLayout<'a>],
     symbols: &'a [Symbol],
 }
 
+#[derive(Debug)]
 pub struct ResolvedErasedLambda<'a> {
     captures: Option<ResolvedErasedCaptures<'a>>,
     lambda_name: LambdaName<'a>,

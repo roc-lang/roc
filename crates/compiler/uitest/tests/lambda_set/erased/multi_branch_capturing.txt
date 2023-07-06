@@ -21,10 +21,8 @@ procedure Test.1 (Test.2):
     let Test.34 : Int1 = CallByName Bool.2;
     if Test.34 then
         dec Test.2;
-        let Test.40 : {} = Struct {};
-        let Test.38 : Boxed({}) = Box Test.40;
-        let Test.39 : FunPtr(({}, ?Erased) -> Str) = FunctionPointer Test.3;
-        let Test.35 : ?Erased = ErasedMake { value: Test.38, callee: Test.39 };
+        let Test.38 : FunPtr(({}) -> Str) = FunctionPointer Test.3;
+        let Test.35 : ?Erased = ErasedMake { value: <null>, callee: Test.38 };
         ret Test.35;
     else
         let Test.33 : {Str} = Struct {Test.2};
@@ -56,8 +54,8 @@ procedure Test.4 (Test.27, #Attr.12):
 procedure Test.0 ():
     let Test.6 : {} = Struct {};
     let Test.16 : Str = "";
-    let Test.41 : FunPtr((Str) -> ?Erased) = FunctionPointer Test.1;
-    let Test.17 : ?Erased = ErasedMake { value: <null>, callee: Test.41 };
+    let Test.39 : FunPtr((Str) -> ?Erased) = FunctionPointer Test.1;
+    let Test.17 : ?Erased = ErasedMake { value: <null>, callee: Test.39 };
     joinpoint Test.18 Test.7:
         joinpoint Test.8 Test.5:
             ret Test.5;

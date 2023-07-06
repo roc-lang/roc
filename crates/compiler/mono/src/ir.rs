@@ -5287,9 +5287,13 @@ pub fn with_hole<'a>(
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
                 RawFunctionLayout::ErasedFunction(argument_layouts, ret_layout) => {
-                    let captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
-                    let captured_symbols = captured_symbols.into_bump_slice();
-                    let captured_symbols = CapturedSymbols::Captured(captured_symbols);
+                    let captured_symbols = if captured_symbols.is_empty() {
+                        CapturedSymbols::None
+                    } else {
+                        let captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
+                        let captured_symbols = captured_symbols.into_bump_slice();
+                        CapturedSymbols::Captured(captured_symbols)
+                    };
                     let resolved_erased_lambda = ResolvedErasedLambda::new(
                         env,
                         layout_cache,
