@@ -536,7 +536,7 @@ fn compact_lambda_set<P: Phase>(
         Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. env.subs, t_f1);
+            trace_compact!(3iter_end_skipped.env.subs, t_f1);
             return OneCompactionResult::Compacted {
                 new_obligations: Default::default(),
                 new_lambda_sets_to_specialize: Default::default(),
@@ -559,7 +559,7 @@ fn compact_lambda_set<P: Phase>(
         Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. env.subs, t_f1);
+            trace_compact!(3iter_end_skipped.env.subs, t_f1);
             return OneCompactionResult::Compacted {
                 new_obligations: Default::default(),
                 new_lambda_sets_to_specialize: Default::default(),
@@ -572,7 +572,7 @@ fn compact_lambda_set<P: Phase>(
     let t_f2 = deep_copy_var_in(env, target_rank, t_f2, env.arena);
 
     // 3. Unify `t_f1 ~ t_f2`.
-    trace_compact!(3iter_start. env.subs, this_lambda_set, t_f1, t_f2);
+    trace_compact!(3iter_start.env.subs, this_lambda_set, t_f1, t_f2);
     let (vars, new_obligations, new_lambda_sets_to_specialize, _meta) = unify(
         &mut env.uenv(),
         t_f1,
@@ -581,7 +581,7 @@ fn compact_lambda_set<P: Phase>(
         Polarity::Pos,
     )
     .expect_success("ambient functions don't unify");
-    trace_compact!(3iter_end. env.subs, t_f1);
+    trace_compact!(3iter_end.env.subs, t_f1);
 
     env.introduce(target_rank, &vars);
 

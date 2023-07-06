@@ -15,6 +15,7 @@ roc_collections = { path = "../collections" }
 roc_module = { path = "../module" }
 roc_region = { path = "../region" }
 roc_error_macros = { path = "../../error_macros" }
+roc_syntax_derive = { path = "../syntax_derive" }
 
 bumpalo.workspace = true
 encode_unicode.workspace = true

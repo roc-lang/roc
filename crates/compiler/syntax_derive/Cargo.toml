@@ -1,0 +1,16 @@
+[package]
+name = "roc_syntax_derive"
+description = "#[derive(Syntax)] implementation, for generating impls on the roc syntax tree"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true

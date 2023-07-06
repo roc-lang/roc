@@ -3728,6 +3728,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "roc_syntax_derive",
 ]
 
 [[package]]
@@ -3959,6 +3960,15 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
+]
+
+[[package]]
+name = "roc_syntax_derive"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
