@@ -1,8 +1,9 @@
 use inkwell::{
-    types::StructType,
+    types::{PointerType, StructType},
     values::{PointerValue, StructValue},
     AddressSpace,
 };
+use roc_mono::ir::ErasedField;
 
 use super::build::Env;
 
@@ -63,4 +64,29 @@ pub fn build<'a, 'ctx>(
     // TODO: insert refcounter
 
     struct_value.into_struct_value()
+}
+
+pub fn load<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    erasure: StructValue<'ctx>,
+    field: ErasedField,
+    as_type: PointerType<'ctx>,
+) -> PointerValue<'ctx> {
+    let index = match field {
+        ErasedField::Value => 0,
+        ErasedField::Callee => 1,
+    };
+
+    let value = env
+        .builder
+        .build_extract_value(erasure, index, "extract_value")
+        .unwrap()
+        .into_pointer_value();
+
+    let value = env
+        .builder
+        .build_bitcast(value, as_type, "bitcast_to_type")
+        .into_pointer_value();
+
+    value
 }

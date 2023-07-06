@@ -1134,7 +1134,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let callee = scope.load_symbol(callee).into_pointer_value();
             erased::build(env, value, callee).into()
         }
-        ErasedLoad { .. } => todo_lambda_erasure!(),
+        ErasedLoad { symbol, field } => {
+            let value = scope.load_symbol(symbol).into_struct_value();
+            let wanted_llvm_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .into_pointer_type();
+
+            erased::load(env, value, *field, wanted_llvm_type).into()
+        }
 
         Reset {
             symbol,
