@@ -625,7 +625,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
             mode,
             lambda_set.runtime_representation(),
         ),
-        FunctionPointer(_) => todo_lambda_erasure!(),
+        FunctionPointer(_) => None,
         Erased(_) => todo_lambda_erasure!(),
     }
 }
