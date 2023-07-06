@@ -6995,6 +6995,8 @@ fn refine_tag_union(
                 .collect();
             while let Some((to_tag, to_args)) = to_tags.next() {
                 if to_tag > from_tag {
+                    // Since from_tags and to_tags are both sorted,
+                    // if we get to a tag greater than from_tag, then from_tag is not in to_tags.
                     break;
                 } else if to_tag == from_tag {
                     // this tag is in both tag unions
@@ -7027,7 +7029,7 @@ fn refine_tag_union(
                     };
                 }
             }
-            // this tag is only in from
+            // this tag is only in from_tags, not from_tags
             let patterns = vec![WhenBranchPattern {
                 pattern: Loc::at_zero(roc_can::pattern::Pattern::AppliedTag {
                     whole_var: from_var,
