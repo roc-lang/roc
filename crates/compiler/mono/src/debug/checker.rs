@@ -511,14 +511,33 @@ impl<'a, 'r> Ctx<'a, 'r> {
             }
             &Expr::FunctionPointer { lambda_name } => {
                 let lambda_symbol = lambda_name.name();
-                if !self.procs.iter().any(|((name, proc), _)| {
+                let proc = self.procs.iter().find(|((name, proc), _)| {
                     *name == lambda_symbol && proc.niche == lambda_name.niche()
-                }) {
-                    self.problem(ProblemKind::PtrToUndefinedProc {
-                        symbol: lambda_symbol,
-                    });
+                });
+                match proc {
+                    None => {
+                        self.problem(ProblemKind::PtrToUndefinedProc {
+                            symbol: lambda_symbol,
+                        });
+                        Some(target_layout)
+                    }
+                    Some(((_, proc_layout), _)) => {
+                        let ProcLayout {
+                            arguments, result, ..
+                        } = proc_layout;
+
+                        let fn_ptr =
+                            self.interner
+                                .insert_direct_no_semantic(LayoutRepr::FunctionPointer(
+                                    FunctionPointer {
+                                        args: arguments,
+                                        ret: *result,
+                                    },
+                                ));
+
+                        Some(fn_ptr)
+                    }
                 }
-                Some(target_layout)
             }
             &Expr::Reset {
                 symbol,
