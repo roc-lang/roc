@@ -69,7 +69,8 @@ if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   echo 'Building tutorial.html from tutorial.md...'
   mkdir www/build/tutorial
 
-  cargo run --release --bin roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
+  cargo build --release --bin roc
+  roc=target/release/roc
 else
   echo 'Fetching latest roc nightly...'
   
@@ -81,18 +82,20 @@ else
   ls | grep "roc_nightly.*tar.gz" | xargs rm
   # simplify dir name
   mv roc_nightly* roc_nightly
+  roc='./roc_nightly/roc'
 
   echo 'Building tutorial.html from tutorial.md...'
   mkdir www/build/tutorial
-
-  ./roc_nightly/roc version
-  ./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
-
-  # cleanup
-  rm -rf roc_nightly roc_releases.json
 fi
 
+$roc version
+$roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
+
+# for new wip site
+mkdir www/build/wip
+$roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip
+cp -r www/wip_new_website/static/site.css www/build/wip
 
 # cleanup
 rm -rf roc_nightly roc_releases.json
