@@ -11,7 +11,7 @@ use roc_mono::layout::{
 
 use super::{
     build::{function_value_by_func_spec, Env, FuncBorrowSpec, FunctionSpec, RocReturn},
-    convert::basic_type_from_layout,
+    convert::{argument_type_from_layout, basic_type_from_layout},
 };
 
 pub fn function_type<'a, 'ctx>(
@@ -22,7 +22,7 @@ pub fn function_type<'a, 'ctx>(
 ) -> FunctionType<'ctx> {
     let args = arguments
         .iter()
-        .map(|arg| basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*arg)));
+        .map(|arg| argument_type_from_layout(env, layout_interner, layout_interner.get_repr(*arg)));
 
     let ret_repr = layout_interner.get_repr(return_type);
     let ret = basic_type_from_layout(env, layout_interner, ret_repr);
