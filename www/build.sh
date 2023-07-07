@@ -94,7 +94,7 @@ mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
 # for new wip site
 mkdir www/build/wip
-roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip
+$roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip
 cp -r www/wip_new_website/static/site.css www/build/wip
 
 # cleanup
