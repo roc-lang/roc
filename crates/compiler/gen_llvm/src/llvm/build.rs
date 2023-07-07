@@ -24,11 +24,11 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{
     AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
 };
-use inkwell::values::BasicValueEnum;
 use inkwell::values::{
     BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PointerValue,
     StructValue,
 };
+use inkwell::values::{BasicValueEnum, CallableValue};
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::{
@@ -39,7 +39,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
-use roc_error_macros::todo_lambda_erasure;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet,
@@ -690,7 +690,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
         let entry = context.append_basic_block(c_function, "entry");
         builder.position_at_end(entry);
 
-        let roc_main_fn_result = call_roc_function(
+        let roc_main_fn_result = call_direct_roc_function(
             env,
             layout_interner,
             roc_main_fn,
@@ -926,7 +926,7 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
-            roc_call_with_args(
+            roc_call_direct_with_args(
                 env,
                 layout_interner,
                 *ret_layout,
@@ -936,8 +936,27 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
             )
         }
 
-        CallType::ByPointer { .. } => {
-            todo_lambda_erasure!()
+        CallType::ByPointer {
+            pointer,
+            arg_layouts,
+            ret_layout,
+        } => {
+            let mut args: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for symbol in arguments.iter() {
+                args.push(scope.load_symbol(symbol));
+            }
+
+            let pointer = scope.load_symbol(pointer).into_pointer_value();
+
+            roc_call_erased_with_args(
+                env,
+                layout_interner,
+                pointer,
+                arg_layouts,
+                *ret_layout,
+                args.into_bump_slice(),
+            )
         }
 
         CallType::LowLevel { op, update_mode } => {
@@ -3907,7 +3926,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         builder.position_at_end(entry);
 
         let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
-        call_roc_function(
+        call_direct_roc_function(
             env,
             layout_interner,
             roc_function,
@@ -3915,7 +3934,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
             arguments_for_call,
         )
     } else {
-        call_roc_function(
+        call_direct_roc_function(
             env,
             layout_interner,
             roc_function,
@@ -4053,7 +4072,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
         let wrapper_result = roc_call_result_layout(env.arena, return_layout);
 
-        let roc_value = call_roc_function(
+        let roc_value = call_direct_roc_function(
             env,
             layout_interner,
             roc_wrapper_function,
@@ -4306,7 +4325,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
 
     let arguments = Vec::from_iter_in(it, env.arena);
 
-    let value = call_roc_function(
+    let value = call_direct_roc_function(
         env,
         layout_interner,
         roc_function,
@@ -4616,7 +4635,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     {
         builder.position_at_end(then_block);
 
-        let call_result = call_roc_function(
+        let call_result = call_direct_roc_function(
             env,
             layout_interner,
             roc_function,
@@ -5468,7 +5487,7 @@ fn build_closure_caller<'a, 'ctx>(
 
         builder.build_store(output, call_result);
     } else {
-        let call_result = call_roc_function(
+        let call_result = call_direct_roc_function(
             env,
             layout_interner,
             evaluator,
@@ -5665,7 +5684,7 @@ fn function_value_by_name_help<'a, 'ctx>(
 }
 
 #[inline(always)]
-fn roc_call_with_args<'a, 'ctx>(
+fn roc_call_direct_with_args<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     result_layout: InLayout<'a>,
@@ -5675,7 +5694,7 @@ fn roc_call_with_args<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let fn_val = function_value_by_func_spec(env, func_spec, name.name());
 
-    call_roc_function(
+    call_direct_roc_function(
         env,
         layout_interner,
         fn_val,
@@ -5684,14 +5703,70 @@ fn roc_call_with_args<'a, 'ctx>(
     )
 }
 
-pub fn call_roc_function<'a, 'ctx>(
+#[inline(always)]
+fn roc_call_erased_with_args<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    pointer: PointerValue<'ctx>,
+    argument_layouts: &[InLayout<'a>],
+    result_layout: InLayout<'a>,
+    arguments: &[BasicValueEnum<'ctx>],
+) -> BasicValueEnum<'ctx> {
+    let function_type =
+        fn_ptr::function_type(env, layout_interner, argument_layouts, result_layout);
+    let function_ptr_type = function_type.ptr_type(AddressSpace::default());
+
+    let function_pointer = fn_ptr::cast_to_function_ptr_type(env, pointer, function_ptr_type);
+    let callable_function_pointer = CallableValue::try_from(function_pointer).unwrap();
+
+    let build_call = |arguments: &[BasicMetadataValueEnum<'ctx>]| {
+        env.builder
+            .build_call(callable_function_pointer, arguments, "call")
+    };
+
+    call_roc_function_help(
+        env,
+        layout_interner,
+        build_call,
+        function_type,
+        layout_interner.get_repr(result_layout),
+        arguments,
+    )
+}
+
+pub(crate) fn call_direct_roc_function<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     result_layout: LayoutRepr<'a>,
     arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let pass_by_pointer = roc_function.get_type().get_param_types().len() == arguments.len() + 1;
+    let function_type = roc_function.get_type();
+
+    let build_call = |arguments: &[BasicMetadataValueEnum<'ctx>]| {
+        env.builder.build_call(roc_function, arguments, "call")
+    };
+    debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
+
+    call_roc_function_help(
+        env,
+        layout_interner,
+        build_call,
+        function_type,
+        result_layout,
+        arguments,
+    )
+}
+
+fn call_roc_function_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    build_call: impl FnOnce(&[BasicMetadataValueEnum<'ctx>]) -> CallSiteValue<'ctx>,
+    roc_function_type: FunctionType<'ctx>,
+    result_layout: LayoutRepr<'a>,
+    arguments: &[BasicValueEnum<'ctx>],
+) -> BasicValueEnum<'ctx> {
+    let pass_by_pointer = roc_function_type.get_param_types().len() == arguments.len() + 1;
 
     match RocReturn::from_layout(layout_interner, result_layout) {
         RocReturn::ByPointer if !pass_by_pointer => {
@@ -5705,14 +5780,10 @@ pub fn call_roc_function<'a, 'ctx>(
 
             arguments.push(result_alloca.into());
 
-            debug_assert_eq!(
-                roc_function.get_type().get_param_types().len(),
-                arguments.len()
-            );
-            let call = env.builder.build_call(roc_function, &arguments, "call");
+            debug_assert_eq!(roc_function_type.get_param_types().len(), arguments.len());
+            let call = build_call(&arguments);
 
             // roc functions should have the fast calling convention
-            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
             env.builder
@@ -5727,14 +5798,10 @@ pub fn call_roc_function<'a, 'ctx>(
 
             arguments.push(result_alloca.into());
 
-            debug_assert_eq!(
-                roc_function.get_type().get_param_types().len(),
-                arguments.len()
-            );
-            let call = env.builder.build_call(roc_function, &arguments, "call");
+            debug_assert_eq!(roc_function_type.get_param_types().len(), arguments.len());
+            let call = build_call(&arguments);
 
             // roc functions should have the fast calling convention
-            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
             if result_layout.is_passed_by_reference(layout_interner) {
@@ -5748,25 +5815,18 @@ pub fn call_roc_function<'a, 'ctx>(
             }
         }
         RocReturn::Return => {
-            debug_assert_eq!(
-                roc_function.get_type().get_param_types().len(),
-                arguments.len()
-            );
+            debug_assert_eq!(roc_function_type.get_param_types().len(), arguments.len());
             let it = arguments.iter().map(|x| (*x).into());
             let arguments = Vec::from_iter_in(it, env.arena);
 
-            let call = env.builder.build_call(roc_function, &arguments, "call");
+            let call = build_call(&arguments);
 
             // roc functions should have the fast calling convention
-            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            call.try_as_basic_value().left().unwrap_or_else(|| {
-                panic!(
-                    "LLVM error: Invalid call by name for name {:?}",
-                    roc_function.get_name()
-                )
-            })
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| internal_error!("LLVM error: Invalid call by name",))
         }
     }
 }
@@ -6261,7 +6321,7 @@ fn build_foreign_symbol<'a, 'ctx>(
         }
     };
 
-    call_roc_function(
+    call_direct_roc_function(
         env,
         layout_interner,
         fastcc_function,

@@ -1,7 +1,7 @@
 use bumpalo::collections::CollectIn;
 use inkwell::{
     types::{FunctionType, PointerType},
-    values::{BasicValueEnum, FunctionValue},
+    values::{BasicValueEnum, FunctionValue, PointerValue},
     AddressSpace,
 };
 use roc_error_macros::internal_error;
@@ -14,18 +14,17 @@ use super::{
     convert::basic_type_from_layout,
 };
 
-fn function_type<'a, 'ctx>(
+pub fn function_type<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    function_pointer: FunctionPointer<'a>,
+    arguments: &[InLayout<'a>],
+    return_type: InLayout<'a>,
 ) -> FunctionType<'ctx> {
-    let FunctionPointer { args, ret } = function_pointer;
-
-    let args = args
+    let args = arguments
         .iter()
         .map(|arg| basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*arg)));
 
-    let ret_repr = layout_interner.get_repr(ret);
+    let ret_repr = layout_interner.get_repr(return_type);
     let ret = basic_type_from_layout(env, layout_interner, ret_repr);
 
     let roc_return = RocReturn::from_layout(layout_interner, ret_repr);
@@ -40,7 +39,12 @@ pub fn pointer_type<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     function_pointer: FunctionPointer<'a>,
 ) -> PointerType<'ctx> {
-    let function_type = function_type(env, layout_interner, function_pointer);
+    let function_type = function_type(
+        env,
+        layout_interner,
+        function_pointer.args,
+        function_pointer.ret,
+    );
 
     function_type.ptr_type(AddressSpace::default())
 }
@@ -72,4 +76,14 @@ pub fn build<'a, 'ctx>(
     env.builder
         .build_store(alloca, func_value.as_global_value().as_pointer_value());
     alloca.into()
+}
+
+pub fn cast_to_function_ptr_type<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    pointer: PointerValue<'ctx>,
+    function_pointer_type: PointerType<'ctx>,
+) -> PointerValue<'ctx> {
+    env.builder
+        .build_bitcast(pointer, function_pointer_type, "cast_to_function_ptr")
+        .into_pointer_value()
 }
