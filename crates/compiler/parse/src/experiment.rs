@@ -4,6 +4,7 @@ pub struct Env {
     in_progress: InProgress,
     structural_chars: Vec<Bitmask>,
 }
+
 enum InProgress {
     StrLiteral,
     Comment,
@@ -19,6 +20,7 @@ impl Env {
         let pounds = Bitmask::find(b'#', chunk);
         let open_parens = Bitmask::find(b'(', chunk);
         let close_parens = Bitmask::find(b')', chunk);
+        let commas = Bitmask::find(b',', chunk);
 
         // Here are all the interesting structural chars
         self.structural_chars.push(
@@ -26,7 +28,8 @@ impl Env {
                 .or(quotes)
                 .or(pounds)
                 .or(open_parens)
-                .or(close_parens),
+                .or(close_parens)
+                .or(commas),
         );
     }
 }
@@ -233,6 +236,24 @@ fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
                             continue;
                         }
 
+                        // TODO try to handle commas here. How can we distinguish between multi-backpassing
+                        // and list elements? e.g.
+                        //
+                        // Scenario 1:
+                        //     list = [
+                        //         a, b, c
+                        //         d, e, f
+                        //     ]
+                        //
+                        // Scenario 2:
+                        //     list = [
+                        //         a, b <- c
+                        //         d, e, f
+                        //     ]
+                        //
+                        // One simple idea: when the preceding token is a comma, we are in a zone of "blocks require parens"
+                        // So no defs, no backpassing, no statements - not unless you surround them by parens.
+
                         match char {
                             b'\"' => {
                                 in_progress = InProgress::SingleLineStr;
@@ -241,6 +262,9 @@ fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
                                 in_progress = InProgress::Comment;
                             }
                             b'\n' => {
+                                in_progress = InProgress::Nothing; // Setting explicitly for when redoing this with simd classifier
+                            }
+                            b',' => {
                                 in_progress = InProgress::Nothing; // Setting explicitly for when redoing this with simd classifier
                             }
                             b'(' => {

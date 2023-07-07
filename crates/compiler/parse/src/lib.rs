@@ -8,6 +8,8 @@
 pub mod parser;
 pub mod ast;
 pub mod blankspace;
+pub mod experiment;
+pub mod experiment2;
 pub mod expr;
 pub mod header;
 pub mod highlight;
@@ -21,4 +23,3 @@ pub mod state;
 pub mod string_literal;
 pub mod test_helpers;
 pub mod type_annotation;
-pub mod experiment;
