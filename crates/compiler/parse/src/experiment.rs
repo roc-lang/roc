@@ -1,6 +1,5 @@
 use std::iter::Iterator;
 
-use crate::ast::StrLiteral;
 pub struct Env {
     in_progress: InProgress,
     structural_chars: Vec<Bitmask>,
@@ -33,19 +32,32 @@ impl Env {
 }
 
 fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    #[repr(u8)]
+    enum InterpolatingIn {
+        Nothing = 0,       // This must be the same number as what InProgress uses for it
+        SingleLineStr = 1, // This must be the same number as what InProgress uses for it
+        MultiLineStr = 2,  // This must be the same number as what InProgress uses for it
+    }
+
+    #[repr(u8)]
+    enum InProgress {
+        Nothing = 0,       // This must be the same number as what InterpolatingIn uses for it
+        SingleLineStr = 1, // This must be the same number as what InterpolatingIn uses for it
+        MultiLineStr = 2,  // This must be the same number as what InterpolatingIn uses for it
+        Comment,
+    }
+
     let mut span_start_index = 0;
     let mut prev_index: isize = -1;
     let mut cur_line_indent = 0;
-    let mut min_indent = 0;
+    let mut interpolating_in = InterpolatingIn::Nothing;
+    let mut multiline_str_indent = 0;
     let mut just_parsed_empty_str = false;
     let mut prev_char = b'\0';
 
-    enum InProgress {
-        SingleLineStr,
-        MultiLineStr,
-        Comment,
-        Nothing,
-    }
+    // TODO write tests that the relevant InterpolatingIn and InProgress variants are the same
+    // when cast to u8, so we can transmute from InterpolatingIn to InProgress.
 
     let mut in_progress = InProgress::Nothing;
     let mut tape = Vec::new();
@@ -81,36 +93,98 @@ fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
 
             match in_progress {
                 InProgress::MultiLineStr => {
-                    if char == b'\"' {
-                        // Check if the next two chars are also quotes. If so, we're done!
-                        if src.len() > index + 2
-                            && unsafe {
-                                branchless_and(
-                                    *src.get_unchecked(index + 1) == b'\"',
-                                    *src.get_unchecked(index + 2) == b'\"',
-                                )
+                    match char {
+                        b'\"' => {
+                            // Check if the next two chars are also quotes. If so, we're done!
+                            if src.len() > index + 2
+                                && unsafe {
+                                    branchless_and(
+                                        *src.get_unchecked(index + 1) == b'\"',
+                                        *src.get_unchecked(index + 2) == b'\"',
+                                    )
+                                }
+                            {
+                                just_parsed_empty_str = false;
+                                in_progress = InProgress::Nothing;
                             }
-                        {
-                            just_parsed_empty_str = false;
-                            in_progress = InProgress::Nothing;
+                        }
+                        b'(' if prev_char == b'\\' => {
+                            if interpolating_in == InterpolatingIn::Nothing {
+                                // We're beginning string interpolation, so end the string.
+                                in_progress = InProgress::Nothing;
+                                interpolating_in = InterpolatingIn::MultiLineStr;
+                            } else {
+                                todo!(
+                                        "Report error: Interpolation inside interpolation is not allowed!"
+                                    );
+                            }
+                        }
+                        b'\n' => {
+                            // Newlines inside multiline strings never do anything (aside from indentation implications).
+                        }
+                        _ => {
+                            // All other structural characters go inside the string, but first we have to
+                            // check indentation level if we're the first structural (non-space) char after a newline.
+                            // (We don't care if a blank line has some trailing spaces inside a multiline str.)
+                            //
+                            // We'll do this branchlessly.
+                            let prev_was_newline = prev_char == b'\n';
+                            let expected_indentation = if prev_was_newline {
+                                multiline_str_indent
+                            } else {
+                                0
+                            };
+
+                            if branchless_and(
+                                prev_was_newline,
+                                cur_line_indent < expected_indentation,
+                            ) {
+                                eprintln!(
+                                    "Error: outdent on a non-blank line inside a multiline str."
+                                );
+                            }
+
+                            // Otherwise, we do nothing, and just let the structural char join the mutliline string.
+                            //
+                            // In terms of structural characters, this means that we store a bunch of unnecessary
+                            // indices inside mutliline strings, thinking they're structurally relevent when
+                            // actually they're part of the string. So we iterate over them needlessly.
+                            // Not ideal but not the end of the world either.
                         }
                     }
                 }
                 InProgress::SingleLineStr => {
-                    if char == b'\"' {
-                        let str_slice = unsafe {
-                            std::str::from_utf8_unchecked(&src[span_start_index..(index - 1)])
-                        };
-                        let node = Ast::StrLiteral(str_slice.to_string());
-                        just_parsed_empty_str = str_slice.is_empty();
+                    match char {
+                        b'\"' => {
+                            let str_slice = unsafe {
+                                std::str::from_utf8_unchecked(&src[span_start_index..(index - 1)])
+                            };
+                            let node = Ast::StrLiteral(str_slice.to_string());
+                            just_parsed_empty_str = str_slice.is_empty();
 
-                        tape.push(node);
+                            tape.push(node);
 
-                        in_progress = InProgress::Nothing;
-                    } else if char == b'\n' {
-                        just_parsed_empty_str = false;
-                        eprintln!("String literal hit a newline before it was closed.");
-                        in_progress = InProgress::Nothing;
+                            in_progress = InProgress::Nothing;
+                        }
+                        b'(' if prev_char == b'\\' => {
+                            if interpolating_in == InterpolatingIn::Nothing {
+                                // We're beginning string interpolation, so end the string.
+                                in_progress = InProgress::Nothing;
+                                interpolating_in = InterpolatingIn::SingleLineStr;
+                            } else {
+                                todo!(
+                                        "Report error: Interpolation inside interpolation is not allowed!"
+                                    );
+                            }
+                        }
+                        b'\n' => {
+                            just_parsed_empty_str = false;
+                            eprintln!("String literal hit a newline before it was closed.");
+                            in_progress = InProgress::Nothing;
+                        }
+                        _ => {
+                            // All other characters just go inside the string.
+                        }
                     }
                 }
                 InProgress::Comment => {
@@ -132,11 +206,32 @@ fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
                 InProgress::Nothing => {
                     span_start_index = index;
 
-                    let is_multiline_str = branchless_and(just_parsed_empty_str, char == b'"');
+                    if branchless_and(char == b'\n', interpolating_in != InterpolatingIn::Nothing) {
+                        eprintln!("Error: Newlines are not allowed inside string interpolation.");
+                    }
 
-                    // Much more likely that we aren't exactly about to encounter a multiline str
-                    if !is_multiline_str {
+                    let is_beginning_of_multiline_str =
+                        branchless_and(just_parsed_empty_str, char == b'"');
+
+                    // Much more likely that we aren't exactly about to encounter a multiline str,
+                    // so put that scenario in the `else` branch.
+                    if !is_beginning_of_multiline_str {
                         just_parsed_empty_str = false;
+
+                        // If we're interpolating and hit a close paren, we go back to whatever we were
+                        // doing before.
+                        if branchless_and(
+                            interpolating_in != InterpolatingIn::Nothing,
+                            char == b')',
+                        ) {
+                            // This should be safe becasue we hardcode the backing numbers to
+                            // match up.
+                            in_progress = unsafe {
+                                std::mem::transmute::<InterpolatingIn, InProgress>(interpolating_in)
+                            };
+
+                            continue;
+                        }
 
                         match char {
                             b'\"' => {
@@ -148,6 +243,12 @@ fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
                             b'\n' => {
                                 in_progress = InProgress::Nothing; // Setting explicitly for when redoing this with simd classifier
                             }
+                            b'(' => {
+                                todo!("push parens onto the stack or something");
+                            }
+                            b')' => {
+                                todo!("close parens currently on the stack or something");
+                            }
                             byte => {
                                 unreachable!(
                                 "somehow a {:?} was recorded as a structural char, but it isn't",
@@ -156,8 +257,7 @@ fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
                             }
                         }
                     } else {
-                        // span_start_index
-                        min_indent = index - span_start_index;
+                        multiline_str_indent = index - span_start_index;
                         in_progress = InProgress::MultiLineStr;
                     }
                 }
