@@ -7,20 +7,42 @@ use roc_mono::ir::ErasedField;
 
 use super::build::Env;
 
+pub fn opaque_ptr_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
+    env.context.i8_type().ptr_type(AddressSpace::default())
+}
+
+fn refcounter_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
+    let return_void = env.context.void_type();
+    let arg_ty = opaque_ptr_type(env);
+
+    return_void
+        .fn_type(&[arg_ty.into()], false)
+        .ptr_type(AddressSpace::default())
+}
+
 /// Erased is laid out like
 ///
 /// ```text
 /// struct Erased {
 ///     value: void*,
 ///     callee: void*,
-///     refcounter: void*,
+///     refcounter_inc: (void* -> void) *,
+///     refcounter_dec: (void* -> void) *,
 /// }
 /// ```
 pub fn basic_type<'a, 'ctx>(env: &Env<'a, 'ctx, '_>) -> StructType<'ctx> {
-    let ptr_ty = env.context.i8_type().ptr_type(AddressSpace::default());
+    let opaque_ptr_ty = opaque_ptr_type(env);
+    let refcounter_ptr_ty = refcounter_type(env);
 
-    env.context
-        .struct_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false)
+    env.context.struct_type(
+        &[
+            opaque_ptr_ty.into(),
+            opaque_ptr_ty.into(),
+            refcounter_ptr_ty.into(),
+            refcounter_ptr_ty.into(),
+        ],
+        false,
+    )
 }
 
 fn bitcast_to_opaque_ptr<'ctx>(
@@ -89,4 +111,20 @@ pub fn load<'ctx>(
         .into_pointer_value();
 
     value
+}
+
+pub fn load_refcounter<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    erasure: StructValue<'ctx>,
+    mode: super::refcounting::Mode,
+) -> PointerValue<'ctx> {
+    let index = match mode {
+        super::refcounting::Mode::Inc => 2,
+        super::refcounting::Mode::Dec => 3,
+    };
+
+    env.builder
+        .build_extract_value(erasure, index, "extract_refcounter")
+        .unwrap()
+        .into_pointer_value()
 }
