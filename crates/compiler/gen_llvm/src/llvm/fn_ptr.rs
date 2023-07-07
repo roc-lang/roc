@@ -63,19 +63,10 @@ pub fn pointer_type_expecting_layout<'a, 'ctx>(
     pointer_type(env, layout_interner, function_pointer)
 }
 
-pub fn build<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    lambda_name: LambdaName<'a>,
-    function_ptr_type: PointerType<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let alloca = env
-        .builder
-        .build_alloca(function_ptr_type, "function_pointer_alloca");
+pub fn build<'a, 'ctx>(env: &Env<'a, 'ctx, '_>, lambda_name: LambdaName<'a>) -> PointerValue<'ctx> {
     let func_value: FunctionValue<'ctx> =
         function_value_by_func_spec(env, FuncBorrowSpec::Erased, lambda_name.name());
-    env.builder
-        .build_store(alloca, func_value.as_global_value().as_pointer_value());
-    alloca.into()
+    func_value.as_global_value().as_pointer_value()
 }
 
 pub fn cast_to_function_ptr_type<'ctx>(

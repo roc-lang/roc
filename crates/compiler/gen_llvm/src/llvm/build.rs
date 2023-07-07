@@ -1143,9 +1143,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
         }
 
         FunctionPointer { lambda_name } => {
-            let function_ptr_type =
-                fn_ptr::pointer_type_expecting_layout(env, layout_interner, layout);
-            let alloca = fn_ptr::build(env, *lambda_name, function_ptr_type);
+            let alloca = fn_ptr::build(env, *lambda_name);
             alloca.into()
         }
         ErasedMake { value, callee } => {
