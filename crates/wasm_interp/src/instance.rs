@@ -976,6 +976,47 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     self.value_store.push(Value::I32(-1));
                 }
             }
+            MEMORY => {
+                // the first argument determines exactly which memory operation we have
+                let op = module.code.bytes[self.program_counter];
+                self.program_counter += 1;
+
+                match op {
+                    8 => {
+                        // memory.init
+                        todo!("WASM instruction: memory.init")
+                    }
+                    9 => {
+                        // data.drop x
+                        todo!("WASM instruction: data.drop")
+                    }
+                    10 => {
+                        // memory.copy
+                        let size = self.value_store.pop_u32()? as usize;
+                        let source = self.value_store.pop_u32()? as usize;
+                        let destination = self.value_store.pop_u32()? as usize;
+
+                        // skip two zero bytes; in future versions of WebAssembly this byte may be
+                        // used to index additional memories
+                        self.program_counter += 2;
+
+                        self.memory.copy_within(source..source + size, destination)
+                    }
+                    11 => {
+                        // memory.fill
+                        let size = self.value_store.pop_u32()? as usize;
+                        let byte_value = self.value_store.pop_u32()? as u8;
+                        let destination = self.value_store.pop_u32()? as usize;
+
+                        // skip a zero byte; in future versions of WebAssembly this byte may be
+                        // used to index additional memories
+                        self.program_counter += 1;
+
+                        self.memory[destination..][..size].fill(byte_value);
+                    }
+                    other => unreachable!("invalid memory instruction {:?}", other),
+                }
+            }
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
                 self.write_debug(value);

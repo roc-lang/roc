@@ -50,6 +50,7 @@ pub enum OpCode {
     I64STORE32 = 0x3e,
     CURRENTMEMORY = 0x3f,
     GROWMEMORY = 0x40,
+    MEMORY = 0xFC,
     I32CONST = 0x41,
     I64CONST = 0x42,
     F32CONST = 0x43,
@@ -232,6 +233,7 @@ fn immediates_for(op: OpCode) -> Result<OpImmediates, String> {
         | I64STORE32 => Leb32x2,
 
         CURRENTMEMORY | GROWMEMORY => Byte1,
+        MEMORY => Leb32x2,
 
         I32CONST => Leb32x1,
         I64CONST => Leb64x1,
