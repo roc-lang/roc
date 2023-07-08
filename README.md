@@ -13,7 +13,7 @@ If you'd like to contribute, check out [good first issues](https://github.com/ro
 
 ## Sponsors
 
-You can 💜 sponsor 💜 Roc on:
+You can 💜 **sponsor** 💜 Roc on:
 - [GitHub](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
