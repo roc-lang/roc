@@ -1,36 +1,180 @@
 use std::iter::Iterator;
 
+use packed_simd::u8x64;
+
 pub struct Env {
     in_progress: InProgress,
     structural_chars: Vec<Bitmask>,
+    /// The number of trailing '"' characters at the end of the previous chunk
+    trailing_quote_chars: u8,
 }
 
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum InProgress {
-    StrLiteral,
-    Comment,
-    Nothing,
+    Nothing = 0,
+    MultiLineStr = 1,  // must be odd (for is_str)
+    SingleLineStr = 3, // must be odd (for is_str), and must be the second-highest number (for is_comment_or_single_line_str)
+    Comment = 4, // must be even (for is_str), and must be the highest number (for is_comment_or_single_line_str)
+}
+
+impl InProgress {
+    /// Branchlessly returns true iff this is either SingleLineStr or Comment
+    fn is_comment_or_single_line_str(&self) -> bool {
+        *self as u8 >= Self::SingleLineStr as u8
+    }
+
+    /// Branchlessly returns true iff this is either SingleLineStr or MultiLineStr
+    fn is_str(&self) -> bool {
+        // MutliLineStr and SingleLineStr are both odd, so just return whether this is odd
+        (*self as u8) & 1 != 0
+    }
 }
 
 type Chunk = [u8; 64];
 
 impl Env {
     pub fn handle_chunk(&mut self, chunk: Chunk) {
-        let newlines = Bitmask::find(b'\n', chunk);
-        let quotes = Bitmask::find(b'"', chunk);
-        let pounds = Bitmask::find(b'#', chunk);
-        let open_parens = Bitmask::find(b'(', chunk);
-        let close_parens = Bitmask::find(b')', chunk);
-        let commas = Bitmask::find(b',', chunk);
+        use InProgress::{Comment, MultiLineStr, Nothing, SingleLineStr};
 
-        // Here are all the interesting structural chars
-        self.structural_chars.push(
-            newlines
-                .or(quotes)
-                .or(pounds)
-                .or(open_parens)
-                .or(close_parens)
-                .or(commas),
-        );
+        let simd_chunk = u8x64::from_slice_unaligned(&chunk);
+        let quotes = simd_chunk.eq(u8x64::splat(b'"')).bitmask();
+        let pounds = simd_chunk.eq(u8x64::splat(b'#')).bitmask();
+        let newlines = simd_chunk.eq(u8x64::splat(b'\n')).bitmask();
+
+        {
+            let mut strings = Bitmask::from(0);
+            let mut comments = Bitmask::from(!0);
+            // u64 bitmask with a 1 where there is a quote, pound, or newline, and 0s everywhere else.
+            //
+            // We will use these to determine the initial string and comment boundaries.
+            let quote_pound_newline = Bitmask::from(quotes | pounds | newlines);
+            let mut in_progress = self.in_progress;
+            let mut start_index = 0;
+            let mut prev_byte = b'\0';
+
+            for index in quote_pound_newline.ones() {
+                // This is safe because this index is from a u64 bitmask, and Chunk has length 64
+                let byte = unsafe { *chunk.get_unchecked(index) };
+                let prev_in_progress = in_progress;
+                let byte_is_quote = byte == b'"';
+
+                // Use a branch to check for the end of a multiline string. Branch because multiline strings are uncommon.
+                if branchless_and(in_progress == MultiLineStr, byte_is_quote) {
+                    todo!(
+                        r#"
+                        Verify that this is not escaped, then peek at the next two chars;
+                        if they are both quotes, we're done with this multiline string.
+                        Advance index by 2 (this will require no longer using an iterator) and update the state.
+                        "#
+                    );
+                }
+
+                // Use a branch to check for the start of a multiline string, because multiline strings are uncommon.
+                // If both this byte and the previous one was a quote, but we had nothing in progress (meaning we just
+                // closed a string, although we don't know if it was single-line or multiline) then this might be the
+                // start of a multiline string. (It might also be a snytax error.)
+                if branchless_and(
+                    byte_is_quote,
+                    branchless_and(in_progress == Nothing, prev_byte == b'"'),
+                ) {
+                    todo!(
+                        r#"
+                        Inspect the previous two bytes (they might be in the previous chunk, so must handle that
+                        using carryover state regarding number of trailing quotes in a chunk) to verify that they
+                        are both quotes. Also, it could be that there are more than 3 consecutive quotes there.
+                        Need to figure out what to do in that scenario.
+                        "#
+                    );
+                }
+
+                // Branchlessly update in_progress
+                {
+                    in_progress = if branchless_and(byte_is_quote, in_progress == Nothing) {
+                        // We had nothing going on, but now we've hit a quote; we're working on a single-line string now.
+                        SingleLineStr
+                    } else {
+                        in_progress
+                    };
+
+                    in_progress = if branchless_and(byte == b'#', in_progress == Nothing) {
+                        // We had nothing going on, but now we've hit a pound; we're working on a comment now.
+                        Comment
+                    } else {
+                        in_progress
+                    };
+
+                    // We were working on a comment or single-line str and encountered a newline; either way, it's done.
+                    // (Single-line strings can't contain newlines; if they do, it's both done and Erroneous. We want
+                    // stop now for graceful error handling, so we don't mark the rest of the document as a string.)
+                    in_progress = if branchless_and(
+                        byte == b'\n',
+                        in_progress.is_comment_or_single_line_str(),
+                    ) {
+                        Nothing
+                    } else {
+                        in_progress
+                    };
+
+                    // If none of these conditions applied, then we keep going. This covers cases like (for example):
+                    // - Encountering a '#' while we're working on a string
+                    // - Encountering a '"' while we're working on a comment
+                    // - Encountering a '\n' while we're working on a multiline string
+                }
+
+                // If we had nothing in progress, but now do, then we just started something.
+                start_index = if branchless_and(prev_in_progress == Nothing, in_progress != Nothing)
+                {
+                    index
+                } else {
+                    start_index
+                };
+
+                // Apply masks if we just finished a span (string or comment).
+                {
+                    let span_len = index.wrapping_sub(start_index);
+                    // A mask for the span between start_index and index
+                    let span_mask_zeroes = ((1u64 << span_len) - 1) << start_index;
+                    let span_mask_ones = !span_mask_zeroes;
+
+                    // If we just finished a string, branchlessly apply it to our main bitmask.
+                    {
+                        // If we had a string in progress, but no longer do, then we just ended a string.
+                        let str_mask =
+                            if branchless_and(prev_in_progress.is_str(), in_progress == Nothing) {
+                                span_mask_ones // 1s only where the string we just made was; 0s elsewhere.
+                            } else {
+                                !0u64 // all 1s; if this is AND'd with the existing bitmask, it will be a no-op.
+                            };
+
+                        strings = strings.and(Bitmask::from(str_mask));
+                    }
+
+                    // If we just finished a comment, branchlessly zero out its span in our main bitmask.
+                    {
+                        let comment_mask = if branchless_and(
+                            prev_in_progress == Comment,
+                            in_progress == Nothing,
+                        ) {
+                            span_mask_zeroes // 0s only where the comment we just made was; 1s elsewhere.
+                        } else {
+                            0u64 // all 0s; if this is OR'd with the existing bitmask, it will be a no-op.
+                        };
+
+                        comments = comments.or(Bitmask::from(comment_mask));
+
+                        // TODO when we have a trait for what to do in various scenarios, this is roughly where to
+                        // have it receive a "just finished a comment" event. (Only the formatter cares about comments,
+                        // although other operations care about doc comments - e.g. `docs` but also editor tooling that
+                        // wants to store docs in memory for hovers and such.)
+                    }
+                }
+
+                prev_byte = byte;
+            }
+
+            self.in_progress = in_progress;
+        }
     }
 }
 
@@ -324,32 +468,40 @@ impl Bitmask {
         Bitmask(self.0 | other.0)
     }
 
-    pub fn ones(&self) -> BitmaskIterator {
-        BitmaskIterator {
-            mask: self.0,
-            index: 0,
-        }
+    pub fn and(self, other: Self) -> Self {
+        Bitmask(self.0 & other.0)
+    }
+
+    pub fn ones(&self) -> BitmaskOnes {
+        BitmaskOnes { bitmask: self.0 }
     }
 }
 
-pub struct BitmaskIterator {
-    mask: u64,
-    index: usize,
+impl From<u64> for Bitmask {
+    fn from(num: u64) -> Self {
+        Self(num)
+    }
 }
 
-impl Iterator for BitmaskIterator {
+pub struct BitmaskOnes {
+    bitmask: u64,
+}
+
+impl Iterator for BitmaskOnes {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.index < 64 {
-            if (self.mask & (1 << self.index)) != 0 {
-                let result = self.index;
-                self.index += 1;
-                return Some(result);
-            }
-            self.index += 1;
+        let bitmask = self.bitmask;
+
+        if bitmask != 0 {
+            let index = bitmask.trailing_zeros();
+
+            self.bitmask &= bitmask - 1; // clear the bit we just encountered
+
+            Some(index as usize)
+        } else {
+            None
         }
-        None
     }
 }
 
