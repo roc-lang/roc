@@ -41,6 +41,9 @@
         },
         {
             "pattern": "https://www.roc-lang.org/packages/basic-cli/Stdout#line"
+        },
+        {
+            "pattern": "https://liberapay.com/"
         }
     ]
 }
