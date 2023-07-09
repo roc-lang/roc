@@ -7,6 +7,7 @@
 #[macro_use]
 pub mod parser;
 pub mod ast;
+pub mod bitmask;
 pub mod blankspace;
 pub mod experiment;
 pub mod experiment2;
