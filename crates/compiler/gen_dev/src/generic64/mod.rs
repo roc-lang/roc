@@ -321,6 +321,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
 
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
+    fn mov_base32_freg32(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
 
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
     fn mov_base32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
