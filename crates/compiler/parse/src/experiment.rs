@@ -8,6 +8,14 @@ pub struct Env {
     structural_chars: Vec<Bitmask>,
     /// The number of trailing '"' characters at the end of the previous chunk
     trailing_quote_chars: u8,
+    chunk_offset: usize, // The current chunk's offset relative to the start of the src.
+    /// This must be specified in terms of the chunk's offset (that is,
+    /// its offset from the beginning of the source) rather than the index into
+    /// the chunk. This is because sometimes it can start earlier than the first
+    /// byte of the chunk, for example if the previous chunk ended in quotes, which
+    /// turned out to be the beginning of a multiline string.
+    span_start_offset: usize,
+    prev_chunk_last_byte: u8,
 }
 
 // Edge cases in quotes ending on chunk boundaries:
@@ -47,7 +55,7 @@ enum LexingOptions {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum InProgress {
     Nothing = 0,
     MultiLineStr = 1,  // must be odd (for is_str)
@@ -168,19 +176,79 @@ impl Env {
         use InProgress::{Comment, MultiLineStr, Nothing, SingleLineStr};
 
         // true iff we had 2 trailing quotes previously, and now we begin with a quote.
-        let trailing_was_triple_quote =
+        let last_chunk_ended_in_2_quotes =
             branchless_and(self.trailing_quote_chars == 2, chunk[0] == b'"');
 
-        let mut in_progress = if trailing_was_triple_quote {
-            // TODO make this branchless using a lookup table, including the outer `if`
-            match self.in_progress {
-                Nothing => MultiLineStr,
-                MultiLineStr => Nothing,
-                SingleLineStr => SingleLineStr,
-                Comment => Comment,
+        let mut span_start_offset = self.span_start_offset;
+        let mut in_progress;
+
+        match self.trailing_quote_chars {
+            1 => {
+                span_start_offset = self.chunk_offset - 1;
+
+                // 1 trailing quote means we need to figure out if we're working on
+                // a single-line string vs a multiline string.
+                let first_is_nonquote = chunk[0] != b'"';
+                let second_is_nonquote = chunk[0] != b'"';
+
+                in_progress = if branchless_or(first_is_nonquote, second_is_nonquote) {
+                    // The most likely scenario: this is not a triple quote,
+                    // so we have a single-line string in progress.
+
+                    SingleLineStr
+                } else {
+                    // Improbably, the preceding chunk ended on a quote and this chunk
+                    // began on two quotes. Therefore, we are processing a multiline string.
+                    MultiLineStr
+                };
             }
-        } else {
-            self.in_progress
+            2 => {
+                if chunk[0] == b'"' {
+                    // 2 trailing quotes plus this one starting with a quote means
+                    // we encountered a triple quote.
+                    let will_be_multiline_str = self.in_progress == Nothing;
+
+                    in_progress = if will_be_multiline_str {
+                        MultiLineStr
+                    } else {
+                        // Since in_progress wasn't Nothing, it must have been MultiLineStr
+                        // (or else an earlier step has a bug, because if there were 2 quotes
+                        // that were considered trailing, the only two in_progress values that
+                        // should be possible are MultiLineStr and Nothing), so therefore
+                        // this must be a closing triple-quote. That means we end the MultiLineStr.
+                        debug_assert_eq!(self.in_progress, MultiLineStr, "Previous chunk ended in 2 quotes, yet its in_progress was neither MutliLineStr nor Nothing. This should never happen!");
+
+                        todo!("Record the end of the currently in-progress MultiLineStr before we change span_start_offset");
+
+                        Nothing
+                    };
+
+                    // If we will be starting a multiline string, it should start 2 bytes
+                    // before the beginning of this chunk. (This is all done branchlessly.)
+                    //
+                    // Importantly, this must be set *after* updating in_progress, because
+                    // the in_progress update logic may need to use the old span_start_offset.
+                    span_start_offset =
+                        self.chunk_offset - if will_be_multiline_str { 2 } else { 0 };
+                } else {
+                    // 2 trailing quotes followed by a non-quote means
+                    // we had an empty string at the end.
+                    todo!("Record an empty string at the end");
+
+                    in_progress = Nothing;
+                }
+            }
+            _ => {
+                debug_assert_eq!(
+                    self.trailing_quote_chars, 0,
+                    "trailing_quote_chars should always be 0, 1, or 2, but here it was {:?}",
+                    self.trailing_quote_chars
+                );
+
+                // Since there were 0 trailing quote chars, just continue whatever we were doing before.
+                span_start_offset = self.span_start_offset;
+                in_progress = self.in_progress;
+            }
         };
 
         let any_single_quotes = !single_quotes.is_zero();
@@ -191,13 +259,12 @@ impl Env {
 
         let mut strings = Bitmask::from(0);
         let mut comments = Bitmask::from(!0);
-        let mut start_index = 0;
-        let mut prev_byte = b'\0';
+        let mut prev_byte = self.prev_chunk_last_byte;
         let mut quote_pound_newline = Bitmask::from(quotes | pounds | newlines);
-        let mut index = 0;
 
         while !quote_pound_newline.is_zero() {
             let index = quote_pound_newline.trailing_zeros();
+            let offset = index as usize + self.chunk_offset;
 
             quote_pound_newline &= quote_pound_newline.wrapping_sub(1); // clear the bit we just encountered
 
@@ -221,7 +288,7 @@ impl Env {
             if any_triple_quotes {
                 // If both this byte and the previous one was a quote, but we had nothing in progress (meaning we just
                 // closed a string, although we don't know if it was single-line or multiline) then this might be the
-                // start of a multiline string. (It might also be a snytax error.)
+                // start of a multiline string. (It might also be a syntax error.) We will assume multiline string.
                 if branchless_and(
                     byte_is_quote,
                     branchless_and(in_progress == Nothing, prev_byte == b'"'),
@@ -270,17 +337,24 @@ impl Env {
             }
 
             // If we had nothing in progress, but now do, then we just started something.
-            start_index = if branchless_and(prev_in_progress == Nothing, in_progress != Nothing) {
-                index
-            } else {
-                start_index
-            };
+            span_start_offset =
+                if branchless_and(prev_in_progress == Nothing, in_progress != Nothing) {
+                    offset
+                } else {
+                    span_start_offset
+                };
 
             // Apply masks if we just finished a span (string or comment).
             {
-                let span_len = index.wrapping_sub(start_index);
+                // Convert the start offset to a start index for this part, even though
+                // offset is what we want to store later. (Working in terms of offset over
+                // index is the better default, because it works with triple quotes that happen
+                // to cross chunk boundaries, but in this particular case we're doing masking,
+                // so we want to work in terms of index.)
+                let start_index = span_start_offset.saturating_sub(self.chunk_offset) as u32;
+                let span_len_in_mask = index.wrapping_sub(start_index);
                 // A mask for the span between start_index and index
-                let span_mask_zeroes = ((1u64 << span_len) - 1) << start_index;
+                let span_mask_zeroes = ((1u64 << span_len_in_mask) - 1) << start_index;
                 let span_mask_ones = !span_mask_zeroes;
 
                 // If we just finished a string, branchlessly apply it to our main bitmask.
@@ -316,10 +390,14 @@ impl Env {
 
             prev_byte = byte;
         }
+
+        self.span_start_offset = span_start_offset;
         self.in_progress = in_progress;
+        self.prev_chunk_last_byte = chunk[63];
     }
 }
 
+/// NOTE: This is all old and obsolete, but I'm keeping it around as a reference for when it gets rewritten.
 fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     #[repr(u8)]
@@ -587,4 +665,8 @@ enum Ast {
 
 fn branchless_and(a: bool, b: bool) -> bool {
     (a as u8 & b as u8) != 0
+}
+
+fn branchless_or(a: bool, b: bool) -> bool {
+    (a as u8 | b as u8) != 0
 }
