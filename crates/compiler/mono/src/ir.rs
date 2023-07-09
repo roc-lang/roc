@@ -9985,8 +9985,9 @@ where
     I: LayoutInterner<'a>,
 {
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout =
-        Layout::no_semantic(LayoutRepr::Ptr(interned_unboxed_struct_layout).direct());
+    let union_layout =
+        UnionLayout::NonNullableUnwrapped(arena.alloc([interned_unboxed_struct_layout]));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Union(union_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10026,7 +10027,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ptr_load(arena.alloc(argument));
+        let unbox_expr = Expr::expr_unbox(argument, arena.alloc(interned_unboxed_struct_layout));
 
         let unbox_stmt = Stmt::Let(
             unboxed,
@@ -10097,7 +10098,8 @@ where
     I: LayoutInterner<'a>,
 {
     let interned = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Ptr(interned).direct());
+    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([interned]));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Union(box_union_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10126,7 +10128,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ptr_load(arena.alloc(argument));
+        let unbox_expr = Expr::expr_unbox(argument, arena.alloc(interned));
         let unbox_stmt = Stmt::Let(unboxed, unbox_expr, interned, arena.alloc(field_get_stmt));
 
         let proc = Proc {
