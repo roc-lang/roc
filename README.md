@@ -13,7 +13,11 @@ If you'd like to contribute, check out [good first issues](https://github.com/ro
 
 ## Sponsors
 
-We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en).
+You can 💜 **sponsor** 💜 Roc on:
+- [GitHub](https://github.com/sponsors/roc-lang)
+- [Liberapay](https://liberapay.com/roc_lang)
+
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en):
 
 [<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
