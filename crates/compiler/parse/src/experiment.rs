@@ -10,6 +10,28 @@ pub struct Env {
     trailing_quote_chars: u8,
 }
 
+// Edge cases in quotes ending on chunk boundaries:
+//
+//            v-------- chunk boundary
+//      """"""|""yz
+//      a"""""|""yz
+//      ab""""|""yz
+//      abc"""|""yz
+//      abcd""|""yz
+//      abcd""|"xyz
+//      abcde"|"xyz
+//      abcde"|""yz
+//      abcde"|"""z
+//      abcde"|""""
+//
+// In general, 1, 2, and 3 quotes in a row are valid, but more than 3 quotes in a row is invalid.
+// (You can't do "open and then immediately close multiline string" - there's only one "empty string" syntax!)
+// We can rely on this to conclude that we only care about exactly 1 or 2 quotes at the end of the chunk.
+//
+// Crucially, if we have exactly 2 quotes at the end, we must not interpret them as quotes, because if we do,
+// we might end up concluding it's an empty string. However, we don't have enough info yet to conclude that;
+// it might turn out to be the beginning of a (triple-quoted) multiline string.
+
 // 1 bits for each even index, or each odd index.
 // See Fig. 3 in "Parsing Gigabytes of JSON per Second" https://arxiv.org/pdf/1902.08318.pdf
 const EVENS: Bitmask =
@@ -77,16 +99,40 @@ impl Env {
 
             // The character following each backslash sequence whose length is odd.
             // If this is a quote, then it's an escaped quote!
-            (evens_carries & ODDS) | (odds_carries & EVENS)
+            !((evens_carries & ODDS) | (odds_carries & EVENS))
         };
 
-        // Bitmask of all the non-escaped double quotes in the chunk.
-        let quotes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'"'))) & !preceded_by_escape;
+        // Bitmask of all the single quotes (`'`) in the chunk, excluding escaped ones (`\'`, `\\\'`, etc.).
+        let single_quotes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\''))) & preceded_by_escape;
 
-        // Bitmask of all the non-escaped single quotes ("ticks") in the chunk.
-        let ticks = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\''))) & !preceded_by_escape;
+        // Bitmask of all the double quotes (`"`) in the chunk, excluding escaped ones (`\"`, `\\\"`, etc.).
+        let quotes = {
+            let quotes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'"'))) & preceded_by_escape;
 
-        // Three consecutive quotes are multiline strings. (We already removed \" from `quotes`.)
+            // Trailing quotes caculation, based on the ending bit pattern of `quotes`:
+            //
+            //         0 => 0 trailing quotes
+            //        01 => 1 trailing quote
+            //       011 => 2 trailing quotes
+            //      0111 => 0 and multiline string is in progress
+            //     01111 => 1 and multiline string is in progress
+            //    011111 => 2 and multiline string is in progress
+            //   0111111 => 0 (multiline string opened and immediately closed)
+            //  01111111 => 1 (multiline string opened and immediately closed, then a stray quote)
+            // 011111111 => 2 (multiline string opened and immediately closed, then 2 stray quotes)
+            //
+            // The pattern repeats from here: we always have 0, 1, or 2 trailing quotes, and then a
+            // multiline string is either in progress or not. (Multiline string in-progress is handled elsewhere.)
+            let trailing_quote_chars = (quotes.trailing_ones() % 3) as u8;
+
+            self.trailing_quote_chars = trailing_quote_chars;
+
+            // Remove the trailing quotes from consideration in the `quotes` mask,
+            // since they'll be handled with the next chunk rather than with this one.
+            (quotes >> trailing_quote_chars) << trailing_quote_chars
+        };
+
+        // Bitmask for triple quotes (used in multiline strings). Note that we already removed \" from `quotes`.
         let triple_quotes =
             // Start of each contiguous sequence of 3+ double quotes. These can overlap
             // (e.g. `"""` becomes 100 and `""""` becomes 1100), which in this case is
@@ -100,38 +146,61 @@ impl Env {
             // shift 1: 0011101110011111100001111000000110000000010101100000001111111000
             // shift 2: 0111011100111111000011110000001100000000101011000000011111110000
             //   anded: 0001000100001111000000110000000000000000000000000000000111110000
+            // shift 2: 0000010001000011110000001100000000000000000000000000000001111100
             //
             // This algorithm was adapted from the backslash-escaping algorithm from the paper.
-            //
             // Thanks, Daniel Lemire and Geoff Langdale!
             quotes & (quotes << 1) & (quotes << 2);
 
-        if triple_quotes.is_zero() {
-            self.lex(quotes, simd_chunk, chunk, LexingOptions::NoMultiLine);
-        } else {
-            self.lex(quotes, simd_chunk, chunk, LexingOptions::MultiLineStr);
-        }
+        self.strings_comments_indents(quotes, single_quotes, triple_quotes, simd_chunk, chunk);
     }
 
-    fn lex(
+    /// Given the masks for the locations of quotes, single quotes, and triple quotes (which have already
+    /// had backslash-escaped versions of themselves removed), compute the ranges for strings, comments, and indents/outdents.
+    fn strings_comments_indents(
         &mut self,
         quotes: Bitmask,
+        single_quotes: Bitmask,
+        triple_quotes: Bitmask,
         simd_chunk: Simd<[u8; 64]>,
         chunk: [u8; 64],
-        options: LexingOptions,
     ) {
         use InProgress::{Comment, MultiLineStr, Nothing, SingleLineStr};
 
+        // true iff we had 2 trailing quotes previously, and now we begin with a quote.
+        let trailing_was_triple_quote =
+            branchless_and(self.trailing_quote_chars == 2, chunk[0] == b'"');
+
+        let mut in_progress = if trailing_was_triple_quote {
+            // TODO make this branchless using a lookup table, including the outer `if`
+            match self.in_progress {
+                Nothing => MultiLineStr,
+                MultiLineStr => Nothing,
+                SingleLineStr => SingleLineStr,
+                Comment => Comment,
+            }
+        } else {
+            self.in_progress
+        };
+
+        let any_single_quotes = !single_quotes.is_zero();
+        let any_triple_quotes = !triple_quotes.is_zero(); // TODO incorporate trailing_quote_chars into this.
+                                                          // Some trailing quotes might be part of triple quotes!
         let pounds = Bitmask::from(simd_chunk.eq(u8x64::splat(b'#')));
         let newlines = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\n')));
 
         let mut strings = Bitmask::from(0);
         let mut comments = Bitmask::from(!0);
-        let quote_pound_newline = Bitmask::from(quotes | pounds | newlines);
-        let mut in_progress = self.in_progress;
         let mut start_index = 0;
         let mut prev_byte = b'\0';
-        for index in quote_pound_newline.ones() {
+        let mut quote_pound_newline = Bitmask::from(quotes | pounds | newlines);
+        let mut index = 0;
+
+        while !quote_pound_newline.is_zero() {
+            let index = quote_pound_newline.trailing_zeros();
+
+            quote_pound_newline &= quote_pound_newline.wrapping_sub(1); // clear the bit we just encountered
+
             // This is safe because this index is from a u64 bitmask, and Chunk has length 64
             let byte = unsafe { *chunk.get_unchecked(index as usize) };
             let prev_in_progress = in_progress;
@@ -149,21 +218,23 @@ impl Env {
             }
 
             // Use a branch to check for the start of a multiline string, because multiline strings are uncommon.
-            // If both this byte and the previous one was a quote, but we had nothing in progress (meaning we just
-            // closed a string, although we don't know if it was single-line or multiline) then this might be the
-            // start of a multiline string. (It might also be a snytax error.)
-            if branchless_and(
-                byte_is_quote,
-                branchless_and(in_progress == Nothing, prev_byte == b'"'),
-            ) {
-                todo!(
-                    r#"
+            if any_triple_quotes {
+                // If both this byte and the previous one was a quote, but we had nothing in progress (meaning we just
+                // closed a string, although we don't know if it was single-line or multiline) then this might be the
+                // start of a multiline string. (It might also be a snytax error.)
+                if branchless_and(
+                    byte_is_quote,
+                    branchless_and(in_progress == Nothing, prev_byte == b'"'),
+                ) {
+                    todo!(
+                        r#"
                         Inspect the previous two bytes (they might be in the previous chunk, so must handle that
                         using carryover state regarding number of trailing quotes in a chunk) to verify that they
                         are both quotes. Also, it could be that there are more than 3 consecutive quotes there.
                         Need to figure out what to do in that scenario.
                         "#
-                );
+                    );
+                }
             }
 
             // Branchlessly update in_progress

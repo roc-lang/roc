@@ -35,17 +35,53 @@ impl Bitmask {
     }
 
     #[inline(always)]
-    pub fn wrapping_add(self, rhs: Self) -> Self {
-        Bitmask(self.0.wrapping_add(rhs.0))
+    pub fn wrapping_add(self, rhs: impl Into<Bitmask>) -> Self {
+        Bitmask(self.0.wrapping_add(rhs.into().0))
     }
 
     #[inline(always)]
-    pub fn wrapping_sub(self, rhs: Self) -> Self {
-        Bitmask(self.0.wrapping_sub(rhs.0))
+    pub fn wrapping_sub(self, rhs: impl Into<Bitmask>) -> Self {
+        Bitmask(self.0.wrapping_sub(rhs.into().0))
     }
 
-    pub fn ones(&self) -> BitmaskOnes {
+    #[inline(always)]
+    pub fn trailing_zeros(self) -> u32 {
+        self.0.trailing_zeros()
+    }
+
+    #[inline(always)]
+    pub fn leading_zeros(self) -> u32 {
+        self.0.trailing_zeros()
+    }
+
+    #[inline(always)]
+    pub fn trailing_ones(self) -> u32 {
+        self.0.trailing_ones()
+    }
+
+    #[inline(always)]
+    pub fn leading_ones(self) -> u32 {
+        self.0.trailing_ones()
+    }
+
+    #[inline(always)]
+    pub fn count_zeros(self) -> u32 {
+        self.0.count_zeros()
+    }
+
+    #[inline(always)]
+    pub fn count_ones(self) -> u32 {
+        self.0.count_ones()
+    }
+
+    #[inline(always)]
+    pub fn ones(self) -> BitmaskOnes {
         BitmaskOnes { bitmask: self.0 }
+    }
+
+    #[inline(always)]
+    pub fn into_inner(self) -> u64 {
+        self.0
     }
 }
 
