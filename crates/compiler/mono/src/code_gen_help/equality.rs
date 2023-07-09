@@ -37,7 +37,6 @@ pub fn eq_generic<'a>(
         Builtin(List(elem_layout)) => eq_list(root, ident_ids, ctx, layout_interner, elem_layout),
         Struct(field_layouts) => eq_struct(root, ident_ids, ctx, layout_interner, field_layouts),
         Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
-        Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         Ptr(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         LambdaSet(_) => unreachable!("`==` is not defined on functions"),
         RecursivePointer(_) => {

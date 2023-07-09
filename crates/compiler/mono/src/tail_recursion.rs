@@ -1106,7 +1106,6 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
             crate::ir::ListLiteralElement::Symbol(symbol) => needle == *symbol,
         }),
         Expr::EmptyArray => false,
-        Expr::ExprBox { symbol } | Expr::ExprUnbox { symbol } => needle == *symbol,
         Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
     }

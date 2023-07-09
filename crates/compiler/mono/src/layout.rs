@@ -674,8 +674,6 @@ pub(crate) enum LayoutWrapper<'a> {
 pub enum LayoutRepr<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [InLayout<'a>]),
-    // A (heap allocated) reference-counted value
-    Boxed(InLayout<'a>),
     // A pointer (heap or stack) without any reference counting
     // Ptr is not user-facing. The compiler author must make sure that invariants are upheld
     Ptr(InLayout<'a>),
@@ -2534,7 +2532,7 @@ impl<'a> LayoutRepr<'a> {
     pub const F64: Self = LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64));
     pub const DEC: Self = LayoutRepr::Builtin(Builtin::Decimal);
     pub const STR: Self = LayoutRepr::Builtin(Builtin::Str);
-    pub const OPAQUE_PTR: Self = LayoutRepr::Boxed(Layout::VOID);
+    pub const OPAQUE_PTR: Self = LayoutRepr::Ptr(Layout::VOID);
 
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
         Self::Struct(field_layouts)
@@ -2576,7 +2574,7 @@ impl<'a> LayoutRepr<'a> {
             LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .safe_to_memcpy(interner),
-            Boxed(_) | Ptr(_) | RecursivePointer(_) => {
+            Ptr(_) | RecursivePointer(_) => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
@@ -2666,7 +2664,6 @@ impl<'a> LayoutRepr<'a> {
                 .get_repr(lambda_set.runtime_representation())
                 .stack_size_without_alignment(interner),
             RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Boxed(_) => interner.target_info().ptr_width() as u32,
             Ptr(_) => interner.target_info().ptr_width() as u32,
         }
     }
@@ -2720,7 +2717,6 @@ impl<'a> LayoutRepr<'a> {
                 .alignment_bytes(interner),
             Builtin(builtin) => builtin.alignment_bytes(interner.target_info()),
             RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Boxed(_) => interner.target_info().ptr_width() as u32,
             Ptr(_) => interner.target_info().ptr_width() as u32,
         }
     }
@@ -2742,10 +2738,6 @@ impl<'a> LayoutRepr<'a> {
             RecursivePointer(_) => {
                 unreachable!("should be looked up to get an actual layout")
             }
-            Boxed(inner) => Ord::max(
-                ptr_width,
-                interner.get_repr(*inner).alignment_bytes(interner),
-            ),
             Ptr(inner) => interner.get_repr(*inner).alignment_bytes(interner),
         }
     }
@@ -2815,7 +2807,6 @@ impl<'a> LayoutRepr<'a> {
                 .get_repr(lambda_set.runtime_representation())
                 .contains_refcounted(interner),
             RecursivePointer(_) => true,
-            Boxed(_) => true,
             Ptr(_) => {
                 // we never consider pointers for refcounting. Ptr is not user-facing. The compiler
                 // author must make sure that invariants are upheld
@@ -2876,7 +2867,7 @@ impl<'a> LayoutRepr<'a> {
                     }
                 },
                 LambdaSet(_) => return true,
-                Boxed(_) | Ptr(_) => {
+                Ptr(_) => {
                     // If there's any layer of indirection (behind a pointer), then it doesn't vary!
                 }
                 RecursivePointer(_) => {
@@ -3206,8 +3197,13 @@ fn layout_from_flat_type<'a>(
                     let inner_var = args[0];
                     let inner_layout =
                         cached!(Layout::from_var(env, inner_var), criteria, env.subs);
+
+                    let repr = LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(
+                        arena.alloc([inner_layout]),
+                    ));
+
                     let boxed_layout = env.cache.put_in(Layout {
-                        repr: LayoutRepr::Boxed(inner_layout).direct(),
+                        repr: repr.direct(),
                         semantic: SemanticRepr::NONE,
                     });
 

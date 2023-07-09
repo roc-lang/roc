@@ -1978,7 +1978,7 @@ impl<'a> LowLevelCall<'a> {
                     value,
                 );
             }
-            PtrLoad => backend.expr_unbox(self.ret_symbol, self.arguments[0]),
+            PtrLoad => backend.ptr_load(self.ret_symbol, self.arguments[0]),
             PtrClearTagId => {
                 let ptr = self.arguments[0];
 
@@ -2097,7 +2097,6 @@ impl<'a> LowLevelCall<'a> {
             | LayoutRepr::Struct { .. }
             | LayoutRepr::Union(_)
             | LayoutRepr::LambdaSet(_)
-            | LayoutRepr::Boxed(_)
             | LayoutRepr::Ptr(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions
                 backend
@@ -2518,7 +2517,7 @@ pub fn call_higher_order_lowlevel<'a>(
             argument_layouts.iter().take(n_non_closure_args).map(|lay| {
                 backend
                     .layout_interner
-                    .insert_direct_no_semantic(LayoutRepr::Boxed(*lay))
+                    .insert_direct_no_semantic(LayoutRepr::Ptr(*lay))
             });
 
         wrapper_arg_layouts.push(wrapped_captures_layout);
@@ -2530,7 +2529,7 @@ pub fn call_higher_order_lowlevel<'a>(
                 wrapper_arg_layouts.push(
                     backend
                         .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Boxed(*result_layout)),
+                        .insert_direct_no_semantic(LayoutRepr::Ptr(*result_layout)),
                 );
                 ProcLayout {
                     arguments: wrapper_arg_layouts.into_bump_slice(),

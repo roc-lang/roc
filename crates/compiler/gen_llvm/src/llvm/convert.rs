@@ -31,7 +31,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             layout_interner.get_repr(lambda_set.runtime_representation()),
         ),
 
-        Ptr(inner_layout) | Boxed(inner_layout) => {
+        Ptr(inner_layout) => {
             let inner_type = basic_type_from_layout(
                 env,
                 layout_interner,

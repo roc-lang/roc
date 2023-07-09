@@ -1878,14 +1878,6 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
-    ExprBox {
-        symbol: Symbol,
-    },
-
-    ExprUnbox {
-        symbol: Symbol,
-    },
-
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,
@@ -2067,14 +2059,6 @@ impl<'a> Expr<'a> {
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            ExprBox { symbol, .. } => alloc
-                .text("Box ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
-
-            ExprUnbox { symbol, .. } => alloc
-                .text("Unbox ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
-
             UnionAtIndex {
                 tag_id,
                 structure,
@@ -2117,6 +2101,24 @@ impl<'a> Expr<'a> {
             },
             arguments: std::slice::from_ref(symbol),
         })
+    }
+
+    pub(crate) fn expr_box(symbol: &'a Symbol, element_layout: &'a InLayout<'a>) -> Expr<'a> {
+        Expr::Tag {
+            tag_layout: UnionLayout::NonNullableUnwrapped(std::slice::from_ref(element_layout)),
+            tag_id: 0,
+            arguments: std::slice::from_ref(symbol),
+            reuse: None,
+        }
+    }
+
+    pub(crate) fn expr_unbox(symbol: Symbol, element_layout: &'a InLayout<'a>) -> Expr<'a> {
+        Expr::UnionAtIndex {
+            structure: symbol,
+            tag_id: 0,
+            union_layout: UnionLayout::NonNullableUnwrapped(std::slice::from_ref(element_layout)),
+            index: 0,
+        }
     }
 }
 
@@ -5614,13 +5616,22 @@ pub fn with_hole<'a>(
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    Stmt::Let(assigned, Expr::ExprBox { symbol: x }, layout, hole)
+                    let element_layout = match layout_cache.interner.get_repr(layout) {
+                        LayoutRepr::Union(UnionLayout::NonNullableUnwrapped([l])) => l,
+                        _ => unreachable!("invalid layout for a box expression"),
+                    };
+
+                    let expr = Expr::expr_box(arena.alloc(x), element_layout);
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
                 UnboxExpr => {
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    Stmt::Let(assigned, Expr::ExprUnbox { symbol: x }, layout, hole)
+                    let expr = Expr::expr_unbox(x, arena.alloc(layout));
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
                 _ => {
                     let call = self::Call {
@@ -7650,14 +7661,6 @@ fn substitute_in_expr<'a>(
             } else {
                 None
             }
-        }
-
-        ExprBox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprBox { symbol: new_symbol })
-        }
-
-        ExprUnbox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
         }
 
         StructAtIndex {
@@ -9912,9 +9915,6 @@ where
                     stack.push(layout_interner.get(*in_layout));
                 }
             }
-            LayoutRepr::Boxed(boxed) => {
-                stack.push(layout_interner.get(boxed));
-            }
             LayoutRepr::Ptr(inner) => {
                 stack.push(layout_interner.get(inner));
             }
@@ -9985,8 +9985,9 @@ where
     I: LayoutInterner<'a>,
 {
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout =
-        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout).direct());
+    let union_layout =
+        UnionLayout::NonNullableUnwrapped(arena.alloc([interned_unboxed_struct_layout]));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Union(union_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10026,7 +10027,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+        let unbox_expr = Expr::expr_unbox(argument, arena.alloc(interned_unboxed_struct_layout));
 
         let unbox_stmt = Stmt::Let(
             unboxed,
@@ -10097,7 +10098,8 @@ where
     I: LayoutInterner<'a>,
 {
     let interned = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned).direct());
+    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([interned]));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Union(box_union_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10126,8 +10128,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
-
+        let unbox_expr = Expr::expr_unbox(argument, arena.alloc(interned));
         let unbox_stmt = Stmt::Let(unboxed, unbox_expr, interned, arena.alloc(field_get_stmt));
 
         let proc = Proc {

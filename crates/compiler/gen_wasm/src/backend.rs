@@ -509,7 +509,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .last()
             .map(|l| self.layout_interner.get_repr(*l))
         {
-            Some(LayoutRepr::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
+            Some(LayoutRepr::Ptr(inner)) => WasmLayout::new(self.layout_interner, inner),
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
@@ -540,8 +540,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             }
 
             let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
-                LayoutRepr::Boxed(inner) => inner,
-                x => internal_error!("Expected a Boxed layout, got {:?}", x),
+                LayoutRepr::Ptr(inner) => inner,
+                x => internal_error!("Expected a Ptr layout, got {:?}", x),
             };
             if self.layout_interner.stack_size(inner_layout) == 0 {
                 continue;
@@ -634,8 +634,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         }
 
         let inner_layout = match self.layout_interner.get_repr(value_layout) {
-            LayoutRepr::Boxed(inner) => inner,
-            x => internal_error!("Expected a Boxed layout, got {:?}", x),
+            LayoutRepr::Ptr(inner) => inner,
+            x => internal_error!("Expected a Ptr layout, got {:?}", x),
         };
         self.code_builder.get_local(LocalId(1));
         self.dereference_boxed_value(inner_layout);
@@ -1135,10 +1135,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 sym,
                 storage,
             ),
-
-            Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
-
-            Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
 
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
@@ -2005,40 +2001,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
      * Box
      *******************************************************************/
 
-    pub fn expr_box(
-        &mut self,
-        ret_sym: Symbol,
-        arg_sym: Symbol,
-        layout: InLayout<'a>,
-        storage: &StoredValue,
-    ) {
-        // create a local variable for the heap pointer
-        let ptr_local_id = match self.storage.ensure_value_has_local(
-            &mut self.code_builder,
-            ret_sym,
-            storage.clone(),
-        ) {
-            StoredValue::Local { local_id, .. } => local_id,
-            _ => internal_error!("A heap pointer will always be an i32"),
-        };
-
-        // allocate heap memory and load its data address onto the value stack
-        let arg_layout = match self.layout_interner.get_repr(layout) {
-            LayoutRepr::Boxed(arg) => arg,
-            _ => internal_error!("ExprBox should always produce a Boxed layout"),
-        };
-        let (size, alignment) = self.layout_interner.stack_size_and_alignment(arg_layout);
-        self.allocate_with_refcount(Some(size), alignment, 1);
-
-        // store the pointer value from the value stack into the local variable
-        self.code_builder.set_local(ptr_local_id);
-
-        // copy the argument to the pointer address
-        self.storage
-            .copy_value_to_memory(&mut self.code_builder, ptr_local_id, 0, arg_sym);
-    }
-
-    pub(crate) fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
+    pub(crate) fn ptr_load(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
         let (from_addr_val, from_offset) = match self.storage.get(&arg_sym) {
             StoredValue::VirtualMachineStack { .. } => {
                 self.storage

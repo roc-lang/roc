@@ -1585,6 +1585,11 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn mov_base32_freg32(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64FloatReg) {
+        movss_base32_offset32_freg32(buf, X86_64GeneralReg::RBP, offset, src)
+    }
+
+    #[inline(always)]
     fn movesd_mem64_offset32_freg64(
         buf: &mut Vec<'_, u8>,
         ptr: X86_64GeneralReg,
@@ -3180,6 +3185,31 @@ fn movsd_base64_offset32_freg64(
     buf.extend(offset.to_le_bytes());
 }
 
+// `MOVSS r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pointer.
+#[inline(always)]
+fn movss_base32_offset32_freg32(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64FloatReg,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(src, rex);
+    let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(10);
+    buf.push(0xF3);
+    if src as u8 > 7 || base as u8 > 7 {
+        buf.push(rex);
+    }
+    buf.extend([0x0F, 0x11, 0x80 | src_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
 /// `MOVSD xmm1,r/m64` -> Move r/m64 to xmm1. where m64 references the base pointer.
 #[inline(always)]
 fn movsd_freg64_base64_offset32(
@@ -3960,6 +3990,17 @@ mod tests {
         disassembler_test!(
             movsd_base64_offset32_freg64,
             |reg1, imm, reg2| format!("movsd qword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_movss_base64_offset32_freg64() {
+        disassembler_test!(
+            movss_base32_offset32_freg32,
+            |reg1, imm, reg2| format!("movss dword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
             ALL_GENERAL_REGS,
             [TEST_I32],
             ALL_FLOAT_REGS
