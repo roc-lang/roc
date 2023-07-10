@@ -783,7 +783,7 @@ impl<'a> CallerProc<'a> {
                 .pretty(80)
                 .to_string();
 
-            println!("{}", doc);
+            println!("{doc}");
         }
 
         Self {

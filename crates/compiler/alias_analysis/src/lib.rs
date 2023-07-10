@@ -117,7 +117,7 @@ where
     }
 
     if debug() {
-        for (i, c) in (format!("{:?}", symbol)).chars().take(25).enumerate() {
+        for (i, c) in (format!("{symbol:?}")).chars().take(25).enumerate() {
             name_bytes[25 + i] = c as u8;
         }
     }
@@ -131,7 +131,7 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
     let mut buf = String::new();
 
     for byte in bytes {
-        write!(buf, "{:02X}", byte).unwrap();
+        write!(buf, "{byte:02X}").unwrap();
     }
 
     buf

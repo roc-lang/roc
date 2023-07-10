@@ -1322,8 +1322,7 @@ pub fn type_implementing_specialization(
                 .filter(|mia| mia.ability == ability)
                 .count()
         } < 2,
-        "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization: {:?}",
-        specialization_must_implement_constraints
+        "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization: {specialization_must_implement_constraints:?}"
     );
 
     specialization_must_implement_constraints

@@ -67,8 +67,7 @@ impl MakeSpecializationsDependents {
         let entry = self.entry(module_id);
         debug_assert!(
             entry.succ.is_empty(),
-            "already added successors for module '{:?}'",
-            module_id
+            "already added successors for module '{module_id:?}'"
         );
 
         entry.succ.extend(succ.into_iter());
@@ -516,8 +515,7 @@ impl<'a> Dependencies<'a> {
         debug_assert_eq!(
             make_specializations_dependents.0.len(),
             default_make_specializations_dependents_len,
-            "more modules were added to the graph: {:?}",
-            make_specializations_dependents
+            "more modules were added to the graph: {make_specializations_dependents:?}"
         );
 
         output
@@ -567,8 +565,7 @@ impl<'a> Dependencies<'a> {
         debug_assert_eq!(
             make_specializations_dependents.0.len(),
             default_make_specializations_dependents_len,
-            "more modules were added to the graph: {:?}",
-            make_specializations_dependents
+            "more modules were added to the graph: {make_specializations_dependents:?}"
         );
 
         output

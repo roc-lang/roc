@@ -1276,7 +1276,7 @@ fn refcount_struct<'a>(
 
     for (i, field_layout) in field_layouts.iter().enumerate().rev() {
         if layout_interner.contains_refcounted(*field_layout) {
-            let field_val = root.create_symbol(ident_ids, &format!("field_val_{}", i));
+            let field_val = root.create_symbol(ident_ids, &format!("field_val_{i}"));
             let field_val_expr = Expr::StructAtIndex {
                 index: i as u64,
                 field_layouts,
@@ -1284,7 +1284,7 @@ fn refcount_struct<'a>(
             };
             let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
 
-            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{}", i));
+            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{i}"));
             let mod_args = refcount_args(root, ctx, field_val);
             let mod_expr = root
                 .call_specialized_op(ident_ids, ctx, layout_interner, *field_layout, mod_args)
@@ -1758,7 +1758,7 @@ fn refcount_union_tailrec<'a>(
                             filtered.push((i, *field));
                         } else {
                             let field_val =
-                                root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
+                                root.create_symbol(ident_ids, &format!("field_{tag_id}_{i}"));
                             let field_val_expr = Expr::UnionAtIndex {
                                 union_layout,
                                 tag_id,
@@ -1896,7 +1896,7 @@ fn refcount_tag_fields<'a>(
 
     for (i, field_layout) in field_layouts.iter().rev() {
         if layout_interner.contains_refcounted(*field_layout) {
-            let field_val = root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
+            let field_val = root.create_symbol(ident_ids, &format!("field_{tag_id}_{i}"));
             let field_val_expr = Expr::UnionAtIndex {
                 union_layout,
                 tag_id,
@@ -1905,7 +1905,7 @@ fn refcount_tag_fields<'a>(
             };
             let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
 
-            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{}_{}", tag_id, i));
+            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{tag_id}_{i}"));
             let mod_args = refcount_args(root, ctx, field_val);
             let mod_expr = root
                 .call_specialized_op(ident_ids, ctx, layout_interner, *field_layout, mod_args)

@@ -1832,7 +1832,7 @@ fn throw_on_overflow<'ctx>(
         .unwrap()
 }
 
-fn throw_because_overflow<'ctx>(env: &Env<'_, 'ctx, '_>, message: &str) {
+fn throw_because_overflow(env: &Env<'_, '_, '_>, message: &str) {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
@@ -2892,6 +2892,6 @@ fn load_symbol_and_lambda_set<'a, 'ctx>(
     let (ptr, layout) = scope.load_symbol_and_layout(symbol);
     match layout_interner.get_repr(layout) {
         LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
-        other => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
+        other => panic!("Not a lambda set: {other:?}, {ptr:?}"),
     }
 }

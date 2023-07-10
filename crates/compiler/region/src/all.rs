@@ -434,10 +434,7 @@ fn test_line_info() {
             } else {
                 "\n" // HACK! pretend there's an extra newline on the end, strictly so we can do the comparison
             };
-            println!(
-                "checking {:?} {:?}, expecting {:?}",
-                input, offset, expected
-            );
+            println!("checking {input:?} {offset:?}, expecting {expected:?}");
             let line_column = info.convert_offset(offset as u32);
             assert!(
                 Some(line_column) > last,

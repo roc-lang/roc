@@ -41,8 +41,8 @@ fn build_wasm_linking_test_host() {
     let host_wasm: &str = host_wasm_path.to_str().unwrap();
     let host_native: &str = host_native_path.to_str().unwrap();
 
-    println!("cargo:rerun-if-changed={}", host_source);
-    println!("cargo:rerun-if-changed={}", import_source);
+    println!("cargo:rerun-if-changed={host_source}");
+    println!("cargo:rerun-if-changed={import_source}");
 
     if !Path::new("build").exists() {
         fs::create_dir("build").unwrap();
@@ -57,7 +57,7 @@ fn build_wasm_linking_test_host() {
         "-target",
         "wasm32-freestanding-musl",
         host_source,
-        &format!("-femit-bin={}", host_wasm),
+        &format!("-femit-bin={host_wasm}"),
     ]);
 
     let mut import_obj_path = PathBuf::from("build").join("wasm_linking_host_imports");
@@ -73,7 +73,7 @@ fn build_wasm_linking_test_host() {
         "build-exe",
         host_source,
         import_obj,
-        &format!("-femit-bin={}", host_native),
+        &format!("-femit-bin={host_native}"),
         #[cfg(windows)]
         "--subsystem",
         #[cfg(windows)]
@@ -148,7 +148,7 @@ fn run_zig(args: &[&str]) {
     let mut zig_cmd = zig();
 
     let full_zig_cmd = zig_cmd.args(args);
-    println!("{:?}", full_zig_cmd);
+    println!("{full_zig_cmd:?}");
 
     let zig_cmd_output = full_zig_cmd.output().unwrap();
 
@@ -164,6 +164,6 @@ fn run_zig(args: &[&str]) {
         panic!("zig call failed with status {:?}", zig_cmd_output.status);
     }
 
-    assert!(zig_cmd_output.stdout.is_empty(), "{:#?}", zig_cmd_output);
-    assert!(zig_cmd_output.stderr.is_empty(), "{:#?}", zig_cmd_output);
+    assert!(zig_cmd_output.stdout.is_empty(), "{zig_cmd_output:#?}");
+    assert!(zig_cmd_output.stderr.is_empty(), "{zig_cmd_output:#?}");
 }

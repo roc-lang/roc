@@ -200,7 +200,7 @@ mod test {
             let expected = expected.trim_end();
 
             if x != expected {
-                println!("{}", x);
+                println!("{x}");
             }
 
             assert_eq!(expected, x);

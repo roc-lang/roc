@@ -165,8 +165,7 @@ impl<'a> LayoutCache<'a> {
         let Cacheable(value, criteria) = Layout::from_var(&mut env, var);
         debug_assert!(
             criteria.is_cacheable(),
-            "{:?} not cacheable as top-level",
-            value
+            "{value:?} not cacheable as top-level"
         );
         value
     }
@@ -192,8 +191,7 @@ impl<'a> LayoutCache<'a> {
         let Cacheable(value, criteria) = RawFunctionLayout::from_var(&mut env, var);
         debug_assert!(
             criteria.is_cacheable(),
-            "{:?} not cacheable as top-level",
-            value
+            "{value:?} not cacheable as top-level"
         );
         value
     }
@@ -1485,9 +1483,7 @@ impl<'a> LambdaSet<'a> {
     {
         debug_assert!(
             self.contains(function_symbol),
-            "function symbol {:?} not in set {:?}",
-            function_symbol,
-            self
+            "function symbol {function_symbol:?} not in set {self:?}"
         );
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[InLayout<'a>]| {
@@ -3210,10 +3206,7 @@ fn layout_from_flat_type<'a>(
                     Cacheable(Ok(boxed_layout), criteria)
                 }
                 _ => {
-                    panic!(
-                        "TODO layout_from_flat_type for Apply({:?}, {:?})",
-                        symbol, args
-                    );
+                    panic!("TODO layout_from_flat_type for Apply({symbol:?}, {args:?})");
                 }
             }
         }
@@ -3664,7 +3657,7 @@ pub fn union_sorted_tags<'a>(
 
                 Error => return Err(LayoutProblem::Erroneous),
 
-                other => panic!("invalid content in tag union variable: {:?}", other),
+                other => panic!("invalid content in tag union variable: {other:?}"),
             }
         }
     };
@@ -4387,7 +4380,7 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, tag_ext: TagExt) -> bool {
                 }
                 // So that we can continue compiling in the presence of errors
                 Error => ext_fields.is_empty(),
-                _ => panic!("invalid content in ext_var: {:?}", content),
+                _ => panic!("invalid content in ext_var: {content:?}"),
             }
         }
     }
@@ -4442,17 +4435,14 @@ fn layout_from_num_content<'a>(
             Symbol::NUM_DEC => Ok(Layout::DEC),
 
             _ => {
-                panic!(
-                    "Invalid Num.Num type application: Apply({:?}, {:?})",
-                    symbol, args
-                );
+                panic!("Invalid Num.Num type application: Apply({symbol:?}, {args:?})");
             }
         },
         Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
         Structure(_) | RangedNumber(..) | LambdaSet(_) => {
-            panic!("Invalid Num.Num type application: {:?}", content);
+            panic!("Invalid Num.Num type application: {content:?}");
         }
         Error => Err(LayoutProblem::Erroneous),
     };

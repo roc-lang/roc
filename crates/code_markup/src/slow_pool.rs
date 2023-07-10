@@ -39,8 +39,8 @@ impl SlowPool {
 
         for (mark_node_id, node) in self.nodes.iter().enumerate() {
             let ast_node_id_str = match mark_id_ast_id_map.get(mark_node_id) {
-                Ok(ast_id) => format!("{:?}", ast_id),
-                Err(err) => format!("{:?}", err),
+                Ok(ast_id) => format!("{ast_id:?}"),
+                Err(err) => format!("{err:?}"),
             };
             let ast_node_id: String = ast_node_id_str
                 .chars()
@@ -52,7 +52,7 @@ impl SlowPool {
             let node_children = node.get_children_ids();
 
             if !node_children.is_empty() {
-                child_str = format!("children: {:?}", node_children);
+                child_str = format!("children: {node_children:?}");
             }
 
             write!(

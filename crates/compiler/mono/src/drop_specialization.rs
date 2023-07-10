@@ -806,7 +806,7 @@ fn specialize_struct<'a, 'i>(
                         // This value has not been index before, create a new symbol.
                         None => {
                             let field_symbol =
-                                environment.create_symbol(ident_ids, &format!("field_val_{}", i));
+                                environment.create_symbol(ident_ids, &format!("field_val_{i}"));
 
                             let field_val_expr = Expr::StructAtIndex {
                                 index: i as u64,
@@ -945,7 +945,7 @@ fn specialize_union<'a, 'i>(
                                         Some(rc) => {
                                             let field_symbol = environment.create_symbol(
                                                 ident_ids,
-                                                &format!("field_val_{}", i),
+                                                &format!("field_val_{i}"),
                                             );
 
                                             let field_val_expr = Expr::UnionAtIndex {
@@ -1134,11 +1134,11 @@ fn specialize_list<'a, 'i>(
                             // If the symbol is unknown, we have to get the value from the list.
                             // Should only happen when list elements are discarded.
                             None => {
-                                let field_symbol = environment
-                                    .create_symbol(ident_ids, &format!("field_val_{}", i));
+                                let field_symbol =
+                                    environment.create_symbol(ident_ids, &format!("field_val_{i}"));
 
-                                let index_symbol = environment
-                                    .create_symbol(ident_ids, &format!("index_val_{}", i));
+                                let index_symbol =
+                                    environment.create_symbol(ident_ids, &format!("index_val_{i}"));
 
                                 let dec = arena.alloc(Stmt::Refcounting(
                                     ModifyRc::Dec(field_symbol),
@@ -1427,7 +1427,7 @@ impl<'a> DropSpecializationEnvironment<'a> {
         }
     }
 
-    fn create_symbol<'i>(&self, ident_ids: &'i mut IdentIds, debug_name: &str) -> Symbol {
+    fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
         let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.home, ident_id)
     }

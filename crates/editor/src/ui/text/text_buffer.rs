@@ -91,7 +91,7 @@ impl TextBuffer {
             txt_pos.column <= line_len,
             OutOfBoundsSnafu {
                 index: txt_pos.column,
-                collection_name: format!("Line in TextBuffer: {}", line_ref),
+                collection_name: format!("Line in TextBuffer: {line_ref}"),
                 len: line_len,
             }
         );

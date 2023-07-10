@@ -206,7 +206,7 @@ impl<'a> EdModule<'a> {
             match parse_res {
                 Ok(ast) => Ok(EdModule { env, ast }),
                 Err(err) => SrcParseSnafu {
-                    syntax_err: format!("{:?}", err),
+                    syntax_err: format!("{err:?}"),
                 }
                 .fail(),
             }
@@ -315,20 +315,17 @@ pub mod test_ed_model {
         let platform_module_path = platform_dir.join("main.roc");
         let mut platform_module_file =
             File::create(platform_module_path).expect("Failed to create main.roc");
-        writeln!(platform_module_file, "{}", PLATFORM_STR).expect("Failed to write to main.roc");
+        writeln!(platform_module_file, "{PLATFORM_STR}").expect("Failed to write to main.roc");
 
         let temp_file_path_buf =
             PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
         let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
 
         let mut file = File::create(temp_file_full_path.clone()).unwrap_or_else(|_| {
-            panic!(
-                "Failed to create temporary file for path {:?}",
-                temp_file_full_path
-            )
+            panic!("Failed to create temporary file for path {temp_file_full_path:?}")
         });
-        writeln!(file, "{}", clean_code_str)
-            .unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}", clean_code_str, file));
+        writeln!(file, "{clean_code_str}")
+            .unwrap_or_else(|_| panic!("Failed to write {clean_code_str:?} to file: {file:?}"));
 
         let loaded_module = load_module(
             &temp_file_full_path,
