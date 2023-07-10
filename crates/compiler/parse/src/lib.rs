@@ -10,7 +10,7 @@ pub mod ast;
 pub mod bitmask;
 pub mod blankspace;
 pub mod experiment;
-pub mod experiment2;
+pub mod experiment_tests;
 pub mod expr;
 pub mod header;
 pub mod highlight;

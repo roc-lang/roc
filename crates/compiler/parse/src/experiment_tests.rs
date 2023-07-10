@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::experiment::{Env, Listener};
+use crate::experiment::{Env, Listener, Token};
 
 #[cfg(test)]
 #[derive(Debug, Eq, PartialEq, Default)]
@@ -12,20 +12,13 @@ struct TestOutput {
 
 #[cfg(test)]
 impl Listener for TestOutput {
-    fn single_line_str(&mut self, start_offset: usize, end_offset: usize) {
-        self.single_line_strings.push((start_offset, end_offset));
-    }
-
-    fn multi_line_str(&mut self, start_offset: usize, end_offset: usize) {
-        self.multi_line_strings.push((start_offset, end_offset));
-    }
-
-    fn single_quote_char(&mut self, start_offset: usize, end_offset: usize) {
-        self.single_quote_chars.push((start_offset, end_offset));
-    }
-
-    fn comment(&mut self, start_offset: usize, end_offset: usize) {
-        self.comments.push((start_offset, end_offset));
+    fn emit(&mut self, token: Token, start_offset: usize, end_offset: usize) {
+        match token {
+            Token::SingleLineStr => self.single_line_strings.push((start_offset, end_offset)),
+            Token::MultiLineStr => self.multi_line_strings.push((start_offset, end_offset)),
+            Token::SingleQuoteChar => self.single_quote_chars.push((start_offset, end_offset)),
+            Token::Comment => self.comments.push((start_offset, end_offset)),
+        }
     }
 }
 
@@ -66,10 +59,10 @@ gen_test!(all_spaces {
 
 gen_test!(one_string_only {
     input: &[r#"   "blah"                                                       "#],
-    single_line_strings: vec![],
+    single_line_strings: vec![(3, 8)],
     multi_line_strings: vec![],
     single_quote_chars: vec![],
-    comments: vec![(3, 4)]
+    comments: vec![]
 });
 
 gen_test!(one_comment_only {

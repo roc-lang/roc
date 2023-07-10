@@ -65,6 +65,7 @@ impl InProgress {
         *self as u8 >= Self::SingleLineStr as u8
     }
 
+    #[allow(unused)] // This was used before, and might be used again.
     /// Branchlessly returns true iff this is either SingleLineStr or MultiLineStr
     fn is_str(&self) -> bool {
         // MutliLineStr and SingleLineStr are both odd, so just return whether this is odd
@@ -72,11 +73,17 @@ impl InProgress {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum Token {
+    SingleLineStr,
+    MultiLineStr,
+    SingleQuoteChar,
+    Comment,
+}
+
 pub trait Listener {
-    fn single_line_str(&mut self, start_offset: usize, end_offset: usize);
-    fn multi_line_str(&mut self, start_offset: usize, end_offset: usize);
-    fn single_quote_char(&mut self, start_offset: usize, end_offset: usize);
-    fn comment(&mut self, start_offset: usize, end_offset: usize);
+    fn emit(&mut self, token: Token, start_offset: usize, end_offset: usize);
 }
 
 impl Env {
@@ -218,7 +225,7 @@ impl Env {
                         debug_assert_eq!(self.in_progress, MultiLineStr, "Previous chunk ended in 2 quotes, yet its in_progress was neither MutliLineStr nor Nothing. This should never happen!");
 
                         // Record the MultiLineStr, between the start offset and the offset of the final quote.
-                        listener.multi_line_str(span_start_offset, chunk_offset + 1);
+                        listener.emit(Token::MultiLineStr, span_start_offset, chunk_offset + 1);
 
                         Nothing
                     };
@@ -232,7 +239,7 @@ impl Env {
                 } else {
                     // 2 trailing quotes followed by a non-quote means
                     // we had an empty string at the end.
-                    listener.single_line_str(chunk_offset, chunk_offset + 1);
+                    listener.emit(Token::SingleLineStr, chunk_offset, chunk_offset + 1);
 
                     in_progress = Nothing;
                 }
@@ -250,15 +257,11 @@ impl Env {
             }
         };
 
-        let any_single_quotes = !single_quotes.is_zero();
-        let mask_contains_triple_quotes = !triple_quotes.is_zero(); // TODO incorporate trailing_quote_chars into this.
-                                                                    // Some trailing quotes might be part of triple quotes!
+        let mask_contains_triple_quotes = !triple_quotes.is_zero();
         let pounds = Bitmask::for_byte(chunk, b'#');
         let newlines = Bitmask::for_byte(chunk, b'\n');
-
-        let mut strings = Bitmask::from(0);
-        let mut comments = Bitmask::from(!0);
         let mut quote_pound_newline = Bitmask::from(quotes | pounds | newlines);
+        let mut strings = Bitmask::from(0);
 
         while !quote_pound_newline.is_zero() {
             let index = quote_pound_newline.trailing_zeros();
@@ -288,7 +291,8 @@ impl Env {
                         }
                         MultiLineStr => {
                             // Record the MultiLineStr.
-                            listener.multi_line_str(
+                            listener.emit(
+                                Token::MultiLineStr,
                                 span_start_offset,
                                 chunk_offset + index as usize + 2,
                             );
@@ -344,8 +348,13 @@ impl Env {
                     span_start_offset
                 };
 
-            // Apply masks if we just finished a span (string or comment).
-            {
+            // Apply masks and notify listener if we just finished a string or comment.
+            // One branch is necessary because we either do or don't run the listener,
+            // but all the logic inside this block can be branchless.
+            if branchless_and(
+                prev_in_progress.is_comment_or_single_line_str(),
+                in_progress == Nothing,
+            ) {
                 // Convert the start offset to a start index for this part, even though
                 // offset is what we want to store later. (Working in terms of offset over
                 // index is the better default, because it works with triple quotes that happen
@@ -353,39 +362,36 @@ impl Env {
                 // so we want to work in terms of index.)
                 let start_index = span_start_offset.saturating_sub(chunk_offset) as u32;
                 let span_len_in_mask = index.wrapping_sub(start_index);
+
                 // A mask for the span between start_index and index
                 let span_mask_zeroes = ((1u64 << span_len_in_mask) - 1) << start_index;
                 let span_mask_ones = !span_mask_zeroes;
 
-                // If we just finished a string, branchlessly apply it to our main bitmask.
-                {
-                    // If we had a string in progress, but no longer do, then we just ended a string.
-                    let str_mask =
-                        if branchless_and(prev_in_progress.is_str(), in_progress == Nothing) {
-                            span_mask_ones // 1s only where the string we just made was; 0s elsewhere.
-                        } else {
-                            !0u64 // all 1s; if this is AND'd with the existing bitmask, it will be a no-op.
-                        };
-
-                    strings &= Bitmask::from(str_mask);
-                }
-
-                // If we just finished a comment, zero out its span in our main bitmask and send it to the listener.
-                let just_finished_comment =
-                    branchless_and(prev_in_progress == Comment, in_progress == Nothing);
-
-                // Do this part branchlessly, because if the comment listener is a no-op (e.g. we're running a script
-                // and don't care about doc comments), the branching conditional around the listener (which will
-                // often be mispredicted) can get optimized away entirely.
-                comments |= if just_finished_comment {
-                    Bitmask::from(span_mask_zeroes)
+                // If we had a string in progress, but no longer do, then we just ended a string.
+                // Branchlessly apply it to our main bitmask.
+                strings |= if branchless_and(prev_in_progress.is_str(), in_progress == Nothing) {
+                    Bitmask::from(span_mask_ones) // 1s only where the string we just made was; 0s elsewhere.
                 } else {
-                    Bitmask::ZERO
+                    Bitmask::ZERO // no-op with `|=`
                 };
 
-                if just_finished_comment {
-                    listener.comment(span_start_offset, chunk_offset + index as usize);
-                }
+                // If we had a comment in progress, but no longer do, then we just ended a comment.
+                // Branchlessly zero out its span in our main bitmask.
+                strings &= if branchless_and(prev_in_progress == Comment, in_progress == Nothing) {
+                    Bitmask::from(span_mask_zeroes)
+                } else {
+                    Bitmask::from(!0u64) // all 1s; if this is AND'd with the existing bitmask, it will be a no-op.
+                };
+
+                let token = if prev_in_progress == SingleLineStr {
+                    Token::SingleLineStr
+                } else {
+                    debug_assert_eq!(prev_in_progress, Comment);
+
+                    Token::Comment
+                };
+
+                listener.emit(token, span_start_offset, chunk_offset + index as usize);
             }
         }
 
