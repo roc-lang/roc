@@ -88,8 +88,25 @@ impl<'a> WasiDispatcher<'a> {
 
                 success_code
             }
-            "environ_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "environ_sizes_get" => todo!("WASI {}({:?})", function_name, arguments),
+            "environ_get" => {
+                // `environ_sizes_get` always reports 0 environment variables
+                // so we don't have to do anything here.
+
+                success_code
+            }
+            "environ_sizes_get" => {
+                let num_env_ptr = arguments[0].expect_i32().unwrap() as usize;
+                let size_env_ptr = arguments[1].expect_i32().unwrap() as usize;
+
+                // Calculate the total size required for environment variables
+                let total_size = 0;
+                let count = 0;
+
+                write_u32(memory, num_env_ptr, count);
+                write_u32(memory, size_env_ptr, total_size as u32);
+
+                success_code
+            }
             "clock_res_get" => success_code, // this dummy implementation seems to be good enough for some functions
             "clock_time_get" => success_code,
             "fd_advise" => todo!("WASI {}({:?})", function_name, arguments),

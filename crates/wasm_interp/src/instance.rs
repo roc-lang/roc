@@ -2,7 +2,7 @@ use bumpalo::{collections::Vec, Bump};
 use std::fmt::{self, Write};
 use std::iter::{self, once, Iterator};
 
-use roc_wasm_module::opcodes::OpCode;
+use roc_wasm_module::opcodes::{MemoryInstruction, OpCode};
 use roc_wasm_module::parse::{Parse, SkipBytes};
 use roc_wasm_module::sections::{ImportDesc, MemorySection, SignatureParamsIter};
 use roc_wasm_module::{ExportType, WasmModule};
@@ -975,6 +975,38 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 } else {
                     self.value_store.push(Value::I32(-1));
                 }
+            }
+            MEMORY => {
+                // the first argument determines exactly which memory operation we have
+                match MemoryInstruction::try_from(module.code.bytes[self.program_counter]) {
+                    Ok(op) => match op {
+                        MemoryInstruction::MemoryInit => todo!("WASM instruction: memory.init"),
+                        MemoryInstruction::DataDrop => todo!("WASM instruction: data.drop"),
+                        MemoryInstruction::MemoryCopy => {
+                            let size = self.value_store.pop_u32()? as usize;
+                            let source = self.value_store.pop_u32()? as usize;
+                            let destination = self.value_store.pop_u32()? as usize;
+
+                            // skip the op byte and an extra two zero bytes.
+                            // in future versions of WebAssembly this byte may be used to index additional memories
+                            self.program_counter += 1 + 2;
+
+                            self.memory.copy_within(source..source + size, destination)
+                        }
+                        MemoryInstruction::MemoryFill => {
+                            let size = self.value_store.pop_u32()? as usize;
+                            let byte_value = self.value_store.pop_u32()? as u8;
+                            let destination = self.value_store.pop_u32()? as usize;
+
+                            // skip the op byte and an extra zero byte.
+                            // in future versions of WebAssembly this byte may be used to index additional memories
+                            self.program_counter += 1 + 1;
+
+                            self.memory[destination..][..size].fill(byte_value);
+                        }
+                    },
+                    Err(other) => unreachable!("invalid memory instruction {other:?}"),
+                };
             }
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();

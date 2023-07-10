@@ -49,6 +49,76 @@ fn test_growmemory() {
     assert_eq!(state.memory.len(), 5 * MemorySection::PAGE_SIZE as usize);
 }
 
+#[test]
+fn test_memory_fill() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let pages = 3;
+    let pc = 0;
+    module.memory = MemorySection::new(&arena, pages * MemorySection::PAGE_SIZE);
+
+    const SIZE: i32 = 16;
+    let byte_value = 0xAA;
+    let destination = 0x4;
+
+    let bytes = [OpCode::MEMORY as u8, 11, 0x0];
+    module.code.bytes.extend(bytes);
+
+    let mut state = Instance::new(&arena, pages, pc, [], DefaultImportDispatcher::default());
+
+    state.value_store.push(Value::I32(destination));
+    state.value_store.push(Value::I32(byte_value));
+    state.value_store.push(Value::I32(SIZE));
+
+    // before the instruction, the memory is all zeros
+    let memory_before = &state.memory[destination as usize..][..SIZE as usize];
+    assert_eq!(memory_before, &[0; SIZE as usize]);
+
+    state.execute_next_instruction(&module).unwrap();
+
+    // after the fill, the same memory range is now all 0xAA bytes
+    let memory_after = &state.memory[destination as usize..][..SIZE as usize];
+    assert_eq!(memory_after, &[byte_value as u8; SIZE as usize])
+}
+
+#[test]
+fn test_memory_copy() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let pages = 3;
+    let pc = 0;
+    module.memory = MemorySection::new(&arena, pages * MemorySection::PAGE_SIZE);
+
+    const SIZE: i32 = 4;
+    let source = 0x4;
+    let destination = 0x8;
+
+    let bytes = [OpCode::MEMORY as u8, 10, 0x0, 0x0];
+    module.code.bytes.extend(bytes);
+
+    let mut state = Instance::new(&arena, pages, pc, [], DefaultImportDispatcher::default());
+
+    state.value_store.push(Value::I32(destination));
+    state.value_store.push(Value::I32(source));
+    state.value_store.push(Value::I32(SIZE));
+
+    // fill the source slice with 0xAA bytes
+    let source_slice = &mut state.memory[source as usize..][..SIZE as usize];
+    source_slice.fill(0xAA);
+
+    // before the copy, the destination slice is all 0x00 bytes
+    let dest_slice = &state.memory[destination as usize..][..SIZE as usize];
+    assert_eq!(dest_slice, &[0x00; SIZE as usize]);
+
+    state.execute_next_instruction(&module).unwrap();
+
+    // after the copy, the destination slice is all 0xAA bytes
+    let dest_slice = &state.memory[destination as usize..][..SIZE as usize];
+    assert_eq!(dest_slice, &[0xAA; SIZE as usize])
+}
+
 fn test_load(load_op: OpCode, ty: ValueType, data: &[u8], addr: u32, offset: u32) -> Value {
     let arena = Bump::new();
     let mut module = WasmModule::new(&arena);
