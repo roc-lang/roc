@@ -1,11 +1,8 @@
-use std::iter::Iterator;
-
 use crate::bitmask::{Bitmask, Chunk};
 use packed_simd::{u8x64, Simd};
 
 pub struct Env {
     in_progress: InProgress,
-    structural_chars: Vec<Bitmask>,
     /// The number of trailing '"' characters at the end of the previous chunk
     trailing_quote_chars: u8,
     chunk_offset: usize, // The current chunk's offset relative to the start of the src.
@@ -48,13 +45,6 @@ const ODDS: Bitmask =
     Bitmask::new(0b0101010101010101010101010101010101010101010101010101010101010101);
 
 #[repr(u8)]
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum LexingOptions {
-    MultiLineStr,
-    NoMultiLine,
-}
-
-#[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum InProgress {
     Nothing = 0,
@@ -76,8 +66,14 @@ impl InProgress {
     }
 }
 
+pub trait Listener {
+    fn single_line_str(&mut self, start_offset: usize, end_offset: usize);
+    fn multi_line_str(&mut self, start_offset: usize, end_offset: usize);
+    fn comment(&mut self, start_offset: usize, end_offset: usize);
+}
+
 impl Env {
-    pub fn handle_chunk(&mut self, chunk: Chunk) {
+    pub fn handle_chunk(&mut self, chunk: Chunk, listener: &mut impl Listener) {
         let simd_chunk = u8x64::from_slice_unaligned(&chunk);
         let backslashes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\\')));
 
@@ -160,7 +156,14 @@ impl Env {
             // Thanks, Daniel Lemire and Geoff Langdale!
             quotes & (quotes << 1) & (quotes << 2);
 
-        self.strings_comments_indents(quotes, single_quotes, triple_quotes, simd_chunk, chunk);
+        self.strings_comments_indents(
+            quotes,
+            single_quotes,
+            triple_quotes,
+            simd_chunk,
+            chunk,
+            listener,
+        );
     }
 
     /// Given the masks for the locations of quotes, single quotes, and triple quotes (which have already
@@ -171,20 +174,18 @@ impl Env {
         single_quotes: Bitmask,
         triple_quotes: Bitmask,
         simd_chunk: Simd<[u8; 64]>,
-        chunk: [u8; 64],
+        chunk: Chunk,
+        listener: &mut impl Listener,
     ) {
         use InProgress::{Comment, MultiLineStr, Nothing, SingleLineStr};
 
-        // true iff we had 2 trailing quotes previously, and now we begin with a quote.
-        let last_chunk_ended_in_2_quotes =
-            branchless_and(self.trailing_quote_chars == 2, chunk[0] == b'"');
-
+        let chunk_offset = self.chunk_offset;
         let mut span_start_offset = self.span_start_offset;
         let mut in_progress;
 
         match self.trailing_quote_chars {
             1 => {
-                span_start_offset = self.chunk_offset - 1;
+                span_start_offset = chunk_offset - 1;
 
                 // 1 trailing quote means we need to figure out if we're working on
                 // a single-line string vs a multiline string.
@@ -218,7 +219,8 @@ impl Env {
                         // this must be a closing triple-quote. That means we end the MultiLineStr.
                         debug_assert_eq!(self.in_progress, MultiLineStr, "Previous chunk ended in 2 quotes, yet its in_progress was neither MutliLineStr nor Nothing. This should never happen!");
 
-                        todo!("Record the end of the currently in-progress MultiLineStr before we change span_start_offset");
+                        // Record the MultiLineStr, between the start offset and the offset of the final quote.
+                        listener.multi_line_str(span_start_offset, chunk_offset + 1);
 
                         Nothing
                     };
@@ -228,12 +230,11 @@ impl Env {
                     //
                     // Importantly, this must be set *after* updating in_progress, because
                     // the in_progress update logic may need to use the old span_start_offset.
-                    span_start_offset =
-                        self.chunk_offset - if will_be_multiline_str { 2 } else { 0 };
+                    span_start_offset = chunk_offset - if will_be_multiline_str { 2 } else { 0 };
                 } else {
                     // 2 trailing quotes followed by a non-quote means
                     // we had an empty string at the end.
-                    todo!("Record an empty string at the end");
+                    listener.single_line_str(chunk_offset, chunk_offset + 1);
 
                     in_progress = Nothing;
                 }
@@ -252,19 +253,18 @@ impl Env {
         };
 
         let any_single_quotes = !single_quotes.is_zero();
-        let any_triple_quotes = !triple_quotes.is_zero(); // TODO incorporate trailing_quote_chars into this.
-                                                          // Some trailing quotes might be part of triple quotes!
+        let mask_contains_triple_quotes = !triple_quotes.is_zero(); // TODO incorporate trailing_quote_chars into this.
+                                                                    // Some trailing quotes might be part of triple quotes!
         let pounds = Bitmask::from(simd_chunk.eq(u8x64::splat(b'#')));
         let newlines = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\n')));
 
         let mut strings = Bitmask::from(0);
         let mut comments = Bitmask::from(!0);
-        let mut prev_byte = self.prev_chunk_last_byte;
         let mut quote_pound_newline = Bitmask::from(quotes | pounds | newlines);
 
         while !quote_pound_newline.is_zero() {
             let index = quote_pound_newline.trailing_zeros();
-            let offset = index as usize + self.chunk_offset;
+            let offset = index as usize + chunk_offset;
 
             quote_pound_newline &= quote_pound_newline.wrapping_sub(1); // clear the bit we just encountered
 
@@ -273,34 +273,36 @@ impl Env {
             let prev_in_progress = in_progress;
             let byte_is_quote = byte == b'"';
 
-            // Use a branch to check for the end of a multiline string. Branch because multiline strings are uncommon.
-            if branchless_and(in_progress == MultiLineStr, byte_is_quote) {
-                todo!(
-                    r#"
-                        peek at the next two chars;
-                        if they are both quotes, we're done with this multiline string.
-                        Advance index by 2 (this will require no longer using an iterator) and update the state.
-                        "#
-                );
-            }
-
-            // Use a branch to check for the start of a multiline string, because multiline strings are uncommon.
-            if any_triple_quotes {
-                // If both this byte and the previous one was a quote, but we had nothing in progress (meaning we just
-                // closed a string, although we don't know if it was single-line or multiline) then this might be the
-                // start of a multiline string. (It might also be a syntax error.) We will assume multiline string.
-                if branchless_and(
-                    byte_is_quote,
-                    branchless_and(in_progress == Nothing, prev_byte == b'"'),
-                ) {
-                    todo!(
-                        r#"
-                        Inspect the previous two bytes (they might be in the previous chunk, so must handle that
-                        using carryover state regarding number of trailing quotes in a chunk) to verify that they
-                        are both quotes. Also, it could be that there are more than 3 consecutive quotes there.
-                        Need to figure out what to do in that scenario.
-                        "#
-                    );
+            // Start with triple quote checks, so that later on when we go to branchlessly update in_progress,
+            // if we've already set in_progress to MultiLineStr, we won't accidentally overwrite it with the
+            // normal quote check.
+            //
+            // Put triple quote checks behind a branch, because most chunks won't contain any multiline strings.
+            // (If there is a triple quote in the mask, this will probably get mispredicted once and then never again.)
+            if mask_contains_triple_quotes {
+                // If the triple_quotes mask has a 1 here, then there's a triple quote here.
+                if !(triple_quotes & (1 << index).into()).is_zero() {
+                    match in_progress {
+                        Nothing => {
+                            // Nothing was in progress; begin a MultiLineStr
+                            span_start_offset = index as usize + chunk_offset;
+                            in_progress = MultiLineStr;
+                        }
+                        MultiLineStr => {
+                            // Record the MultiLineStr.
+                            listener.multi_line_str(
+                                span_start_offset,
+                                chunk_offset + index as usize + 2,
+                            );
+                            in_progress = Nothing;
+                        }
+                        Comment => {
+                            // We encountered triple quotes inside a comment; do nothing.
+                        }
+                        SingleLineStr => {
+                            unreachable!("It should not be possible to encounter a triple quote when SingleLineStr is in progress. Something went wrong with the masks or something!");
+                        }
+                    }
                 }
             }
 
@@ -351,7 +353,7 @@ impl Env {
                 // index is the better default, because it works with triple quotes that happen
                 // to cross chunk boundaries, but in this particular case we're doing masking,
                 // so we want to work in terms of index.)
-                let start_index = span_start_offset.saturating_sub(self.chunk_offset) as u32;
+                let start_index = span_start_offset.saturating_sub(chunk_offset) as u32;
                 let span_len_in_mask = index.wrapping_sub(start_index);
                 // A mask for the span between start_index and index
                 let span_mask_zeroes = ((1u64 << span_len_in_mask) - 1) << start_index;
@@ -387,8 +389,6 @@ impl Env {
                     // wants to store docs in memory for hovers and such.)
                 }
             }
-
-            prev_byte = byte;
         }
 
         self.span_start_offset = span_start_offset;
@@ -398,6 +398,7 @@ impl Env {
 }
 
 /// NOTE: This is all old and obsolete, but I'm keeping it around as a reference for when it gets rewritten.
+/*
 fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     #[repr(u8)]
@@ -662,6 +663,7 @@ enum Ast {
     StrLiteral(String),
     Comment(String),
 }
+*/
 
 fn branchless_and(a: bool, b: bool) -> bool {
     (a as u8 & b as u8) != 0
