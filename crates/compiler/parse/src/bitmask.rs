@@ -1,4 +1,3 @@
-use packed_simd::m8x64;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, Not, Shl, Shr};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,6 +10,41 @@ impl Bitmask {
 
     pub const fn new(num: u64) -> Self {
         Self(num)
+    }
+
+    /// Branchlessly convert the given 64 bytes into a bitmap
+    pub const fn for_byte(bytes: [u8; 64], needle: u8) -> Self {
+        // The packed_simd version of this, which we could use if we were on Nightly
+        // (assuming it supports sufficiently graceful fallbacks, and supports non-Intel SIMD)
+        //
+        //     return Self(u8x64::from_slice_unaligned(&bytes).eq(u8x64::splat(needle)).bitmask());
+        //
+        // However, does an unnecessary number of SIMD loads. Instead, we should do the u8x64::from_slice_unaligned
+        // once, and then do multiple splat() and eq() calls, like so:
+        //
+        //     let simd_chunk = u8x64::from_slice_unaligned(&chunk);
+        //     let backslashes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\\')));
+        //     let single_quotes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\''))) & preceded_by_escape;
+
+        let mut bitmask: u64 = 0;
+
+        // Without branching (e.g. using a loop), fill each of the 64 bits with a 1 if the corresponding byte
+        // at that index matches the needle, and a 0 otherwise.
+        macro_rules! fill_bitmask {
+            ($($index:literal),*) => {
+                $(
+                    bitmask |= ((bytes[$index] == needle) as u64) << $index;
+                )*
+            };
+        }
+
+        fill_bitmask!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+            46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63
+        );
+
+        Self(bitmask)
     }
 
     pub const fn is_zero(self) -> bool {
@@ -113,9 +147,32 @@ impl From<u64> for Bitmask {
     }
 }
 
-impl From<m8x64> for Bitmask {
-    fn from(simd: m8x64) -> Self {
-        Self(simd.bitmask())
+impl From<[u8; 64]> for Bitmask {
+    fn from(bytes: [u8; 64]) -> Self {
+        // The packed_simd version of this, which we could use if we were on Nightly
+        // (assuming it supports sufficiently graceful fallbacks, and supports non-Intel SIMD)
+        //
+        // return Self(u8x64::from_slice_unaligned(&bytes).bitmask());
+
+        let mut bitmask: u64 = 0;
+
+        // Without branching (e.g. using a loop), fill each of the 64 bits with a 1 if the corresponding byte
+        // at that index is nonzero, and a 0 otherwise.
+        macro_rules! fill_bitmask {
+            ($($index:literal),*) => {
+                $(
+                    bitmask |= ((bytes[$index] != 0) as u64) << $index;
+                )*
+            };
+        }
+
+        fill_bitmask!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+            46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63
+        );
+
+        Self(bitmask)
     }
 }
 

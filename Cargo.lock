@@ -1894,12 +1894,6 @@ dependencies = [
 
 [[package]]
 name = "libm"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fc7aa29613bd6a620df431842069224d8bc9011086b1db4c0e0cd47fa03ec9a"
-
-[[package]]
-name = "libm"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7012b1bbb0719e1097c47611d3898568c546d597c2e74d66f6087edd5233ff4"
@@ -2299,7 +2293,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "578ede34cf02f8924ab9447f50c28075b4d3e5b269972345e7e0372b38c6cdcd"
 dependencies = [
  "autocfg",
- "libm 0.2.7",
+ "libm",
 ]
 
 [[package]]
@@ -2428,16 +2422,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "706de7e2214113d63a8238d1910463cfce781129a6f263d13fdb09ff64355ba4"
 dependencies = [
  "ttf-parser",
-]
-
-[[package]]
-name = "packed_simd"
-version = "0.3.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cf965495ba3190af4c54375cb7d5d4777954457a215035a783f9aec5380b19f"
-dependencies = [
- "cfg-if 1.0.0",
- "libm 0.1.4",
 ]
 
 [[package]]
@@ -3736,7 +3720,6 @@ dependencies = [
  "criterion",
  "encode_unicode 1.0.0",
  "indoc",
- "packed_simd",
  "pretty_assertions",
  "proptest",
  "quickcheck",

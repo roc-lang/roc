@@ -1,5 +1,4 @@
 use crate::bitmask::{Bitmask, Chunk};
-use packed_simd::{u8x64, Simd};
 
 pub struct Env {
     in_progress: InProgress,
@@ -74,8 +73,7 @@ pub trait Listener {
 
 impl Env {
     pub fn handle_chunk(&mut self, chunk: Chunk, listener: &mut impl Listener) {
-        let simd_chunk = u8x64::from_slice_unaligned(&chunk);
-        let backslashes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\\')));
+        let backslashes = Bitmask::for_byte(chunk, b'\\');
 
         // A bitmask of all the characters that are immediately preceded by an escape
         // (so, an odd number of contiguous backslashes) - e.g. \\\" or \'
@@ -107,11 +105,11 @@ impl Env {
         };
 
         // Bitmask of all the single quotes (`'`) in the chunk, excluding escaped ones (`\'`, `\\\'`, etc.).
-        let single_quotes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\''))) & preceded_by_escape;
+        let single_quotes = Bitmask::for_byte(chunk, b'\'') & preceded_by_escape;
 
         // Bitmask of all the double quotes (`"`) in the chunk, excluding escaped ones (`\"`, `\\\"`, etc.).
         let quotes = {
-            let quotes = Bitmask::from(simd_chunk.eq(u8x64::splat(b'"'))) & preceded_by_escape;
+            let quotes = Bitmask::for_byte(chunk, b'"') & preceded_by_escape;
 
             // Trailing quotes caculation, based on the ending bit pattern of `quotes`:
             //
@@ -156,14 +154,7 @@ impl Env {
             // Thanks, Daniel Lemire and Geoff Langdale!
             quotes & (quotes << 1) & (quotes << 2);
 
-        self.strings_comments_indents(
-            quotes,
-            single_quotes,
-            triple_quotes,
-            simd_chunk,
-            chunk,
-            listener,
-        );
+        self.strings_comments_indents(quotes, single_quotes, triple_quotes, chunk, listener);
     }
 
     /// Given the masks for the locations of quotes, single quotes, and triple quotes (which have already
@@ -173,7 +164,6 @@ impl Env {
         quotes: Bitmask,
         single_quotes: Bitmask,
         triple_quotes: Bitmask,
-        simd_chunk: Simd<[u8; 64]>,
         chunk: Chunk,
         listener: &mut impl Listener,
     ) {
@@ -255,8 +245,8 @@ impl Env {
         let any_single_quotes = !single_quotes.is_zero();
         let mask_contains_triple_quotes = !triple_quotes.is_zero(); // TODO incorporate trailing_quote_chars into this.
                                                                     // Some trailing quotes might be part of triple quotes!
-        let pounds = Bitmask::from(simd_chunk.eq(u8x64::splat(b'#')));
-        let newlines = Bitmask::from(simd_chunk.eq(u8x64::splat(b'\n')));
+        let pounds = Bitmask::for_byte(chunk, b'#');
+        let newlines = Bitmask::for_byte(chunk, b'\n');
 
         let mut strings = Bitmask::from(0);
         let mut comments = Bitmask::from(!0);

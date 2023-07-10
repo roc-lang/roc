@@ -1,5 +1,3 @@
-extern crate packed_simd;
-
 #[derive(Debug, Eq, PartialEq, Default)]
 struct Test {
     description: &'static str,
