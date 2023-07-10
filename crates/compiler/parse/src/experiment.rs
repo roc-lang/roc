@@ -370,21 +370,21 @@ impl Env {
                     strings &= Bitmask::from(str_mask);
                 }
 
-                // If we just finished a comment, branchlessly zero out its span in our main bitmask.
-                {
-                    let comment_mask =
-                        if branchless_and(prev_in_progress == Comment, in_progress == Nothing) {
-                            span_mask_zeroes // 0s only where the comment we just made was; 1s elsewhere.
-                        } else {
-                            0u64 // all 0s; if this is OR'd with the existing bitmask, it will be a no-op.
-                        };
+                // If we just finished a comment, zero out its span in our main bitmask and send it to the listener.
+                let just_finished_comment =
+                    branchless_and(prev_in_progress == Comment, in_progress == Nothing);
 
-                    comments |= Bitmask::from(comment_mask);
+                // Do this part branchlessly, because if the comment listener is a no-op (e.g. we're running a script
+                // and don't care about doc comments), the branching conditional around the listener (which will
+                // often be mispredicted) can get optimized away entirely.
+                comments |= if just_finished_comment {
+                    Bitmask::from(span_mask_zeroes)
+                } else {
+                    Bitmask::ZERO
+                };
 
-                    // TODO when we have a trait for what to do in various scenarios, this is roughly where to
-                    // have it receive a "just finished a comment" event. (Only the formatter cares about comments,
-                    // although other operations care about doc comments - e.g. `docs` but also editor tooling that
-                    // wants to store docs in memory for hovers and such.)
+                if just_finished_comment {
+                    listener.comment(span_start_offset, chunk_offset + index as usize);
                 }
             }
         }
